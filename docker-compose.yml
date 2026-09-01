@@ -195,7 +195,7 @@ x-selfhost-env: &selfhost-env
   NOTIFICATION_PUSH_WINDOW: ${NOTIFICATION_PUSH_WINDOW:-}
   NOTIFICATION_EMAIL_DAILY_CAP: ${NOTIFICATION_EMAIL_DAILY_CAP:-}
 
-  SENTRY_DSN: ${SENTRY_DSN:-}
+
 
 services:
 
@@ -415,7 +415,7 @@ services:
       TRACKING_PAGEHIT_RATE_LIMIT_PER_MIN: ${TRACKING_PAGEHIT_RATE_LIMIT_PER_MIN:-}
       TRACKING_TRUSTED_PROXIES: ${TRACKING_TRUSTED_PROXIES:-}
       TRACKING_CLIENT_IP_HEADER: ${TRACKING_CLIENT_IP_HEADER:-}
-      SENTRY_DSN: ${SENTRY_DSN:-}
+
       # Overridable so `make dev` (native backend) can point at
       # host.docker.internal:8080 while `docker compose up` uses the container.
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8080}
