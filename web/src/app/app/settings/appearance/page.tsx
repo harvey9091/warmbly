@@ -13,7 +13,7 @@ import {
 } from "../_components/SectionShell";
 import { SelectMenu, type SelectOption } from "@/components/ui/select-menu";
 import { NumberInput } from "@/components/ui/field";
-import { useAppearance, useAppStore } from "@/stores";
+import { useAppStore } from "@/stores";
 import { usePermission } from "@/hooks/usePermission";
 import { NoAccess } from "@/components/layout/NoAccess";
 
@@ -37,11 +37,39 @@ export default function AppearanceSettingsPage() {
 }
 
 function AppearanceSettings() {
-    const { resolvedTheme, setTheme } = useAppStore((state) => ({
-        resolvedTheme: state.resolvedTheme,
-        setTheme: state.setTheme,
-    }));
-    const appearance = useAppearance();
+    const resolvedTheme = useAppStore((state) => state.resolvedTheme)
+    const setTheme = useAppStore((state) => state.setTheme)
+    const glassmorphismEnabled = useAppStore((state) => state.glassmorphismEnabled)
+    const glassOpacity = useAppStore((state) => state.glassOpacity)
+    const glassBlur = useAppStore((state) => state.glassBlur)
+    const backgroundPreset = useAppStore((state) => state.backgroundPreset)
+    const backgroundImage = useAppStore((state) => state.backgroundImage)
+    const backgroundBlur = useAppStore((state) => state.backgroundBlur)
+    const backgroundOpacity = useAppStore((state) => state.backgroundOpacity)
+    const setGlassmorphismEnabled = useAppStore((state) => state.setGlassmorphismEnabled)
+    const setGlassOpacity = useAppStore((state) => state.setGlassOpacity)
+    const setGlassBlur = useAppStore((state) => state.setGlassBlur)
+    const setBackgroundPreset = useAppStore((state) => state.setBackgroundPreset)
+    const setBackgroundImage = useAppStore((state) => state.setBackgroundImage)
+    const setBackgroundBlur = useAppStore((state) => state.setBackgroundBlur)
+    const setBackgroundOpacity = useAppStore((state) => state.setBackgroundOpacity)
+
+    const appearance = {
+        glassmorphismEnabled,
+        glassOpacity,
+        glassBlur,
+        backgroundPreset,
+        backgroundImage,
+        backgroundBlur,
+        backgroundOpacity,
+        setGlassmorphismEnabled,
+        setGlassOpacity,
+        setGlassBlur,
+        setBackgroundPreset,
+        setBackgroundImage,
+        setBackgroundBlur,
+        setBackgroundOpacity,
+    }
 
     const themeValue = THEME_OPTIONS.find((o) => o.value === resolvedTheme)?.value ?? "system";
 

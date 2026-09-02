@@ -79,23 +79,38 @@ export const useSidebar = () =>
     setCollapsed: state.setSidebarCollapsed,
     setMobileOpen: state.setSidebarMobileOpen,
   })))
-export const useAppearance = () =>
-  useAppStore(useShallow((state) => ({
-    glassmorphismEnabled: state.glassmorphismEnabled,
-    glassOpacity: state.glassOpacity,
-    glassBlur: state.glassBlur,
-    backgroundPreset: state.backgroundPreset,
-    backgroundImage: state.backgroundImage,
-    backgroundBlur: state.backgroundBlur,
-    backgroundOpacity: state.backgroundOpacity,
-    setGlassmorphismEnabled: state.setGlassmorphismEnabled,
-    setGlassOpacity: state.setGlassOpacity,
-    setGlassBlur: state.setGlassBlur,
-    setBackgroundPreset: state.setBackgroundPreset,
-    setBackgroundImage: state.setBackgroundImage,
-    setBackgroundBlur: state.setBackgroundBlur,
-    setBackgroundOpacity: state.setBackgroundOpacity,
-  })))
+export const useAppearance = () => {
+  const glassmorphismEnabled = useAppStore((state) => state.glassmorphismEnabled)
+  const glassOpacity = useAppStore((state) => state.glassOpacity)
+  const glassBlur = useAppStore((state) => state.glassBlur)
+  const backgroundPreset = useAppStore((state) => state.backgroundPreset)
+  const backgroundImage = useAppStore((state) => state.backgroundImage)
+  const backgroundBlur = useAppStore((state) => state.backgroundBlur)
+  const backgroundOpacity = useAppStore((state) => state.backgroundOpacity)
+  const setGlassmorphismEnabled = useAppStore((state) => state.setGlassmorphismEnabled)
+  const setGlassOpacity = useAppStore((state) => state.setGlassOpacity)
+  const setGlassBlur = useAppStore((state) => state.setGlassBlur)
+  const setBackgroundPreset = useAppStore((state) => state.setBackgroundPreset)
+  const setBackgroundImage = useAppStore((state) => state.setBackgroundImage)
+  const setBackgroundBlur = useAppStore((state) => state.setBackgroundBlur)
+  const setBackgroundOpacity = useAppStore((state) => state.setBackgroundOpacity)
+  return {
+    glassmorphismEnabled,
+    glassOpacity,
+    glassBlur,
+    backgroundPreset,
+    backgroundImage,
+    backgroundBlur,
+    backgroundOpacity,
+    setGlassmorphismEnabled,
+    setGlassOpacity,
+    setGlassBlur,
+    setBackgroundPreset,
+    setBackgroundImage,
+    setBackgroundBlur,
+    setBackgroundOpacity,
+  }
+}
 export const useCurrentOrg = () => useAppStore((state) => state.currentOrganization)
 export const useOrganizations = () =>
   useAppStore(useShallow((state) => ({
