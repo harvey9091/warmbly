@@ -15,6 +15,7 @@ import { TONE_DOT } from "@/components/ui/tones";
 import type { DitherTone } from "@/components/ui/dither";
 import AnalyticsShareButton from "@/components/app/analytics/AnalyticsShareButton";
 import TaskPreview from "@/components/app/campaigns/TaskPreview";
+import CampaignFormsPanel from "@/components/app/campaigns/CampaignFormsPanel";
 import AnimatedNumber from "@/components/ui/AnimatedNumber";
 import AdvisorStrip from "@/components/app/advisor/AdvisorStrip";
 
@@ -266,6 +267,8 @@ export default function CampaignOverview() {
                             </div>
                         )}
                     </div>
+
+                    <CampaignFormsPanel campaignId={id} />
 
                     {/* quick breakdown strip below sequence table, mobile-friendly summary */}
                     <div className="rounded-md border border-slate-200 overflow-hidden bg-white lg:hidden">

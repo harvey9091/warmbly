@@ -213,19 +213,35 @@ func writeBase64Wrapped(w io.Writer, data []byte) {
 func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []byte) *errx.MailError {
 	var host string
 	var port int
+	var security string
 
 	switch c.AuthType {
 	case models.AuthPlain:
 		host = c.Credentials.Host
 		port = c.Credentials.Port
+		security = c.Credentials.Security
 	case models.AuthOAuth2:
 		host = c.Oauth2.Host
 		port = c.Oauth2.Port
 	}
 
 	addr := fmt.Sprintf("%s:%d", host, port)
-	dialer := netbind.Dialer(c.BindIP)
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	tlsConf := &tls.Config{
+		ServerName:         host,
+		InsecureSkipVerify: netbind.InsecureTLS(),
+	}
+
+	var conn net.Conn
+	var err error
+	// Implicit TLS (SMTPS) means the server speaks TLS from the first byte, so
+	// a plaintext dial + STARTTLS never gets past the greeting. The mode is
+	// the mailbox's stored choice, falling back to the port convention.
+	implicitTLS := models.ResolveSMTPSecurity(security, port) == models.MailSecurityTLS
+	if implicitTLS {
+		conn, err = netbind.TLSDialer(c.BindIP, tlsConf).DialContext(ctx, "tcp", addr)
+	} else {
+		conn, err = netbind.Dialer(c.BindIP).DialContext(ctx, "tcp", addr)
+	}
 	if err != nil {
 		return errx.ErrMailServerUnreachable
 	}
@@ -238,19 +254,17 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 	}
 	defer client.Quit()
 
-	tlsConf := &tls.Config{
-		ServerName:         host,
-		InsecureSkipVerify: netbind.InsecureTLS(),
-	}
 	// TLS is mandatory. The MAIL_TLS_INSECURE dev knob additionally allows a
 	// server with no STARTTLS at all (the local mailpit sink) — never taken in
 	// production, where the env var is unset.
-	if ok, _ := client.Extension("STARTTLS"); ok {
-		if err := client.StartTLS(tlsConf); err != nil {
+	if !implicitTLS {
+		if ok, _ := client.Extension("STARTTLS"); ok {
+			if err := client.StartTLS(tlsConf); err != nil {
+				return errx.ErrMailServerUnreachable
+			}
+		} else if !netbind.InsecureTLS() {
 			return errx.ErrMailServerUnreachable
 		}
-	} else if !netbind.InsecureTLS() {
-		return errx.ErrMailServerUnreachable
 	}
 
 	// --- Auth ---

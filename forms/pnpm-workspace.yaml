@@ -1,0 +1,5 @@
+# Trust the install-time build scripts of these packages so pnpm doesn't
+# refuse to run them. esbuild is pulled in transitively by vite and needs
+# to compile its native binary at install time.
+allowBuilds:
+  esbuild: true

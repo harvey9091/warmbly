@@ -1,6 +1,7 @@
 import Request from "../../Request";
 import type Segment from "@/lib/api/models/app/segments/Segment";
 import type {
+    CampaignSegmentLink,
     ContactSegment,
     SegmentOverride,
     SegmentAddToCampaignResult,
@@ -69,6 +70,27 @@ export async function listContactSegments(contactId: string): Promise<ContactSeg
 export async function listSegmentOverrides(id: string): Promise<SegmentOverride[]> {
     const res = await Request<{ data: SegmentOverride[] }>({ method: "GET", url: `/segments/${id}/overrides`, authorization: true });
     return res.data ?? [];
+}
+
+export async function listCampaignSegments(campaignId: string): Promise<CampaignSegmentLink[]> {
+    const res = await Request<{ data: CampaignSegmentLink[] }>({
+        method: "GET",
+        url: `/campaigns/${campaignId}/segments`,
+        authorization: true,
+    });
+    return res.data ?? [];
+}
+
+export async function setCampaignSegments(
+    campaignId: string,
+    segmentIds: string[],
+): Promise<{ data: CampaignSegmentLink[]; added: number }> {
+    return await Request<{ data: CampaignSegmentLink[]; added: number }>({
+        method: "PUT",
+        url: `/campaigns/${campaignId}/segments`,
+        data: { segment_ids: segmentIds },
+        authorization: true,
+    });
 }
 
 export async function addSegmentToCampaign(id: string, campaignId: string): Promise<SegmentAddToCampaignResult> {

@@ -196,6 +196,7 @@ const ENUM_LABELS: Record<string, string> = {
     sheet_sync: "Google Sheets sync",
     api: "API",
     ai_assistant: "AI assistant",
+    form: "Form submission",
     valid: "Valid",
     risky: "Risky",
     invalid: "Invalid",

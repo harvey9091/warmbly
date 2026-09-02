@@ -549,7 +549,30 @@ func (s *service) mergeOrganization(ctx context.Context, tx pgx.Tx, orgID uuid.U
 	if err != nil {
 		return err
 	}
-	return s.repo.MergeOrganization(ctx, tx, orgID, cols, raw)
+	if err := s.repo.MergeOrganization(ctx, tx, orgID, cols, raw); err != nil {
+		return err
+	}
+
+	// The verdict columns are excluded above, which preserves whatever the
+	// DESTINATION already held rather than resetting them. On a workspace that
+	// had its own verified forms domain, importing a different one would
+	// inherit that verified flag and start building form URLs on a name whose
+	// CNAME still points at the source instance. Clear it whenever the domain
+	// itself moved; the hourly sweep re-earns it once DNS points here.
+	for _, c := range cols {
+		if c != "forms_domain" {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE organizations
+			SET forms_domain_verified = false, forms_domain_verified_at = NULL
+			WHERE id = $1
+		`, orgID); err != nil {
+			return err
+		}
+		break
+	}
+	return nil
 }
 
 // orgMergeExcluded are the organization columns an archive may never set.
@@ -561,6 +584,14 @@ var orgMergeExcluded = func() map[string]bool {
 		"created_at":             true,
 		"deletion_scheduled_at":  true,
 		"deletion_scheduled_for": true,
+		// forms_domain itself travels: it is the customer's own name and they
+		// will want it on the destination. The verdict must not, because it
+		// was reached against the SOURCE instance's forms host. Importing it
+		// verified would build every form URL on a name still pointing at the
+		// old install. Left unverified, links fall back to the shared host and
+		// the hourly sweep re-verifies once the customer repoints the record.
+		"forms_domain_verified":    true,
+		"forms_domain_verified_at": true,
 	}
 	for name := range OrgRiskColumns {
 		out[name] = true

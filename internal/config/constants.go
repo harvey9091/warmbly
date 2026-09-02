@@ -69,6 +69,10 @@ const (
 	SyncFloodPerHour                = 5_000 // new live messages observed in one hour that mark a mailbox as flooding
 	SyncThrottleEscalationDays      = 3     // throttled UTC days out of the last 7 that deactivate a mailbox
 
+	// Forms. Funnel events feed analytics ranges up to 90 days; the fixed
+	// retention window keeps double coverage without a per-org setting.
+	FormEventsRetentionDays = 180
+
 	// Sequences. Empty by default so the editor shows a smart, position-based
 	// label (e.g. "Email 1") until the user names the step themselves.
 	SequenceDefaultName  = ""

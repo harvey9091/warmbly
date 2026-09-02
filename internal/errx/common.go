@@ -127,9 +127,11 @@ var (
 	ErrEmailReauthCloudManaged   = New(Conflict, "Warmbly Cloud holds this mailbox's sign-in. Reconnect it from your cloud workspace instead.")
 	ErrEmailReauthNoRefreshToken = New(BadRequest, "The provider did not return a refresh token and none is stored. Please try re-authorizing again.")
 	ErrEmailSMTPHost             = New(BadRequest, "SMTP host is required.")
-	ErrEmailSMTPPort             = New(BadRequest, "SMTP port must be 465 or 587.")
+	ErrEmailSMTPPort             = New(BadRequest, "SMTP port must be between 1 and 65535.")
+	ErrEmailSMTPSecurity         = New(BadRequest, "SMTP security must be tls or starttls.")
+	ErrEmailIMAPSecurity         = New(BadRequest, "IMAP security must be tls or starttls.")
 	ErrEmailIMAPHost             = New(BadRequest, "IMAP host is required.")
-	ErrEmailIMAPPort             = New(BadRequest, "IMAP port must be a positive integer.")
+	ErrEmailIMAPPort             = New(BadRequest, "IMAP port must be between 1 and 65535.")
 	ErrEmailCredentialsRequired  = New(BadRequest, "SMTP and IMAP credentials are required.")
 	ErrEmailTrackingDomain       = New(BadRequest, "Invalid tracking domain.")
 	ErrEmailTrackingDomainLength = New(BadRequest, "Tracking domain is too long (max 253 characters).")
@@ -175,6 +177,9 @@ var (
 	// Unibox
 	ErrUniboxLimit = New(BadRequest, fmt.Sprintf("Limit must be between %d and %d.", config.UniboxLimitMin, config.UniboxLimitMax))
 	ErrSeenMax     = New(BadRequest, "Cannot update more than 500 messages.")
+	// Folder scoping (unibox sidebar).
+	ErrUniboxFolder     = New(BadRequest, "Folder must be one of inbox, sent, drafts, archive, spam, trash.")
+	ErrSeenFolderAndIDs = New(BadRequest, "Provide either email_ids or folder, not both.")
 
 	// Servers
 	ErrIPAddr    = New(BadRequest, "Invalid IP Address.")

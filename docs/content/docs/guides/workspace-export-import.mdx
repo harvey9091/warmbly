@@ -14,8 +14,8 @@ The data is split into groups. Every export includes **Workspace**; the rest are
 | Group | Contents |
 |-------|----------|
 | Workspace | The organization, members, roles, teams, mailboxes, API keys, webhooks, and settings, including the website tracking site key. Always included |
-| Contacts | Contacts, categories, segments with their manual overrides, notes, activities, and the suppression list |
-| Campaigns | Campaigns, sequences, senders, attachments, and per-campaign settings |
+| Contacts | Contacts, categories, segments with their manual overrides, forms with their images, submissions, personalized link tickets and funnel events, notes, activities, and the suppression list |
+| Campaigns | Campaigns, sequences, senders, linked segments, attachments, and per-campaign settings |
 | CRM | Pipelines, deals, tasks, and meeting bookings |
 | Automations | Automations, connected integrations, and lead sync sources |
 | Assistant | Assistant sessions and messages, skills, MCP servers, and AI settings |
@@ -100,6 +100,7 @@ An import runs as one transaction. If anything fails, nothing lands and the work
 
 - **Reconnect any mailbox that needs it.** Mailboxes without credentials show as needing a reconnect in the mailbox list.
 - **Point your tracking domain at the new instance.** Click links already delivered keep resolving as long as the domain follows.
+- **Repoint your forms domain too.** A custom forms domain travels with the archive, but its verification does not: the record still points at the old instance. Update the `CNAME`, and the hourly re-check picks it up. Until then form links fall back to the shared host rather than breaking.
 - **Check campaign schedules.** Per-contact progress travels, so a running campaign resumes at the step it reached rather than restarting.
 - **Expect the daily send counters to be honoured.** Today's counts come across, so a mailbox cannot double its volume by being migrated mid-day.
 - **Re-authorize integrations** if you exported without credentials.

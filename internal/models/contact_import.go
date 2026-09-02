@@ -99,13 +99,16 @@ type ContactImportPreview struct {
 // ContactImportCommit is the full configuration for committing an
 // import: how to map columns, how to treat collisions, what categories
 // to assign, what the default subscription state is, and which
-// campaign(s) the imported contacts should join.
+// campaign(s) and segment(s) the imported contacts should join.
 type ContactImportCommit struct {
 	Mapping     []ContactImportColumnMapping `json:"mapping"`
 	Dedup       ContactImportDedupStrategy   `json:"dedup"`
 	HasHeader   bool                         `json:"has_header"`
 	CategoryIDs []string                     `json:"category_ids,omitempty"`
 	CampaignIDs []string                     `json:"campaign_ids,omitempty"`
+	// SegmentIDs pins every imported row into these segments as a manual
+	// include override, the same write the "Add to segment" bulk action does.
+	SegmentIDs []string `json:"segment_ids,omitempty"`
 
 	// SubscribedDefault is what new contacts inherit when no
 	// subscribed column was mapped. Defaults to true server-side.

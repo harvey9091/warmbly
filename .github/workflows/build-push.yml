@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       service:
-        description: "Service to build (all, backend, consumer, worker, tracking, realtime)"
+        description: "Service to build (all, backend, consumer, worker, forms, tracking, realtime)"
         required: false
         default: "all"
 
@@ -54,6 +54,13 @@ jobs:
               - 'internal/**'
               - 'cmd/worker/**'
               - 'deploy/docker/worker.Dockerfile'
+            forms:
+              - 'go.mod'
+              - 'go.sum'
+              - 'internal/**'
+              - 'cmd/forms/**'
+              - 'forms/**'
+              - 'deploy/docker/forms.Dockerfile'
             tracking:
               - 'tracking/**'
             realtime:
@@ -67,6 +74,7 @@ jobs:
           BACKEND: ${{ steps.filter.outputs.backend }}
           CONSUMER: ${{ steps.filter.outputs.consumer }}
           WORKER: ${{ steps.filter.outputs.worker }}
+          FORMS: ${{ steps.filter.outputs.forms }}
           TRACKING: ${{ steps.filter.outputs.tracking }}
           REALTIME: ${{ steps.filter.outputs.realtime }}
         run: |
@@ -74,7 +82,7 @@ jobs:
           native=""
           if [ "$EVENT" = "workflow_dispatch" ]; then
             sel="${SELECTED:-all}"
-            for s in backend consumer worker; do
+            for s in backend consumer worker forms; do
               if [ "$sel" = "all" ] || [ "$sel" = "$s" ]; then go="$go\"$s\","; fi
             done
             for s in tracking realtime; do
@@ -84,6 +92,7 @@ jobs:
             if [ "$BACKEND" = "true" ]; then go="$go\"backend\","; fi
             if [ "$CONSUMER" = "true" ]; then go="$go\"consumer\","; fi
             if [ "$WORKER" = "true" ]; then go="$go\"worker\","; fi
+            if [ "$FORMS" = "true" ]; then go="$go\"forms\","; fi
             if [ "$TRACKING" = "true" ]; then native="$native\"tracking\","; fi
             if [ "$REALTIME" = "true" ]; then native="$native\"realtime\","; fi
           fi

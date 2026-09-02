@@ -57,6 +57,7 @@ const (
 	ActivityTaskCompleted   ActivityType = "task_completed"
 	ActivityContactCreated  ActivityType = "contact_created"
 	ActivityContactUpdated  ActivityType = "contact_updated"
+	ActivityFormSubmitted   ActivityType = "form_submitted"
 	ActivityCampaignAdded   ActivityType = "campaign_added"
 	ActivityCampaignRemoved ActivityType = "campaign_removed"
 	ActivityCategoryAdded   ActivityType = "category_added"

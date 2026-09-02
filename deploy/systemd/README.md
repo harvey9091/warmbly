@@ -7,6 +7,7 @@ them is [Deploying without Docker](https://docs.warmbly.com/development/bare-met
 | Unit | Runs | Reads |
 |------|------|-------|
 | `warmbly-backend.service` | `/opt/warmbly/bin/backend` | `/etc/warmbly/warmbly.env` |
+| `warmbly-forms.service` | `/opt/warmbly/bin/forms` | `/etc/warmbly/warmbly.env` |
 | `warmbly-consumer.service` | `/opt/warmbly/bin/consumer` | `/etc/warmbly/warmbly.env` |
 | `warmbly-tracking.service` | `/opt/warmbly/bin/tracking` | `/etc/warmbly/warmbly.env` |
 | `warmbly-realtime.service` | `/opt/warmbly/realtime/bin/realtime start` | `/etc/warmbly/warmbly.env` |

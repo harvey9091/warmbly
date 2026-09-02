@@ -81,9 +81,15 @@ x-selfhost-env: &selfhost-env
   STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
   STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY:-}
 
-  # Captcha. Set both to turn Turnstile on.
+  # Captcha. Set both to turn Turnstile on. The site key also lets hosted
+  # form pages render the widget when a form enables spam protection.
   CAPTCHA_PROVIDER: ${CAPTCHA_PROVIDER:-none}
   TURNSTILE_SECRET: ${TURNSTILE_SECRET:-}
+  TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
+
+  # Hosted forms. The public host routed to the forms service; share links
+  # and embed codes point here. Unset leaves forms without a public URL.
+  FORMS_DOMAIN: ${FORMS_DOMAIN:-}
 
   # Deployment mode. Picks the auth defaults below; every one stays
   # individually overridable.
@@ -348,6 +354,34 @@ services:
       retries: 10
       start_period: 20s
 
+  # Public face of hosted forms: pages, embed loader, submissions. No
+  # database; the backend's internal API is its only dependency.
+  forms:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: deploy/docker/forms.Dockerfile
+    ports: ["${FORMS_PORT:-8090}:8090"]
+    environment:
+      GIN_MODE: release
+      FORMS_PORT: "8090"
+      FORM_IP_RATE_LIMIT: ${FORM_IP_RATE_LIMIT:-}
+      TRUSTED_PROXIES: ${FORMS_TRUSTED_PROXIES:-}
+      # Overridable so a native `make backend` can be pointed at from a
+      # container via host.docker.internal, mirroring the tracking service.
+      BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8080}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-local-dev-internal-token}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      backend: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8090/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
   consumer:
     restart: unless-stopped
     build:
@@ -378,9 +412,11 @@ services:
       ENCRYPTED_KEYS_PROVIDER: http
       ENCRYPTED_KEYS_BACKEND_URL: ${ENCRYPTED_KEYS_BACKEND_URL:-http://backend:8080}
       ENCRYPTED_KEYS_WORKER_TOKEN: ${INTERNAL_API_TOKEN:-local-dev-internal-token}
-      # Unset by default so each replica generates its own id and --scale works.
-      # Pin it only when running exactly one worker on this host.
+      # Explicit pin for a single worker; usually unnecessary. Without it each
+      # replica flock-claims a persistent id file in the worker_state volume,
+      # so ids survive container recreates and --scale still works.
       WORKER_ID: ${WORKER_ID:-}
+      WORKER_STATE_DIR: ${WORKER_STATE_DIR:-/data/state}
       WORKER_TIER: ${WORKER_TIER:-}
       WORKER_EGRESS_KIND: ${WORKER_EGRESS_KIND:-}
       BOX_GOOGLE_CLIENT_ID: ${BOX_GOOGLE_CLIENT_ID:-}
@@ -389,6 +425,7 @@ services:
       BOX_OUTLOOK_CLIENT_SECRET: ${BOX_OUTLOOK_CLIENT_SECRET:-}
     volumes:
       - blobs:/data/blobs
+      - worker_state:/data/state
     depends_on:
       backend: { condition: service_healthy }
       nats: { condition: service_healthy }
@@ -512,3 +549,4 @@ volumes:
   redis_data:
   nats_data:
   blobs:
+  worker_state:

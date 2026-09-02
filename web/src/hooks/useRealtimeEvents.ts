@@ -118,6 +118,13 @@ export function useRealtimeEvents() {
         return
       }
 
+      // A hosted form received a public submission: refresh form counters,
+      // submission lists, and contacts (the submission may have created one).
+      if (includes('FORM_SUBMISSION')) {
+        invalidate([['forms'], ['contacts']])
+        return
+      }
+
       // AI contact research finished for one contact (batch progress arrives as
       // one of these per completion).
       if (includes('AI_RESEARCH', 'RESEARCH_PROGRESS')) {
@@ -336,6 +343,7 @@ export function useRealtimeEvents() {
           // change moves segment counts too.
           contact: [['contacts'], ['segments']],
           segment: [['segments'], ['contacts', 'list']],
+          form: [['forms']],
           campaign: [['campaigns'], ['analytics']],
           step: [['campaigns']],
           // ['emails'] rather than ['emails', 'list']: it prefix-matches the
@@ -402,6 +410,7 @@ export function useRealtimeEvents() {
         if (keys) invalidate(keys)
         if (entityId && entityType === 'contact') invalidate([['contacts', entityId]])
         if (entityId && entityType === 'segment') invalidate([['segments', entityId]])
+        if (entityId && entityType === 'form') invalidate([['forms', entityId]])
         if (entityId && entityType === 'campaign') invalidate([['campaigns', entityId]])
         if (entityId && entityType === 'automation') invalidate([['automations', entityId]])
         return

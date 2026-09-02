@@ -83,6 +83,16 @@ export interface SegmentAddToCampaignResult {
     members: number;
 }
 
+// One segment linked to a campaign as a live audience source.
+export interface CampaignSegmentLink {
+    segment_id: string;
+    name: string;
+    color: string;
+    description: string;
+    contact_count: number;
+    linked_at: string;
+}
+
 // Operators per field kind, mirrored from the backend catalog.
 export const SEGMENT_OPERATORS: Record<SegmentFieldKind, { id: string; label: string }[]> = {
     text: [

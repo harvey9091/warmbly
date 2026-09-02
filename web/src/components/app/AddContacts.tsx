@@ -32,6 +32,9 @@ export interface AddContact {
     phone: string;
     campaigns: string[];
     categories?: string[];
+    // Segments the contact is pinned into on creation (an include override),
+    // so a contact created from inside a segment lands in it.
+    segments?: string[];
     custom_fields: Record<string, string>;
     // First-touch source hint: "campaign" when added from a campaign's
     // Leads tab, else "manual". The server decides every other origin.

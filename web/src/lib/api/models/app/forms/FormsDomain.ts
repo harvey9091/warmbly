@@ -1,0 +1,16 @@
+// The organization's custom forms domain. Mirrors models.FormsDomainStatus,
+// and is shaped like the mailbox tracking-domain status on purpose.
+
+export default interface FormsDomainStatus {
+    forms_domain: string;
+    forms_domain_verified: boolean;
+    forms_domain_verified_at?: string;
+    /** The value to put in the CNAME: this install's forms host. */
+    cname_target: string;
+    /** verified | unset | no_target | not_found | wrong_target | lookup_error | pending */
+    status: string;
+    message: string;
+    /** What DNS actually returned, so a typo is visible. */
+    observed?: string;
+    forms_host_unresolvable: boolean;
+}

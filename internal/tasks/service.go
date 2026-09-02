@@ -82,6 +82,10 @@ type TasksService interface {
 	// SetCloudLink wires the self-hosted side of the warmup pool link: a
 	// mailbox the cloud warms gets no local warmup chain.
 	SetCloudLink(r CloudLinkReader)
+
+	// SetFormLinks wires the minter that resolves {{form_link:...}} markers
+	// into per-recipient form URLs. Nil-safe: markers drop with a warning.
+	SetFormLinks(m FormLinkMinter)
 }
 
 // CloudLinkReader reports whether Warmbly Cloud warms a mailbox.
@@ -139,6 +143,9 @@ type tasksService struct {
 
 	// automationRunner launches automations from a campaign "run_automation" step.
 	automationRunner AutomationRunner
+
+	// formLinks resolves {{form_link:...}} markers to per-recipient URLs.
+	formLinks FormLinkMinter
 
 	// aiProvider + aiCredits back the campaign "switch" sequence step (SetAI).
 	aiProvider generation.Provider
@@ -246,6 +253,10 @@ func (s *tasksService) SetDomainAuthPolicy(p DomainAuthPolicy) {
 }
 
 // SetCloudLink wires the cloud-warmed mailbox check.
+func (s *tasksService) SetFormLinks(m FormLinkMinter) {
+	s.formLinks = m
+}
+
 func (s *tasksService) SetCloudLink(r CloudLinkReader) {
 	s.cloudLink = r
 }

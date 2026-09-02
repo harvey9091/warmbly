@@ -166,6 +166,7 @@ func (r *contactRepository) Add(ctx context.Context, userID string, orgID uuid.U
 	normalized := make([]models.AddContact, 0, len(contacts))
 	campaignIDs := make([][]uuid.UUID, 0, len(contacts))
 	categoryIDs := make([][]uuid.UUID, 0, len(contacts))
+	segmentIDs := make([][]uuid.UUID, 0, len(contacts))
 	for _, lead := range contacts {
 		lead.Email = strings.TrimSpace(lead.Email)
 		if !email.IsValid(lead.Email) {
@@ -236,6 +237,27 @@ func (r *contactRepository) Add(ctx context.Context, userID string, orgID uuid.U
 			cats = append(cats, cid)
 		}
 
+		// Parse + dedupe segment IDs. Same rules again; these become manual
+		// include overrides written in this transaction, so a contact created
+		// inside a segment cannot come back without it.
+		segSet := make(map[uuid.UUID]struct{}, len(lead.Segments))
+		segs := make([]uuid.UUID, 0, len(lead.Segments))
+		for _, raw := range lead.Segments {
+			raw = strings.TrimSpace(raw)
+			if raw == "" {
+				continue
+			}
+			sid, serr := uuid.Parse(raw)
+			if serr != nil {
+				return nil, errx.ErrUuid
+			}
+			if _, dup := segSet[sid]; dup {
+				continue
+			}
+			segSet[sid] = struct{}{}
+			segs = append(segs, sid)
+		}
+
 		// First-touch attribution. Every creation path stamps one; an empty
 		// value is recorded honestly rather than guessed.
 		if lead.Source == "" {
@@ -256,6 +278,7 @@ func (r *contactRepository) Add(ctx context.Context, userID string, orgID uuid.U
 		normalized = append(normalized, lead)
 		campaignIDs = append(campaignIDs, cids)
 		categoryIDs = append(categoryIDs, cats)
+		segmentIDs = append(segmentIDs, segs)
 	}
 
 	tx, err := r.DB.Begin(ctx)
@@ -479,6 +502,34 @@ func (r *contactRepository) Add(ctx context.Context, userID string, orgID uuid.U
 			return nil, errx.InternalError()
 		}
 		ncontacts[i].Categories = linked
+	}
+
+	// Pin into segments, in the same transaction as the contact itself: a
+	// failed override write must not answer with a contact that quietly never
+	// joined the segment it was created in (issue #285). Scoped to the org, so
+	// a foreign segment id links nothing.
+	for i, segs := range segmentIDs {
+		if len(segs) == 0 {
+			continue
+		}
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO segment_members (segment_id, contact_id, mode)
+			SELECT s.id, $1, 'include'
+			FROM   segments s
+			WHERE  s.id = ANY($2) AND s.organization_id = $3
+			ON CONFLICT (segment_id, contact_id) DO UPDATE SET mode = EXCLUDED.mode, created_at = now()
+		`, ncontacts[i].ID, segs, orgID)
+		if err != nil {
+			db.CaptureError(err, "", nil, "segment_members insert")
+			return nil, errx.InternalError()
+		}
+		// One row per requested segment, since `segs` is deduplicated and a
+		// conflicting row still counts as affected. Fewer means a segment was
+		// deleted between the service's check and this statement, so the
+		// create is rolled back rather than answered without the membership.
+		if int(tag.RowsAffected()) != len(segs) {
+			return nil, errx.New(errx.BadRequest, "a selected segment does not exist")
+		}
 	}
 
 	if err := logContactCreated(ctx, tx, orgID, actor, createdIDs); err != nil {
@@ -1828,14 +1879,23 @@ func (r *contactRepository) Update(ctx context.Context, userID, contactID string
 		toDelete := utils.Difference(currentCampaignIDs, wantIDs)
 
 		if len(toDelete) > 0 {
+			// Record the removal so linked-segment enrolment does not re-add
+			// the pair; a later manual add clears it again.
 			query = `
-				DELETE FROM campaign_leads cl
-				USING campaigns cam
-				WHERE cl.contact_id = $1
-				  AND cl.campaign_id = cam.id
-				  AND cam.id = ANY($2::uuid[])
-				  AND cam.organization_id = $3
-				RETURNING cl.campaign_id
+				WITH gone AS (
+					DELETE FROM campaign_leads cl
+					USING campaigns cam
+					WHERE cl.contact_id = $1
+					  AND cl.campaign_id = cam.id
+					  AND cam.id = ANY($2::uuid[])
+					  AND cam.organization_id = $3
+					RETURNING cl.contact_id, cl.campaign_id
+				), mark AS (
+					INSERT INTO campaign_lead_removals (campaign_id, contact_id)
+					SELECT campaign_id, contact_id FROM gone
+					ON CONFLICT (campaign_id, contact_id) DO UPDATE SET created_at = now()
+				)
+				SELECT campaign_id FROM gone
 			`
 			params := []any{contactID, toDelete, orgID}
 			rows, err := tx.Query(ctx, query, params...)
@@ -1853,6 +1913,14 @@ func (r *contactRepository) Update(ctx context.Context, userID, contactID string
 
 		if len(toInsert) > 0 {
 			query = `
+				WITH cleared AS (
+					DELETE FROM campaign_lead_removals r
+					USING campaigns cam
+					WHERE r.contact_id = $1
+					  AND r.campaign_id = cam.id
+					  AND cam.id = ANY($2::uuid[])
+					  AND cam.organization_id = $3
+				)
 				INSERT INTO campaign_leads (contact_id, campaign_id)
 				SELECT $1, cam.id
 				FROM campaigns cam
@@ -2109,7 +2177,11 @@ func (r *contactRepository) BulkUpdate(ctx context.Context, userID string, orgID
 		return nil
 	}
 	if len(data.RemoveCampaigns) > 0 {
-		if xerr := link(`DELETE FROM campaign_leads cl
+		// Only pairs that actually held a lead are recorded as removals, so
+		// the automatic segment enrolment never re-adds a hand-removed lead
+		// while contacts merely listed in the request stay eligible.
+		if xerr := link(`WITH gone AS (
+		         DELETE FROM campaign_leads cl
 		         USING contacts c, campaigns cam
 		         WHERE cl.contact_id = c.id
 		           AND cl.campaign_id = cam.id
@@ -2117,14 +2189,32 @@ func (r *contactRepository) BulkUpdate(ctx context.Context, userID string, orgID
 		           AND cam.organization_id = $1
 		           AND cl.contact_id = ANY($2)
 		           AND cl.campaign_id = ANY($3)
-		         RETURNING cl.contact_id, cl.campaign_id`,
+		         RETURNING cl.contact_id, cl.campaign_id
+		         ), mark AS (
+		         INSERT INTO campaign_lead_removals (campaign_id, contact_id)
+		         SELECT campaign_id, contact_id FROM gone
+		         ON CONFLICT (campaign_id, contact_id) DO UPDATE SET created_at = now()
+		         )
+		         SELECT contact_id, campaign_id FROM gone`,
 			models.ActivityCampaignRemoved, logCampaignLinks, orgID, data.Contacts, data.RemoveCampaigns); xerr != nil {
 			return nil, xerr
 		}
 	}
 
 	if len(data.AddCampaigns) > 0 {
-		if xerr := link(`INSERT INTO campaign_leads (contact_id, campaign_id)
+		// A manual add clears the removal record: the user changed their mind,
+		// so linked segments may manage this pair again.
+		if xerr := link(`WITH cleared AS (
+		         DELETE FROM campaign_lead_removals r
+		         USING contacts c, campaigns cam
+		         WHERE r.contact_id = c.id
+		           AND r.campaign_id = cam.id
+		           AND c.organization_id = $1
+		           AND cam.organization_id = $1
+		           AND r.contact_id = ANY($2)
+		           AND r.campaign_id = ANY($3::uuid[])
+		         )
+		         INSERT INTO campaign_leads (contact_id, campaign_id)
 		         SELECT c.id, cam.id
 		         FROM contacts c
 		         CROSS JOIN campaigns cam
@@ -3171,7 +3261,7 @@ func (r *contactRepository) ListTimeline(ctx context.Context, userID uuid.UUID, 
 			FROM contact_activities
 			WHERE contact_id = $1
 			  AND organization_id = $2
-			  AND activity_type IN ('contact_created', 'campaign_added', 'campaign_removed', 'category_added', 'category_removed')
+			  AND activity_type IN ('contact_created', 'campaign_added', 'campaign_removed', 'category_added', 'category_removed', 'form_submitted')
 			  AND created_at < $3
 			ORDER BY created_at DESC
 			LIMIT $4
@@ -3215,6 +3305,9 @@ func (r *contactRepository) ListTimeline(ctx context.Context, userID uuid.UUID, 
 			case models.TimelineCategoryAdded, models.TimelineCategoryRemoved:
 				ev.CategoryID = id("category_id")
 				ev.CategoryTitle = str("category_title")
+			case models.TimelineFormSubmitted:
+				ev.FormID = id("form_id")
+				ev.FormName = str("form_name")
 			}
 			events = append(events, ev)
 		}

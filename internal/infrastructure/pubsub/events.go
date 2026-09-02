@@ -71,6 +71,11 @@ const (
 	// ['audit'] query on any event type containing "AUDIT".
 	EventAuditCreated EventType = "AUDIT_CREATED"
 
+	// Form events (org-scoped). Submissions arrive with no dashboard actor,
+	// so they cannot ride the audit spine; the web client invalidates the
+	// ['forms'] queries on any event type containing "FORM".
+	EventFormSubmission EventType = "FORM_SUBMISSION_CREATED"
+
 	// Automation events (org-scoped). The web client invalidates the
 	// ['automations'] queries on any event type containing "AUTOMATION".
 	EventAutomationCreated EventType = "AUTOMATION_CREATED"
@@ -133,6 +138,7 @@ type EmailInboxEvent struct {
 	Subject        string `json:"subject,omitempty"`
 	From           string `json:"from,omitempty"`
 	Preview        string `json:"preview,omitempty"`
+	Folder         string `json:"folder,omitempty"`
 }
 
 // ContactEvent for contact changes
@@ -505,6 +511,41 @@ func (p *StreamingPublisher) PublishAuditCreated(ctx context.Context, orgID, act
 		"event_type": string(EventAuditCreated),
 	}
 
+	if err := p.client.Publish(ctx, TopicUserEvents, event, attrs); err != nil {
+		// Best-effort: realtime is a nicety, not a requirement.
+	}
+}
+
+// FormSubmissionEvent is the org-scoped payload for FORM_SUBMISSION_CREATED.
+// Ids only: the submission body stays behind the list endpoint's permission.
+type FormSubmissionEvent struct {
+	BaseEvent
+	OrgID        string `json:"org_id"`
+	FormID       string `json:"form_id"`
+	SubmissionID string `json:"submission_id,omitempty"`
+	ContactID    string `json:"contact_id,omitempty"`
+}
+
+// PublishFormSubmission emits an org-scoped form submission signal. There is
+// no actor: public visitors submit, so UserID stays empty.
+func (p *StreamingPublisher) PublishFormSubmission(ctx context.Context, orgID, formID uuid.UUID, submissionID, contactID string) {
+	if p == nil || p.client == nil || orgID == uuid.Nil {
+		return
+	}
+	event := &FormSubmissionEvent{
+		BaseEvent: BaseEvent{
+			EventType: EventFormSubmission,
+			Timestamp: time.Now(),
+		},
+		OrgID:        orgID.String(),
+		FormID:       formID.String(),
+		SubmissionID: submissionID,
+		ContactID:    contactID,
+	}
+	attrs := map[string]string{
+		"org_id":     orgID.String(),
+		"event_type": string(EventFormSubmission),
+	}
 	if err := p.client.Publish(ctx, TopicUserEvents, event, attrs); err != nil {
 		// Best-effort: realtime is a nicety, not a requirement.
 	}

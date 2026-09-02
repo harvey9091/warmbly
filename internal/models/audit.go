@@ -77,6 +77,7 @@ const (
 	AuditEntityTag                AuditEntityType = "tag"
 	AuditEntityCategory           AuditEntityType = "category"
 	AuditEntitySegment            AuditEntityType = "segment"
+	AuditEntityForm               AuditEntityType = "form"
 	AuditEntitySubscription       AuditEntityType = "subscription"
 	AuditEntitySettings           AuditEntityType = "settings"
 

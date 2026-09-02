@@ -25,6 +25,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/emailsend"
 	emailverifyapp "github.com/warmbly/warmbly/internal/app/emailverify"
 	"github.com/warmbly/warmbly/internal/app/feature"
+	"github.com/warmbly/warmbly/internal/app/form"
 	"github.com/warmbly/warmbly/internal/app/group"
 	"github.com/warmbly/warmbly/internal/app/instancecheck"
 	"github.com/warmbly/warmbly/internal/app/instanceconfig"
@@ -101,6 +102,7 @@ type Handler struct {
 	CampaignService  campaign.CampaignService
 	ContactService   contact.ContactService
 	SegmentService   segment.Service
+	FormService      form.Service
 	SequenceService  sequence.SequenceService
 	UniboxService    unibox.UniboxService
 

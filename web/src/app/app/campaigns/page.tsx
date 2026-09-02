@@ -48,6 +48,11 @@ import {
 } from "@/components/layout/Page";
 import { SearchInput } from "@/components/ui/field";
 import {
+    CAMPAIGN_STATUS_LABEL,
+    campaignStatusBucket as statusBucket,
+    campaignStatusTone as statusTone,
+} from "@/components/app/campaigns/status";
+import {
     PopoverMenu,
     PopoverMenuContent,
     PopoverMenuItem,
@@ -60,47 +65,11 @@ import {
 type StatusFilter = "all" | "active" | "paused" | "draft" | "completed";
 type SortMode = "newest" | "oldest" | "name";
 
-// Collapse the backend's raw campaign statuses into the buckets the list
-// filters/counts by. paused_no_accounts / paused_trial_expired are auto-pause
-// variants, so they belong with "paused"; anything unknown reads as draft.
-function statusBucket(s?: string): "active" | "paused" | "completed" | "draft" {
-    if (s === "active") return "active";
-    if (s === "completed") return "completed";
-    if (s && s.startsWith("paused")) return "paused";
-    return "draft";
-}
-
 // Per-state label + leading mark for a campaign row. "active" renders the
 // animated dot-grid loader; every other state is a 14px lucide icon so the
-// fixed-width leading slot keeps each row's name aligned.
-const STATUS_LABEL: Record<string, string> = {
-    active: "running",
-    paused: "paused",
-    paused_no_accounts: "no accounts",
-    paused_trial_expired: "trial expired",
-    paused_guardrail: "auto-paused",
-    paused_undeliverable: "needs verification",
-    completed: "finished",
-    draft: "draft",
-};
-
-// Single source of truth for a status's color — drives BOTH the leading mark
-// and the right-side text label so they always agree. emerald = live/done,
-// amber = paused/needs-attention, slate = not started.
-const STATUS_TONE: Record<string, string> = {
-    active: "text-emerald-600",
-    completed: "text-emerald-600",
-    paused: "text-amber-600",
-    paused_no_accounts: "text-amber-600",
-    paused_trial_expired: "text-amber-600",
-    paused_guardrail: "text-rose-600",
-    paused_undeliverable: "text-amber-600",
-    draft: "text-slate-500",
-};
-
-function statusTone(status: string): string {
-    return STATUS_TONE[status] ?? STATUS_TONE.draft;
-}
+// fixed-width leading slot keeps each row's name aligned. The label/tone maps
+// live in components/app/campaigns/status so pickers share them.
+const STATUS_LABEL = CAMPAIGN_STATUS_LABEL;
 
 function CampaignStatusMark({ status }: { status: string }) {
     const tone = statusTone(status);

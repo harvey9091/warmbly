@@ -87,23 +87,49 @@ export function tokenLabel(token: string): string {
     return parsed ? parsed.key : token;
 }
 
+// keep in sync with FormLinkMarkerRE in internal/models/form_event.go
+export const FORM_LINK_RE = /\{\{\s*form_link:([a-z0-9]{1,64})\s*\}\}/g;
+
+// buildFormLinkToken assembles the literal personalized-form-link marker the Go
+// send pipeline resolves per recipient.
+export function buildFormLinkToken(publicId: string): string {
+    return `{{form_link:${publicId}}}`;
+}
+
+// parseFormLinkToken extracts the form public id from a form-link marker, or
+// null when the string is not one.
+export function parseFormLinkToken(token: string): string | null {
+    const m = token.match(/^\{\{\s*form_link:([a-z0-9]{1,64})\s*\}\}$/);
+    return m ? m[1] : null;
+}
+
 // FIELD_TOKEN_RE matches a bare merge-field token (optionally with a default
 // fallback) but NOT control tokens like {{if .X}} / {{end}} / {{eq ...}}, so
 // legacy plain content can be upgraded to chips without disturbing conditionals.
 export const FIELD_TOKEN_RE = /\{\{\s*\.[A-Za-z0-9_ -]+?(?:\s*\|\s*default\s+"[^"]*")?\s*\}\}/g;
 
-// upgradeVariableTokens wraps bare merge-field tokens in the editor HTML with the
-// chip span (span[data-var]) so legacy plain content shows as chips on load. It
-// is a no-op once content has been saved with chips (detected by an existing
-// data-var span), which also prevents double-wrapping. The token stays as the
-// span's text content, matching how VariableNode serializes back out.
+// upgradeVariableTokens wraps bare merge-field and form-link tokens in the
+// editor HTML with their chip spans (span[data-var] / span[data-form-link]) so
+// legacy plain content shows as chips on load. It is a no-op once content has
+// been saved with chips (detected by an existing chip span), which also
+// prevents double-wrapping. The token stays as the span's text content,
+// matching how VariableNode/FormLinkNode serialize back out.
 export function upgradeVariableTokens(html: string): string {
-    // Bail once the content already carries any chip node (variable, AI, or
-    // conditional), so we never double-wrap or reach inside a chip's serialized
-    // text. Legacy plain content has none of these markers.
-    if (!html || html.includes("data-var") || html.includes("data-ai-var") || html.includes("data-if")) return html;
-    return html.replace(FIELD_TOKEN_RE, (tok) => {
-        const esc = tok.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        return `<span data-var="">${esc}</span>`;
-    });
+    // Bail once the content already carries any chip node (variable, AI,
+    // conditional, or form link), so we never double-wrap or reach inside a
+    // chip's serialized text. Legacy plain content has none of these markers.
+    if (
+        !html ||
+        html.includes("data-var") ||
+        html.includes("data-ai-var") ||
+        html.includes("data-if") ||
+        html.includes("data-form-link")
+    )
+        return html;
+    return html
+        .replace(FIELD_TOKEN_RE, (tok) => {
+            const esc = tok.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            return `<span data-var="">${esc}</span>`;
+        })
+        .replace(FORM_LINK_RE, (tok, publicId: string) => `<span data-form-link="${publicId}">${tok}</span>`);
 }

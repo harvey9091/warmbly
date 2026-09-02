@@ -21,9 +21,13 @@ interface Props {
     // When set (the campaign Leads tab), the new lead is added straight into
     // this campaign.
     campaign?: { id: string; name: string };
+    // When set (a segment's member list), the contact is pinned into that
+    // segment, so it shows up where it was created even if the segment's
+    // conditions don't match it.
+    segment?: { id: string; name: string };
 }
 
-export function NewContactDialog({ open, onClose, campaign }: Props) {
+export function NewContactDialog({ open, onClose, campaign, segment }: Props) {
     const [email, setEmail] = React.useState("");
     const [firstName, setFirstName] = React.useState("");
     const [lastName, setLastName] = React.useState("");
@@ -61,13 +65,14 @@ export function NewContactDialog({ open, onClose, campaign }: Props) {
             phone: phone.trim(),
             campaigns: campaign ? [campaign.id] : [],
             categories,
+            segments: segment ? [segment.id] : undefined,
             custom_fields: {},
             source: campaign ? "campaign" : "manual",
         };
         try {
             await toast.promise(add.mutateAsync([contact]), {
                 loading: "Adding contact…",
-                success: "Contact added",
+                success: segment ? `Contact added to ${segment.name}` : "Contact added",
                 error: (err: AppError) => buildError(err),
             });
             onClose();
@@ -108,6 +113,11 @@ export function NewContactDialog({ open, onClose, campaign }: Props) {
                             <span className="text-[12.5px] text-slate-900 font-medium">
                                 Contact
                             </span>
+                            {segment && (
+                                <span className="hidden sm:inline-flex items-center h-5 px-1.5 rounded bg-sky-50 text-sky-700 text-[10px] font-medium max-w-[160px] truncate">
+                                    {segment.name}
+                                </span>
+                            )}
                             <button
                                 type="button"
                                 onClick={onClose}

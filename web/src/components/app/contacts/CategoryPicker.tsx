@@ -136,6 +136,7 @@ export default function CategoryPicker({
             <AnimatePresence>
                 {open && (
                     <motion.div
+                        data-floating
                         initial={{ opacity: 0, y: placement === "top" ? 4 : -4 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: placement === "top" ? 4 : -4 }}

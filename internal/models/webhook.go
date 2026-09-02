@@ -76,6 +76,9 @@ const (
 	WebhookEventContactUpdated WebhookEventType = "contact.updated"
 	WebhookEventContactDeleted WebhookEventType = "contact.deleted"
 
+	// Forms.
+	WebhookEventFormSubmitted WebhookEventType = "form.submitted"
+
 	// --- Bulk import/export operations ---
 	WebhookEventBulkOperationStarted   WebhookEventType = "bulk_operation.started"
 	WebhookEventBulkOperationCompleted WebhookEventType = "bulk_operation.completed"
@@ -165,6 +168,7 @@ var AllWebhookEventTypes = []WebhookEventType{
 	WebhookEventContactCreated,
 	WebhookEventContactUpdated,
 	WebhookEventContactDeleted,
+	WebhookEventFormSubmitted,
 	WebhookEventBulkOperationStarted,
 	WebhookEventBulkOperationCompleted,
 	WebhookEventBulkOperationFailed,
@@ -301,6 +305,7 @@ func buildWebhookEventCatalog() []WebhookEventDescriptor {
 		{WebhookEventContactCreated, WebhookCatContact, "A contact was created."},
 		{WebhookEventContactUpdated, WebhookCatContact, "A contact was updated."},
 		{WebhookEventContactDeleted, WebhookCatContact, "A contact was deleted."},
+		{WebhookEventFormSubmitted, WebhookCatContact, "A hosted form received a submission."},
 		{WebhookEventCRMDealCreated, WebhookCatCRM, "A CRM deal was created."},
 		{WebhookEventCRMDealUpdated, WebhookCatCRM, "A CRM deal changed (including stage moves)."},
 		{WebhookEventCRMDealDeleted, WebhookCatCRM, "A CRM deal was deleted."},

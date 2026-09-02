@@ -56,6 +56,14 @@ func (s *contactService) Add(ctx context.Context, userID string, orgID uuid.UUID
 		return nil, xerr
 	}
 
+	// Checked before the write so an unknown segment is a 400 rather than a
+	// silently-skipped link. The override itself is written inside the
+	// repository's transaction, so a contact is never created without the
+	// segment membership the caller asked for.
+	if xerr := s.checkSegmentTargets(ctx, orgID, contacts); xerr != nil {
+		return nil, xerr
+	}
+
 	created, xerr := s.contactRepository.Add(ctx, userID, orgID, contacts)
 	if xerr != nil {
 		return nil, xerr
@@ -67,7 +75,24 @@ func (s *contactService) Add(ctx context.Context, userID string, orgID uuid.UUID
 		attached = append(attached, contacts[i].Campaigns...)
 	}
 	s.wakeCampaigns(ctx, orgID, attached)
+	s.syncSegmentCampaigns(ctx, orgID)
 	return created, nil
+}
+
+// checkSegmentTargets rejects a create whose segments do not exist in the
+// organization. Existence is checked once for the whole batch, so N contacts
+// naming the same segment cost one lookup; the repository writes the overrides
+// itself, inside the same transaction as the contacts.
+func (s *contactService) checkSegmentTargets(ctx context.Context, orgID uuid.UUID, contacts []models.AddContact) *errx.Error {
+	var raw []string
+	for i := range contacts {
+		raw = append(raw, contacts[i].Segments...)
+	}
+	if len(raw) == 0 {
+		return nil
+	}
+	_, xerr := s.parseSegmentIDs(ctx, orgID, raw)
+	return xerr
 }
 
 func (s *contactService) Search(ctx context.Context, orgID, cursor, category, limit string, filters models.SearchContacts) (*models.ContactsResult, *errx.Error) {
@@ -135,6 +160,7 @@ func (s *contactService) BulkUpdate(ctx context.Context, userID string, orgID uu
 
 	s.publishContactsReload(ctx, userID, "contacts:bulk_update")
 	s.wakeCampaigns(ctx, orgID, data.AddCampaigns)
+	s.syncSegmentCampaigns(ctx, orgID)
 	return updated, nil
 }
 
@@ -146,6 +172,7 @@ func (s *contactService) Update(ctx context.Context, userID, contactID string, o
 
 	s.publishContactsReload(ctx, userID, "contacts:update:"+contactID)
 	s.wakeCampaigns(ctx, orgID, data.Campaigns)
+	s.syncSegmentCampaigns(ctx, orgID)
 	return updated, nil
 }
 

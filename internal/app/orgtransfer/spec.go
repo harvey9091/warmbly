@@ -318,6 +318,41 @@ var Tables = []Table{
 		Scope: `campaign_id IN ` + orgCampaigns,
 	},
 	{
+		// The forms tables live below campaigns despite belonging to the
+		// Contacts group: each carries a campaign_id foreign key, and Tables is
+		// applied top to bottom, so importing them earlier would hit a missing
+		// campaign when both groups travel together.
+		Name: "forms", Group: models.OrgDataGroupContacts,
+		Scope: scopeOrg,
+		Note: "public_id travels so installed embed codes keep working after a move; " +
+			"campaign_id is a nullable crossing the importer blanks when campaigns stay behind.",
+		Blobs: []BlobColumn{
+			{Column: "logo_url", Kind: BlobKindPublicURL},
+			{Column: "cover_url", Kind: BlobKindPublicURL},
+			{Column: "background_url", Kind: BlobKindPublicURL},
+		},
+	},
+	{
+		Name: "form_categories", Group: models.OrgDataGroupContacts,
+		Scope: `form_id IN (SELECT id FROM forms WHERE organization_id = $1)`,
+	},
+	{
+		Name: "form_submissions", Group: models.OrgDataGroupContacts,
+		Scope: scopeOrg,
+	},
+	{
+		Name: "form_links", Group: models.OrgDataGroupContacts,
+		Scope: scopeOrg,
+		Note: "row ids are the tokens inside already-sent personalized URLs, so they travel verbatim; " +
+			"campaign_id is a nullable crossing the importer blanks when campaigns stay behind.",
+	},
+	{
+		// Kept in Contacts (not Events) because form_id is a NOT NULL crossing
+		// into forms; the 180-day retention bounds the volume.
+		Name: "form_events", Group: models.OrgDataGroupContacts,
+		Scope: scopeOrg,
+	},
+	{
 		Name: "sequences", Group: models.OrgDataGroupCampaigns,
 		Scope: scopeOrg,
 	},
@@ -345,6 +380,17 @@ var Tables = []Table{
 	{
 		Name: "campaign_leads", Group: models.OrgDataGroupCampaigns,
 		Scope: `campaign_id IN ` + orgCampaigns,
+	},
+	{
+		// Segments travel in the contacts group, which campaigns already
+		// require, so both ends of the link exist by the time this applies.
+		Name: "campaign_segments", Group: models.OrgDataGroupCampaigns,
+		Scope: `campaign_id IN ` + orgCampaigns,
+	},
+	{
+		Name: "campaign_lead_removals", Group: models.OrgDataGroupCampaigns,
+		Scope: `campaign_id IN ` + orgCampaigns,
+		Note:  "Must travel, or linked segments on the destination re-add every lead the user removed by hand.",
 	},
 	{
 		Name: "campaign_ab_assignments", Group: models.OrgDataGroupCampaigns,

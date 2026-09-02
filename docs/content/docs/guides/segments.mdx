@@ -42,19 +42,38 @@ Conditions decide membership, and two overrides sit on top of them:
 
 The segment header shows how many contacts are pinned in or out, and a **Pinned contacts** panel below it lists them; **Back to automatic** clears an override so the conditions decide again. A contact's own drawer has a **Segments** section that shows every segment, whether the contact is in it, and the same pin in, pin out and back-to-automatic controls.
 
-Sequences can pin as well: the **Add to segment** and **Remove from segment** action steps apply the override to a contact as it moves through a campaign flow, so a positive reply can drop someone into a "warm" segment automatically.
+**New contact** on a segment page pins as well: a contact created from inside a segment joins that segment, so it appears in the list you created it from even when the conditions do not describe it yet.
+
+Sequences can pin too: the **Add to segment** and **Remove from segment** action steps apply the override to a contact as it moves through a campaign flow, so a positive reply can drop someone into a "warm" segment automatically. So can an import: the file import wizard's **Add to segments** picker on its Options step pins every contact in the file into the segments you choose, so a fresh list can land straight in the audience it was collected for.
 
 ## Using a segment
 
 - **Browse**: a segment page lists its current members with the same table, filters, detail drawer and bulk actions as the contacts page.
-- **Add to campaign**: enrols every current member as a lead of the campaign you pick, from the segment page or with **From segment** on a campaign's Leads tab. Contacts already in that campaign are skipped, and a running campaign wakes up to schedule the new leads. This is a snapshot: contacts who join the segment later are not added until you run it again.
+- **Add to campaign**: enrols every current member as a lead of the campaign you pick, from the segment page or with **From segment** on a campaign's Leads tab. Contacts already in that campaign are skipped, and a running campaign wakes up to schedule the new leads. This is a snapshot: contacts who join the segment later are not added until you run it again. To keep a campaign fed automatically, [link the segment](#linking-a-segment-to-a-campaign) instead.
+- **Link to campaign**: attaches the segment to a campaign as a live audience, so contacts who join the segment later become leads on their own. See [below](#linking-a-segment-to-a-campaign).
 - **Filter**: the contact list's filter bar has a **Segment** pill, and the same scope carries into an export.
 - **Duplicate**: the segment menu copies a definition to start a variation from.
 - **Search and export**: the contact search and export accept `segment_ids`, so anything that takes a contact filter can be scoped to a segment.
 
+## Linking a segment to a campaign
+
+Where **Add to campaign** copies today's members once, a linked segment is a live audience: the campaign keeps enrolling whoever the segment says belongs. Manage the links from the **Segments** button on a campaign's Leads tab; a campaign can link up to 20 segments.
+
+Linking enrols every current member as a lead immediately. From then on, any contact who enters the segment, a new contact, an import, a condition edit, a manual pin-in, or simply drifting into a date or engagement condition, is enrolled automatically; a background check picks up drift about every 2 minutes.
+
+Enrolment is additive. A contact who later falls out of the segment keeps their lead row and their progress; the link only ever adds. Detaching a segment stops future enrolment but leaves the leads it already added in place. Removing a lead from the campaign by hand is respected too: automatic enrolment will not re-add that contact, even while they still match a linked segment, until you add them back yourself.
+
+The campaign reacts to growth by status:
+
+- **Active**: woken up to schedule the new leads straight away.
+- **Finished**: restarted automatically, through the same launch checks as pressing play.
+- **Paused** (or draft): the leads accumulate and send when the campaign runs.
+
+A segment linked to a campaign cannot be deleted; detach it from the campaign first.
+
 ## Segments in the API
 
-Everything above can be driven from the [API](/api/reference/contacts/#segments): list, create, update and delete segments, pin contacts in or out, look up a contact's segments, and enrol a segment into a campaign. Contact search and export take `segment_ids` to scope any contact query to a segment, so an external system (a signup form, a CRM sync) can keep a segment current and let campaigns pick it up from there.
+Everything above can be driven from the [API](/api/reference/contacts/#segments): list, create, update and delete segments, pin contacts in or out, look up a contact's segments, enrol a segment into a campaign once, and [link segments to a campaign](/api/reference/campaigns/#list-linked-segments) as a live audience. Contact search and export take `segment_ids` to scope any contact query to a segment, so an external system (a signup form, a CRM sync) can keep a segment current and let campaigns pick it up from there.
 
 API calls address a segment by its ID. It is shown at the bottom of the segment page header (click it to copy), in the **Copy segment ID** entry of a segment's row menu on the Segments tab, and in every segment the API returns. Reads take the `READ_CONTACTS` key scope, writes `WRITE_CONTACTS`, and enrolling into a campaign `WRITE_CAMPAIGNS`.
 

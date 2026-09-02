@@ -1,0 +1,142 @@
+---
+title: "Forms"
+description: "Build a hosted lead-capture form, style it to match your site, embed it anywhere, and turn every submission into a contact."
+---
+
+Forms turn website visitors into contacts. You build a form in the dashboard, publish it to a hosted page, and either share the link or embed the form on any website. Every submission is stored, and when it carries an email address it creates or updates a contact, files it under the categories you chose, and can drop it straight into a campaign.
+
+Open **Forms** in the sidebar. Viewing takes the same permission as viewing contacts; building and publishing take the manage-contacts permission.
+
+## Building a form
+
+**New form** creates a draft seeded with first name, last name and email, and opens the builder. The canvas in the middle is a live preview: what you see is exactly what the hosted page renders.
+
+- Add blocks by clicking them in the left palette or dragging them onto the canvas.
+- Click a block to edit it in the right panel: label, placeholder, help text, required, and width. Two half-width fields share a row.
+- Drag the grip on a selected block to reorder; the copy and trash buttons duplicate and remove it.
+
+### Field types
+
+| Block | Collects |
+|---|---|
+| Text, Email, Phone, Long text, Number, Date | A single value |
+| Dropdown, Radio buttons | One of the options you define |
+| Checkbox group | Any number of the options |
+| Single checkbox | A yes, for consent lines like "I agree" |
+| Hidden field | A constant you set, invisible to visitors. Useful for tagging which page or campaign a form sits on |
+| Heading, Text block, Divider | Nothing. Layout only |
+| Page break | Nothing. Everything after it starts a new page |
+
+### Pages
+
+Drop a **Page break** block anywhere to split the form into steps. Visitors move through pages with Next and Back, each page validates before advancing, and an optional progress bar (Design tab) shows how far along they are. A break can carry a page title, which labels the page on the form and in analytics. Avoid a break as the very first or last block; an empty page renders nothing and the builder warns before publishing.
+
+### Where answers go
+
+Every answer is kept verbatim on the submission. On top of that, each input field can feed the contact:
+
+- **Contact columns.** A field mapped to first name, last name, email, company or phone fills that column. The email field always maps to email, and only one field can map to each column.
+- **Custom fields.** An unmapped field stores its answer as a contact custom field named after the label, so a "Company size" question becomes a `Company size` custom field you can use in [segments](/guides/segments/) and email personalization.
+
+A form needs an email answer to create a contact. Forms without an email field still collect submissions; they just never touch the contact list.
+
+## Design
+
+The **Design** tab styles the form while the canvas updates live. The defaults are a clean, neutral card that looks right on most sites; changing nothing is a fine choice.
+
+- **Themes.** One-click presets (light, dark, gradients, serif and more) that set the colors and font in one go. A theme never touches your layout, pages or button text, and every color stays editable afterwards.
+- **Layout.** *Card* is the classic centered box. *Wide* drops the box and lets the fields sit directly on the page background. *Split* adds a side panel that shows your cover image (or the page background) next to the form.
+- **Mode.** *Classic* shows each page of fields at once. *Focus* asks one question per screen, advancing on Enter, in the style of full-page survey tools.
+- **Colors and type.** Every color (page, card, inputs, labels, placeholder, accent, button), eight fonts, corner radius, spacing, width and alignment. Each color opens a full picker: drag the shade area, pick a hue, paste a hex value, or use one of the presets. On Chromium browsers there is also an eyedropper for sampling a color anywhere on screen. The page background can be a two-color gradient.
+- **Header bar.** An optional bar carrying your logo and a title. **Across the page** runs it edge to edge above everything; **with the form** puts it on the form itself, above the fields with a rule under it, which reads as part of the card rather than as chrome above it. Its contents sit left, centered or apart (logo one side, title the other), following the form's own alignment until you choose otherwise; centering stacks the logo above the title, since that is the shape a centered lockup wants. A page-width bar can take its own background color and stay on screen while the form scrolls; neither applies to an inline header, so neither is offered for one. The header takes the logo by default, and turning that off leaves the logo in its own placement and gives the header the title alone. A header with neither a logo nor a title is skipped on the live page.
+- **Side panel.** On the Split layout, the panel takes a title and a paragraph of text on top of the cover image, rendered in white with a soft shadow so it stays readable on any photo.
+- **Branding and backgrounds.** Upload a logo (PNG or JPG, up to 1 MB), a cover image for the Split layout, and a background image behind the whole page (both up to 4 MB). The logo renders small, medium or large, and on the Card layout it can sit on the card or above it on the page background; check contrast if you move it out, since a dark page can swallow a dark logo. A background image can fill, fit or tile, and the **veil** slider fades the page color over it: raise it when text on a busy photo gets hard to read.
+
+## Settings
+
+The **Settings** tab controls what a submission does:
+
+- **Success message** is shown after submitting, or set a **redirect URL** to send the visitor to your own thank-you page instead.
+- **Add to categories** files every submitted contact under the categories you pick, for example "Website leads".
+- **Add to campaign** enrolls new contacts as leads in the campaign you pick. Sending still follows the campaign's own schedule, limits and windows; a form never causes immediate mail.
+- **Spam protection** and **allowed embed domains** are covered below.
+
+## Publishing and sharing
+
+**Publish** puts the form online; **Unpublish** takes it offline again (the page starts answering not found). Archiving keeps the data but takes the page offline too. Edits to a published form go live when you save.
+
+The **Share** tab has four ways to use a published form:
+
+- **Hosted link.** The form's own page. Share it in an email signature or on social; no website needed.
+- **JavaScript embed** (recommended). A script tag plus a `div` with a `data-warmbly-form` attribute. The form renders in place and sizes itself to its content, so there is no clipped bottom edge or dead space.
+- **Popup.** The same script plus any element with a `data-warmbly-popup` attribute. Clicking it opens the form in an overlay, which closes on Escape, on the backdrop, and shortly after a successful submit.
+- **Plain iframe.** For site builders that strip scripts. Fixed height, so set the `height` attribute to fit your form.
+
+These work in WordPress, Elementor, Webflow, Shopify, Framer and anywhere else custom HTML is allowed. The form itself always runs on the Warmbly origin, so the host page's CSS cannot break it and no visitor data flows through the host page. The script also fires a `warmbly:submitted` DOM event on the host page after each successful submit, if you want to run your own tracking.
+
+### Personalized links
+
+A personalized link is the form URL with a per-contact ticket (`?t=...`). Opening it pre-fills the contact's mapped fields, and the visit and submission are attributed to that contact even when they type a different email. There is no separate email verification step; holding the link is the identity, the same way an unsubscribe link works.
+
+Two ways to get them:
+
+- **In campaign emails.** Use the form button in the editor toolbar, or type `{{` and pick the form under **Forms**. Either inserts a chip you can click to swap the form later. At send time every recipient gets their own link, and it is click-tracked like any other link.
+- **For one contact.** The Share tab has a contact search; Copy link mints that contact's URL for use anywhere.
+
+Personalized links make the analytics personal too: the form's Analytics tab shows which contacts opened the form, how far they got, and whether they finished.
+
+### Custom domain
+
+Form links go out on a shared host by default, which means their reputation and their look are the sum of everyone using it. Pointing a subdomain of the domain you send from at that host puts every form link on your own name instead: the hosted page, the embeds, and the personalized links inside campaign emails.
+
+This matters more than it looks. Click tracking already rewrites links in the HTML part of an email onto your [tracking domain](/guides/mailboxes/#custom-tracking-domain), but the plain-text alternative is never rewritten, so without a custom forms domain the shared host still appears in every message that carries a form link.
+
+Type the subdomain into **Custom domain** on any form's Share tab, add the `CNAME` it shows you at your DNS provider, then press **Save and verify**. It is a workspace setting, so it covers every form at once and needs the manage-settings permission.
+
+Verification reports the same outcomes as a tracking domain: verified, no record yet, points at something else, or nothing to point at when the install has no forms host. Until it verifies, links keep working on the shared host, so an unverified domain never breaks a form. Warmbly re-checks hourly, so a record that finishes propagating starts being used on its own, and one that later stops pointing here stops being used instead of quietly serving links from a host that no longer answers.
+
+Links already sent keep resolving on whichever host they were built with. Only new links pick up a change.
+
+### Forms in a campaign
+
+A campaign that links to a form grows a **Forms** panel on its overview page, listing every form it references with, per form: how many recipients were handed a personalized link, how many opened it, how many started filling it in, how many submitted, and the resulting submission rate. A form appears there as soon as it is written into a step, at zero, so you can confirm the wiring before launching.
+
+Because each recipient's link is unique, those numbers are per contact rather than per click: the same person opening twice counts once, and every submission names the campaign that sent them. The form's own Analytics tab has the mirror image, a **Campaigns** breakdown of where its traffic came from, and every submission row shows its campaign.
+
+## Submissions
+
+The **Submissions** tab is a table of everyone who engaged, newest activity first and live: a new submission appears for everyone with the form open, without a refresh. Alongside completed responses it lists people who opened a personalized link but have not finished, marked **In progress** with the page they reached, so a stalled lead is visible instead of invisible. Search and the status filter narrow the list; click a response for every answer; the trash button deletes it (the contact it created is kept), and selecting rows offers a bulk delete.
+
+Each submitted contact carries `form` as its first-touch source, gets a "Submitted a form" entry on its activity timeline, and can be filtered in segments by source. The form's page views, submission count and conversion rate show on the Forms list.
+
+Submissions also fire the `form.submitted` [webhook](/guides/webhooks/), carrying the answers and the contact id, so you can forward leads to any external system.
+
+## Analytics
+
+The **Analytics** tab shows the funnel for the last 7, 30 or 90 days:
+
+- **Totals and trend.** Views, starts (first interaction), submissions and the completion rate, with a daily chart.
+- **Page funnel.** On multi-page forms, how many visitors reached each page and how many of those finished, so you can see exactly where people drop off.
+- **Where visitors come from.** Top referrer domains, countries and device types. Location is resolved to country only and the visitor's IP address is never stored.
+- **Identified visitors.** Contacts who opened the form through a personalized link: when they were last seen, the furthest page they reached, and whether they completed it.
+
+Funnel events are kept for 180 days; the lifetime view and submission counters on the Forms list are kept forever.
+
+## Spam protection
+
+Every published form has layered protection with nothing to configure:
+
+- a honeypot field invisible to people but filled in by naive bots
+- a minimum fill time, discarding submissions that arrive faster than a human can type
+- per-address rate limits on the submit endpoint
+- a size cap on every submission
+- a render token: the form's data and submit endpoints only answer requests carrying a token minted when the page was served, so scripts cannot scrape form definitions or spray submissions without loading the page. A tab left open for more than 12 hours shows a refresh prompt instead of failing silently
+
+Two more controls are yours:
+
+- **Captcha challenge** adds a Cloudflare Turnstile check to the form. The toggle appears once the operator has configured Turnstile for the instance.
+- **Allowed embed domains** limits which sites may embed the form. With domains listed, browsers refuse to frame the page anywhere else (a domain covers its subdomains); empty allows any site. The hosted link keeps working either way.
+
+## Data and portability
+
+Forms, their design, their logo and cover images, their submissions, personalized link tickets and funnel events all belong to the **Contacts** data group of a [workspace archive](/guides/workspace-export-import/). The public form id travels with them, so embed codes installed on your website keep working after a move to another instance (point your embeds at the new host), and link tickets travel verbatim, so personalized links already sitting in sent emails keep identifying their contacts. A form's campaign link is dropped on import when campaigns stay behind.

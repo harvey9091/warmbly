@@ -15,12 +15,14 @@ flowchart LR
   NG --> API["backend :8080"]
   NG --> RT["realtime :4000"]
   NG --> TRK["tracking :3000"]
+  NG --> FRM["forms :8090"]
   subgraph HOST["One host, systemd"]
     API --> PG[("PostgreSQL 16")]
     API --> BUS{{"NATS JetStream"}}
     API --> RD[("Redis 7")]
     BUS --> CONS["consumer"] --> PG
     TRK --> BUS
+    FRM --> API
     RT --- RD
     BUS --> W["worker"]
   end
@@ -38,9 +40,9 @@ flowchart LR
 | Go 1.25 | Builds the backend, consumer, worker, `migrate` and `warmblyctl` |
 | Rust (stable, 1.93 or newer) | Builds the tracking service |
 | Elixir 1.18 on OTP 26 | Builds the realtime service |
-| Node 22 and pnpm | Builds the dashboard and admin panel |
-| nginx | Serves the static frontends and terminates TLS for the API, websocket and tracking hosts |
-| Five DNS names | `app`, `admin`, `api`, `ws` and `t` under your domain, all pointing at the host |
+| Node 22 and pnpm | Builds the dashboard, admin panel and forms app |
+| nginx | Serves the static frontends and terminates TLS for the API, websocket, tracking and forms hosts |
+| Six DNS names | `app`, `admin`, `api`, `ws`, `t` and `forms` under your domain, all pointing at the host |
 
 The toolchains are only needed on the machine that builds. If you would rather not install compilers on the production host, build on another machine of the same architecture and copy `/opt/warmbly` over; nothing below is path-dependent beyond the values you put in the env file.
 
@@ -145,15 +147,15 @@ Checkout a release tag rather than `main` when you want a known version: `git -C
 
 ### Go services
 
-Five binaries come out of one module. Static builds, so the production host needs no Go runtime:
+Six binaries come out of one module. Static builds, so the production host needs no Go runtime:
 
 ```bash
 cd /opt/warmbly/src
 export CGO_ENABLED=0
-for cmd in backend consumer worker migrate warmblyctl; do
+for cmd in backend forms consumer worker migrate warmblyctl; do
   go build -ldflags="-s -w" -o "out/$cmd" "./cmd/$cmd"
 done
-sudo install -m 0755 out/backend out/consumer out/worker out/migrate out/warmblyctl /opt/warmbly/bin/
+sudo install -m 0755 out/backend out/forms out/consumer out/worker out/migrate out/warmblyctl /opt/warmbly/bin/
 sudo ln -sf /opt/warmbly/bin/warmblyctl /usr/local/bin/warmblyctl
 ```
 
@@ -198,16 +200,19 @@ Build on a machine with the same libc as the host: a release built on Alpine (mu
 
 <Step>
 
-### Dashboard and admin panel
+### Dashboard, admin panel and forms app
 
-Both are static Vite builds. No URL is baked in at build time; the frontends read `config.js` at runtime, which you write in the next step.
+All three are static Vite builds. No URL is baked in at build time; the dashboard and admin read `config.js` at runtime (next step), and the forms app is served by the forms binary itself, which looks for it at `forms/dist` under its working directory.
 
 ```bash
 cd /opt/warmbly/src/web   && pnpm install --frozen-lockfile && pnpm build
 cd /opt/warmbly/src/admin && pnpm install --frozen-lockfile && pnpm build
-sudo rm -rf /opt/warmbly/web /opt/warmbly/admin
+cd /opt/warmbly/src/forms && pnpm install --frozen-lockfile && pnpm build
+sudo rm -rf /opt/warmbly/web /opt/warmbly/admin /opt/warmbly/forms
 sudo cp -r /opt/warmbly/src/web/dist   /opt/warmbly/web
 sudo cp -r /opt/warmbly/src/admin/dist /opt/warmbly/admin
+sudo install -d /opt/warmbly/forms
+sudo cp -r /opt/warmbly/src/forms/dist /opt/warmbly/forms/dist
 ```
 
 </Step>
@@ -440,7 +445,7 @@ To apply migrations without starting the API, for instance in a deploy script, `
 ### Start the rest
 
 ```bash
-sudo systemctl enable --now warmbly-consumer warmbly-tracking warmbly-realtime warmbly-worker
+sudo systemctl enable --now warmbly-forms warmbly-consumer warmbly-tracking warmbly-realtime warmbly-worker
 systemctl status 'warmbly-*' --no-pager
 ```
 
@@ -449,6 +454,7 @@ Each answers on its own port:
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/health   # backend
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/health   # tracking
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8090/health   # forms
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:4000/health   # realtime
 ```
 
@@ -460,13 +466,13 @@ The consumer and worker have no port; `journalctl -u warmbly-worker` shows the w
 
 ### Put nginx in front
 
-[`deploy/nginx/warmbly.conf`](https://github.com/warmbly/warmbly/blob/main/deploy/nginx/warmbly.conf) serves the two static frontends and proxies the API, websocket and tracking hosts. It references Let's Encrypt certificate files by path, so the certificates have to exist before nginx will accept the site. Issue them first, in standalone mode with nothing on port 80, then enable the site:
+[`deploy/nginx/warmbly.conf`](https://github.com/warmbly/warmbly/blob/main/deploy/nginx/warmbly.conf) serves the two static frontends and proxies the API, websocket, tracking and forms hosts. It references Let's Encrypt certificate files by path, so the certificates have to exist before nginx will accept the site. Issue them first, in standalone mode with nothing on port 80, then enable the site:
 
 ```bash
 sudo systemctl stop nginx
 sudo certbot certonly --standalone --agree-tos -m you@yourdomain.com \
   -d app.yourdomain.com -d admin.yourdomain.com -d api.yourdomain.com \
-  -d ws.yourdomain.com -d t.yourdomain.com \
+  -d ws.yourdomain.com -d t.yourdomain.com -d forms.yourdomain.com \
   --cert-name app.yourdomain.com
 
 sudo cp /opt/warmbly/src/deploy/nginx/warmbly.conf /etc/nginx/sites-available/warmbly.conf
@@ -475,7 +481,7 @@ sudo ln -s /etc/nginx/sites-available/warmbly.conf /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl start nginx
 ```
 
-`--cert-name app.yourdomain.com` puts all five names on one certificate under `/etc/letsencrypt/live/app.yourdomain.com/`, which is the path every server block in the shipped file uses. Renewals run from the timer certbot installs; because the certificate was issued standalone, tell it how to reload nginx once:
+`--cert-name app.yourdomain.com` puts all six names on one certificate under `/etc/letsencrypt/live/app.yourdomain.com/`, which is the path every server block in the shipped file uses. Renewals run from the timer certbot installs; because the certificate was issued standalone, tell it how to reload nginx once:
 
 ```bash
 sudo certbot renew --dry-run --pre-hook 'systemctl stop nginx' --post-hook 'systemctl start nginx'
@@ -562,7 +568,7 @@ Rebuild the artifacts that changed, then restart. Migrations are forward-only an
 cd /opt/warmbly/src && sudo git pull                     # or checkout a newer tag
 # repeat the build steps for the services that changed, then:
 sudo systemctl restart warmbly-backend
-sudo systemctl restart warmbly-consumer warmbly-tracking warmbly-realtime warmbly-worker
+sudo systemctl restart warmbly-forms warmbly-consumer warmbly-tracking warmbly-realtime warmbly-worker
 ```
 
 Frontend rebuilds overwrite `config.js` when you copy `dist/` over, so rewrite it afterwards (or keep the two files somewhere and copy them back). A build script that does all of it in order is worth writing the second time you upgrade.
@@ -602,11 +608,11 @@ Restore into an empty database before the backend starts, then start it and it a
 ## Quick reference
 
 ```
-/opt/warmbly/bin/{backend,consumer,worker,tracking,migrate,warmblyctl}
+/opt/warmbly/bin/{backend,forms,consumer,worker,tracking,migrate,warmblyctl}
 /opt/warmbly/realtime/bin/realtime        mix release
 /opt/warmbly/web, /opt/warmbly/admin      static builds + config.js
 /opt/warmbly/src                          the checkout (worker installer is served from here)
-/etc/warmbly/warmbly.env                  backend, consumer, tracking, realtime
+/etc/warmbly/warmbly.env                  backend, forms, consumer, tracking, realtime
 /etc/warmbly/worker.env                   worker
 /var/lib/warmbly/blobs                    BLOB_FS_ROOT
 /etc/systemd/system/warmbly-*.service     from deploy/systemd/

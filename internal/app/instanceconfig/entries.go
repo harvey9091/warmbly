@@ -527,6 +527,12 @@ var table = []Entry{
 		DocsAnchor: docsCaptcha,
 		Resolve:    envValue("TURNSTILE_BYPASS_TOKEN"),
 	},
+	{
+		Key: "TURNSTILE_SITE_KEY", Group: GroupCaptcha, RuntimeChangeable: ChangePerRequest,
+		Effect:     "The public Turnstile widget key hosted form pages render with. Unset leaves spam-protected forms without a captcha.",
+		DocsAnchor: docsCaptcha,
+		Resolve:    envValue("TURNSTILE_SITE_KEY"),
+	},
 
 	// Encryption.
 	{
@@ -723,6 +729,18 @@ var table = []Entry{
 	},
 
 	// Tracking.
+	{
+		Key: "FORMS_DOMAIN", Group: GroupAddresses, RuntimeChangeable: ChangePerRequest,
+		Effect:     "The host hosted form pages and embeds are served on (forms.example.com, routed to the forms service). Share links and embed codes point here; unset leaves forms without a public URL.",
+		DocsAnchor: docsAddresses,
+		Resolve:    envValue("FORMS_DOMAIN"),
+	},
+	{
+		Key: "FORM_IP_RATE_LIMIT", Group: GroupAddresses, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Public form submissions allowed per source IP per 10 minutes, enforced by the forms service. Default 30.",
+		DocsAnchor: docsAddresses, WhenUnset: SourceDerived,
+		Resolve: envValue("FORM_IP_RATE_LIMIT"),
+	},
 	{
 		Key: "TRACKING_DOMAIN", Group: GroupTracking, RuntimeChangeable: ChangePerRequest,
 		Effect:     "The host open pixels and click links point at. Recipients still receive mail when it is wrong, but nothing is recorded.",

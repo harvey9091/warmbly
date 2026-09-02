@@ -52,6 +52,7 @@ import (
 	emailverifyapp "github.com/warmbly/warmbly/internal/app/emailverify"
 	"github.com/warmbly/warmbly/internal/app/feature"
 	"github.com/warmbly/warmbly/internal/app/fleet"
+	"github.com/warmbly/warmbly/internal/app/form"
 	"github.com/warmbly/warmbly/internal/app/group"
 	"github.com/warmbly/warmbly/internal/app/guardrail"
 	idempotencyapp "github.com/warmbly/warmbly/internal/app/idempotency"
@@ -164,6 +165,7 @@ func main() {
 	var sequenceService sequence.SequenceService
 	var contactService contact.ContactService
 	var segmentService segment.Service
+	var formService form.Service
 	var websiteTrackingService websitetracking.Service
 	var socketService socket.SocketService
 	var uniboxService unibox.UniboxService
@@ -1197,6 +1199,25 @@ func main() {
 		contactService = contact.NewService(contactRepostory, subscriptionRepository, planRepository, streamingPublisher)
 		segmentRepository := repository.NewSegmentRepository(primaryDB)
 		segmentService = segment.NewService(segmentRepository, contactRepostory)
+		// Imports write segment include overrides, and every contact-mutating
+		// path re-enrols the org's segment-linked campaigns.
+		if aware, ok := contactService.(contact.SegmentAware); ok {
+			aware.WireSegments(segmentRepository, segmentService)
+		}
+		formRepository := repository.NewFormRepository(primaryDB)
+		formEventRepository := repository.NewFormEventRepository(primaryDB)
+		formService = form.NewService(formRepository)
+		formService.SetContacts(contactService)
+		formService.SetRealtime(streamingPublisher)
+		formService.SetCaptcha(captcha)
+		formService.SetWebhooks(webhookServiceForHandler)
+		formService.SetContactReader(contactRepostory)
+		formService.SetGeo(geoloc)
+		formService.SetLinks(repository.NewFormLinkRepository(primaryDB))
+		formService.SetEvents(formEventRepository)
+		formService.SetDomains(organizationRepoForHandler)
+		go jobs.NewFormEventsRetentionJob(formEventRepository).Start(ctx, 12*time.Hour)
+		go jobs.NewFormsDomainSweep(organizationRepoForHandler).Start(ctx, time.Hour)
 		// A visibly bad import is filed on the workspace's posture. On its own
 		// it can only reach `watch`, which changes nothing.
 		if aware, ok := contactService.(contact.OrgRiskAware); ok && orgRiskService != nil {
@@ -1290,6 +1311,9 @@ func main() {
 		// and Cloud Tasks client exist.
 		if segmentService != nil {
 			segmentService.SetCampaignWaker(campaignService)
+			// A completed campaign whose linked segments grow is restarted
+			// through the full launch checks, never by a raw status flip.
+			segmentService.SetCampaignStarter(campaignService)
 		}
 		if contactService != nil {
 			contactService.SetCampaignWaker(campaignService)
@@ -1522,6 +1546,9 @@ func main() {
 		if cloudLinkService != nil {
 			tasksService.SetCloudLink(cloudLinkService)
 		}
+		// {{form_link:...}} markers in campaign copy resolve to per-recipient
+		// personalized form URLs at send time.
+		tasksService.SetFormLinks(formService)
 		if w, ok := poolLinkService.(interface {
 			WireScheduler(poollink.WarmupScheduler)
 		}); ok {
@@ -1581,6 +1608,13 @@ func main() {
 		// crash between send and enqueue). Campaigns have no other bootstrap once
 		// started, so without this a stranded campaign stops sending forever.
 		go tasksService.StartCampaignReconciler(ctx, 5*time.Minute)
+
+		// Segment-linked campaigns: enrol contacts that drifted into a linked
+		// segment (date windows, engagement counters, nested segments) that
+		// the write-path syncs cannot see.
+		if segmentService != nil {
+			go segmentService.StartCampaignSegmentSync(ctx, 2*time.Minute)
+		}
 
 		// Worker reconciler: assign + (re)load every active mailbox onto its
 		// worker. Workers hold accounts in memory only, so this is what makes a
@@ -1832,6 +1866,7 @@ func main() {
 		RateLimitService: rateLimitService,
 		ContactService:   contactService,
 		SegmentService:   segmentService,
+		FormService:      formService,
 		SequenceService:  sequenceService,
 		UniboxService:    uniboxService,
 

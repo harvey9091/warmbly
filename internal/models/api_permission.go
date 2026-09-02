@@ -8,14 +8,14 @@ const (
 	// Read permissions
 	APIPermReadEmails    uint64 = 1 << iota // Read email accounts
 	APIPermReadCampaigns                    // Read campaigns + sequences
-	APIPermReadContacts                     // Read contacts, notes, activities
+	APIPermReadContacts                     // Read contacts, segments, notes, activities
 	APIPermReadUnibox                       // Read unified inbox
 	APIPermReadAnalytics                    // Read analytics + statistics
 
 	// Write permissions
 	APIPermWriteEmails    // Modify email accounts
 	APIPermWriteCampaigns // Create/modify campaigns + sequences
-	APIPermWriteContacts  // Create/modify contacts, notes, activities
+	APIPermWriteContacts  // Create/modify contacts, segments, notes, activities
 	APIPermWriteUnibox    // Mark as seen, reply, etc.
 
 	// Bulk operations (separate so a key can read+write without bulk power)
@@ -98,7 +98,7 @@ type APIPermission struct {
 var AllAPIPermissions = []APIPermission{
 	{"READ_EMAILS", APIPermReadEmails, "View email accounts and settings", "read"},
 	{"READ_CAMPAIGNS", APIPermReadCampaigns, "View campaigns and sequences", "read"},
-	{"READ_CONTACTS", APIPermReadContacts, "View contact lists, notes, and activities", "read"},
+	{"READ_CONTACTS", APIPermReadContacts, "View contact lists, segments, notes, and activities", "read"},
 	{"READ_UNIBOX", APIPermReadUnibox, "Access unified inbox", "read"},
 	{"READ_ANALYTICS", APIPermReadAnalytics, "View analytics and statistics", "read"},
 	{"READ_TEMPLATES", APIPermReadTemplates, "View reply templates", "read"},
@@ -106,7 +106,7 @@ var AllAPIPermissions = []APIPermission{
 	{"READ_AUDIT_LOGS", APIPermReadAuditLogs, "View organization audit logs", "read"},
 	{"WRITE_EMAILS", APIPermWriteEmails, "Modify email account settings", "write"},
 	{"WRITE_CAMPAIGNS", APIPermWriteCampaigns, "Create and modify campaigns and sequences", "write"},
-	{"WRITE_CONTACTS", APIPermWriteContacts, "Create and modify contacts, notes, and activities", "write"},
+	{"WRITE_CONTACTS", APIPermWriteContacts, "Create and modify contacts, segments, notes, and activities", "write"},
 	{"WRITE_UNIBOX", APIPermWriteUnibox, "Mark emails as read/unread and send replies", "write"},
 	{"WRITE_TEMPLATES", APIPermWriteTemplates, "Create and modify reply templates", "write"},
 	{"WRITE_CRM", APIPermWriteCRM, "Create and modify pipelines, deals, and CRM tasks", "write"},

@@ -50,12 +50,14 @@ type listPage struct {
 
 // TrackedFolders are the well-known folders live sync follows: inbox and junk
 // for placement, sent so a conversation shows both sides (as the Gmail and
-// IMAP paths already do).
-var TrackedFolders = []string{FolderInbox, FolderJunk, FolderSent}
+// IMAP paths already do), and drafts so the Drafts scope is populated on
+// Outlook the way it is on the other two providers.
+var TrackedFolders = []string{FolderInbox, FolderJunk, FolderSent, FolderDrafts}
 
 // BackfillFolders are the folders the initial import walks. Junk is followed
-// live for placement signals but its history is not worth importing.
-var BackfillFolders = []string{FolderInbox, FolderSent, FolderArchive}
+// live for placement signals but its history is not worth importing, and would
+// consume the message budget that belongs to real conversations.
+var BackfillFolders = []string{FolderInbox, FolderSent, FolderArchive, FolderDrafts}
 
 // Sync walks the delta stream for the tracked folders and drives the
 // OnMessage* callbacks. It is the Graph equivalent of goog.FetchHistory and
@@ -217,11 +219,22 @@ func (c *Client) ListMessagesSince(ctx context.Context, folder string, since tim
 	return out, pg.NextLink, nil
 }
 
-// ToEmailData maps a hydrated message; folder adds the junk placement flag.
+// ToEmailData maps a hydrated message; folder sets the canonical placement
+// and adds the junk flag warmup placement detection reads.
 func (m *GraphMessage) ToEmailData(folder string) *models.EmailMessageData {
 	data := m.toEmailData()
-	if folder == FolderJunk {
+	switch folder {
+	case FolderJunk:
 		data.Flags = append(data.Flags, "\\Junk")
+		data.Folder = models.FolderSpam
+	case FolderSent:
+		data.Folder = models.FolderSent
+	case FolderArchive:
+		data.Folder = models.FolderArchive
+	case FolderDrafts:
+		data.Folder = models.FolderDrafts
+	case FolderInbox:
+		data.Folder = models.FolderInbox
 	}
 	return data
 }

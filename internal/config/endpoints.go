@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -31,4 +32,58 @@ func GetPasswordResetURL(sessionToken string) string {
 // only the emailed variant was broken on self-host.
 func GetInviteURL(token string) string {
 	return AppBaseURL() + "/invite?token=" + url.QueryEscape(token)
+}
+
+// FormsBaseURL is the origin hosted form pages are served from: FORMS_DOMAIN,
+// the host routed to the forms service (cmd/forms). Empty when unset — the
+// pages do not live on the API origin, so there is nothing to fall back to,
+// and a share link pointing at the wrong process is worse than none.
+func FormsBaseURL() string {
+	if host := strings.TrimSpace(os.Getenv("FORMS_DOMAIN")); host != "" {
+		host = strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://")
+		host = strings.TrimRight(host, "/")
+		scheme := "https"
+		if strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.0.0.1") {
+			scheme = "http"
+		}
+		return scheme + "://" + host
+	}
+	return ""
+}
+
+// FormsHostname is the bare host this install serves forms on. It is the
+// CNAME target a customer points their own forms subdomain at.
+func FormsHostname() string {
+	return hostWithoutPort(NormalizeTrackingHost(FormsBaseURL()))
+}
+
+// FormURLOn builds the hosted page URL on a specific host, which is how a
+// verified custom forms domain replaces the shared one. An empty host falls
+// back to this install's own forms base.
+func FormURLOn(host, publicID string) string {
+	host = NormalizeTrackingHost(host)
+	if host == "" {
+		return GetFormURL(publicID)
+	}
+	scheme := "https"
+	if name, port, err := net.SplitHostPort(host); err == nil {
+		if port != "" && port != "443" {
+			scheme = "http"
+		}
+		if name == "localhost" || strings.HasSuffix(name, ".localhost") {
+			scheme = "http"
+		}
+	} else if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		scheme = "http"
+	}
+	return scheme + "://" + host + "/f/" + url.PathEscape(publicID)
+}
+
+// GetFormURL is the hosted page for one form; empty when no base is known.
+func GetFormURL(publicID string) string {
+	base := FormsBaseURL()
+	if base == "" {
+		return ""
+	}
+	return base + "/f/" + url.PathEscape(publicID)
 }

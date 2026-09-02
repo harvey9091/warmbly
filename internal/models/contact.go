@@ -402,6 +402,7 @@ const (
 	TimelineCampaignRemoved ContactTimelineEventType = "campaign_removed"
 	TimelineCategoryAdded   ContactTimelineEventType = "category_added"
 	TimelineCategoryRemoved ContactTimelineEventType = "category_removed"
+	TimelineFormSubmitted   ContactTimelineEventType = "form_submitted"
 
 	// A page view from the website tracking snippet, tied to the contact
 	// through an email-link ticket. Detail rides in PageHit.
@@ -450,6 +451,10 @@ type ContactTimelineEvent struct {
 	CategoryTitle *string    `json:"category_title,omitempty"`
 	SourceDetail  *string    `json:"source_detail,omitempty"`
 
+	// Form submission (form_submitted): which hosted form was filled in.
+	FormID   *uuid.UUID `json:"form_id,omitempty"`
+	FormName *string    `json:"form_name,omitempty"`
+
 	// Website page view (page_hit): URL, referrer, device, UTM, location.
 	PageHit *WebsitePageHit `json:"page_hit,omitempty"`
 
@@ -485,6 +490,11 @@ type AddContact struct {
 	Phone      string   `json:"phone"`
 	Campaigns  []string `json:"campaigns"`
 	Categories []string `json:"categories"`
+
+	// Segments the new contact joins as an include override, so a contact
+	// created from inside a segment belongs to it whatever the conditions
+	// say. Unknown ids are a 400 before anything is written.
+	Segments []string `json:"segments,omitempty"`
 
 	CustomFields map[string]string `json:"custom_fields"`
 
@@ -529,13 +539,14 @@ const (
 	ContactSourceSheetSync   ContactSource = "sheet_sync"
 	ContactSourceAPI         ContactSource = "api"
 	ContactSourceAIAssistant ContactSource = "ai_assistant"
+	ContactSourceForm        ContactSource = "form"
 )
 
 // Valid reports whether the value is one the database accepts.
 func (s ContactSource) Valid() bool {
 	switch s {
 	case ContactSourceUnknown, ContactSourceManual, ContactSourceCampaign, ContactSourceImport,
-		ContactSourceSheetSync, ContactSourceAPI, ContactSourceAIAssistant:
+		ContactSourceSheetSync, ContactSourceAPI, ContactSourceAIAssistant, ContactSourceForm:
 		return true
 	}
 	return false

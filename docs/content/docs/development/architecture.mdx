@@ -38,6 +38,7 @@ flowchart LR
 | Backend | Go (Gin) | Control | REST API, auth, business logic, worker orchestration |
 | Consumer | Go | Control | Event bus processor → Postgres |
 | Tracking | Rust (Axum) | Control | Open/click pixels and redirects → event bus |
+| Forms | Go (Gin) + React (TanStack) | Control | Hosted form pages (`forms/` app), embeds and public submissions → backend internal API |
 | Realtime | Elixir (Phoenix) | Control | WebSocket fanout |
 | Worker | Go | Execution | One per VPS; subscribes to a per-worker event bus topic; never opens a Postgres connection |
 | Web | React (Vite) | n/a | Dashboard frontend |

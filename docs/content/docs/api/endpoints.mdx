@@ -48,6 +48,8 @@ All paths below are relative to the versioned base URL `https://api.warmbly.com/
 | PATCH | `/campaigns/:id` | `WRITE_CAMPAIGNS` |
 | DELETE | `/campaigns/:id` | `WRITE_CAMPAIGNS` |
 | POST | `/campaigns/:id/duplicate` | `WRITE_CAMPAIGNS` |
+| GET | `/campaigns/:id/segments` | `READ_CAMPAIGNS` |
+| PUT | `/campaigns/:id/segments` | `WRITE_CAMPAIGNS` |
 | GET | `/campaigns/:id/advanced` | `READ_CAMPAIGNS` |
 | PATCH | `/campaigns/:id/advanced` | `WRITE_CAMPAIGNS` |
 | GET | `/campaigns/:id/ab-variants` | `READ_CAMPAIGNS` |
@@ -60,11 +62,14 @@ All paths below are relative to the versioned base URL `https://api.warmbly.com/
 | POST | `/campaigns/:id/start` | `SEND_CAMPAIGNS` |
 | POST | `/campaigns/:id/stop` | `SEND_CAMPAIGNS` |
 | GET | `/campaigns/:id/logs` | `READ_CAMPAIGNS` |
+| GET | `/campaigns/:id/forms` | `READ_CAMPAIGNS` |
 | GET/POST/PATCH/DELETE | `/campaigns/:id/steps[/:sid]` | `READ_CAMPAIGNS` for GET, `WRITE_CAMPAIGNS` otherwise |
 | PATCH | `/campaigns/:id/step-layout` | `WRITE_CAMPAIGNS` |
 | POST | `/generation/write` | `WRITE_CAMPAIGNS` |
 | POST | `/generation/edit` | `WRITE_CAMPAIGNS` |
 | POST | `/generation/ai-variable` | `WRITE_CAMPAIGNS` |
+
+`GET /campaigns/:id/forms` reports the forms this campaign links to and what its recipients did with them: personalized links handed out, who opened one, who started filling it in and who submitted. See the [forms guide](/guides/forms/).
 
 ### Contacts
 
@@ -120,7 +125,29 @@ AI contact research charges credits (2 per run, billable even when it finds noth
 | GET | `/segments/:id/overrides` | `READ_CONTACTS` |
 | POST | `/segments/:id/add-to-campaign` | `WRITE_CAMPAIGNS` |
 
-Segments are saved contact audiences: a condition list plus per-contact manual overrides, evaluated live. Contact scopes cover them because a segment is a view over contacts; enrolling one into a campaign writes leads, so that call takes the campaign write scope. `POST /contacts/search` and `POST /contacts/export` accept `segment_ids` to scope any contact query to a segment. See [contacts](/api/reference/contacts/#segments) for the condition format.
+Segments are saved contact audiences: a condition list plus per-contact manual overrides, evaluated live. Contact scopes cover them because a segment is a view over contacts; enrolling one into a campaign writes leads, so that call takes the campaign write scope, as does managing a campaign's linked segments (`/campaigns/:id/segments` above). `POST /contacts/search` and `POST /contacts/export` accept `segment_ids` to scope any contact query to a segment. See [contacts](/api/reference/contacts/#segments) for the condition format.
+
+### Forms
+
+| Method | Path | API Permission |
+|--------|------|----------------|
+| GET | `/forms` | `READ_CONTACTS` |
+| GET | `/forms/config` | `READ_CONTACTS` |
+| POST | `/forms` | `WRITE_CONTACTS` |
+| GET | `/forms/:id` | `READ_CONTACTS` |
+| PATCH | `/forms/:id` | `WRITE_CONTACTS` |
+| DELETE | `/forms/:id` | `WRITE_CONTACTS` |
+| GET | `/forms/:id/submissions` | `READ_CONTACTS` |
+| DELETE | `/forms/:id/submissions/:sid` | `WRITE_CONTACTS` |
+| GET | `/forms/:id/stats` | `READ_CONTACTS` |
+| GET | `/forms/domain` | `READ_CONTACTS` |
+| PUT | `/forms/domain` | `WRITE_CONTACTS` |
+| POST | `/forms/domain/verify` | `WRITE_CONTACTS` |
+| GET | `/forms/:id/links/:contactID` | `WRITE_CONTACTS` |
+| POST | `/forms/:id/assets/:kind` | `WRITE_CONTACTS` |
+| DELETE | `/forms/:id/assets/:kind` | `WRITE_CONTACTS` |
+
+Hosted lead-capture forms; see the [forms guide](/guides/forms/). Contact scopes cover them because a form exists to create contacts. Minting a personalized link is a `GET` on top of an upsert, so retries always return the same token. The `/forms/domain` routes are the workspace-wide custom forms domain and additionally need the `manage_settings` organization permission for JWT callers; `PUT` resolves the record as part of saving, and only a verified domain is ever used to build a URL. The public page (`/f/:public_id`), its submit endpoint and the embed loader (`/forms.js`) are served by the standalone forms service on its own host (`FORMS_DOMAIN`), not the API origin, and take no authentication; the unguessable public id is the capability, and the JSON endpoints additionally require the render token the page shell carries.
 
 ### Lead sync
 
@@ -347,7 +374,7 @@ Credit balance, top-up purchases, and the transaction log are part of `/subscrip
 
 ### AI assistant
 
-The dashboard AI assistant is JWT only: sessions are private to the member who started them. The message and approval runs stream over Server-Sent Events. Each tool the assistant runs is gated by the member's own organization permission bits, so the assistant can never do more than the member could by hand. See the [AI assistant](/guides/ai-assistant/) guide. (API-key and OAuth callers reach the same tools through the [MCP server](/api/mcp/), gated by the `AI_AGENT` scope.)
+The dashboard AI assistant is JWT only: sessions are private to the member who started them. The message and approval runs stream over Server-Sent Events. Each tool the assistant runs is gated by the member's own organization permission bits, so the assistant can never do more than the member could by hand. See the [AI assistant](/guides/ai-assistant/) guide. (API-key and OAuth callers reach the same tools through the [MCP server](/api/mcp/) or the [REST agent-tools surface](/api/agent-tools/), each tool gated by its own scope.)
 
 | Method | Path | JWT permission |
 |--------|------|----------------|
@@ -369,6 +396,15 @@ Org playbooks the AI features follow (see the [AI skills](/guides/ai-skills/) gu
 | POST | `/ai/skills` | `manage_settings` / `AI_AGENT` |
 | PATCH | `/ai/skills/:id` | `manage_settings` / `AI_AGENT` |
 | DELETE | `/ai/skills/:id` | `manage_settings` / `AI_AGENT` |
+
+### Agent tools (REST)
+
+The AI tool registry over plain HTTP for function-calling agents that do not speak MCP (see [Agent tools](/api/agent-tools/)). Like the advisor apply path and the MCP endpoint, there is no route-level scope on purpose: each tool enforces its own permission, the list reflects only what the caller may use, and send-class tools are never exposed.
+
+| Method | Path | API Permission |
+|--------|------|----------------|
+| GET | `/ai/tools` | permission of each listed tool |
+| POST | `/ai/tools/:name/call` | permission of the tool being called |
 
 ### Connected MCP servers
 

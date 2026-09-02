@@ -207,6 +207,62 @@ func (h *Handler) AddSegmentToCampaign(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
+// campaignSegmentScope pulls the org and the campaign id from a campaigns route.
+func campaignSegmentScope(c *gin.Context) (uuid.UUID, uuid.UUID, bool) {
+	orgID := middleware.GetOrganizationID(c)
+	if orgID == nil {
+		errx.Handle(c, errx.New(errx.BadRequest, "no organization selected"))
+		return uuid.Nil, uuid.Nil, false
+	}
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		errx.Handle(c, errx.New(errx.BadRequest, "invalid campaign id"))
+		return uuid.Nil, uuid.Nil, false
+	}
+	return *orgID, id, true
+}
+
+// ListCampaignSegments lists the segments linked to a campaign.
+func (h *Handler) ListCampaignSegments(c *gin.Context) {
+	orgID, campaignID, ok := campaignSegmentScope(c)
+	if !ok {
+		return
+	}
+	out, xerr := h.SegmentService.ListCampaignSegments(c.Request.Context(), orgID, campaignID)
+	if xerr != nil {
+		errx.Handle(c, xerr)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": out})
+}
+
+// SetCampaignSegments replaces a campaign's linked segments. Members of the
+// linked segments are enrolled as leads immediately and kept current.
+func (h *Handler) SetCampaignSegments(c *gin.Context) {
+	orgID, campaignID, ok := campaignSegmentScope(c)
+	if !ok {
+		return
+	}
+	var in models.CampaignSegmentsWrite
+	if err := c.ShouldBindJSON(&in); err != nil {
+		errx.Handle(c, errx.ErrInvalid)
+		return
+	}
+	// An omitted field must not read as "detach everything"; only an
+	// explicit [] does that.
+	if in.SegmentIDs == nil {
+		errx.Handle(c, errx.New(errx.BadRequest, "segment_ids is required; send [] to detach all segments"))
+		return
+	}
+	links, added, xerr := h.SegmentService.SetCampaignSegments(c.Request.Context(), orgID, campaignID, &in)
+	if xerr != nil {
+		errx.Handle(c, xerr)
+		return
+	}
+	h.auditOrg(c, models.AuditActionUpdate, models.AuditEntityCampaign, &campaignID, nil, map[string]string{"segments": itoa(len(links)), "added": itoa(added)})
+	c.JSON(http.StatusOK, gin.H{"data": links, "added": added})
+}
+
 // ListSegmentOverrides lists the contacts pinned into or out of a segment.
 func (h *Handler) ListSegmentOverrides(c *gin.Context) {
 	orgID, id, ok := segmentScope(c)

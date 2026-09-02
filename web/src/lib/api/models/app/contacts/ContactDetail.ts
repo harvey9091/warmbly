@@ -31,7 +31,8 @@ export type ContactSource =
     | "import"
     | "sheet_sync"
     | "api"
-    | "ai_assistant";
+    | "ai_assistant"
+    | "form";
 
 // One observed fact about the mailbox. Silence is never recorded: a contact
 // who does not open or reply has said nothing about their address.

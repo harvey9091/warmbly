@@ -1,0 +1,545 @@
+/* MIRROR — this file exists byte-identical in web/src/components/app/forms/
+   and forms/src/. Edit both copies together; scripts/check-forms-mirror.sh
+   (run by `make lint`) fails the build when they drift. Every rule is scoped
+   under .wf so the builder canvas can import it without leaking into the
+   dashboard, and every color and size comes from the --wf-* variables
+   designCore.ts emits. */
+
+.wf {
+    display: flex;
+    flex-direction: column;
+    font-family: var(--wf-font, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif);
+    color: var(--wf-text, #0f172a);
+    background: var(--wf-page-bg-css, var(--wf-page-bg, #f8fafc));
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+}
+/* .wf-body holds the layout so an optional header can sit above it without
+   every layout needing a variant. */
+.wf .wf-body {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+.wf .wf-body > .wf-main {
+    flex: 1 1 auto;
+}
+.wf *,
+.wf *::before,
+.wf *::after {
+    box-sizing: border-box;
+}
+
+/* A page background image sits over the color and under the content, with an
+   overlay of the page color veiling it: without that, any light theme on a
+   busy photo is unreadable. Both layers are inert to pointers. */
+.wf {
+    position: relative;
+    isolation: isolate;
+}
+.wf::before,
+.wf::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+}
+.wf::before {
+    background-image: var(--wf-bg-image, none);
+    background-size: var(--wf-bg-size, cover);
+    background-repeat: var(--wf-bg-repeat, no-repeat);
+    background-position: center;
+}
+.wf::after {
+    background: var(--wf-page-bg-css, var(--wf-page-bg, #f8fafc));
+    opacity: var(--wf-bg-overlay, 0);
+}
+/* Inside the builder canvas the shell is a scroll pane, not the viewport, so
+   the layers have to be absolute or they would track the window instead. */
+.wf.wf-inline::before,
+.wf.wf-inline::after {
+    position: absolute;
+}
+
+/* ---- layouts ----
+   The fields always sit on the form background: a theme picks its label,
+   text and input colors against that surface, so a layout that drops them
+   straight onto the page background makes dark-on-dark text. Card gets the
+   surface from its box, Wide takes the whole viewport, Split takes the
+   panel beside the cover. */
+.wf .wf-main {
+    max-width: var(--wf-max-width, 560px);
+    width: 100%;
+    margin: 0 auto;
+    padding: 48px 16px;
+}
+.wf.layout-wide {
+    background: var(--wf-form-bg, #ffffff);
+}
+.wf.layout-wide .wf-main {
+    padding: 56px 20px;
+}
+.wf.layout-split .wf-body {
+    display: grid;
+    grid-template-columns: minmax(260px, 38%) 1fr;
+}
+.wf.layout-split .wf-cover {
+    position: relative;
+    background: var(--wf-page-bg-css, var(--wf-page-bg, #f8fafc));
+    background-size: cover;
+    background-position: center;
+    padding: 40px 36px;
+}
+/* A wash of the accent keeps the cover from reading as a dead slab when the
+   form has no cover image, and doubles as a scrim when it has one. */
+.wf.layout-split .wf-cover::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(150deg, color-mix(in srgb, var(--wf-accent) 30%, transparent), transparent 68%);
+    pointer-events: none;
+}
+.wf.layout-split .wf-cover > * {
+    position: relative;
+    z-index: 1;
+}
+/* The panel fills its column and the padding centers the content inside it,
+   so the surface is edge to edge without wrapping the content in a box. */
+.wf.layout-split .wf-main {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    background: var(--wf-form-bg, #ffffff);
+    margin: 0;
+    max-width: none;
+    padding: 64px max(48px, calc((100% - var(--wf-max-width, 560px)) / 2));
+}
+@media (max-width: 720px) {
+    .wf.layout-split .wf-body {
+        grid-template-columns: 1fr;
+    }
+    .wf.layout-split .wf-cover {
+        min-height: 132px;
+        padding: 20px 24px;
+    }
+    .wf.layout-split .wf-main {
+        padding: 36px 20px;
+    }
+}
+
+/* ---- header bar ---- */
+.wf .wf-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    background: var(--wf-header-bg, #ffffff);
+    border-bottom: 1px solid var(--wf-input-border, #e2e8f0);
+}
+/* Sticky keeps the brand in view down a long form. Page placement only: an
+   inline header scrolls with the card it belongs to. */
+.wf .wf-header.is-sticky {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+}
+/* Inline sits with the form instead of spanning the viewport, so it drops the
+   bar background and separates with air and a soft rule rather than a hard
+   edge, which would read as a second card border. */
+.wf .wf-header.wf-header--inline {
+    padding: 0 0 14px;
+    background: transparent;
+    border-bottom-color: color-mix(in srgb, var(--wf-input-border, #e2e8f0) 70%, transparent);
+    margin-bottom: calc(var(--wf-gap, 16px) * 1.3);
+}
+.wf .wf-header.h-left {
+    justify-content: flex-start;
+}
+/* Centered stacks the lockup: a logo beside a name reads as a bar, above it
+   reads as a brand mark, which is what centering is asking for. */
+.wf .wf-header.h-center {
+    flex-direction: column;
+    justify-content: center;
+    gap: 10px;
+    text-align: center;
+}
+.wf .wf-header.h-between {
+    justify-content: space-between;
+}
+.wf .wf-header .wf-logo {
+    margin: 0;
+    height: auto;
+    /* Honour the chosen logo size. The bar is chrome so it stays a little
+       tighter than the form surface, but Large is still visibly large. */
+    max-height: var(--wf-logo-h, 36px);
+    max-width: 220px;
+}
+.wf .wf-header.wf-header--inline .wf-logo {
+    max-width: 100%;
+}
+/* A site name has to be allowed to wrap: truncating it with an ellipsis in a
+   560px card is how a header stops fitting. */
+.wf .wf-header-title {
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--wf-text);
+    letter-spacing: -0.01em;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+/* ---- cover copy ---- */
+.wf .wf-cover-title {
+    margin: 16px 0 0;
+    font-size: 24px;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+    color: #ffffff;
+    text-shadow: 0 1px 12px rgba(15, 23, 42, 0.35);
+}
+.wf .wf-cover-sub {
+    margin: 8px 0 0;
+    font-size: 14px;
+    line-height: 1.55;
+    color: rgba(255, 255, 255, 0.86);
+    text-shadow: 0 1px 10px rgba(15, 23, 42, 0.3);
+    white-space: pre-line;
+}
+
+/* ---- branding ---- */
+.wf .wf-logo {
+    display: block;
+    height: var(--wf-logo-h, 36px);
+    max-width: 60%;
+    object-fit: contain;
+    object-position: left center;
+    margin: 0 0 20px;
+}
+.wf.align-center .wf-main .wf-logo {
+    margin-left: auto;
+    margin-right: auto;
+    object-position: center;
+}
+/* On the form surface the logo is brand chrome, not a field, so it gets more
+   air beneath it than fields give each other. */
+.wf .card > .wf-logo,
+.wf .wf-bare > .wf-logo {
+    margin-bottom: calc(var(--wf-gap, 16px) * 1.6);
+}
+/* Above the card it sits on the page background instead, so it needs the same
+   spacing on the outside. */
+.wf .wf-main > .wf-logo {
+    margin-bottom: calc(var(--wf-gap, 16px) * 1.4);
+}
+.wf .wf-header .wf-logo {
+    max-width: 220px;
+}
+
+/* ---- form container ---- */
+.wf .card {
+    background: var(--wf-form-bg, #ffffff);
+    border-radius: var(--wf-radius, 10px);
+    padding: 32px;
+    box-shadow: var(--wf-shadow, none);
+}
+.wf .wf-bare {
+    padding: 4px 0;
+}
+
+/* ---- fields ---- */
+.wf .grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--wf-gap, 16px);
+}
+.wf .fld {
+    flex: 1 1 100%;
+    min-width: 0;
+}
+.wf .fld.half {
+    flex: 1 1 calc(50% - var(--wf-gap, 16px));
+}
+@media (max-width: 480px) {
+    .wf .fld.half {
+        flex-basis: 100%;
+    }
+}
+.wf label.l {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--wf-label);
+    margin: 0 0 6px;
+}
+.wf .req {
+    color: #dc2626;
+}
+.wf .help {
+    font-size: 12px;
+    color: var(--wf-placeholder);
+    margin: 5px 0 0;
+}
+.wf .fielderr {
+    font-size: 12px;
+    color: #dc2626;
+    margin: 5px 0 0;
+}
+.wf input[type="text"],
+.wf input[type="email"],
+.wf input[type="tel"],
+.wf input[type="date"],
+.wf input[type="number"],
+.wf select,
+.wf textarea {
+    width: 100%;
+    font: inherit;
+    font-size: 14px;
+    color: var(--wf-input-text);
+    background: var(--wf-input-bg);
+    border: 1px solid var(--wf-input-border);
+    border-radius: var(--wf-input-radius);
+    padding: 10px 12px;
+    outline: none;
+    transition:
+        border-color 0.12s,
+        box-shadow 0.12s;
+}
+.wf textarea {
+    resize: vertical;
+    min-height: 40px;
+}
+.wf input:focus,
+.wf select:focus,
+.wf textarea:focus {
+    border-color: var(--wf-accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--wf-accent) 18%, transparent);
+}
+.wf ::placeholder {
+    color: var(--wf-placeholder);
+}
+.wf .opts {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+.wf .opt {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--wf-text);
+    cursor: pointer;
+}
+.wf .opt input {
+    accent-color: var(--wf-accent);
+    width: 15px;
+    height: 15px;
+    margin: 0;
+}
+.wf h2.h {
+    margin: 2px 0 0;
+    font-size: 22px;
+    font-weight: 600;
+    line-height: 1.25;
+    letter-spacing: -0.015em;
+    color: var(--wf-text);
+}
+.wf p.p {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--wf-text);
+    opacity: 0.85;
+    white-space: pre-line;
+}
+.wf hr.d {
+    border: none;
+    border-top: 1px solid var(--wf-input-border);
+    margin: 6px 0;
+    width: 100%;
+}
+
+/* ---- alignment ---- */
+.wf.align-center h2.h,
+.wf.align-center p.p,
+.wf.align-center .ok {
+    text-align: center;
+}
+.wf.align-center .btnrow,
+.wf.align-center .wf-pagenav {
+    justify-content: center;
+}
+
+/* ---- buttons ---- */
+.wf .btnrow {
+    display: flex;
+    margin-top: 4px;
+    width: 100%;
+}
+.wf button.submit {
+    font: inherit;
+    font-weight: 600;
+    font-size: var(--wf-btn-font, 14px);
+    color: var(--wf-btn-text);
+    background: var(--wf-btn-bg);
+    border: none;
+    border-radius: var(--wf-radius, 10px);
+    padding: var(--wf-btn-pad, 10px 20px);
+    cursor: pointer;
+    transition:
+        filter 0.15s,
+        transform 0.12s,
+        box-shadow 0.15s;
+}
+.wf button.submit.full {
+    width: 100%;
+}
+.wf button.submit:hover {
+    filter: brightness(1.06);
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--wf-btn-bg) 35%, transparent);
+}
+.wf button.submit:active {
+    transform: translateY(1px);
+}
+.wf button.submit:focus-visible {
+    outline: 2px solid var(--wf-accent);
+    outline-offset: 2px;
+}
+.wf button.submit:disabled {
+    opacity: 0.6;
+    cursor: default;
+    box-shadow: none;
+}
+.wf button.wf-back {
+    font: inherit;
+    font-weight: 500;
+    font-size: var(--wf-btn-font, 14px);
+    color: var(--wf-label);
+    background: transparent;
+    border: 1px solid var(--wf-input-border);
+    border-radius: var(--wf-radius, 10px);
+    padding: var(--wf-btn-pad, 10px 20px);
+    cursor: pointer;
+    transition: border-color 0.12s;
+}
+.wf button.wf-back:hover {
+    border-color: var(--wf-label);
+}
+
+/* ---- pages ---- */
+.wf .wf-progress {
+    height: 3px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--wf-accent) 15%, transparent);
+    overflow: hidden;
+    margin-bottom: 18px;
+}
+.wf .wf-progress span {
+    display: block;
+    height: 100%;
+    background: var(--wf-accent);
+    transition: width 0.25s ease;
+}
+.wf .wf-pagenav {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 4px;
+    width: 100%;
+}
+.wf .wf-pagetitle {
+    margin: 0 0 2px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--wf-accent);
+    width: 100%;
+}
+@keyframes wf-in-fwd {
+    from {
+        opacity: 0;
+        transform: translateX(16px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+@keyframes wf-in-back {
+    from {
+        opacity: 0;
+        transform: translateX(-16px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+.wf .wf-step {
+    width: 100%;
+}
+.wf .wf-step[data-dir="fwd"] {
+    animation: wf-in-fwd 0.22s ease;
+}
+.wf .wf-step[data-dir="back"] {
+    animation: wf-in-back 0.22s ease;
+}
+
+/* ---- focus mode ---- */
+.wf.mode-focus .wf-main {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+.wf.mode-focus label.l {
+    font-size: 16px;
+    margin-bottom: 10px;
+}
+.wf.mode-focus h2.h {
+    font-size: 24px;
+}
+.wf.mode-focus .wf-hint {
+    font-size: 12px;
+    color: var(--wf-placeholder);
+    margin-top: 12px;
+}
+
+/* ---- messages ---- */
+.wf .err {
+    font-size: 13px;
+    color: #dc2626;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+    padding: 9px 12px;
+    margin-bottom: 4px;
+    width: 100%;
+}
+.wf .ok {
+    text-align: center;
+    padding: 36px 8px;
+}
+.wf .ok svg {
+    color: #16a34a;
+}
+.wf .ok p {
+    font-size: 15px;
+    color: var(--wf-text);
+    white-space: pre-line;
+}
+.wf .brand {
+    text-align: center;
+    margin-top: 14px;
+    padding-bottom: 8px;
+}
+.wf .brand a {
+    font-size: 11px;
+    color: var(--wf-placeholder, #94a3b8);
+    text-decoration: none;
+}
+.wf .cf-turnstile {
+    margin: 2px 0;
+}

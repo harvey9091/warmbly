@@ -9,16 +9,18 @@ import React from "react";
 import { createPortal } from "react-dom";
 import type { Editor } from "@tiptap/react";
 import { AnimatePresence, motion } from "framer-motion";
-import { BracesIcon, GitBranchIcon, FunctionSquareIcon } from "lucide-react";
+import { BracesIcon, GitBranchIcon, FunctionSquareIcon, ClipboardListIcon } from "lucide-react";
 import useCustomFieldKeys from "@/lib/api/hooks/app/contacts/useCustomFieldKeys";
-import { STANDARD_VARS, buildToken, cleanFieldName, isStandardKey } from "@/lib/templateVars";
+import { useForms } from "@/lib/api/hooks/app/forms";
+import { STANDARD_VARS, buildToken, buildFormLinkToken, cleanFieldName, isStandardKey } from "@/lib/templateVars";
 import { useAnchoredFloating, caretReference } from "@/hooks/useAnchoredFloating";
 
-type Group = "Fields" | "Logic" | "Functions";
+type Group = "Fields" | "Forms" | "Logic" | "Functions";
 
 // How picking an item mutates the doc, after the typed `{{…` trigger is removed.
 type Insert =
     | { type: "chip"; token: string } // a {{.Field}} (optionally with a helper) chip
+    | { type: "formLink"; publicId: string } // a personalized {{form_link:...}} chip
     | { type: "conditional" } // an {{if}}/{{else}} condition chip
     | { type: "text"; text: string }; // a raw template snippet (advanced functions)
 
@@ -33,6 +35,7 @@ interface Item {
 
 const GROUP_ICON: Record<Group, typeof BracesIcon> = {
     Fields: BracesIcon,
+    Forms: ClipboardListIcon,
     Logic: GitBranchIcon,
     Functions: FunctionSquareIcon,
 };
@@ -93,6 +96,7 @@ const HELPERS: Item[] = [
 
 export default function EditorSuggest({ editor }: { editor: Editor }) {
     const { data: customKeys = [] } = useCustomFieldKeys();
+    const { data: forms = [] } = useForms();
     const [trigger, setTrigger] = React.useState<{ from: number; query: string } | null>(null);
     const [active, setActive] = React.useState(0);
 
@@ -117,8 +121,20 @@ export default function EditorSuggest({ editor }: { editor: Editor }) {
                     insert: { type: "chip" as const, token: buildToken(k) },
                 })),
         ];
-        return [...fields, ...HELPERS];
-    }, [customKeys]);
+        // Published forms only: an unpublished form's link resolves to nothing
+        // at send time, so it is never offered. No forms, no group.
+        const formLinks: Item[] = forms
+            .filter((f) => f.status === "published")
+            .map((f) => ({
+                id: `form:${f.public_id}`,
+                group: "Forms" as const,
+                label: f.name,
+                hint: "personalized link",
+                search: `form link ${f.name}`.toLowerCase(),
+                insert: { type: "formLink" as const, publicId: f.public_id },
+            }));
+        return [...fields, ...formLinks, ...HELPERS];
+    }, [customKeys, forms]);
 
     const items = React.useMemo<Item[]>(() => {
         if (!trigger) return [];
@@ -188,6 +204,8 @@ export default function EditorSuggest({ editor }: { editor: Editor }) {
                 .deleteRange({ from: trigger.from, to: editor.state.selection.from });
             if (item.insert.type === "chip") {
                 chain.insertVariable(item.insert.token).run();
+            } else if (item.insert.type === "formLink") {
+                chain.insertFormLink(item.insert.publicId).run();
             } else if (item.insert.type === "conditional") {
                 chain.insertConditional().run();
             } else {

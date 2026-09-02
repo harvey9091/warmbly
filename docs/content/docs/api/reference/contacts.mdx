@@ -151,6 +151,7 @@ A JSON array of contact objects (at least one, up to the per-request maximum; an
 | `phone` | string | No | Phone number. |
 | `campaigns` | string[] | No | Campaign IDs to add the contact to. |
 | `categories` | string[] | No | Category IDs to assign. |
+| `segments` | string[] | No | Segment IDs to pin the contact into, as a manual include override, so it belongs whether or not the conditions match it. An unknown id is rejected with `400` before any contact is written, and the override is written in the same transaction as the contact, so a success response always means the membership exists. |
 | `custom_fields` | object | No | String key/value custom fields. Keys may use letters, numbers, underscores, spaces, and dashes. |
 | `subscribed` | boolean | No | Marketing-consent flag. Omit it to let a new contact default to subscribed and an existing one keep whatever it already had. |
 | `verification_status` | string | No | A verdict you already hold for the address, in Warmbly's vocabulary (`valid`, `risky`, `invalid`, `unknown`) or any known service's (`ok`, `catch-all`, `do_not_mail`, `deliverable`, `ok_for_all`, ...). Stored as an imported verdict that the background check leaves alone. A value no known service writes is rejected with `unknown_verification_status`. |
@@ -366,6 +367,7 @@ Send `multipart/form-data` with a `file` field and an `options` field containing
 | `has_header` | boolean | Yes | Whether the first row is a header. |
 | `category_ids` | string[] | No | Categories to assign to imported contacts. |
 | `campaign_ids` | string[] | No | Campaigns to add imported contacts to. |
+| `segment_ids` | string[] | No | Segments to pin imported contacts into, as a manual include override. Applies to imported, updated, and skipped-but-linked contacts alike. |
 | `subscribed_default` | boolean | No | Subscription state for new contacts when no subscribed column is mapped. Defaults to true. |
 
 ```json
@@ -1028,7 +1030,7 @@ Engagement counters add up every campaign the contact has been in, and opens cou
 
 ### List, create, read, update, delete
 
-`GET /segments` returns every segment with live counts under `data`. `POST /segments` creates one from `name` (required), `description`, `color` (`#rrggbb`), `match` and `conditions`; a duplicate name is a `409`. `GET /segments/:id` returns one segment. `PATCH /segments/:id` accepts the same fields, all optional. `DELETE /segments/:id` returns `204`, or `409` when another segment's conditions reference it.
+`GET /segments` returns every segment with live counts under `data`. `POST /segments` creates one from `name` (required), `description`, `color` (`#rrggbb`), `match` and `conditions`; a duplicate name is a `409`. `GET /segments/:id` returns one segment. `PATCH /segments/:id` accepts the same fields, all optional. `DELETE /segments/:id` returns `204`, or `409` when another segment's conditions reference it or a campaign has it [linked as a live audience](/api/reference/campaigns/#replace-linked-segments); detach it first.
 
 Auth: **Scope** `READ_CONTACTS` for reads, `WRITE_CONTACTS` for writes · **Org permission** `view_contacts` / `manage_contacts`
 
@@ -1068,6 +1070,6 @@ Sequence action steps `add_to_segment` and `remove_from_segment` take a `segment
 { "campaign_id": "…" }
 ```
 
-Enrols every current member as a lead. Contacts already in the campaign are skipped, each new lead gets a `campaign_added` activity, and a running campaign is woken so the leads are scheduled. Returns `{ "campaign_id", "added", "members" }`. This is a snapshot: later members are not added until the call is repeated. Safe to retry.
+Enrols every current member as a lead. Contacts already in the campaign are skipped, each new lead gets a `campaign_added` activity, and a running campaign is woken so the leads are scheduled. Returns `{ "campaign_id", "added", "members" }`. This is a snapshot: later members are not added until the call is repeated. Safe to retry. For a live link that keeps enrolling members as they join the segment, see [linked segments](/api/reference/campaigns/#list-linked-segments).
 
 Auth: **Scope** `WRITE_CAMPAIGNS` · **Org permission** `manage_campaigns`

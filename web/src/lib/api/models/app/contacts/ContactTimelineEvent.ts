@@ -19,6 +19,7 @@ export type ContactTimelineEventType =
     | "campaign_removed"
     | "category_added"
     | "category_removed"
+    | "form_submitted"
     | "page_hit";
 
 // A page view from the website tracking snippet (page_hit).
@@ -82,6 +83,8 @@ export default interface ContactTimelineEvent {
     // Lifecycle events.
     category_id?: string | null;
     category_title?: string | null;
+    form_id?: string | null;
+    form_name?: string | null;
     source_detail?: string | null;
 
     user_id?: string | null;

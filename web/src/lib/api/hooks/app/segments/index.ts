@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     addSegmentToCampaign,
+    listCampaignSegments,
+    setCampaignSegments,
     listContactSegments,
     listSegmentOverrides,
     createSegment,
@@ -104,6 +106,30 @@ export function useSetSegmentMembers() {
         // own segments panel changes.
         onSuccess: () =>
             Promise.all([invalidateSegments(queryClient), queryClient.invalidateQueries({ queryKey: ["contacts"] })]),
+    });
+}
+
+// Keyed under ["campaigns", id, ...] so the campaign spine refreshes it.
+export function useCampaignSegments(campaignId: string | undefined, enabled = true) {
+    return useQuery({
+        queryKey: ["campaigns", campaignId, "segments"],
+        queryFn: () => listCampaignSegments(campaignId as string),
+        enabled: enabled && !!campaignId,
+    });
+}
+
+export function useSetCampaignSegments() {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: ({ campaignId, segmentIds }: { campaignId: string; segmentIds: string[] }) =>
+            setCampaignSegments(campaignId, segmentIds),
+        // Linking enrols leads right away, so the campaign's contact list moves.
+        onSuccess: (_res, vars) =>
+            Promise.all([
+                queryClient.invalidateQueries({ queryKey: ["campaigns", vars.campaignId, "segments"] }),
+                queryClient.invalidateQueries({ queryKey: ["contacts"] }),
+                queryClient.invalidateQueries({ queryKey: ["segments"] }),
+            ]),
     });
 }
 

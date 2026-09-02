@@ -1,0 +1,23 @@
+[Unit]
+Description=Warmbly forms service (hosted form pages, embeds and submissions)
+Documentation=https://docs.warmbly.com/development/bare-metal/
+After=network-online.target warmbly-backend.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=warmbly
+Group=warmbly
+EnvironmentFile=/etc/warmbly/warmbly.env
+WorkingDirectory=/opt/warmbly
+ExecStart=/opt/warmbly/bin/forms
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

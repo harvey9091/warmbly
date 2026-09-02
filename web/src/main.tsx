@@ -12,6 +12,8 @@ import "@fontsource/poppins/700.css";
 import RootAppLayout from './app/app/layout';
 import AddressesPage from './app/app/emails/page';
 import ContactsPage from './app/app/contacts/page';
+import FormsPage from './app/app/forms/page';
+import FormBuilderPage from './app/app/forms/[id]/page';
 import ContactsLayout from './app/app/contacts/layout';
 import SegmentsPage from './app/app/contacts/segments/page';
 import CategoriesPage from './app/app/contacts/categories/page';
@@ -54,6 +56,7 @@ import BillingSettingsPage from './app/app/settings/billing/page';
 import ReferralSettingsPage from './app/app/settings/referral/page';
 import LimitsSettingsPage from './app/app/settings/limits/page';
 import SendingSettingsPage from './app/app/settings/sending/page';
+import WebsiteTrackingSettingsPage from './app/app/settings/tracking/page';
 import RolesSettingsPage from './app/app/settings/roles/page';
 import UniboxPage from './app/app/unibox/page';
 import DashboardNotFound from './app/app/not-found';
@@ -253,6 +256,13 @@ const router = createBrowserRouter([
             ],
           },
           {
+            path: "forms",
+            children: [
+              { index: true, element: <FormsPage /> },
+              { path: ":id", element: <FormBuilderPage /> },
+            ],
+          },
+          {
             path: "campaigns",
             children: [
               {
@@ -365,6 +375,7 @@ const router = createBrowserRouter([
               { path: "referral", element: <ReferralSettingsPage /> },
               { path: "limits", element: <LimitsSettingsPage /> },
               { path: "sending", element: <SendingSettingsPage /> },
+              { path: "tracking", element: <WebsiteTrackingSettingsPage /> },
               { path: "roles", element: <RolesSettingsPage /> },
               { path: "warmbly-cloud", element: <WarmblyCloudSettingsPage /> },
               { path: "oauth-apps", element: <OAuthAppsPage /> },

@@ -36,6 +36,7 @@ import {
     SparklesIcon,
     TrashIcon,
     UploadIcon,
+    UserMinusIcon,
     UserPlusIcon,
     UsersIcon,
     XIcon,
@@ -75,8 +76,9 @@ import AddToSegmentMenu from "@/components/app/segments/AddToSegmentMenu";
 import SegmentEditor from "@/components/app/segments/SegmentEditor";
 import { filtersToSegment } from "@/components/app/segments/filtersToSegment";
 import type { SegmentCondition } from "@/lib/api/models/app/segments/Segment";
-import AddSegmentLeadsDialog from "@/components/app/segments/AddSegmentLeadsDialog";
-import { useSetSegmentMembers } from "@/lib/api/hooks/app/segments";
+import CampaignSegmentsDialog from "@/components/app/segments/CampaignSegmentsDialog";
+import { useCampaignSegments, useSetSegmentMembers } from "@/lib/api/hooks/app/segments";
+import useUpdateContactsBulk from "@/lib/api/hooks/app/contacts/useUpdateContactsBulk";
 import useAiMetered from "@/hooks/useAiMetered";
 import SyncSourcesPanel from "./SyncSourcesPanel";
 import { CategoryChip } from "./CategoryPicker";
@@ -178,6 +180,26 @@ export default function ContactsTable({
         }
     }
     const contactsBulkDelete = useDeleteContacts();
+    const bulkUpdate = useUpdateContactsBulk();
+    // Linked segments (live audience) for the toolbar badge on a Leads tab.
+    const campaignSegments = useCampaignSegments(current_campaign?.id, !!current_campaign);
+
+    // In a campaign, "remove" detaches the leads; the contacts themselves stay.
+    async function removeFromCampaign(ids: string[]) {
+        if (!current_campaign || ids.length === 0 || bulkUpdate.isPending) return;
+        try {
+            await bulkUpdate.mutateAsync({
+                contacts: ids,
+                add_campaigns: [],
+                remove_campaigns: [current_campaign.id],
+                fields: [],
+            });
+            toast.success(`Removed ${ids.length} lead${ids.length === 1 ? "" : "s"} from ${current_campaign.name}`);
+            setSelected((bef) => bef.filter((x) => !ids.includes(x)));
+        } catch (err) {
+            toast.error(buildError(err as AppError));
+        }
+    }
 
     // Connected CRM targets the "Push to CRM" bulk action can reach. Driven by
     // the org's live connections (backend enforces the push permission).
@@ -363,6 +385,15 @@ export default function ContactsTable({
                     await bulkDelete();
                 })
             }
+            onRemoveFromCampaign={
+                embedded
+                    ? (id) =>
+                          confirm?.show(
+                              "Remove this lead from the campaign? The contact stays in your workspace.",
+                              async () => removeFromCampaign([id]),
+                          )
+                    : undefined
+            }
             emptyTitle={
                 subFilter !== "all"
                     ? `No ${subFilter} contacts`
@@ -403,7 +434,7 @@ export default function ContactsTable({
                             icon={<LayersIcon className="w-3 h-3" />}
                             onClick={() => campaignWrite.guard(() => setFromSegmentOpen(true))({})}
                         >
-                            From segment
+                            Link a segment
                         </TopbarAction>
                         <TopbarAction
                             variant="ghost"
@@ -438,6 +469,14 @@ export default function ContactsTable({
                         placeholder="Search leads…"
                         className="w-full sm:w-56"
                     />
+                    <TopbarAction
+                        variant="ghost"
+                        icon={<LayersIcon className="w-3 h-3" />}
+                        onClick={() => campaignWrite.guard(() => setFromSegmentOpen(true))({})}
+                    >
+                        Segments
+                        {(campaignSegments.data?.length ?? 0) > 0 ? ` (${campaignSegments.data?.length})` : ""}
+                    </TopbarAction>
                     <TopbarAction
                         variant="ghost"
                         icon={<UsersIcon className="w-3 h-3" />}
@@ -508,13 +547,26 @@ export default function ContactsTable({
                     segment={segment}
                     onExclude={excludeFromSegment}
                     excluding={segmentMembers.isPending}
+                    campaign={current_campaign}
+                    onRemoveFromCampaign={() =>
+                        confirm?.show(
+                            `Remove ${selected.length} lead${selected.length === 1 ? "" : "s"} from this campaign? The contacts stay in your workspace.`,
+                            async () => removeFromCampaign(selected),
+                        )
+                    }
+                    removing={bulkUpdate.isPending}
                 />
                 <ContactEdit
                     contacts={contacts ?? []}
                     active={edit}
                     setActive={setEdit}
                 />
-                <ContactsEditBulk active={bulkEdit} setActive={setBulkEdit} selected={selected} />
+                <ContactsEditBulk
+                    active={bulkEdit}
+                    setActive={setBulkEdit}
+                    selected={selected}
+                    scope={current_campaign ? { kind: "campaign", name: current_campaign.name } : undefined}
+                />
                 <NewContactDialog open={newOpen} onClose={() => setNewOpen(false)} campaign={current_campaign} />
                 <SyncSourcesPanel
                     open={syncOpen}
@@ -531,7 +583,7 @@ export default function ContactsTable({
                     onClose={() => setFromContactsOpen(false)}
                     campaign={current_campaign}
                 />
-                <AddSegmentLeadsDialog
+                <CampaignSegmentsDialog
                     open={fromSegmentOpen}
                     onClose={() => setFromSegmentOpen(false)}
                     campaign={current_campaign}
@@ -741,8 +793,13 @@ export default function ContactsTable({
                 onSaved={(saved) => navigate(`/app/contacts/segments/${saved.id}`)}
             />
             <ContactEdit contacts={contacts ?? []} active={edit} setActive={setEdit} initialTab={editTab} />
-            <ContactsEditBulk active={bulkEdit} setActive={setBulkEdit} selected={selected} />
-            <NewContactDialog open={newOpen} onClose={() => setNewOpen(false)} />
+            <ContactsEditBulk
+                active={bulkEdit}
+                setActive={setBulkEdit}
+                selected={selected}
+                scope={segment ? { kind: "segment", name: segment.name } : undefined}
+            />
+            <NewContactDialog open={newOpen} onClose={() => setNewOpen(false)} segment={segment} />
             {segment && (
                 <AddFromContactsDialog
                     open={fromContactsOpen}
@@ -780,6 +837,7 @@ function ContactsTableBody({
     onToggleAll,
     onRowClick,
     onDelete,
+    onRemoveFromCampaign,
     emptyTitle,
     emptyBody,
     emptyCta,
@@ -818,6 +876,9 @@ function ContactsTableBody({
     onToggleAll: () => void;
     onRowClick: (id: string, tab?: ContactSlideTab) => void;
     onDelete: (id: string) => void;
+    // In a campaign, the row's destructive action detaches the lead instead
+    // of deleting the contact from the whole workspace.
+    onRemoveFromCampaign?: (id: string) => void;
     emptyTitle: string;
     emptyBody: string;
     emptyCta: React.ReactNode;
@@ -1078,14 +1139,25 @@ function ContactsTableBody({
                                 <td className="px-3" onClick={(e) => e.stopPropagation()}>
                                     {/* Touch-safe: always visible on mobile, hover-reveal on desktop. */}
                                     <div className="flex items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
-                                        <button
-                                            type="button"
-                                            aria-label="Delete contact"
-                                            onClick={() => onDelete(c.id)}
-                                            className="size-6 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center transition-colors"
-                                        >
-                                            <TrashIcon className="w-3 h-3" />
-                                        </button>
+                                        {onRemoveFromCampaign ? (
+                                            <button
+                                                type="button"
+                                                aria-label="Remove from campaign"
+                                                onClick={() => onRemoveFromCampaign(c.id)}
+                                                className="size-6 rounded text-slate-400 hover:text-amber-600 hover:bg-amber-50 flex items-center justify-center transition-colors"
+                                            >
+                                                <UserMinusIcon className="w-3 h-3" />
+                                            </button>
+                                        ) : (
+                                            <button
+                                                type="button"
+                                                aria-label="Delete contact"
+                                                onClick={() => onDelete(c.id)}
+                                                className="size-6 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center transition-colors"
+                                            >
+                                                <TrashIcon className="w-3 h-3" />
+                                            </button>
+                                        )}
                                         <button
                                             type="button"
                                             aria-label="Contact details"
@@ -1450,6 +1522,9 @@ function SelectionBar({
     segment,
     onExclude,
     excluding,
+    campaign,
+    onRemoveFromCampaign,
+    removing,
 }: {
     count: number;
     deleting: boolean;
@@ -1468,6 +1543,9 @@ function SelectionBar({
     segment?: { id: string; name: string };
     onExclude: () => void;
     excluding: boolean;
+    campaign?: MiniCampaign;
+    onRemoveFromCampaign?: () => void;
+    removing?: boolean;
 }) {
     if (count === 0) return null;
     return (
@@ -1530,6 +1608,17 @@ function SelectionBar({
                     <span className="hidden sm:inline">Remove from segment</span>
                 </button>
             )}
+            {campaign && onRemoveFromCampaign && (
+                <button
+                    type="button"
+                    onClick={onRemoveFromCampaign}
+                    disabled={removing}
+                    className="h-7 px-2.5 rounded text-[12px] text-amber-700 hover:text-white hover:bg-amber-600 font-medium inline-flex items-center gap-1.5 transition-colors disabled:opacity-60"
+                >
+                    {removing ? <Loader2Icon className="w-3 h-3 animate-spin" /> : <UserMinusIcon className="w-3 h-3" />}
+                    <span className="hidden sm:inline">Remove from campaign</span>
+                </button>
+            )}
             <button
                 type="button"
                 onClick={onResearch}
@@ -1556,15 +1645,20 @@ function SelectionBar({
                     <PopoverMenuItem onSelect={onMarkDeliverable}>Mark deliverable</PopoverMenuItem>
                 </PopoverMenuContent>
             </PopoverMenu>
-            <button
-                type="button"
-                onClick={onDelete}
-                disabled={deleting}
-                className="h-7 px-2.5 rounded text-[12px] text-red-600 hover:text-white hover:bg-red-600 font-medium inline-flex items-center gap-1.5 transition-colors disabled:opacity-60"
-            >
-                {deleting ? <Loader2Icon className="w-3 h-3 animate-spin" /> : <TrashIcon className="w-3 h-3" />}
-                <span className="hidden sm:inline">Delete</span>
-            </button>
+            {/* Inside a campaign the destructive action is leaving the campaign,
+                not leaving the workspace — same rule as the row action, which
+                shows Remove instead of Delete there. */}
+            {!campaign && (
+                <button
+                    type="button"
+                    onClick={onDelete}
+                    disabled={deleting}
+                    className="h-7 px-2.5 rounded text-[12px] text-red-600 hover:text-white hover:bg-red-600 font-medium inline-flex items-center gap-1.5 transition-colors disabled:opacity-60"
+                >
+                    {deleting ? <Loader2Icon className="w-3 h-3 animate-spin" /> : <TrashIcon className="w-3 h-3" />}
+                    <span className="hidden sm:inline">Delete</span>
+                </button>
+            )}
             <div className="h-4 w-px bg-slate-200" />
             <button
                 type="button"

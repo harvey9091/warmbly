@@ -222,6 +222,12 @@ func (s *contactService) ImportCommit(
 	if xerr != nil {
 		return nil, xerr
 	}
+	// Segment targets are resolved up front: each must exist in the org.
+	// Membership is written after the rows exist, as an include override.
+	segmentIDs, xerr := s.parseSegmentIDs(ctx, orgID, opts.SegmentIDs)
+	if xerr != nil {
+		return nil, xerr
+	}
 
 	rows, _, xerr := parseSpreadsheet(r, filename)
 	if xerr != nil {
@@ -381,6 +387,9 @@ func (s *contactService) ImportCommit(
 	toInsert := make([]models.AddContact, 0, len(parsed))
 	toInsertLines := make([]int, 0, len(parsed))
 	toUpdate := make([]pendingRow, 0)
+	// Every contact the file touched (created, updated or skipped-but-linked)
+	// joins the import's target segments at the end.
+	touched := make([]uuid.UUID, 0, len(parsed))
 	// Existing contacts the file listed but did not change. They still have
 	// to join the campaign / categories this import targets: "skip" means
 	// "don't touch their fields", not "leave them out of the list".
@@ -409,6 +418,7 @@ func (s *contactService) ImportCommit(
 			toInsertLines = append(toInsertLines, p.line)
 		case dedup == models.ContactImportDedupSkip:
 			res.Skipped++
+			touched = append(touched, ex.ID)
 			skippedLinks = append(skippedLinks, linkTarget{
 				line:       p.line,
 				email:      p.contact.Email,
@@ -456,6 +466,9 @@ func (s *contactService) ImportCommit(
 			continue
 		}
 		res.Imported += len(inserted)
+		for i := range inserted {
+			touched = append(touched, inserted[i].ID)
+		}
 	}
 
 	for _, p := range toUpdate {
@@ -485,6 +498,7 @@ func (s *contactService) ImportCommit(
 			continue
 		}
 		res.Updated++
+		touched = append(touched, ex.ID)
 
 		// Attach campaigns separately if the caller requested it.
 		if len(p.contact.Campaigns) > 0 {
@@ -522,6 +536,16 @@ func (s *contactService) ImportCommit(
 		}
 	}
 
+	// Segment membership last, once every touched row exists. A failed write
+	// is a note, not a failed import: the contacts themselves are in.
+	if len(touched) > 0 {
+		for _, segID := range segmentIDs {
+			if _, xerr := s.segmentLinker.SetMembers(ctx, orgID, segID, touched, models.SegmentMemberInclude); xerr != nil {
+				warn(0, "", nil, "imported contacts could not be added to a segment: "+xerr.Message)
+			}
+		}
+	}
+
 	res.EndedAt = time.Now().UTC()
 
 	s.updateListQuality(ctx, orgID, quality)
@@ -530,8 +554,40 @@ func (s *contactService) ImportCommit(
 		s.publishContactsReload(ctx, userID, "contacts:import")
 		// Covers the Google Sheets sync too: it commits through this path.
 		s.wakeCampaigns(ctx, orgID, globalCampaignIDs)
+		s.syncSegmentCampaigns(ctx, orgID)
 	}
 	return res, nil
+}
+
+// parseSegmentIDs validates the import's target segments: well-formed ids
+// that exist in the org, deduplicated.
+func (s *contactService) parseSegmentIDs(ctx context.Context, orgID uuid.UUID, raw []string) ([]uuid.UUID, *errx.Error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if s.segmentLinker == nil {
+		return nil, errx.New(errx.BadRequest, "segments are not available")
+	}
+	out := make([]uuid.UUID, 0, len(raw))
+	seen := map[uuid.UUID]bool{}
+	for _, r := range raw {
+		id, err := uuid.Parse(strings.TrimSpace(r))
+		if err != nil {
+			return nil, errx.New(errx.BadRequest, "invalid segment id")
+		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		if _, xerr := s.segmentLinker.Get(ctx, orgID, id); xerr != nil {
+			if xerr.Code == errx.NotFound {
+				return nil, errx.New(errx.BadRequest, "a selected segment does not exist")
+			}
+			return nil, xerr
+		}
+		out = append(out, id)
+	}
+	return out, nil
 }
 
 // linkTarget is an existing contact that must join the import's campaigns and

@@ -10,10 +10,13 @@ export default function useAddContacts() {
         onSuccess: () => {
             // The campaign Leads tab is a ["contacts","list"] search scoped to one
             // campaign, so a lead created there needs the list refetched, and
-            // ["campaigns"] carries the counts that just moved.
+            // ["campaigns"] carries the counts that just moved. A contact created
+            // inside a segment is pinned into it, which moves that segment's
+            // count and its pinned-contacts panel.
             return Promise.all([
                 queryClient.invalidateQueries({ queryKey: ["contacts", "list"] }),
                 queryClient.invalidateQueries({ queryKey: ["campaigns"] }),
+                queryClient.invalidateQueries({ queryKey: ["segments"] }),
             ])
         }
     })

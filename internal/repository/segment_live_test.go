@@ -241,3 +241,164 @@ func TestLiveSegmentOverridesNestingAndCampaign(t *testing.T) {
 		t.Fatalf("acme after nested delete: %+v", got)
 	}
 }
+
+// Issue #277: segments linked to a campaign are a live audience source. These
+// prove the link CRUD, the incremental enrolment sync, the sweep scan and the
+// delete guard against the real schema.
+func TestLiveSegmentCampaignLinks(t *testing.T) {
+	f, repo := newSegmentFixture(t)
+	ctx := context.Background()
+
+	acme, xerr := repo.Create(ctx, f.org, &f.owner, &models.Segment{
+		Name: "Acme live", Color: "#0284c7", Match: models.SegmentMatchAll,
+		Conditions: []models.SegmentCondition{{Field: "company", Operator: "equals", Value: "acme"}},
+	})
+	if xerr != nil {
+		t.Fatalf("create: %v", xerr)
+	}
+
+	// Linking replaces the set; a segment the org does not own is refused.
+	if xerr := repo.SetForCampaign(ctx, f.org, f.other, []uuid.UUID{acme.ID}); xerr != nil {
+		t.Fatalf("set: %v", xerr)
+	}
+	if xerr := repo.SetForCampaign(ctx, f.org, f.other, []uuid.UUID{uuid.New()}); xerr == nil {
+		t.Fatalf("unknown segment accepted")
+	}
+	links, xerr := repo.ListForCampaign(ctx, f.org, f.other)
+	if xerr != nil || len(links) != 1 || links[0].SegmentID != acme.ID || links[0].ContactCount != 2 {
+		t.Fatalf("links = %+v, %v", links, xerr)
+	}
+
+	// Sync enrols current members once; a second pass adds nothing.
+	added, xerr := repo.SyncCampaignSegments(ctx, f.org, f.other)
+	if xerr != nil || added != 2 {
+		t.Fatalf("sync = %d, %v", added, xerr)
+	}
+	if added, _ = repo.SyncCampaignSegments(ctx, f.org, f.other); added != 0 {
+		t.Fatalf("second sync = %d, want 0", added)
+	}
+
+	// A contact pinned into the segment is picked up by the next sync.
+	if _, xerr := repo.SetMembers(ctx, f.org, acme.ID, []uuid.UUID{f.bob}, models.SegmentMemberInclude); xerr != nil {
+		t.Fatalf("include: %v", xerr)
+	}
+	if added, _ = repo.SyncCampaignSegments(ctx, f.org, f.other); added != 1 {
+		t.Fatalf("post-include sync = %d, want 1", added)
+	}
+
+	// A hand-removed lead stays removed: the sync skips the pair until a
+	// manual add clears the record, and the explicit one-shot enrol overrides
+	// and clears it too.
+	handle, _ := liveContactDB(t)
+	contacts := NewContactRepostory(handle)
+	removeBob := &models.BulkEditContactsData{Contacts: []string{f.bob.String()}, RemoveCampaigns: []string{f.other.String()}}
+	if _, xerr := contacts.BulkUpdate(ctx, f.owner.String(), f.org, removeBob); xerr != nil {
+		t.Fatalf("remove: %v", xerr)
+	}
+	if added, _ = repo.SyncCampaignSegments(ctx, f.org, f.other); added != 0 {
+		t.Fatalf("sync after manual removal = %d, want 0", added)
+	}
+	if _, xerr := contacts.BulkUpdate(ctx, f.owner.String(), f.org, &models.BulkEditContactsData{
+		Contacts: []string{f.bob.String()}, AddCampaigns: []string{f.other.String()},
+	}); xerr != nil {
+		t.Fatalf("re-add: %v", xerr)
+	}
+	var removals int
+	if err := handle.QueryRow(ctx, `SELECT COUNT(*) FROM campaign_lead_removals WHERE campaign_id = $1`, f.other).Scan(&removals); err != nil || removals != 0 {
+		t.Fatalf("removals after manual re-add = %d, %v", removals, err)
+	}
+	if _, xerr := contacts.BulkUpdate(ctx, f.owner.String(), f.org, removeBob); xerr != nil {
+		t.Fatalf("remove again: %v", xerr)
+	}
+	out, xerr := repo.AddToCampaign(ctx, f.org, f.owner.String(), acme.ID, f.other)
+	if xerr != nil || out.Added != 1 {
+		t.Fatalf("one-shot after removal = %+v, %v", out, xerr)
+	}
+	if err := handle.QueryRow(ctx, `SELECT COUNT(*) FROM campaign_lead_removals WHERE campaign_id = $1`, f.other).Scan(&removals); err != nil || removals != 0 {
+		t.Fatalf("removals after one-shot = %d, %v", removals, err)
+	}
+
+	// The sweep and the targeted lookup both see the linked campaign, and the
+	// delete guard reports it by name.
+	linked, xerr := repo.LinkedCampaigns(ctx, &f.org)
+	if xerr != nil || len(linked) != 1 || linked[0].CampaignID != f.other || linked[0].OrganizationID != f.org {
+		t.Fatalf("linked = %+v, %v", linked, xerr)
+	}
+	byseg, xerr := repo.LinkedCampaignsForSegments(ctx, f.org, []uuid.UUID{acme.ID})
+	if xerr != nil || len(byseg) != 1 || byseg[0].CampaignID != f.other {
+		t.Fatalf("by segment = %+v, %v", byseg, xerr)
+	}
+	names, xerr := repo.CampaignsUsingSegment(ctx, f.org, acme.ID)
+	if xerr != nil || len(names) != 1 || names[0] != "RevOps outreach" {
+		t.Fatalf("using = %v, %v", names, xerr)
+	}
+
+	// Unlinking everything keeps the enrolled leads (alice, carol, bob).
+	if xerr := repo.SetForCampaign(ctx, f.org, f.other, []uuid.UUID{}); xerr != nil {
+		t.Fatalf("unlink: %v", xerr)
+	}
+	if links, _ = repo.ListForCampaign(ctx, f.org, f.other); len(links) != 0 {
+		t.Fatalf("links after unlink = %+v", links)
+	}
+	inOther := models.SegmentCondition{Field: "campaign", Operator: "in", Values: []string{f.other.String()}}
+	if got := segCount(t, repo, f.org, models.SegmentMatchAll, inOther); got != 3 {
+		t.Errorf("leads after unlink = %d, want 3", got)
+	}
+}
+
+// Issue #285: a contact created inside a segment joins it, and the include
+// override is written in the same transaction as the contact. A segment that
+// vanishes between the service's existence check and this insert must roll the
+// whole create back rather than answer with a membership that never happened.
+func TestLiveContactAddPinsSegments(t *testing.T) {
+	f, repo := newSegmentFixture(t)
+	ctx := context.Background()
+	handle, pool := liveContactDB(t)
+	contacts := NewContactRepostory(handle)
+
+	acme, xerr := repo.Create(ctx, f.org, &f.owner, &models.Segment{
+		Name: "Pin target", Color: "#0284c7", Match: models.SegmentMatchAll,
+		Conditions: []models.SegmentCondition{{Field: "company", Operator: "equals", Value: "acme"}},
+	})
+	if xerr != nil {
+		t.Fatalf("create segment: %v", xerr)
+	}
+
+	// A company the conditions do not match, so membership can only come from
+	// the pin. The second contact names no segment and must stay out.
+	tag := uuid.New().String()[:6]
+	made, xerr := contacts.Add(ctx, f.owner.String(), f.org, []models.AddContact{
+		{Email: "pinned-" + tag + "@initech.test", FirstName: "Pinned", Company: "initech", Segments: []string{acme.ID.String(), acme.ID.String()}},
+		{Email: "loose-" + tag + "@initech.test", FirstName: "Loose", Company: "initech"},
+	})
+	if xerr != nil || len(made) != 2 {
+		t.Fatalf("add: %+v, %v", made, xerr)
+	}
+	modes, xerr := repo.MemberModes(ctx, acme.ID, []uuid.UUID{made[0].ID, made[1].ID})
+	if xerr != nil {
+		t.Fatalf("modes: %v", xerr)
+	}
+	if modes[made[0].ID] != models.SegmentMemberInclude {
+		t.Errorf("pinned contact mode = %q, want include", modes[made[0].ID])
+	}
+	if _, ok := modes[made[1].ID]; ok {
+		t.Errorf("contact that named no segment was pinned")
+	}
+
+	// A segment id that is not in the organization (the state the race leaves
+	// behind) fails the create instead of dropping the membership silently.
+	gone := uuid.New().String()
+	email := "vanished-" + tag + "@initech.test"
+	if _, xerr := contacts.Add(ctx, f.owner.String(), f.org, []models.AddContact{
+		{Email: email, FirstName: "Vanished", Company: "initech", Segments: []string{gone}},
+	}); xerr == nil {
+		t.Fatalf("create with a vanished segment succeeded")
+	}
+	var stranded int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM contacts WHERE organization_id = $1 AND email = $2`, f.org, email).Scan(&stranded); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if stranded != 0 {
+		t.Errorf("rolled-back create left %d contacts behind", stranded)
+	}
+}

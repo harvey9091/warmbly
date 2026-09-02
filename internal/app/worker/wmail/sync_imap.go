@@ -58,6 +58,7 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 		fullyProcessed := true
 		if befBox.HighestModSeq != box.HighestModSeq && !stats.aborted {
 			w.SmtpImapData.mailbox = box.UIDValidity
+			w.SmtpImapData.folder = imapCanonicalFolder(box)
 			done, err := w.imapIncremental(ctx, box, befBox.HighestModSeq, stats)
 			if err != nil {
 				return err
@@ -204,6 +205,7 @@ func (w *WMail) imapApply(ctx context.Context, fetched []*imap.Fetched, backfill
 			UID:     f.Email.UID,
 			ModSeq:  f.Email.ModSeq,
 			Mailbox: w.SmtpImapData.mailbox,
+			Folder:  w.SmtpImapData.folder,
 			Flags:   f.Email.Flags,
 		}); err != nil {
 			return false, w.controlPlaneError(err, stats)
@@ -285,6 +287,7 @@ func (w *WMail) imapStore(ctx context.Context, msg *models.EmailMessageData) err
 		ID:           msg.ID,
 		EmailID:      w.ID,
 		Mailbox:      w.SmtpImapData.mailbox,
+		Folder:       w.SmtpImapData.folder,
 		ThreadID:     threadID,
 		MessageID:    msg.MessageID,
 		GmailID:      msg.GmailID,
@@ -344,6 +347,7 @@ func (w *WMail) imapBackfill(ctx context.Context, folders []models.Mailbox, stat
 			return nil
 		}
 		w.SmtpImapData.mailbox = box.UIDValidity
+		w.SmtpImapData.folder = imapCanonicalFolder(box)
 
 		count, err := client.SelectForSync(box.Name)
 		if err != nil {
@@ -402,14 +406,19 @@ func (w *WMail) imapBackfill(ctx context.Context, folders []models.Mailbox, stat
 }
 
 // imapBackfillEligible excludes folders whose history is not worth importing:
-// trash, drafts, spam and Gmail's virtual "All Mail" (a duplicate of every
-// other folder). Live sync still follows them for placement signals; only the
-// import skips them. Special-use attributes are authoritative, with a name
-// fallback for servers that do not advertise them.
+// trash, spam and Gmail's virtual "All Mail" (a duplicate of every other
+// folder). Live sync still follows them for placement signals and to file new
+// mail into the Spam and Trash scopes; only the bounded initial import skips
+// them, because their history would consume the message budget that belongs to
+// real conversations. Drafts IS imported: it is small and a Drafts scope with
+// none of the mailbox's existing drafts in it reads as broken.
+//
+// Special-use attributes are authoritative, with a name fallback for servers
+// that do not advertise them.
 func imapBackfillEligible(box *models.Mailbox) bool {
 	for _, a := range box.Attrs {
 		switch strings.ToLower(a) {
-		case "\\noselect", "\\nonexistent", "\\trash", "\\junk", "\\drafts", "\\all":
+		case "\\noselect", "\\nonexistent", "\\trash", "\\junk", "\\all":
 			return false
 		}
 	}
@@ -418,10 +427,48 @@ func imapBackfillEligible(box *models.Mailbox) bool {
 		name = name[i+1:]
 	}
 	switch name {
-	case "trash", "junk", "spam", "drafts", "draft", "deleted items", "deleted messages", "junk e-mail", "junk email", "bulk mail":
+	case "trash", "junk", "spam", "deleted items", "deleted messages", "junk e-mail", "junk email", "bulk mail":
 		return false
 	}
 	return true
+}
+
+// imapCanonicalFolder maps an IMAP folder to the canonical unibox folder.
+// Special-use attributes are authoritative, with a name fallback for servers
+// that do not advertise them; unrecognized user folders file as inbox so
+// their mail stays visible.
+func imapCanonicalFolder(box *models.Mailbox) string {
+	for _, a := range box.Attrs {
+		switch strings.ToLower(a) {
+		case "\\sent":
+			return models.FolderSent
+		case "\\drafts":
+			return models.FolderDrafts
+		case "\\junk":
+			return models.FolderSpam
+		case "\\trash":
+			return models.FolderTrash
+		case "\\archive", "\\all":
+			return models.FolderArchive
+		}
+	}
+	name := strings.ToLower(box.Name)
+	if i := strings.LastIndexAny(name, "/."); i >= 0 {
+		name = name[i+1:]
+	}
+	switch name {
+	case "sent", "sent mail", "sent items", "sent messages":
+		return models.FolderSent
+	case "drafts", "draft":
+		return models.FolderDrafts
+	case "junk", "spam", "junk e-mail", "junk email", "bulk mail":
+		return models.FolderSpam
+	case "trash", "deleted", "deleted items", "deleted messages":
+		return models.FolderTrash
+	case "archive", "archives", "all mail":
+		return models.FolderArchive
+	}
+	return models.FolderInbox
 }
 
 // controlPlaneError handles a failed map lookup, body store or event publish

@@ -451,12 +451,18 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 		return xerr
 	}
 
+	// STEP 9.5: Resolve {{form_link:...}} markers to per-recipient form URLs
+	// BEFORE templating, so the substituted literal survives the naive
+	// fallback and gets wrapped by click tracking in STEP 11 like any link.
+	rawSubject, rawBodyHTML, rawBodyPlain := sequence.Subject, sequence.BodyHTML, sequence.BodyPlain
+	s.resolveFormLinks(ctx, orgID, campaign, contact, &rawSubject, &rawBodyHTML, &rawBodyPlain)
+
 	// STEP 10: Render email template with contact variables, then expand any
 	// {a|b|c} spintax per-recipient (only real |-groups; literal braces/CSS are
 	// left intact) so each send varies for deliverability.
-	subject := expandSpintax(RenderTemplate(sequence.Subject, *contact))
-	bodyHTML := expandSpintax(RenderTemplate(sequence.BodyHTML, *contact))
-	bodyPlain := expandSpintax(RenderTemplate(sequence.BodyPlain, *contact))
+	subject := expandSpintax(RenderTemplate(rawSubject, *contact))
+	bodyHTML := expandSpintax(RenderTemplate(rawBodyHTML, *contact))
+	bodyPlain := expandSpintax(RenderTemplate(rawBodyPlain, *contact))
 
 	// If no plain text provided, extract from HTML
 	if bodyPlain == "" && bodyHTML != "" {

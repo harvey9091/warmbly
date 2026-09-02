@@ -120,7 +120,7 @@ var SegmentFieldCatalog = []SegmentFieldSpec{
 	{Field: "phone", Label: "Phone", Group: "Contact", Kind: SegmentFieldText},
 	{Field: "subscribed", Label: "Subscribed", Group: "Contact", Kind: SegmentFieldBool},
 	{Field: "suppressed", Label: "On the suppression list", Group: "Contact", Kind: SegmentFieldBool},
-	{Field: "source", Label: "Source", Group: "Contact", Kind: SegmentFieldEnum, Options: []string{"unknown", "manual", "campaign", "import", "sheet_sync", "api", "ai_assistant"}},
+	{Field: "source", Label: "Source", Group: "Contact", Kind: SegmentFieldEnum, Options: []string{"unknown", "manual", "campaign", "import", "sheet_sync", "api", "ai_assistant", "form"}},
 	{Field: "verification_status", Label: "Verification status", Group: "Contact", Kind: SegmentFieldEnum, Options: []string{"valid", "risky", "invalid", "unknown"}},
 	{Field: "is_catch_all", Label: "Catch-all domain", Group: "Contact", Kind: SegmentFieldBool},
 	{Field: "esp_provider", Label: "Email provider", Group: "Contact", Kind: SegmentFieldEnum, Options: []string{"gmail", "outlook", "other"}},
@@ -233,6 +233,32 @@ type SegmentAddToCampaignResult struct {
 	CampaignID uuid.UUID `json:"campaign_id"`
 	Added      int       `json:"added"`
 	Members    int       `json:"members"`
+}
+
+// CampaignSegmentsMax bounds how many segments one campaign can link.
+const CampaignSegmentsMax = 20
+
+// CampaignSegmentsWrite replaces a campaign's linked segments.
+type CampaignSegmentsWrite struct {
+	SegmentIDs []string `json:"segment_ids"`
+}
+
+// CampaignSegmentLink is one segment linked to a campaign, for the Leads tab.
+type CampaignSegmentLink struct {
+	SegmentID    uuid.UUID `json:"segment_id"`
+	Name         string    `json:"name"`
+	Color        string    `json:"color"`
+	Description  string    `json:"description"`
+	ContactCount int       `json:"contact_count"`
+	LinkedAt     time.Time `json:"linked_at"`
+}
+
+// LinkedCampaign is one campaign that has segments attached, for the sync
+// sweep and the targeted per-segment syncs.
+type LinkedCampaign struct {
+	CampaignID     uuid.UUID
+	OrganizationID uuid.UUID
+	Status         string
 }
 
 // ContactSegment is one segment a contact belongs to, with its override.

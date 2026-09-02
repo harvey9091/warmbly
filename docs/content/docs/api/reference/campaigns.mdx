@@ -775,6 +775,79 @@ Atomically replace the campaign's explicit sender pool with the supplied list. *
 
 A `data` array of the resulting sender objects (same shape as [list senders](#list-campaign-senders)).
 
+## List linked segments
+
+`GET /campaigns/:id/segments`
+
+Return the segments linked to the campaign as live audience sources. **Scope** `READ_CAMPAIGNS` · **Org permission** `view_campaigns`.
+
+| Parameter | In | Type | Description |
+| --- | --- | --- | --- |
+| `id` | path | uuid | Campaign id. |
+
+### Response
+
+A `data` array of link objects (no pagination wrapper).
+
+```json
+{
+  "data": [
+    {
+      "segment_id": "4b9e...",
+      "name": "Warm leads",
+      "color": "#0ea5e9",
+      "description": "Replied or clicked in the last 30 days",
+      "contact_count": 412,
+      "linked_at": "2026-06-10T12:00:00Z"
+    }
+  ]
+}
+```
+
+## Replace linked segments
+
+`PUT /campaigns/:id/segments`
+
+Atomically replace the campaign's linked segments with the supplied set (up to 20). Every current member of a newly linked segment is enrolled as a lead immediately, and contacts who enter a linked segment later are enrolled automatically, within about 2 minutes. Enrolment is additive: a contact who leaves a segment keeps their lead row, and removing a segment from the set stops future enrolment without touching existing leads. A lead removed from the campaign by hand is never re-added automatically; a manual add (or the one-shot enrol below) clears that removal record. Omitting `segment_ids` returns `400`; send an explicit empty array to detach every segment. An active campaign is woken to send to the new leads; a completed campaign is restarted through the full launch checks when a linked segment grows. A linked segment cannot be deleted (`DELETE /segments/:id` returns `409`) until it is removed here. **Scope** `WRITE_CAMPAIGNS` · **Org permission** `manage_campaigns`.
+
+| Parameter | In | Type | Description |
+| --- | --- | --- | --- |
+| `id` | path | uuid | Campaign id. |
+
+### Request body
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `segment_ids` | uuid[] | yes | The full new set of linked segments, max 20. An empty array detaches them all. |
+
+```json
+{
+  "segment_ids": ["4b9e...", "7c2f..."]
+}
+```
+
+### Response
+
+The resulting links plus how many leads the call enrolled.
+
+```json
+{
+  "data": [
+    {
+      "segment_id": "4b9e...",
+      "name": "Warm leads",
+      "color": "#0ea5e9",
+      "description": "Replied or clicked in the last 30 days",
+      "contact_count": 412,
+      "linked_at": "2026-06-10T12:00:00Z"
+    }
+  ],
+  "added": 397
+}
+```
+
+For a one-time snapshot enrolment instead of a live link, see [add a segment to a campaign](/api/reference/contacts/#add-to-a-campaign).
+
 ## Verify campaign tracking domain
 
 `POST /campaigns/:id/tracking-domain/verify`

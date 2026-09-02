@@ -24,12 +24,14 @@ You must map at least one column to **Email**.
 <Callout type="info" title="Duplicates match on lowercased email">
 `Dana@Acme.com` and `dana@acme.com` are the same contact. Choose **Skip existing** (leave untouched), **Update existing** (merge new values in), or **Create duplicates** (force a new one, falling back to update if a uniqueness rule blocks it).
 
-Skipping still adds the contact to the campaign and categories the import targets: it leaves their fields alone, it does not leave them out of the list. If the same address appears twice in one file it becomes one contact, and the extra rows count as skipped.
+Skipping still adds the contact to the campaigns, segments, and categories the import targets: it leaves their fields alone, it does not leave them out of the list. If the same address appears twice in one file it becomes one contact, and the extra rows count as skipped.
 </Callout>
 
 Rows with a missing or invalid email are reported with a line number and reason rather than imported. A blank cell never erases a value you already have, so re-importing a partial export enriches contacts instead of wiping them.
 
 Problems with the mapping itself, an unnamed custom field or a name Warmbly cannot use, are reported once before anything is written, so a single typo can never fail every row.
+
+The **Options** step also decides where the contacts land: **Add to campaigns** enrols everyone in the file as leads of the campaigns you pick (hidden when the wizard was started from a campaign's Leads tab, since that campaign is already the target), and **Add to segments** pins them into the [segments](/guides/segments/) you pick as manual includes, so they stay members whatever the segment's conditions say.
 
 **From Google Sheets**, a sheet is a reusable **sync source** rather than a one-time upload. Connect it once (Warmbly reads only the tab you choose and never writes back), paste the spreadsheet ID from the URL between `/d/` and `/edit`, pick the tab, map columns, then set duplicate handling, a label, and optionally a campaign to enroll into and categories to apply. **Nothing syncs automatically**: press **Sync now**, or save and sync immediately.
 
@@ -68,6 +70,12 @@ See [Personalization & expressions](/guides/expressions/) for the full templatin
 ## Filtering the list
 
 A filter bar sits above the contact list. **Category**, **Segment**, **Status** and **Campaign** are always there; open one, tick values, and the list updates immediately with the matching count next to the bar. **Add filter** adds a custom-field condition (field, contains/is/starts with/ends with, value), a date-added or last-updated range, a number-of-campaigns range, the address verification verdict and, on a campaign's Leads tab, lead status and engagement. Each active filter is a pill you can reopen to change or remove with its cross; **Clear** drops them all, and **Save as segment** turns the current set into a [segment](/guides/segments/). Free-text search and sort stay in the toolbar.
+
+## Editing many contacts at once
+
+Tick rows in any contact list, a segment's members or a campaign's leads, and the selection bar's **Edit** opens a bulk panel. It can add or remove campaigns, add or remove categories, force a subscription state, and queue custom-field operations (add, edit, delete, rename) that run on every selected contact.
+
+Nothing is applied while you build it up. The header names the list the selection came from, and a **Will apply** strip above the buttons lists every queued change as a chip you can take back one at a time before pressing Apply. A field operation missing its key, or its value where one is needed, is marked and skipped rather than sent half-finished.
 
 ## Categories
 

@@ -479,6 +479,10 @@ defmodule RealtimeWeb.OrgChannel do
       String.contains?(event_type, "CONTACT") or String.contains?(event_type, "PAGE_HIT") ->
         has.(:view_contacts)
 
+      # Hosted form submissions: lead capture, so they ride the contacts gate.
+      String.contains?(event_type, "FORM") ->
+        has.(:view_contacts)
+
       # AI contact research progress: findings are about contacts.
       String.contains?(event_type, "RESEARCH") ->
         has.(:view_contacts)

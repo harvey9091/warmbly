@@ -93,3 +93,10 @@ func providerOr(env, def string) string {
 	}
 	return def
 }
+
+// TurnstileSiteKey is the public widget key the hosted form page renders
+// with. Frontends carry their own copy (TURNSTILE_KEY); this one exists
+// because the server-rendered page cannot read the SPA's runtime config.
+func TurnstileSiteKey() string {
+	return strings.TrimSpace(os.Getenv("TURNSTILE_SITE_KEY"))
+}

@@ -1,19 +1,21 @@
-// From a campaign's Leads tab: pick a segment and enrol its current members
-// as leads. The mirror image of AddSegmentToCampaignDialog.
+// From a campaign's Leads tab: link segments as a live audience source.
+// Members of linked segments are enrolled as leads automatically, now and as
+// the segments grow. Replaces the one-shot "From segment" copy.
 
 import React from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { LayersIcon, Loader2Icon, XIcon } from "lucide-react";
+import { LayersIcon, Loader2Icon, XIcon, CheckIcon } from "lucide-react";
 import toast from "react-hot-toast";
 
 import { SearchInput } from "@/components/ui/field";
-import { useAddSegmentToCampaign, useSegments } from "@/lib/api/hooks/app/segments";
+import { useConfirm } from "@/hooks/context/confirm";
+import { useCampaignSegments, useSegments, useSetCampaignSegments } from "@/lib/api/hooks/app/segments";
 import type MiniCampaign from "@/lib/api/models/app/campaigns/MiniCampaign";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
 import { cn } from "@/lib/utils";
 
-export default function AddSegmentLeadsDialog({
+export default function CampaignSegmentsDialog({
     open,
     onClose,
     campaign,
@@ -22,17 +24,27 @@ export default function AddSegmentLeadsDialog({
     onClose: () => void;
     campaign: MiniCampaign;
 }) {
-    const add = useAddSegmentToCampaign();
+    const confirm = useConfirm();
     const segments = useSegments(open);
+    const linked = useCampaignSegments(campaign.id, open);
+    const save = useSetCampaignSegments();
     const [query, setQuery] = React.useState("");
-    const [picked, setPicked] = React.useState<string | null>(null);
+    const [picked, setPicked] = React.useState<Set<string>>(new Set());
+    const [seeded, setSeeded] = React.useState(false);
 
     React.useEffect(() => {
         if (!open) {
             setQuery("");
-            setPicked(null);
+            setPicked(new Set());
+            setSeeded(false);
         }
     }, [open]);
+
+    React.useEffect(() => {
+        if (!open || seeded || !linked.data) return;
+        setPicked(new Set(linked.data.map((l) => l.segment_id)));
+        setSeeded(true);
+    }, [open, seeded, linked.data]);
 
     const list = React.useMemo(() => {
         const all = segments.data ?? [];
@@ -40,10 +52,23 @@ export default function AddSegmentLeadsDialog({
         return q ? all.filter((s) => s.name.toLowerCase().includes(q)) : all;
     }, [segments.data, query]);
 
-    const busy = add.isPending;
+    const dirty = React.useMemo(() => {
+        if (!seeded || !linked.data) return false;
+        const before = new Set(linked.data.map((l) => l.segment_id));
+        if (before.size !== picked.size) return true;
+        for (const id of picked) if (!before.has(id)) return true;
+        return false;
+    }, [seeded, linked.data, picked]);
+
+    const busy = save.isPending;
     const requestClose = React.useCallback(() => {
-        if (!busy) onClose();
-    }, [busy, onClose]);
+        if (busy) return;
+        if (dirty) {
+            confirm.show("Discard your segment changes?", async () => onClose());
+            return;
+        }
+        onClose();
+    }, [busy, dirty, confirm, onClose]);
 
     React.useEffect(() => {
         if (!open) return;
@@ -56,21 +81,39 @@ export default function AddSegmentLeadsDialog({
         return () => document.removeEventListener("keydown", onKey);
     }, [open, requestClose]);
 
+    function toggle(id: string) {
+        setPicked((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    }
+
     async function submit() {
-        if (!picked || busy) return;
-        const seg = list.find((s) => s.id === picked);
+        if (busy || !seeded) return;
         try {
-            const res = await add.mutateAsync({ id: picked, campaignId: campaign.id });
+            const res = await save.mutateAsync({ campaignId: campaign.id, segmentIds: [...picked] });
             toast.success(
-                res.added === 0
-                    ? `Every member of ${seg?.name ?? "the segment"} is already a lead`
-                    : `Added ${res.added.toLocaleString()} lead${res.added === 1 ? "" : "s"} from ${seg?.name ?? "the segment"}`,
+                picked.size === 0
+                    ? "Segments detached"
+                    : res.added === 0
+                      ? `Linked ${picked.size} segment${picked.size === 1 ? "" : "s"}; every member is already a lead`
+                      : `Linked ${picked.size} segment${picked.size === 1 ? "" : "s"} and added ${res.added.toLocaleString()} lead${res.added === 1 ? "" : "s"}`,
             );
             onClose();
         } catch (err) {
             toast.error(buildError(err as AppError));
         }
     }
+
+    const loading = segments.isPending || (linked.isPending && !seeded);
+    // A failed load must not strand the dialog as "loaded but Save disabled".
+    const loadError = segments.isError || (linked.isError && !seeded);
+    const retryLoad = () => {
+        if (segments.isError) void segments.refetch();
+        if (linked.isError) void linked.refetch();
+    };
 
     return (
         <AnimatePresence>
@@ -88,7 +131,7 @@ export default function AddSegmentLeadsDialog({
                         key="card"
                         role="dialog"
                         aria-modal="true"
-                        aria-label="Add leads from a segment"
+                        aria-label="Linked segments"
                         initial={{ y: 8, opacity: 0, scale: 0.985 }}
                         animate={{ y: 0, opacity: 1, scale: 1 }}
                         exit={{ y: 8, opacity: 0, scale: 0.985 }}
@@ -100,11 +143,11 @@ export default function AddSegmentLeadsDialog({
                             <div className="size-5 rounded bg-slate-100 text-slate-600 flex items-center justify-center">
                                 <LayersIcon className="w-3 h-3" />
                             </div>
-                            <span className="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">Add leads</span>
+                            <span className="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">Audience</span>
                             <div className="h-4 w-px bg-slate-200" />
-                            <span className="text-[12.5px] text-slate-900 font-medium">From a segment</span>
+                            <span className="text-[12.5px] text-slate-900 font-medium">Linked segments</span>
                             <span className="hidden sm:inline-flex items-center h-5 px-1.5 rounded bg-sky-50 text-sky-700 text-[10px] font-medium max-w-[200px] truncate">
-                                → {campaign.name}
+                                {campaign.name}
                             </span>
                             <button
                                 type="button"
@@ -115,15 +158,33 @@ export default function AddSegmentLeadsDialog({
                                 <XIcon className="w-3.5 h-3.5" />
                             </button>
                         </header>
+                        <div className="px-4 py-2.5 border-b border-slate-100 shrink-0 bg-slate-50/40">
+                            <p className="text-[11.5px] text-slate-500 leading-snug">
+                                Contacts in a linked segment become leads automatically, now and whenever the segment grows.
+                                Removing a link stops new enrolment; existing leads stay.
+                            </p>
+                        </div>
                         <div className="px-4 py-3 border-b border-slate-100 shrink-0">
                             <SearchInput value={query} onChange={setQuery} placeholder="Search segments…" autoFocus className="w-full" />
                         </div>
                         <div className="flex-1 min-h-[200px] overflow-y-auto">
-                            {segments.isPending ? (
+                            {loading ? (
                                 <div className="p-3 space-y-1.5">
                                     {[...Array(4)].map((_, i) => (
                                         <div key={i} className="h-9 rounded-md bg-slate-100 animate-pulse" />
                                     ))}
+                                </div>
+                            ) : loadError ? (
+                                <div className="px-5 py-10 text-center">
+                                    <p className="text-[12.5px] text-slate-900 font-medium">Couldn't load segments</p>
+                                    <p className="text-[11.5px] text-slate-400 mt-0.5">Check your connection and try again.</p>
+                                    <button
+                                        type="button"
+                                        onClick={retryLoad}
+                                        className="mt-3 h-7 px-2.5 rounded-md border border-slate-200 hover:border-slate-300 text-[12px] text-slate-700 hover:text-slate-900 transition-colors"
+                                    >
+                                        Retry
+                                    </button>
                                 </div>
                             ) : list.length === 0 ? (
                                 <div className="px-5 py-10 text-center">
@@ -133,12 +194,12 @@ export default function AddSegmentLeadsDialog({
                             ) : (
                                 <ul className="divide-y divide-slate-100">
                                     {list.map((s) => {
-                                        const on = picked === s.id;
+                                        const on = picked.has(s.id);
                                         return (
                                             <li key={s.id}>
                                                 <button
                                                     type="button"
-                                                    onClick={() => setPicked(s.id)}
+                                                    onClick={() => toggle(s.id)}
                                                     aria-pressed={on}
                                                     className={cn(
                                                         "w-full px-4 h-10 flex items-center gap-3 text-left transition-colors",
@@ -147,11 +208,11 @@ export default function AddSegmentLeadsDialog({
                                                 >
                                                     <span
                                                         className={cn(
-                                                            "size-3.5 rounded-full border flex items-center justify-center shrink-0",
+                                                            "size-3.5 rounded border flex items-center justify-center shrink-0",
                                                             on ? "border-sky-600 bg-sky-600" : "border-slate-300 bg-white",
                                                         )}
                                                     >
-                                                        {on && <span className="size-1.5 rounded-full bg-white" />}
+                                                        {on && <CheckIcon className="w-2.5 h-2.5 text-white" />}
                                                     </span>
                                                     <span className="size-2 rounded-full shrink-0" style={{ backgroundColor: s.color }} />
                                                     <span className="text-[12.5px] text-slate-900 font-medium truncate">{s.name}</span>
@@ -165,24 +226,26 @@ export default function AddSegmentLeadsDialog({
                                 </ul>
                             )}
                         </div>
-                        <footer className="px-3 h-12 border-t border-slate-200 flex items-center gap-2 shrink-0 bg-slate-50/30">
-                            <span className="text-[11px] text-slate-400 min-w-0 truncate">Adds today's members. Existing leads are skipped.</span>
+                        <footer className="px-3 py-2 min-h-12 border-t border-slate-200 flex flex-wrap items-center gap-x-2 gap-y-1.5 shrink-0 bg-slate-50/30">
+                            <span className="text-[11px] text-slate-400 leading-snug basis-full sm:basis-0 sm:flex-1 sm:min-w-[120px]">
+                                {picked.size === 0 ? "No segments linked" : `${picked.size} segment${picked.size === 1 ? "" : "s"} linked`}
+                            </span>
                             <button
                                 type="button"
                                 onClick={requestClose}
                                 disabled={busy}
-                                className="ml-auto h-7 px-2.5 rounded-md text-[12px] text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition-colors disabled:opacity-50"
+                                className="ml-auto shrink-0 h-7 px-2.5 rounded-md text-[12px] text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition-colors disabled:opacity-50"
                             >
                                 Cancel
                             </button>
                             <button
                                 type="button"
                                 onClick={submit}
-                                disabled={busy || !picked}
-                                className="h-7 px-2.5 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                                disabled={busy || !seeded || !dirty}
+                                className="shrink-0 whitespace-nowrap h-7 px-2.5 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
                             >
                                 {busy ? <Loader2Icon className="w-3 h-3 animate-spin" /> : <LayersIcon className="w-3 h-3" />}
-                                Add leads
+                                Save
                             </button>
                         </footer>
                     </motion.div>

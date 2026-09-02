@@ -357,7 +357,7 @@ func (b *blobCollector) addURL(url, table, column string) {
 }
 
 // publicKeyPrefixes are the object-key prefixes reachable through a public URL.
-var publicKeyPrefixes = []string{"avatars/"}
+var publicKeyPrefixes = []string{"avatars/", "form-assets/"}
 
 // ---------- small JSON helpers ----------
 

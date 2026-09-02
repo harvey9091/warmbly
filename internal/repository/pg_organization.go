@@ -34,6 +34,14 @@ type OrganizationRepository interface {
 	AddMember(ctx context.Context, member *models.OrganizationMember) error
 	UpdateMember(ctx context.Context, member *models.OrganizationMember) error
 
+	// Custom forms domain (implemented in pg_organization_forms_domain.go)
+	GetFormsDomain(ctx context.Context, orgID uuid.UUID) (domain string, verified bool, err error)
+	SetFormsDomain(ctx context.Context, orgID uuid.UUID, domain string) error
+	SetFormsDomainVerified(ctx context.Context, orgID uuid.UUID, verified bool, at *time.Time) error
+	// ListFormsDomains returns every org with a custom forms domain set, for
+	// the periodic re-verification sweep.
+	ListFormsDomains(ctx context.Context) ([]OrgFormsDomain, error)
+
 	// Custom roles (implemented in pg_organization_roles.go)
 	ListRoles(ctx context.Context, orgID uuid.UUID) ([]models.OrganizationRole, error)
 	GetRoleByID(ctx context.Context, orgID, roleID uuid.UUID) (*models.OrganizationRole, error)

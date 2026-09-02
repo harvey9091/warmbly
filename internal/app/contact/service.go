@@ -91,12 +91,32 @@ type CampaignWaker interface {
 	WakeCampaigns(ctx context.Context, orgID uuid.UUID, campaignIDs []string)
 }
 
+// SegmentLinker writes segment include overrides for imported contacts.
+// Satisfied structurally by repository.SegmentRepository.
+type SegmentLinker interface {
+	Get(ctx context.Context, orgID, id uuid.UUID) (*models.Segment, *errx.Error)
+	SetMembers(ctx context.Context, orgID, segmentID uuid.UUID, contactIDs []uuid.UUID, mode models.SegmentMemberMode) (int, *errx.Error)
+}
+
+// SegmentCampaignSyncer re-enrols the org's segment-linked campaigns after
+// contacts changed. Satisfied structurally by segment.Service.
+type SegmentCampaignSyncer interface {
+	SyncOrgLinkedCampaigns(ctx context.Context, orgID uuid.UUID)
+}
+
+// SegmentAware is the optional capability the caller uses to attach both.
+type SegmentAware interface {
+	WireSegments(linker SegmentLinker, syncer SegmentCampaignSyncer)
+}
+
 type contactService struct {
 	contactRepository  repository.ContactRepository
 	subRepo            repository.SubscriptionRepository
 	planRepo           repository.PlanRepository
 	streamingPublisher *pubsub.StreamingPublisher
 	campaignWaker      CampaignWaker
+	segmentLinker      SegmentLinker
+	segmentSyncer      SegmentCampaignSyncer
 	previewer          scheduler.ContactSendPreviewer
 	// orgRisk files import-quality findings on the workspace's posture.
 	// Optional/nil-safe: without it a bad import is reported but not fused.
@@ -154,6 +174,22 @@ func (s *contactService) publishContactsReload(ctx context.Context, userID strin
 }
 
 func (s *contactService) SetCampaignWaker(w CampaignWaker) { s.campaignWaker = w }
+
+// WireSegments attaches the segment override writer and linked-campaign syncer.
+func (s *contactService) WireSegments(linker SegmentLinker, syncer SegmentCampaignSyncer) {
+	s.segmentLinker = linker
+	s.segmentSyncer = syncer
+}
+
+// syncSegmentCampaigns follows every contact-mutating path: a changed contact
+// may now match a segment linked to a campaign. Best effort like wakeCampaigns;
+// the periodic sweep is the backstop.
+func (s *contactService) syncSegmentCampaigns(ctx context.Context, orgID uuid.UUID) {
+	if s.segmentSyncer == nil {
+		return
+	}
+	s.segmentSyncer.SyncOrgLinkedCampaigns(ctx, orgID)
+}
 
 // wakeCampaigns is the single place every lead-attaching path funnels through
 // (add, update, bulk edit, CSV/XLSX import and the Google Sheets sync, which

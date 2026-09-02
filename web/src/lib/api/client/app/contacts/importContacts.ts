@@ -46,6 +46,7 @@ export interface ImportCommitOptions {
     has_header: boolean;
     category_ids?: string[];
     campaign_ids?: string[];
+    segment_ids?: string[];
     subscribed_default?: boolean;
 }
 

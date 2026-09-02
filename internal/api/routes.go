@@ -144,6 +144,13 @@ func Run(
 		// instead of carrying it all in the install-time env file.
 		internal.GET("/worker/config", h.InternalWorkerConfig)
 		internal.POST("/worker/heartbeat", h.InternalWorkerHeartbeat)
+
+		// Hosted forms: the forms service (cmd/forms) resolves published
+		// forms, forwards deduped funnel events and visitor submissions
+		// here; the answers-to-contact pipeline runs on this side.
+		internal.GET("/forms/:publicID", h.InternalGetPublicForm)
+		internal.POST("/forms/:publicID/events", h.InternalRecordFormEvent)
+		internal.POST("/forms/:publicID/submissions", h.InternalSubmitForm)
 	}
 
 	corsConfig := cors.Config{
@@ -482,9 +489,18 @@ func Run(
 				campaigns.POST("/:id/stop", m.RequireOrganization(), m.RequireAccess(models.PermSendCampaigns, models.APIPermSendCampaigns), h.StopCampaign)
 				campaigns.GET("/:id/logs", m.RequireAccess(models.PermViewCampaigns, models.APIPermReadCampaigns), h.GetCampaignLogs)
 
+				// Form performance for this campaign's recipients.
+				campaigns.GET("/:id/forms", m.RequireOrganization(), m.RequireAccess(models.PermViewCampaigns, models.APIPermReadCampaigns), h.GetCampaignForms)
+
 				// Explicit sender pool (rotation/weighting).
 				campaigns.GET("/:id/senders", m.RequireOrganization(), m.RequireAccess(models.PermViewCampaigns, models.APIPermReadCampaigns), h.ListCampaignSenders)
 				campaigns.PUT("/:id/senders", m.RequireOrganization(), m.RequireAccess(models.PermManageCampaigns, models.APIPermWriteCampaigns), h.ReplaceCampaignSenders)
+
+				// Linked segments: a live audience source; members are enrolled
+				// as leads automatically. PUT replaces the set, so retries are
+				// naturally safe.
+				campaigns.GET("/:id/segments", m.RequireOrganization(), m.RequireAccess(models.PermViewCampaigns, models.APIPermReadCampaigns), h.ListCampaignSegments)
+				campaigns.PUT("/:id/segments", m.RequireOrganization(), m.RequireAccess(models.PermManageCampaigns, models.APIPermWriteCampaigns), h.SetCampaignSegments)
 
 				// Campaign-scoped tracking-domain verification.
 				campaigns.POST("/:id/tracking-domain/verify", m.RequireOrganization(), m.RequireAccess(models.PermManageCampaigns, models.APIPermWriteCampaigns), h.VerifyCampaignTrackingDomain)
@@ -523,6 +539,18 @@ func Run(
 				skillsGroup.POST("", m.RequireAccess(models.PermManageSettings, models.APIPermAIAgent), h.CreateSkill)
 				skillsGroup.PATCH("/:id", m.RequireAccess(models.PermManageSettings, models.APIPermAIAgent), h.UpdateSkill)
 				skillsGroup.DELETE("/:id", m.RequireAccess(models.PermManageSettings, models.APIPermAIAgent), h.DeleteSkill)
+			}
+
+			// REST tool surface for non-MCP agents (Hermes/OpenAI-style function
+			// calling). No route-level permission gate on purpose, matching the
+			// advisor apply path and the MCP endpoint: the registry enforces each
+			// tool's own permission bits, the list reflects only what the caller
+			// may use, and send-class tools are never exposed.
+			agentTools := protected.Group("/ai/tools")
+			agentTools.Use(m.RequireOrganization())
+			{
+				agentTools.GET("", m.RateLimitMiddleware(models.RateLimitRead), h.ListAgentTools)
+				agentTools.POST("/:name/call", m.RateLimitMiddleware(models.RateLimitWrite), h.CallAgentTool)
 			}
 
 			// Advisor. Reads are an analytics read of the org's sending
@@ -622,6 +650,32 @@ func Run(
 			}
 
 			// folders, email-account tags, and contact categories.
+			// Forms: hosted lead capture. Contact permissions on both sides,
+			// since a form exists only to create and update contacts.
+			forms := protected.Group("/forms")
+			forms.Use(m.RateLimitMiddleware(models.RateLimitWrite))
+			{
+				forms.GET("", m.RequireAccess(models.PermViewContacts, models.APIPermReadContacts), h.ListForms)
+				forms.GET("/config", m.RequireAccess(models.PermViewContacts, models.APIPermReadContacts), h.GetFormsConfig)
+				// The custom forms domain is workspace-wide branding, so it
+				// sits behind the settings gate rather than the contacts one.
+				// Static siblings, declared before the /:id routes.
+				forms.GET("/domain", m.RequireOrganization(), m.RequireAccess(models.PermViewContacts, models.APIPermReadContacts), h.GetFormsDomain)
+				forms.PUT("/domain", m.RequireOrganization(), m.RequireAccess(models.PermManageSettings, models.APIPermWriteContacts), h.SetFormsDomain)
+				forms.POST("/domain/verify", m.RequireOrganization(), m.RequireAccess(models.PermManageSettings, models.APIPermWriteContacts), h.VerifyFormsDomain)
+				forms.POST("", m.RequireAccess(models.PermManageContacts, models.APIPermWriteContacts), h.CreateForm)
+				forms.GET("/:id", m.RequireAccess(models.PermViewContacts, models.APIPermReadContacts), h.GetForm)
+				forms.PATCH("/:id", m.RequireAccess(models.PermManageContacts, models.APIPermWriteContacts), h.UpdateForm)
+				forms.DELETE("/:id", m.RequireAccess(models.PermManageContacts, models.APIPermWriteContacts), h.DeleteForm)
+				forms.GET("/:id/submissions", m.RequireAccess(models.PermViewContacts, models.APIPermReadContacts), h.ListFormSubmissions)
+				forms.DELETE("/:id/submissions/:sid", m.RequireAccess(models.PermManageContacts, models.APIPermWriteContacts), h.DeleteFormSubmission)
+				forms.GET("/:id/stats", m.RequireAccess(models.PermViewContacts, models.APIPermReadContacts), h.GetFormStats)
+				// Minting writes a link row, hence the manage gate on a GET.
+				forms.GET("/:id/links/:contactID", m.RequireAccess(models.PermManageContacts, models.APIPermWriteContacts), h.MintFormLink)
+				forms.POST("/:id/assets/:kind", m.RequireAccess(models.PermManageContacts, models.APIPermWriteContacts), h.UploadFormAsset)
+				forms.DELETE("/:id/assets/:kind", m.RequireAccess(models.PermManageContacts, models.APIPermWriteContacts), h.DeleteFormAsset)
+			}
+
 			grouph.New(protected, h.FolderService, h.AuditService, "folders", m.RequireAccess(models.PermManageCampaigns, models.APIPermWriteCampaigns))
 			grouph.New(protected, h.TagService, h.AuditService, "tags", m.RequireAccess(models.PermManageEmails, models.APIPermWriteEmails))
 			grouph.New(protected, h.CategoryService, h.AuditService, "categories", m.RequireAccess(models.PermManageContacts, models.APIPermWriteContacts))

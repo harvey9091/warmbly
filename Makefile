@@ -25,7 +25,7 @@ PROTO_GEN_FILES := $(PROTO_DIR)/tasks.pb.go
 .PHONY: poollink-dev poollink-dev-down poollink-dev-reset setup-tools fmt lint check-migrations proto check-proto \
         up claim doctor cli seed-demo seed seed-plan sandbox sandbox-seed sandbox-simulate reset logs status stop down test-seed \
         restart restart-go restart-all infra infra-down app app-down app-logs \
-        backend consumer worker run dev tracking realtime web \
+        backend forms forms-web consumer worker run dev tracking realtime web \
         admin site docs grant-admin revoke-admin gen-key db-reset db-wipe migrate
 
 setup-tools:
@@ -40,6 +40,7 @@ fmt:
 	gofmt -w ./cmd ./internal
 
 lint: check-migrations
+	./scripts/check-forms-mirror.sh
 	$(GO_BIN)/golangci-lint run --timeout=5m
 
 # Duplicate migration versions only collide once two PRs are both on main, and
@@ -558,6 +559,7 @@ backend:
 	$(GO_DEV_ENV) \
 	$(AI_DEV_ENV) \
 	API_HOST=0.0.0.0:8080 \
+	FORMS_DOMAIN=localhost:$(FORMS_PORT) \
 	GIN_MODE=debug \
 	APP_URL=http://$(WEB_HOST):5173 \
 	CORS_ALLOW_ORIGINS=$(CORS_ORIGINS) \
@@ -574,6 +576,30 @@ backend:
 	GEODB_PATH=data/GeoLite2-City.mmdb \
 	INTERNAL_API_TOKEN=local-dev-internal-token \
 	go run ./cmd/backend
+
+# Public forms service on :8090 (cmd/forms): serves the TanStack form app
+# (forms/), per-form page shells, the embed loader and public submissions.
+# Builds the app first (fast), then runs the Go service; it resolves forms
+# and forwards submissions through the backend's internal API, so
+# `make backend` must be running and INTERNAL_API_TOKEN must match
+# (pre-wired here, like the workers).
+# Override the port (here AND on make backend, so share links agree) with
+# `make forms FORMS_PORT=8091` when worktrees share the machine.
+FORMS_PORT ?= 8090
+forms:
+	@if [ ! -d forms/node_modules ]; then echo "Installing forms dependencies (first run)..."; cd forms && pnpm install; fi
+	@cd forms && pnpm build --logLevel warn
+	GIN_MODE=debug \
+	FORMS_PORT=$(FORMS_PORT) \
+	FORMS_STATIC_DIR=forms/dist \
+	BACKEND_INTERNAL_URL=http://localhost:8080 \
+	INTERNAL_API_TOKEN=local-dev-internal-token \
+	go run ./cmd/forms
+
+# Vite dev server for the forms app (:5175, /api proxied to the Go service)
+# when you want hot reload while editing forms/ itself.
+forms-web:
+	cd forms && FORMS_API_URL=http://localhost:$(FORMS_PORT) pnpm dev
 
 # Event consumer (NATS by default; Kafka with -tags kafka) -> postgres.
 consumer:
@@ -602,9 +628,10 @@ worker:
 # Workers are interchangeable now; run a second `make worker WORKER_ID=<uuid>`
 # in another terminal to add parallelism.
 run:
-	@echo "backend + consumer + worker (native). Ctrl-C stops all. Run 'make infra' first if infra is down."
+	@echo "backend + forms + consumer + worker (native). Ctrl-C stops all. Run 'make infra' first if infra is down."
 	@trap 'kill 0' INT TERM; \
 	$(MAKE) --no-print-directory backend & \
+	$(MAKE) --no-print-directory forms & \
 	$(MAKE) --no-print-directory consumer & \
 	$(MAKE) --no-print-directory worker & \
 	wait
@@ -671,11 +698,12 @@ dev:
 	@echo "Starting realtime + tracking as containers (no host Elixir/cargo needed)..."
 	@BACKEND_INTERNAL_URL=http://host.docker.internal:8080 $(COMPOSE) up -d --build realtime tracking
 	@echo ""
-	@echo "Starting backend + consumer + worker + dashboard + admin. Ctrl-C stops them (infra stays up)."
+	@echo "Starting backend + forms + consumer + worker + dashboard + admin. Ctrl-C stops them (infra stays up)."
 	@echo "Dashboard: $(DASHBOARD_URL)    Admin: $(ADMIN_URL)    Login: dev@warmbly.com / password123"
 	@echo ""
 	@trap 'kill 0' INT TERM; \
 	$(MAKE) --no-print-directory backend & \
+	$(MAKE) --no-print-directory forms & \
 	$(MAKE) --no-print-directory consumer & \
 	$(MAKE) --no-print-directory worker & \
 	$(MAKE) --no-print-directory web & \

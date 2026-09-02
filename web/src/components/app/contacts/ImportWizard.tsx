@@ -8,9 +8,9 @@
 //   2. Map     — the server returns columns + suggestions; the user
 //      reviews and tweaks. Email is required and auto-mapped if
 //      anything looks like an email column.
-//   3. Options — dedup strategy, default categories to apply, default
-//      campaigns, subscription default. These are global to the
-//      import; per-row overrides happen post-import via bulk edit.
+//   3. Options — dedup strategy, categories to apply, campaigns and
+//      segments to join. These are global to the import; per-row
+//      overrides happen post-import via bulk edit.
 //   4. Result  — summary counts + per-row errors. Errors can be
 //      downloaded as a CSV the user can fix and re-import.
 //
@@ -53,6 +53,7 @@ import {
 } from "@/components/ui/popover-menu";
 import { Label, TextInput } from "@/components/ui/field";
 import CategoryPicker from "./CategoryPicker";
+import { CampaignMultiPicker, SegmentMultiPicker } from "@/components/app/segments/SegmentPickers";
 import { downloadBlob } from "@/lib/api/client/app/contacts/exportContacts";
 import {
     CUSTOM_KEY_RULES,
@@ -84,6 +85,8 @@ export default function ImportWizard({ open, onClose, lockedCampaign }: Props) {
     const [hasHeader, setHasHeader] = React.useState<boolean>(true);
     const [dedup, setDedup] = React.useState<ImportDedupStrategy>("skip");
     const [categoryIds, setCategoryIds] = React.useState<string[]>([]);
+    const [campaignIds, setCampaignIds] = React.useState<string[]>([]);
+    const [segmentIds, setSegmentIds] = React.useState<string[]>([]);
     const [previewBusy, setPreviewBusy] = React.useState<boolean>(false);
     const [commitBusy, setCommitBusy] = React.useState<boolean>(false);
     const [result, setResult] = React.useState<ImportResult | null>(null);
@@ -97,6 +100,8 @@ export default function ImportWizard({ open, onClose, lockedCampaign }: Props) {
         setHasHeader(true);
         setDedup("skip");
         setCategoryIds([]);
+        setCampaignIds([]);
+        setSegmentIds([]);
         setResult(null);
     }
 
@@ -131,7 +136,8 @@ export default function ImportWizard({ open, onClose, lockedCampaign }: Props) {
                 dedup,
                 has_header: hasHeader,
                 category_ids: categoryIds.length > 0 ? categoryIds : undefined,
-                campaign_ids: lockedCampaign ? [lockedCampaign.id] : undefined,
+                campaign_ids: lockedCampaign ? [lockedCampaign.id] : campaignIds.length > 0 ? campaignIds : undefined,
+                segment_ids: segmentIds.length > 0 ? segmentIds : undefined,
             });
             setResult(res);
             setStep("result");
@@ -224,6 +230,11 @@ export default function ImportWizard({ open, onClose, lockedCampaign }: Props) {
                                     setDedup={setDedup}
                                     categoryIds={categoryIds}
                                     setCategoryIds={setCategoryIds}
+                                    campaignIds={campaignIds}
+                                    setCampaignIds={setCampaignIds}
+                                    segmentIds={segmentIds}
+                                    setSegmentIds={setSegmentIds}
+                                    campaignLocked={!!lockedCampaign}
                                 />
                             )}
                             {step === "result" && result && (
@@ -657,11 +668,23 @@ function OptionsStep({
     setDedup,
     categoryIds,
     setCategoryIds,
+    campaignIds,
+    setCampaignIds,
+    segmentIds,
+    setSegmentIds,
+    campaignLocked,
 }: {
     dedup: ImportDedupStrategy;
     setDedup: (v: ImportDedupStrategy) => void;
     categoryIds: string[];
     setCategoryIds: (v: string[]) => void;
+    campaignIds: string[];
+    setCampaignIds: (v: string[]) => void;
+    segmentIds: string[];
+    setSegmentIds: (v: string[]) => void;
+    // From a campaign's Leads tab the target campaign is fixed, so the
+    // campaign picker is hidden and the header chip shows the target instead.
+    campaignLocked: boolean;
 }) {
     return (
         <div className="space-y-5">
@@ -712,6 +735,30 @@ function OptionsStep({
                     Every imported contact will get these categories. Skip if you don't want to tag the whole batch.
                 </p>
                 <CategoryPicker value={categoryIds} onChange={setCategoryIds} />
+            </section>
+
+            {!campaignLocked && (
+                <section>
+                    <h2 className="text-[10px] uppercase tracking-[0.14em] font-semibold text-slate-500 mb-2">
+                        Add to campaigns
+                    </h2>
+                    <p className="text-[11px] text-slate-400 leading-tight mb-2">
+                        Every imported contact joins these campaigns as a lead. An active campaign starts emailing them
+                        on its own schedule.
+                    </p>
+                    <CampaignMultiPicker value={campaignIds} onChange={setCampaignIds} />
+                </section>
+            )}
+
+            <section>
+                <h2 className="text-[10px] uppercase tracking-[0.14em] font-semibold text-slate-500 mb-2">
+                    Add to segments
+                </h2>
+                <p className="text-[11px] text-slate-400 leading-tight mb-2">
+                    Every imported contact is pinned into these segments. A segment linked to a campaign enrols them
+                    there automatically.
+                </p>
+                <SegmentMultiPicker value={segmentIds} onChange={setSegmentIds} />
             </section>
 
             <section className="rounded-md border border-slate-200 bg-slate-50/40 p-3">

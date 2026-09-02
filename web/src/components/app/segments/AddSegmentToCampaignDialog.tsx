@@ -7,6 +7,7 @@ import { Loader2Icon, MegaphoneIcon, XIcon } from "lucide-react";
 import toast from "react-hot-toast";
 
 import { SearchInput } from "@/components/ui/field";
+import { campaignStatusLabel, campaignStatusTone } from "@/components/app/campaigns/status";
 import useCampaigns from "@/lib/api/hooks/app/campaigns/useCampaigns";
 import { useAddSegmentToCampaign } from "@/lib/api/hooks/app/segments";
 import type Segment from "@/lib/api/models/app/segments/Segment";
@@ -149,7 +150,14 @@ export default function AddSegmentToCampaignDialog({
                                                         {on && <span className="size-1.5 rounded-full bg-white" />}
                                                     </span>
                                                     <span className="text-[12.5px] text-slate-900 font-medium truncate">{c.name}</span>
-                                                    <span className="ml-auto text-[10.5px] uppercase tracking-[0.1em] text-slate-400">{c.status}</span>
+                                                    <span
+                                                        className={cn(
+                                                            "ml-auto shrink-0 text-[10.5px] uppercase tracking-[0.1em]",
+                                                            campaignStatusTone(c.status),
+                                                        )}
+                                                    >
+                                                        {campaignStatusLabel(c.status)}
+                                                    </span>
                                                 </button>
                                             </li>
                                         );
@@ -170,15 +178,17 @@ export default function AddSegmentToCampaignDialog({
                                 </ul>
                             )}
                         </div>
-                        <footer className="px-3 h-12 border-t border-slate-200 flex items-center gap-2 shrink-0 bg-slate-50/30">
-                            <span className="text-[11px] text-slate-400 min-w-0 truncate">
+                        {/* Wraps instead of clipping: the hint takes its own row when the
+                            buttons need the width, so neither is ever cut mid-word. */}
+                        <footer className="px-3 py-2 min-h-12 border-t border-slate-200 flex flex-wrap items-center gap-x-2 gap-y-1.5 shrink-0 bg-slate-50/30">
+                            <span className="text-[11px] text-slate-400 leading-snug basis-full sm:basis-0 sm:flex-1 sm:min-w-[160px]">
                                 Adds today's members. Contacts already in the campaign are skipped.
                             </span>
                             <button
                                 type="button"
                                 onClick={requestClose}
                                 disabled={busy}
-                                className="ml-auto h-7 px-2.5 rounded-md text-[12px] text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition-colors disabled:opacity-50"
+                                className="ml-auto shrink-0 h-7 px-2.5 rounded-md text-[12px] text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition-colors disabled:opacity-50"
                             >
                                 Cancel
                             </button>
@@ -186,7 +196,7 @@ export default function AddSegmentToCampaignDialog({
                                 type="button"
                                 onClick={submit}
                                 disabled={busy || !picked}
-                                className="h-7 px-2.5 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                                className="shrink-0 whitespace-nowrap h-7 px-2.5 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
                             >
                                 {busy ? <Loader2Icon className="w-3 h-3 animate-spin" /> : <MegaphoneIcon className="w-3 h-3" />}
                                 Add leads
