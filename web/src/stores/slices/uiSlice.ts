@@ -88,7 +88,7 @@ const getInitialAppearance = (): AppearanceState => {
   if (typeof window === 'undefined') {
     return {
       glassmorphismEnabled: false,
-      glassOpacity: 15,
+      glassOpacity: 88,
       glassBlur: 12,
       backgroundPreset: 'default',
       backgroundImage: '',
@@ -102,7 +102,7 @@ const getInitialAppearance = (): AppearanceState => {
       const parsed = JSON.parse(raw) as AppearanceState
       return {
         glassmorphismEnabled: parsed.glassmorphismEnabled ?? false,
-        glassOpacity: parsed.glassOpacity ?? 15,
+        glassOpacity: Math.max(60, parsed.glassOpacity ?? 88),
         glassBlur: parsed.glassBlur ?? 12,
         backgroundPreset: parsed.backgroundPreset ?? 'default',
         backgroundImage: parsed.backgroundImage ?? '',
@@ -113,7 +113,7 @@ const getInitialAppearance = (): AppearanceState => {
   } catch { /* ignore */ }
   return {
     glassmorphismEnabled: false,
-    glassOpacity: 15,
+    glassOpacity: 88,
     glassBlur: 12,
     backgroundPreset: 'default',
     backgroundImage: '',
@@ -179,9 +179,11 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set, get) 
     }),
   setGlassOpacity: (glassOpacity) =>
     set((state) => {
-      const next = { ...state, glassOpacity }
-      saveAppearance(next)
-      return next
+      const next = Math.max(60, Math.min(100, glassOpacity))
+      if (state.glassOpacity === next) return state
+      const upd = { ...state, glassOpacity: next }
+      saveAppearance(upd)
+      return upd
     }),
   setGlassBlur: (glassBlur) =>
     set((state) => {

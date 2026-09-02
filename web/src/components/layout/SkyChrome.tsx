@@ -20,16 +20,10 @@ import React from "react";
 export function SkyChrome() {
     return (
         <div className="app-shell-chrome absolute inset-0 overflow-hidden pointer-events-none bg-chrome">
-            {/* Base tint — clean neutral, a half-step darker than white.
-                Avoid blue-leaning here; the only colour cue is the soft
-                clouds above. */}
-            <div className="absolute inset-0 bg-[#f5f6f8]" />
-
-            {/* Faint cloud blobs. Positioned to suggest a softly clouded
-                sky in the upper half. Generous blur radius + low alpha
-                makes them ambient rather than figurative. */}
+            {/* Faint cloud blobs. In light mode they're near-white; in dark mode
+                the CSS overrides shift them to subtle light-on-dark accents. */}
             <div
-                className="absolute"
+                className="absolute dark:bg-white/[0.07]"
                 style={{
                     top: "-80px",
                     left: "-60px",
@@ -42,7 +36,7 @@ export function SkyChrome() {
                 }}
             />
             <div
-                className="absolute"
+                className="absolute dark:bg-white/[0.05]"
                 style={{
                     top: "10%",
                     right: "8%",
@@ -55,7 +49,7 @@ export function SkyChrome() {
                 }}
             />
             <div
-                className="absolute"
+                className="absolute dark:bg-white/[0.04]"
                 style={{
                     top: "32%",
                     left: "26%",
@@ -67,7 +61,6 @@ export function SkyChrome() {
                     opacity: 0.45,
                 }}
             />
-
         </div>
     );
 }

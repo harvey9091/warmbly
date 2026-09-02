@@ -48,7 +48,7 @@
   --app-bg-image: none;
   --app-bg-blur: 0px;
   --app-bg-opacity: 1;
-  --app-glass-opacity: 0.15;
+  --app-glass-opacity: 0.88;
   --app-glass-blur: 12px;
 }
 
@@ -86,7 +86,67 @@
   --sidebar-ring: oklch(0.60 0.01 260);
   --chrome-bg: oklch(0.13 0.01 260);
 
-  --app-glass-opacity: 0.12;
+  --app-glass-opacity: 0.88;
+
+  /* ── Global dark overrides for hardcoded Tailwind color classes ── */
+  color-scheme: dark;
+
+  /* Surfaces */
+  .bg-white,
+  .bg-white\/60,
+  .bg-white\/80,
+  .bg-white\/90 { background-color: var(--background) !important; }
+
+  .bg-slate-50,
+  .bg-slate-100 { background-color: var(--secondary) !important; }
+  .bg-slate-200 { background-color: var(--muted) !important; }
+  .bg-slate-800 { background-color: var(--secondary) !important; }
+  .bg-slate-900,
+  .bg-slate-900\/40,
+  .bg-slate-900\/50,
+  .bg-slate-900\/60 { background-color: var(--foreground) !important; }
+
+  /* Text */
+  .text-slate-900,
+  .text-slate-800,
+  .text-slate-700 { color: var(--foreground) !important; }
+  .text-slate-600 { color: oklch(0.75 0.01 260) !important; }
+  .text-slate-500,
+  .text-slate-400 { color: var(--muted-foreground) !important; }
+  .text-slate-300 { color: var(--border) !important; }
+  .text-white { color: var(--foreground) !important; }
+
+  /* Borders */
+  .border-slate-200,
+  .border-slate-300,
+  .border-slate-200\/70,
+  .border-slate-200\/50 { border-color: var(--border) !important; }
+  .border-white\/20,
+  .border-white\/30 { border-color: rgba(255,255,255,0.1) !important; }
+
+  /* Hover / active states */
+  .hover\:bg-slate-200:hover,
+  .hover\:bg-slate-100:hover,
+  .hover\:bg-slate-50:hover { background-color: var(--secondary) !important; }
+  .hover\:text-slate-900:hover,
+  .hover\:text-slate-700:hover { color: var(--foreground) !important; }
+
+  /* Overlays / scrims */
+  .bg-black\/40,
+  .bg-black\/50 { background-color: rgba(0,0,0,0.6) !important; }
+  .bg-slate-900\/40 { background-color: rgba(0,0,0,0.5) !important; }
+
+  /* Focus / ring states that use hardcoded slate */
+  .focus\:border-slate-300:focus { border-color: var(--ring) !important; }
+  .focus\:ring-slate-100:focus { --tw-ring-color: var(--ring) !important; }
+
+  /* Disabled / muted surfaces */
+  .disabled\:bg-slate-50:disabled { background-color: var(--secondary) !important; }
+  .disabled\:text-slate-400:disabled { color: var(--muted-foreground) !important; }
+  .bg-slate-50\/60 { background-color: var(--secondary) !important; }
+
+  /* Divider hairlines */
+  .divide-slate-200\/70 > * + * { border-color: var(--border) !important; }
 }
 
 @theme inline {
@@ -597,9 +657,9 @@ svg.loading circle {
 }
 
 /* Glassmorphism: applied conditionally via the .glassmorphism-enabled
-   class on the document root. Targets the actual DOM elements rendered
-   by AppShell, SkyChrome, AppNav, and shadcn surface components. */
-.glassmorphism-enabled .app-shell-chrome,
+   class on the document root. Targets actual surface elements in the
+   app shell — sidebar, content panel, dialogs, popovers, dropdowns.
+   Does NOT apply to the chrome background or the background layer. */
 .glassmorphism-enabled .app-shell-nav,
 .glassmorphism-enabled main.app-shell-content,
 .glassmorphism-enabled [data-dialog-content],
@@ -612,7 +672,6 @@ svg.loading circle {
   border-color: rgba(255, 255, 255, 0.4);
 }
 
-.glassmorphism-enabled.dark .app-shell-chrome,
 .glassmorphism-enabled.dark .app-shell-nav,
 .glassmorphism-enabled.dark main.app-shell-content,
 .glassmorphism-enabled.dark [data-dialog-content],

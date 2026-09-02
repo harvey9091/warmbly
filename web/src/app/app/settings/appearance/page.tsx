@@ -113,8 +113,8 @@ function AppearanceSettings() {
                             <NumberInput
                                 value={appearance.glassOpacity}
                                 onChange={appearance.setGlassOpacity}
-                                min={5}
-                                max={60}
+                                min={60}
+                                max={100}
                                 step={1}
                                 className="w-20"
                             />
