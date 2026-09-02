@@ -4,9 +4,11 @@
  *
  * The layer drifts slowly; the library already pauses its rAF when the tab is
  * hidden or the element is off screen, and reduced-motion pins it to a single
- * static render. The CSS gradient underneath is the same palette, so a machine
- * without WebGL (or one that never runs the script) gets the right frame
- * instead of a hole.
+ * static render. The canvas only exists while its frame is near the viewport:
+ * it is released once scrolled past, so a long page never holds more than a
+ * few GL contexts (iOS Safari kills the tab otherwise). The CSS gradient
+ * underneath is the same palette, so a machine without WebGL (or one that
+ * never runs the script) gets the right frame instead of a hole.
  *
  * The canvas inherits the frame's radius: WebGL paints a rectangle, so without
  * this the grain squares off the corners its frame just rounded.
@@ -48,6 +50,11 @@ const t = GRAIN_TONES[tone];
   // to be grainy with, so we leave the CSS gradient standing instead.
   const noise = getShaderNoiseTexture();
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // Phones: a 3x canvas per frame is what pushes iOS Safari over its GPU
+  // memory limit while scrolling; 2x grain reads the same at that size.
+  const touch = window.matchMedia('(hover: none)').matches;
+  const noGl = new URLSearchParams(location.search).has('nogl');
+  const maxPixels = touch ? 1280 * 720 : 1920 * 1080 * 2;
 
   // Every frame gets its own rotation, drift and shape. Sharing one palette
   // is the point; sharing one ANGLE makes eight cards look like eight copies
@@ -69,7 +76,7 @@ const t = GRAIN_TONES[tone];
   }
 
   function mount(el: HTMLElement, i: number) {
-    if (el.dataset.grainReady) return;
+    if (noGl || el.dataset.grainReady) return;
     el.dataset.grainReady = 'true';
     const colors = (el.dataset.colors ?? '').split(',').filter(Boolean);
     if (!noise || !colors.length) return;
@@ -107,12 +114,18 @@ const t = GRAIN_TONES[tone];
         // Grain is computed in device pixels, so the pixel ratio IS the grain
         // size: 2x renders it fine, 1x renders it chunky.
         2,
-        1920 * 1080 * 2,
+        maxPixels,
       );
     } catch {
       // No WebGL, or the context limit on a page with several bands. The CSS
       // gradient underneath is already painted, so there is nothing to undo.
     }
+  }
+  // Frees the GL context and its canvas; the CSS gradient stays underneath.
+  function unmount(el: HTMLElement) {
+    const m = (el as HTMLElement & { paperShaderMount?: { dispose: () => void } }).paperShaderMount;
+    if (m) m.dispose();
+    delete el.dataset.grainReady;
   }
 
   const bands = [...document.querySelectorAll<HTMLElement>('[data-grain]')];
@@ -123,15 +136,14 @@ const t = GRAIN_TONES[tone];
   if (typeof IntersectionObserver === 'undefined') {
     bands.forEach((el, i) => mount(el, i));
   } else {
-    // Mount on approach, so a visitor who never scrolls costs one GL context
-    // rather than eight.
+    // Mount on approach and release again once scrolled well past, so the
+    // page holds two or three GL contexts at a time instead of nine.
     const io = new IntersectionObserver(
       (entries) => {
         for (const e of entries) {
-          if (!e.isIntersecting) continue;
-          io.unobserve(e.target);
           const el = e.target as HTMLElement;
-          mount(el, indexOf.get(el) ?? 0);
+          if (e.isIntersecting) mount(el, indexOf.get(el) ?? 0);
+          else if (el.dataset.grainReady) unmount(el);
         }
       },
       { rootMargin: '300px' },

@@ -99,12 +99,12 @@ const ic = {
         </span>
       </div>
       <button type="button" class="h-7 px-2.5 rounded-md border border-slate-200 text-[12px] text-slate-700 inline-flex items-center gap-1.5 min-w-0">
-        <span class="truncate max-w-[110px] md:max-w-[200px]">Sales pipeline</span>
+        <span class="truncate max-w-[110px] @md:max-w-[200px]">Sales pipeline</span>
         <span class="text-slate-400">▾</span>
       </button>
       <div class="h-7 px-2 rounded-md border border-slate-200 bg-white flex items-center gap-1.5">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-400" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
-        <span class="w-[120px] md:w-[160px] h-5 inline-flex items-center text-[12px] text-slate-400">Search deals…</span>
+        <span class="w-[120px] @md:w-[160px] h-5 inline-flex items-center text-[12px] text-slate-400">Search deals…</span>
       </div>
       <button type="button" class="h-7 px-2.5 rounded-md inline-flex items-center gap-1.5 text-[12px] font-medium bg-sky-600 text-white">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
@@ -114,7 +114,7 @@ const ic = {
   </div>
 
   <!-- StatStrip -->
-  <div class="grid border-b border-slate-200 shrink-0 bg-white grid-cols-2 md:grid-cols-4">
+  <div class="grid border-b border-slate-200 shrink-0 bg-white grid-cols-2 @md:grid-cols-4">
     {stats.map((s) => (
       <div class={`group px-5 py-4 transition-colors ${!s.last ? 'border-r border-slate-200' : ''}`}>
         <div class="flex items-center gap-2">
@@ -127,7 +127,7 @@ const ic = {
   </div>
 
   <!-- SectionBar -->
-  <div class="min-h-9 md:h-9 px-5 py-1.5 md:py-0 border-b border-slate-200/60 flex flex-wrap md:flex-nowrap items-center gap-x-2.5 gap-y-1.5 shrink-0">
+  <div class="min-h-9 @md:h-9 px-5 py-1.5 @md:py-0 border-b border-slate-200/60 flex flex-wrap @md:flex-nowrap items-center gap-x-2.5 gap-y-1.5 shrink-0">
     <span class="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">{stages.length} stages</span>
   </div>
 
@@ -135,7 +135,7 @@ const ic = {
   <div class="flex-1 min-h-0 overflow-hidden px-5 py-5">
     <div class="grid gap-3 grid-flow-col auto-cols-[280px] overflow-hidden pb-2">
       {stages.map((stage) => (
-        <div class="flex flex-col rounded-md min-h-[300px] max-h-[calc(100dvh-230px)] transition-colors bg-slate-50 border-slate-200 border">
+        <div class="flex flex-col rounded-md min-h-[300px] max-h-[calc(900px-230px)] transition-colors bg-slate-50 border-slate-200 border">
           <div class="h-9 px-3 flex items-center gap-2 border-b border-slate-200 shrink-0">
             <span class="size-1.5 rounded-full shrink-0" style={`background-color:${stage.color};`}></span>
             <span class="text-[11px] uppercase tracking-[0.1em] font-semibold text-slate-700 truncate">{stage.name}</span>
@@ -180,7 +180,7 @@ const ic = {
   <!-- The deal dialog a card click opens -->
   <!-- Portaled to the body in the app: fixed over the whole window, centred on the screen. -->
   <div class="cd-react fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/30 backdrop-blur-[2px] px-4" aria-hidden="true">
-    <div class="cd-dialog w-full max-w-[480px] max-h-[calc(100dvh-2rem)] flex flex-col rounded-lg bg-white border border-slate-200 shadow-[0_24px_48px_-12px_rgba(15,23,42,0.18)] overflow-hidden">
+    <div class="cd-dialog w-full max-w-[480px] max-h-[calc(900px-2rem)] flex flex-col rounded-lg bg-white border border-slate-200 shadow-[0_24px_48px_-12px_rgba(15,23,42,0.18)] overflow-hidden">
       <div class="h-12 shrink-0 px-4 border-b border-slate-200 flex items-center gap-2.5">
         <div class="size-5 rounded bg-slate-100 text-slate-600 flex items-center justify-center">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" set:html={ic.trophy}></svg>
@@ -201,7 +201,7 @@ const ic = {
           <span class="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium block mb-1.5">Deal name</span>
           <div class="h-7 px-2.5 rounded-md border border-sky-400 ring-2 ring-sky-100 bg-white text-[12.5px] text-slate-900 flex items-center w-full">Stratech</div>
         </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <div class="grid grid-cols-1 @sm:grid-cols-2 gap-2">
           <div>
             <span class="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium block mb-1.5">Stage</span>
             <div class="h-7 w-full px-2.5 rounded-md border border-slate-200 text-[12px] text-slate-700 inline-flex items-center gap-1.5">
@@ -219,8 +219,8 @@ const ic = {
             </div>
           </div>
         </div>
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
-          <div class="sm:col-span-2">
+        <div class="grid grid-cols-1 @sm:grid-cols-3 gap-2">
+          <div class="@sm:col-span-2">
             <span class="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium block mb-1.5">Value</span>
             <div class="h-7 px-2.5 rounded-md border border-slate-200 bg-white text-[12.5px] text-slate-900 flex items-center w-full">45000</div>
           </div>
@@ -229,7 +229,7 @@ const ic = {
             <div class="h-7 px-2.5 rounded-md border border-slate-200 bg-white text-[12.5px] text-slate-900 flex items-center w-full uppercase">USD</div>
           </div>
         </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <div class="grid grid-cols-1 @sm:grid-cols-2 gap-2">
           <div>
             <span class="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium block mb-1.5">Expected close</span>
             <div class="h-7 w-full px-2 rounded-md border border-slate-200 bg-white inline-flex items-center gap-1.5 text-[12px] transition-colors">

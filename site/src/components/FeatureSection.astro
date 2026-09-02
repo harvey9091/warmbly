@@ -26,8 +26,9 @@ import type { GrainTone } from '../lib/grain';
  * move it by hand.
  *
  * The frame takes its height from the copy beside it (the grid row
- * stretches). Below lg the shell and chrome drop away and the screen mock
- * alone scales to fit from its top-left.
+ * stretches). Below lg the copy sits above and the frame keeps a desktop
+ * frame's proportions, with the very same window, chrome and crop inside it,
+ * just smaller: a phone sees what a desktop sees.
  */
 interface Callout { label: string; text: string }
 type Anchor = 'tl' | 'tr' | 'bl' | 'br';
@@ -110,34 +111,34 @@ const shellStyle = `border-radius:${RADIUS}px; box-shadow:${frameShadow};`;
 const frameStyle = `border-radius:${RADIUS}px; overflow:hidden; clip-path: inset(0 round ${RADIUS}px);`;
 
 // Where the window's box sits in the frame: inset on the two sides that meet
-// at the anchored corner, flush on the two it bleeds off. Below lg every
-// window hangs top-left.
+// at the anchored corner (16px below lg, 28px at lg+), flush on the two it
+// bleeds off.
 const fitPos: Record<Anchor, string> = {
   tl: 'left-4 top-4 right-0 bottom-0 lg:left-7 lg:top-7',
-  tr: 'left-4 top-4 right-0 bottom-0 lg:left-0 lg:right-7 lg:top-7',
-  bl: 'left-4 top-4 right-0 bottom-0 lg:left-7 lg:top-0 lg:bottom-7',
-  br: 'left-4 top-4 right-0 bottom-0 lg:left-0 lg:top-0 lg:right-7 lg:bottom-7',
+  tr: 'right-4 top-4 left-0 bottom-0 lg:right-7 lg:top-7',
+  bl: 'left-4 bottom-4 right-0 top-0 lg:left-7 lg:bottom-7',
+  br: 'right-4 bottom-4 left-0 top-0 lg:right-7 lg:bottom-7',
 };
 // Only the real window corner is rounded; the edges that meet the frame stay
 // straight, the way a cropped screenshot does.
 const fitCorner: Record<Anchor, string> = {
   tl: 'rounded-tl-[12px]',
-  tr: 'rounded-tl-[12px] lg:rounded-tl-none lg:rounded-tr-[12px]',
-  bl: 'rounded-tl-[12px] lg:rounded-tl-none lg:rounded-bl-[12px]',
-  br: 'rounded-tl-[12px] lg:rounded-tl-none lg:rounded-br-[12px]',
+  tr: 'rounded-tr-[12px]',
+  bl: 'rounded-bl-[12px]',
+  br: 'rounded-br-[12px]',
 };
 const fitShadow: Record<Anchor, string> = {
   tl: 'shadow-[-8px_-8px_28px_-10px_rgba(2,10,32,0.55)]',
-  tr: 'shadow-[-8px_-8px_28px_-10px_rgba(2,10,32,0.55)] lg:shadow-[8px_-8px_28px_-10px_rgba(2,10,32,0.55)]',
-  bl: 'shadow-[-8px_-8px_28px_-10px_rgba(2,10,32,0.55)] lg:shadow-[-8px_8px_28px_-10px_rgba(2,10,32,0.55)]',
-  br: 'shadow-[-8px_-8px_28px_-10px_rgba(2,10,32,0.55)] lg:shadow-[8px_8px_28px_-10px_rgba(2,10,32,0.55)]',
+  tr: 'shadow-[8px_-8px_28px_-10px_rgba(2,10,32,0.55)]',
+  bl: 'shadow-[-8px_8px_28px_-10px_rgba(2,10,32,0.55)]',
+  br: 'shadow-[8px_8px_28px_-10px_rgba(2,10,32,0.55)]',
 };
 // The screen pins to the box corner the anchor names and scales away from it.
 const screenPos: Record<Anchor, string> = {
   tl: 'top-0 left-0 origin-top-left',
-  tr: 'top-0 left-0 origin-top-left lg:left-auto lg:right-0 lg:origin-top-right',
-  bl: 'top-0 left-0 origin-top-left lg:top-auto lg:bottom-0 lg:origin-bottom-left',
-  br: 'top-0 left-0 origin-top-left lg:top-auto lg:bottom-0 lg:left-auto lg:right-0 lg:origin-bottom-right',
+  tr: 'top-0 right-0 origin-top-right',
+  bl: 'bottom-0 left-0 origin-bottom-left',
+  br: 'bottom-0 right-0 origin-bottom-right',
 };
 
 const eyebrowColor = lightText ? 'text-white/60' : 'text-sky-600';
@@ -220,12 +221,12 @@ const mockCol = wide ? `lg:col-span-8 ${side === 'left' ? 'lg:-ml-10' : 'lg:-mr-
                          its own window, so a right-anchored screen that overflows
                          to the left cannot bleed over the slide before it. -->
                     <div class="feat-slide absolute top-0 bottom-0 w-full overflow-hidden" style={`left:${i * 100}%`}>
-                      <div class={`feat-screen absolute w-[900px] lg:w-[1280px] ${screenPos[anchor]}`} data-zoom={zoom} aria-hidden="true">
+                      <div class={`feat-screen absolute w-[1280px] ${screenPos[anchor]}`} data-zoom={zoom} aria-hidden="true">
                         <!-- Browser chrome is part of the screenshot, so it
                              scales and crops with everything else. The address
                              is centred, Safari-style, so a right-anchored crop
                              still shows it whole. -->
-                        <div class="hidden lg:flex items-center gap-2.5 px-3 h-11 border-b border-slate-300/70 bg-gradient-to-b from-[#f7f8fa] to-[#e9ebef]">
+                        <div class="flex items-center gap-2.5 px-3 h-11 border-b border-slate-300/70 bg-gradient-to-b from-[#f7f8fa] to-[#e9ebef]">
                           <div class="flex items-center gap-2 shrink-0">
                             <span class="w-3 h-3 rounded-full bg-[#ff5f57]"></span>
                             <span class="w-3 h-3 rounded-full bg-[#febc2e]"></span>
@@ -312,46 +313,44 @@ const mockCol = wide ? `lg:col-span-8 ${side === 'left' ? 'lg:-ml-10' : 'lg:-mr-
     .feat-track { transition: none; }
     .feat-bar.is-active .feat-fill { animation: none; transform: scaleX(1); }
   }
+  /* Parked (a viewport or more away): the screens are not rendered at all. */
+  .feat-frame.is-parked .feat-track { content-visibility: hidden; }
+  @supports not (content-visibility: hidden) {
+    .feat-frame.is-parked .feat-track { display: none; }
+  }
 </style>
 
 <script>
-  // Below lg the chrome and shell are display:none and the mock alone (900
-  // design px) scales to fit from its top-left. At lg+ the window is a
-  // 1280x944 browser pinned at the anchored corner: `zoom` of its width
-  // maps across the box, and if that still leaves the box taller than the
-  // window, the scale grows until the window covers it. Never panned into.
-  const DESIGN_SM = 900;
+  // The window is a 1280x944 browser pinned at the anchored corner at every
+  // width: `zoom` of its width maps across the box, and if that still leaves
+  // the box taller than the window, the scale grows until the window covers
+  // it. Never panned into. At lg+ the frame is as tall as the copy beside it;
+  // below lg nothing sits beside it, so it keeps a desktop frame's proportions.
+  const FRAME_ASPECT = 0.8;
   function fit(screen: HTMLElement) {
     const box = screen.parentElement as HTMLElement | null;
     const frame = screen.closest<HTMLElement>('.feat-frame');
     const shell = frame?.parentElement as HTMLElement | null;
     if (!box || !frame || !shell) return;
+    // A parked screen has no layout to measure; its last sizes stay put.
+    if (frame.classList.contains('is-parked')) return;
 
-    if (window.innerWidth >= 1024) {
-      const zoom = Number(screen.dataset.zoom) || 1000;
-      const byWidth = box.clientWidth / zoom;
-      if (shell.hasAttribute('data-whole')) {
-        // The whole window at the scale the width allows; the frame's height
-        // follows (the box is inset 28px on one edge), so nothing is cropped.
-        screen.style.transform = `scale(${byWidth})`;
-        const h = `${Math.round(screen.offsetHeight * byWidth + 28)}px`;
-        if (frame.style.height !== h) { frame.style.height = h; shell.style.height = h; }
-        return;
-      }
-      // Height comes from the grid row (the copy beside it), not from here.
-      frame.style.height = '';
-      shell.style.height = '';
-      const byHeight = box.clientHeight / Math.max(1, screen.offsetHeight);
-      screen.style.transform = `scale(${Math.max(byWidth, byHeight)})`;
+    const lg = window.innerWidth >= 1024;
+    const inset = lg ? 28 : 16;
+    const zoom = Number(screen.dataset.zoom) || 1000;
+    const byWidth = box.clientWidth / zoom;
+    if (shell.hasAttribute('data-whole')) {
+      // The whole window at the scale the width allows; the frame's height
+      // follows (the box is inset on one edge), so nothing is cropped.
+      screen.style.transform = `scale(${byWidth})`;
+      const h = `${Math.round(screen.offsetHeight * byWidth + inset)}px`;
+      if (frame.style.height !== h) { frame.style.height = h; shell.style.height = h; }
       return;
     }
-
-    const s = box.clientWidth / DESIGN_SM;
-    screen.style.transform = `scale(${s})`;
-    // 16px is the top inset the box is pinned at below lg; the bottom is flush.
-    const h = `${screen.offsetHeight * s + 16}px`;
-    frame.style.height = h;
-    shell.style.height = h;
+    const h = lg ? '' : `${Math.round(shell.clientWidth * FRAME_ASPECT)}px`;
+    if (frame.style.height !== h) { frame.style.height = h; shell.style.height = h; }
+    const byHeight = box.clientHeight / Math.max(1, screen.offsetHeight);
+    screen.style.transform = `scale(${Math.max(byWidth, byHeight)})`;
   }
 
   function fitAll() {
@@ -445,6 +444,19 @@ const mockCol = wide ? `lg:col-span-8 ${side === 'left' ? 'lg:-ml-10' : 'lg:-mr-
     paint();
   }
 
+  // Sections more than a viewport away drop their screens from rendering
+  // (content-visibility), so iOS Safari holds the layers of two or three
+  // windows at a time instead of fourteen; the frame keeps its size, and the
+  // screens are fitted again as the section comes back within reach.
+  function park(frame: HTMLElement) {
+    if (typeof IntersectionObserver === 'undefined') return;
+    new IntersectionObserver((entries) => {
+      const near = entries.some((e) => e.isIntersecting);
+      if (frame.classList.toggle('is-parked', !near)) return;
+      frame.querySelectorAll<HTMLElement>('.feat-screen').forEach(fit);
+    }, { rootMargin: '100% 0px' }).observe(frame);
+  }
+
   function init() {
     document.querySelectorAll<HTMLElement>('.feat-screen').forEach((screen) => {
       const run = () => fit(screen);
@@ -456,6 +468,7 @@ const mockCol = wide ? `lg:col-span-8 ${side === 'left' ? 'lg:-ml-10' : 'lg:-mr-
     window.addEventListener('load', fitAll);
     window.addEventListener('resize', fitAll);
     document.querySelectorAll<HTMLElement>('.feat-frame').forEach(carousel);
+    document.querySelectorAll<HTMLElement>('.feat-frame').forEach(park);
     // Screens are pictures: nothing inside them is a real tab stop.
     document.querySelectorAll<HTMLElement>('.feat-screen button, .feat-screen input, .feat-screen a, .feat-screen [tabindex]').forEach((el) => { el.tabIndex = -1; });
   }

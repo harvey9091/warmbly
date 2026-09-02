@@ -247,7 +247,7 @@ const rootClass = ['cb relative w-full bg-white text-slate-900 flex flex-col', o
       <div aria-hidden="true" class="absolute inset-0 pointer-events-none" style="background-image: radial-gradient(circle, #e9eef5 0.5px, transparent 0.6px); background-size: 24px 24px;"></div>
 
       <!-- Panel top-left (15px margin): Add step split button, Tidy up, Stop on reply -->
-      <div class="absolute left-[15px] top-[15px] z-[5] flex max-w-[calc(100vw-1.5rem)] flex-col gap-1.5">
+      <div class="absolute left-[15px] top-[15px] z-[5] flex max-w-[calc(1280px-1.5rem)] flex-col gap-1.5">
         <div class="flex flex-wrap items-center gap-1.5">
           <div class="relative inline-flex">
             <button type="button" class="inline-flex h-8 items-center gap-1.5 rounded-l-md bg-sky-600 px-3 text-[12px] font-medium text-white shadow-sm">
@@ -270,7 +270,7 @@ const rootClass = ['cb relative w-full bg-white text-slate-900 flex flex-col', o
 
       <!-- Panel bottom-center: the mouse-and-keyboard hint -->
       <div class="absolute bottom-[15px] left-1/2 -translate-x-1/2 z-[5] max-w-[calc(100%-30px)]">
-        <div class="hidden md:flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-white/95 px-3 py-1.5 text-[11px] text-slate-500 shadow-sm">
+        <div class="hidden @md:flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-white/95 px-3 py-1.5 text-[11px] text-slate-500 shadow-sm">
           <span class="text-slate-400">drag a node’s bottom dot onto another node to connect, or onto empty space to pick what comes next (email, action, condition, or Stop) · click a line to set its condition · add Condition nodes to branch, and chain them for nested trees · click a line then press Delete to remove it · a step with no outgoing line just ends</span>
         </div>
       </div>
@@ -400,7 +400,7 @@ const rootClass = ['cb relative w-full bg-white text-slate-900 flex flex-col', o
       <!-- Edit sheet: the builder's SidePanel (AutomationFlow.tsx), 320px,
            springing in from the right over the whole window (fixed, contained
            by the shell). -->
-      <div class="cb-edit fixed top-0 right-0 bottom-0 z-30 w-full md:w-80 md:max-w-[88vw] overflow-y-auto overflow-x-hidden bg-white border-l border-slate-200 shadow-xl" aria-hidden="true">
+      <div class="cb-edit fixed top-0 right-0 bottom-0 z-30 w-full @md:w-80 @md:max-w-[1126px] overflow-y-auto overflow-x-hidden bg-white border-l border-slate-200 shadow-xl" aria-hidden="true">
         <div class="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-3 py-2">
           <span class="truncate text-[12.5px] font-medium text-slate-700">Edit “{panelTitle}”</span>
           <div class="flex items-center gap-1">
@@ -430,8 +430,8 @@ const rootClass = ['cb relative w-full bg-white text-slate-900 flex flex-col', o
           <!-- Send email: StepEmailArms > SequenceView (embedded) -->
           {(demo === 'flow' || demo === 'ai') && (
           <div class="rounded-md border border-slate-200 bg-white">
-            <div class="flex flex-col gap-3 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
-              <div class="flex flex-wrap shrink-0 items-center gap-2 sm:ml-auto">
+            <div class="flex flex-col gap-3 px-3 py-2.5 @sm:flex-row @sm:items-center @sm:justify-between">
+              <div class="flex flex-wrap shrink-0 items-center gap-2 @sm:ml-auto">
                 <span class="h-7 px-2.5 inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white text-[12px] font-medium text-slate-600">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" set:html={ic.split}></svg>
                   A/B test
