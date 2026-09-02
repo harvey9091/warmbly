@@ -20,42 +20,39 @@ import React from "react";
 export function SkyChrome() {
     return (
         <div className="app-shell-chrome absolute inset-0 overflow-hidden pointer-events-none bg-chrome">
-            {/* Faint cloud blobs. In light mode they're near-white; in dark mode
-                the CSS overrides shift them to subtle light-on-dark accents. */}
+            {/* Cloud blobs — visible in light mode, dimmed when a background
+                is active so they don't compete with the user's image. */}
             <div
-                className="absolute dark:bg-white/[0.07]"
+                className="cloud-blob cloud-blob-1 absolute"
                 style={{
                     top: "-80px",
                     left: "-60px",
                     width: "520px",
                     height: "240px",
-                    background: "rgba(255,255,255,0.95)",
                     borderRadius: "50% 50% 18% 18%",
                     filter: "blur(60px)",
                     opacity: 0.7,
                 }}
             />
             <div
-                className="absolute dark:bg-white/[0.05]"
+                className="cloud-blob cloud-blob-2 absolute"
                 style={{
                     top: "10%",
                     right: "8%",
                     width: "380px",
                     height: "180px",
-                    background: "rgba(255,255,255,0.85)",
                     borderRadius: "50% 50% 18% 18%",
                     filter: "blur(70px)",
                     opacity: 0.55,
                 }}
             />
             <div
-                className="absolute dark:bg-white/[0.04]"
+                className="cloud-blob cloud-blob-3 absolute"
                 style={{
                     top: "32%",
                     left: "26%",
                     width: "300px",
                     height: "140px",
-                    background: "rgba(255,255,255,0.9)",
                     borderRadius: "50% 50% 22% 22%",
                     filter: "blur(70px)",
                     opacity: 0.45,

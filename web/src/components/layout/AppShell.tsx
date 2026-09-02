@@ -57,10 +57,11 @@ export function AppShell() {
 
     return (
         <div className={`fixed inset-0 flex flex-col ${glassmorphismEnabled ? "glassmorphism-enabled" : ""}`}>
+            <BackgroundLayer />
+
             <SkyChrome />
 
             <div className="relative z-10 flex flex-col h-full">
-                <BackgroundLayer />
                 <SendingRestrictedBar />
                 <PendingDeletionBar />
 

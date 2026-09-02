@@ -82,7 +82,7 @@ export function AppHeader({ onMenu }: { onMenu?: () => void }) {
     const currentPath = `/app/${segments.join("/")}`;
 
     return (
-        <div className="h-14 flex items-center shrink-0">
+        <div className="app-shell-header h-14 flex items-center shrink-0">
             {/* Logo zone — sidebar-width on >=md, compact with a menu button
                 on mobile (the sidebar collapses into a drawer below md). */}
             <button
