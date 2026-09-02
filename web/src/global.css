@@ -690,15 +690,24 @@ svg.loading circle {
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
 }
+.appearance-bg-active main.app-shell-content {
+  background: rgba(255, 255, 255, 0.90);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
 .appearance-bg-active.dark .app-shell-header,
 .appearance-bg-active.dark .app-shell-nav {
   background: rgba(20, 20, 30, 0.84);
 }
+.appearance-bg-active.dark main.app-shell-content {
+  background: rgba(20, 20, 30, 0.90);
+}
 
 /* Glassmorphism: applied conditionally via the .glassmorphism-enabled
    class on the document root. Adds translucent blur to actual surface
-   elements — sidebar, content panel, dialogs, popovers, dropdowns.
+   elements — header, sidebar, content panel, dialogs, popovers, dropdowns.
    Never targets the chrome background or the background layer. */
+.glassmorphism-enabled .app-shell-header,
 .glassmorphism-enabled .app-shell-nav,
 .glassmorphism-enabled main.app-shell-content,
 .glassmorphism-enabled [data-dialog-content],
@@ -711,6 +720,7 @@ svg.loading circle {
   border-color: rgba(255, 255, 255, 0.35);
 }
 
+.glassmorphism-enabled.dark .app-shell-header,
 .glassmorphism-enabled.dark .app-shell-nav,
 .glassmorphism-enabled.dark main.app-shell-content,
 .glassmorphism-enabled.dark [data-dialog-content],
