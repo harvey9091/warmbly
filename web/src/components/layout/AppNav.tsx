@@ -936,7 +936,7 @@ export function AppNav({ open = false, onClose }: { open?: boolean; onClose?: ()
             <aside
                 className={cn(
                     // Mobile: off-canvas drawer that slides in from the left.
-                    "fixed inset-y-0 left-0 z-50 w-64 flex flex-col text-slate-900 bg-white shadow-2xl transition-transform duration-300 ease-out",
+                    "app-shell-nav fixed inset-y-0 left-0 z-50 w-64 flex flex-col text-slate-900 bg-background shadow-2xl transition-transform duration-300 ease-out",
                     open ? "translate-x-0" : "-translate-x-full",
                     // >=md: static sidebar column over the chrome, no transform/shadow.
                     "md:static md:z-auto md:translate-x-0 md:bg-transparent md:shadow-none md:transition-none shrink-0",

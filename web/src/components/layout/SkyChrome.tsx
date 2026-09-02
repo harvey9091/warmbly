@@ -19,7 +19,7 @@ import React from "react";
 
 export function SkyChrome() {
     return (
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="app-shell-chrome absolute inset-0 overflow-hidden pointer-events-none bg-chrome">
             {/* Base tint — clean neutral, a half-step darker than white.
                 Avoid blue-leaning here; the only colour cue is the soft
                 clouds above. */}

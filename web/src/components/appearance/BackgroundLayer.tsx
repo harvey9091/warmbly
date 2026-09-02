@@ -33,7 +33,8 @@ export function BackgroundLayer() {
     }
 
     const url = backgroundImage || presetGradients[backgroundPreset] || 'none'
-    root.style.setProperty('--app-bg-image', `url("${url}")`)
+    const isGradient = !backgroundImage && backgroundPreset !== 'default'
+    root.style.setProperty('--app-bg-image', isGradient ? url : `url("${url}")`)
     root.style.setProperty('--app-bg-blur', `${backgroundBlur}px`)
     root.style.setProperty('--app-bg-opacity', `${(backgroundOpacity / 100).toFixed(2)}`)
   }, [backgroundImage, backgroundPreset, backgroundBlur, backgroundOpacity, hasImage])

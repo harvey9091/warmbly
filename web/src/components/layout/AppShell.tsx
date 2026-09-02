@@ -35,7 +35,9 @@ import { useAppStore } from "@/stores";
 export function AppShell() {
     useKeyboardShortcuts();
 
-    const glassmorphismEnabled = useAppStore((state) => state.glassmorphismEnabled);
+    const glassmorphismEnabled = useAppStore((state) => state.glassmorphismEnabled)
+    const glassOpacity = useAppStore((state) => state.glassOpacity)
+    const glassBlur = useAppStore((state) => state.glassBlur)
 
     const [navOpen, setNavOpen] = useState(false);
     const { pathname } = useLocation();
@@ -47,13 +49,18 @@ export function AppShell() {
         scrollRef.current?.scrollTo({ top: 0, left: 0 });
     }, [pathname]);
 
+    useEffect(() => {
+        const root = document.documentElement
+        root.style.setProperty('--app-glass-opacity', String(glassmorphismEnabled ? glassOpacity / 100 : 0.15))
+        root.style.setProperty('--app-glass-blur', `${glassBlur}px`)
+    }, [glassmorphismEnabled, glassOpacity, glassBlur])
+
     return (
         <div className={`fixed inset-0 flex flex-col ${glassmorphismEnabled ? "glassmorphism-enabled" : ""}`}>
-            <BackgroundLayer />
-
             <SkyChrome />
 
             <div className="relative z-10 flex flex-col h-full">
+                <BackgroundLayer />
                 <SendingRestrictedBar />
                 <PendingDeletionBar />
 
@@ -62,7 +69,7 @@ export function AppShell() {
                 <div className="flex-1 flex min-h-0">
                     <AppNav open={navOpen} onClose={() => setNavOpen(false)} />
 
-                    <main className="app-shell-content flex-1 min-w-0 bg-white overflow-hidden border-t border-slate-200/70 md:rounded-tl-2xl md:border-l">
+                    <main className="app-shell-content flex-1 min-w-0 bg-background overflow-hidden border-t border-slate-200/70 md:rounded-tl-2xl md:border-l">
                         <GlobalCursorsProvider scrollRef={scrollRef}>
                             <div ref={scrollRef} className="h-full overflow-auto">
                                 <RouteBoundary>
