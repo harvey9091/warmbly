@@ -92,6 +92,7 @@ import CloudOAuthDonePage from './app/cloud-oauth/done/page';
 import WarmblyCloudSettingsPage from './app/app/settings/warmbly-cloud/page';
 import SetupPage from './app/setup/page';
 import SSOCallbackPage from './app/auth/sso/page';
+import AppearanceSettingsPage from './app/app/settings/appearance/page';
 
 // React-Query defaults tuned for a dashboard. The library's
 // out-of-the-box behaviour treats every query as immediately stale
@@ -366,6 +367,7 @@ const router = createBrowserRouter([
               { index: true, element: <Navigate to="/app/settings/profile" replace /> },
               { path: "profile", element: <ProfileSettingsPage /> },
               { path: "notifications", element: <NotificationsSettingsPage /> },
+              { path: "appearance", element: <AppearanceSettingsPage /> },
               { path: "security", element: <SecuritySettingsPage /> },
               { path: "members", element: <MembersSettingsPage /> },
               { path: "teams", element: <TeamsSettingsPage /> },

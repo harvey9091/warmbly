@@ -42,6 +42,14 @@ export const useAppStore = create<AppStore>()(
           // Only persist UI preferences
           theme: state.theme,
           sidebarCollapsed: state.sidebarCollapsed,
+          // Appearance
+          glassmorphismEnabled: state.glassmorphismEnabled,
+          glassOpacity: state.glassOpacity,
+          glassBlur: state.glassBlur,
+          backgroundPreset: state.backgroundPreset,
+          backgroundImage: state.backgroundImage,
+          backgroundBlur: state.backgroundBlur,
+          backgroundOpacity: state.backgroundOpacity,
           // Assistant panel layout (edge + width + floating window geometry)
           agentSide: state.agentSide,
           agentWidth: state.agentWidth,
@@ -71,6 +79,23 @@ export const useSidebar = () =>
     setCollapsed: state.setSidebarCollapsed,
     setMobileOpen: state.setSidebarMobileOpen,
   })))
+export const useAppearance = () =>
+  useAppStore(useShallow((state) => ({
+    glassmorphismEnabled: state.glassmorphismEnabled,
+    glassOpacity: state.glassOpacity,
+    glassBlur: state.glassBlur,
+    backgroundPreset: state.backgroundPreset,
+    backgroundImage: state.backgroundImage,
+    backgroundBlur: state.backgroundBlur,
+    backgroundOpacity: state.backgroundOpacity,
+    setGlassmorphismEnabled: state.setGlassmorphismEnabled,
+    setGlassOpacity: state.setGlassOpacity,
+    setGlassBlur: state.setGlassBlur,
+    setBackgroundPreset: state.setBackgroundPreset,
+    setBackgroundImage: state.setBackgroundImage,
+    setBackgroundBlur: state.setBackgroundBlur,
+    setBackgroundOpacity: state.setBackgroundOpacity,
+  })))
 export const useCurrentOrg = () => useAppStore((state) => state.currentOrganization)
 export const useOrganizations = () =>
   useAppStore(useShallow((state) => ({
@@ -80,7 +105,7 @@ export const useOrganizations = () =>
   })))
 export const useKeyboardNavigation = () =>
   useAppStore(useShallow((state) => ({
-    sequence: state.keySequence,
+    keySequence: state.keySequence,
     addToSequence: state.addToSequence,
     clearSequence: state.clearSequence,
     selectedIndex: state.selectedIndex,

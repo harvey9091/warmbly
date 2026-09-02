@@ -31,6 +31,7 @@ import {
     UsersIcon,
     WebhookIcon,
     GlobeIcon,
+    PaletteIcon,
 } from "lucide-react";
 import { UnsavedProvider, useUnsavedRegistry } from "@/hooks/context/unsaved";
 import { usePermission, type PermissionKey } from "@/hooks/usePermission";
@@ -60,6 +61,12 @@ const GROUPS: SectionGroup[] = [
             { path: "profile", label: "Profile", icon: UserIcon, description: "Personal information." },
             { path: "notifications", label: "Notifications", icon: BellIcon, description: "What you get notified about." },
             { path: "security", label: "Security", icon: ShieldIcon, description: "Password, 2FA, active sessions." },
+        ],
+    },
+    {
+        label: "Appearance",
+        items: [
+            { path: "appearance", label: "Appearance", icon: PaletteIcon, description: "Theme, glassmorphism, and background." },
         ],
     },
     {

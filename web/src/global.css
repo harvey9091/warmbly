@@ -43,6 +43,12 @@
   --sidebar-accent-foreground: oklch(0.20 0.01 260);
   --sidebar-border: oklch(0.92 0.005 260);
   --sidebar-ring: oklch(0.55 0.01 260);
+
+  --app-bg-image: none;
+  --app-bg-blur: 0px;
+  --app-bg-opacity: 1;
+  --app-glass-opacity: 0.15;
+  --app-glass-blur: 12px;
 }
 
 .dark {
@@ -77,6 +83,8 @@
   --sidebar-accent-foreground: oklch(0.95 0.005 260);
   --sidebar-border: oklch(0.26 0.01 260);
   --sidebar-ring: oklch(0.60 0.01 260);
+
+  --app-glass-opacity: 0.12;
 }
 
 @theme inline {
@@ -560,4 +568,70 @@ svg.loading circle {
    desktop type is untouched. */
 @media (max-width: 767px) {
   input, select, textarea, [contenteditable="true"] { font-size: max(16px, 1em) !important; }
+}
+
+/* ── Appearance system ────────────────────────── */
+
+/* Background image layer: sits behind the app shell, fills the
+   viewport, and respects user-configured blur and opacity.
+   Rendered by <BackgroundLayer>; never intercepts pointer events. */
+.appearance-bg-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: var(--app-bg-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: var(--app-bg-opacity);
+  filter: blur(var(--app-bg-blur));
+  transform: translateZ(0);
+  will-change: filter, opacity;
+}
+
+/* Glassmorphism: applied conditionally via the .glassmorphism-enabled
+   class on the document root. Affects sidebar, top nav, cards, dialogs,
+   settings panels, and the content surface — NOT the chrome itself. */
+.glassmorphism-enabled .app-shell-chrome,
+.glassmorphism-enabled .app-shell-sidebar,
+.glassmorphism-enabled .app-shell-nav,
+.glassmorphism-enabled .settings-content-panel,
+.glassmorphism-enabled [data-dialog-content],
+.glassmorphism-enabled .card-glass,
+.glassmorphism-enabled .popover-content,
+.glassmorphism-enabled .dropdown-menu-content,
+.glassmorphism-enabled [role="dialog"] {
+  background: rgba(255, 255, 255, var(--app-glass-opacity));
+  backdrop-filter: blur(var(--app-glass-blur));
+  -webkit-backdrop-filter: blur(var(--app-glass-blur));
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.glassmorphism-enabled.dark .app-shell-chrome,
+.glassmorphism-enabled.dark .app-shell-sidebar,
+.glassmorphism-enabled.dark .app-shell-nav,
+.glassmorphism-enabled.dark .settings-content-panel,
+.glassmorphism-enabled.dark [data-dialog-content],
+.glassmorphism-enabled.dark .card-glass,
+.glassmorphism-enabled.dark .popover-content,
+.glassmorphism-enabled.dark .dropdown-menu-content,
+.glassmorphism-enabled.dark [role="dialog"] {
+  background: rgba(20, 20, 35, var(--app-glass-opacity));
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+/* Respect reduced motion for glass transitions */
+@media (prefers-reduced-motion: reduce) {
+  .glassmorphism-enabled .app-shell-chrome,
+  .glassmorphism-enabled .app-shell-sidebar,
+  .glassmorphism-enabled .app-shell-nav,
+  .glassmorphism-enabled .settings-content-panel,
+  .glassmorphism-enabled [data-dialog-content],
+  .glassmorphism-enabled .card-glass,
+  .glassmorphism-enabled .popover-content,
+  .glassmorphism-enabled .dropdown-menu-content,
+  .glassmorphism-enabled [role="dialog"] {
+    transition: none;
+  }
 }
