@@ -25,10 +25,10 @@
  * exactly as the portaled one covers the real viewport, and the demo cursor
  * can travel the whole screen.
  *
- * `chrome="lg"` drops the header and sidebar below lg, so a narrow frame
- * shows the screen alone instead of spending half a phone width on nav.
- * `chrome="always"` keeps the whole desktop shell at every width (the hero
- * deliberately bleeds a desktop shot off the right edge on mobile).
+ * The shell is the same desktop screenshot at every viewport: a phone gets it
+ * scaled, never a phone layout. The root is a container query root, and the
+ * mocks inside use `@md:`-style variants, so their responsive classes answer
+ * to this 1280px window rather than to the visitor's screen.
  */
 import { nextId } from '../lib/uid';
 
@@ -39,22 +39,16 @@ interface Props {
   active?: string;
   /** Extra breadcrumb segment after the section, e.g. "Q1 sales". */
   sub?: string;
-  chrome?: 'always' | 'lg';
 }
-const { crumb, active = crumb, sub, chrome = 'lg' } = Astro.props;
+const { crumb, active = crumb, sub } = Astro.props;
 
-const shellShow = chrome === 'always' ? 'flex' : 'hidden lg:flex';
-const headerShow = chrome === 'always' ? 'flex' : 'hidden lg:flex';
 // The sidebar is taken out of flow so the screen mock, not the nav, decides
 // how tall the shell is; the nav clips and the footer stays pinned, exactly
 // as it behaves in the app.
-const mainEdge =
-  chrome === 'always'
-    ? 'ml-64 rounded-tl-2xl border-t border-l border-slate-200/70'
-    : 'border-t border-slate-200/70 lg:ml-64 lg:rounded-tl-2xl lg:border-l';
+const mainEdge = 'ml-64 rounded-tl-2xl border-t border-l border-slate-200/70';
 // 1280x900 minus the 56px header. Fixed, so every window is exactly a viewport
 // whichever screen is inside it, and the sidebar always draws itself whole.
-const bodyMin = chrome === 'always' ? 'min-h-[844px]' : 'lg:min-h-[844px]';
+const bodyMin = 'min-h-[844px]';
 
 const navIcons: Record<string, string> = {
   Inbox:       '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
@@ -178,14 +172,14 @@ const online = [
   { initials: 'RS', hot: false },
 ];
 ---
-<!-- SkyChrome - #f5f6f8 base + ambient cloud blurs -->
-<div class="relative overflow-hidden" style="background:#f5f6f8; contain: paint;" data-stage data-shell aria-hidden="true">
-  <span aria-hidden="true" class="absolute pointer-events-none" style="top:-80px; left:-60px; width:520px; height:240px; background:rgba(255,255,255,0.95); border-radius:50% 50% 18% 18%; filter:blur(60px); opacity:0.7;"></span>
-  <span aria-hidden="true" class="absolute pointer-events-none" style="top:10%; right:8%; width:380px; height:180px; background:rgba(255,255,255,0.85); border-radius:50% 50% 18% 18%; filter:blur(70px); opacity:0.55;"></span>
-  <span aria-hidden="true" class="absolute pointer-events-none" style="top:32%; left:26%; width:300px; height:140px; background:rgba(255,255,255,0.9); border-radius:50% 50% 22% 22%; filter:blur(70px); opacity:0.45;"></span>
+<!-- SkyChrome: #f5f6f8 base + its three ambient cloud blurs, baked into one
+     SVG (public/backdrops/shell-ambient.svg). Fifteen shells on a page each
+     running three live 70px blur layers is what iOS Safari runs out of GPU
+     memory on. -->
+<div class="@container relative overflow-hidden" style="background:#f5f6f8 url(/backdrops/shell-ambient.svg) 0 0 / 100% 100% no-repeat; contain: paint;" data-stage data-shell aria-hidden="true">
 
   <!-- ── AppHeader (h-14) ── -->
-  <div class={`relative z-10 h-14 items-center shrink-0 ${headerShow}`}>
+  <div class="relative z-10 h-14 flex items-center shrink-0">
     <div class="w-64 px-5 h-full flex items-center gap-2.5 shrink-0">
       <svg viewBox="0 0 746 764" class="w-7 text-slate-900" fill="currentColor"><path d="M222.805 644.772L186.274 108.881L704.5 451.158L484.5 451.158L245.5 196.158L444 463.5L222.805 644.772Z"/></svg>
       <span class="font-extrabold text-[15.5px] tracking-tight text-slate-900" style="font-family: var(--font-display);">Warmbly</span>
@@ -256,7 +250,7 @@ const online = [
 
   <!-- ── Body: sidebar + content panel ── -->
   <div class={`relative z-10 flex ${bodyMin}`}>
-    <aside class={`absolute inset-y-0 left-0 w-64 overflow-hidden flex-col text-slate-900 ${shellShow}`}>
+    <aside class="absolute inset-y-0 left-0 w-64 overflow-hidden flex flex-col text-slate-900">
       <!-- LivePanel: hero number, capacity meter, 14-day sparkline, chips -->
       <div class="mx-2 mt-2 mb-3 rounded-md bg-white/80 border border-slate-200/70 pt-2 overflow-hidden">
         <div class="px-2.5 flex items-baseline gap-1.5 whitespace-nowrap">
@@ -477,15 +471,18 @@ const online = [
     };
 
     let onScreen = false;
-    const sync = () => (onScreen && !document.hidden ? start() : stop());
+    // Reduced motion never ticks the counters; the observer still parks the shell.
+    const sync = () => (onScreen && !document.hidden && !REDUCED ? start() : stop());
     new IntersectionObserver((entries) => {
       onScreen = entries.some((e) => e.isIntersecting);
+      // Off screen, the pings and pulses inside stop too (see global.css).
+      shell.classList.toggle('is-off', !onScreen);
       sync();
     }, { threshold: 0.1 }).observe(shell);
     document.addEventListener('visibilitychange', sync);
   }
 
-  if (!REDUCED) document.querySelectorAll<HTMLElement>('[data-shell]').forEach(live);
+  document.querySelectorAll<HTMLElement>('[data-shell]').forEach(live);
   // The shell is a picture: nothing inside it is a real tab stop.
   document.querySelectorAll<HTMLElement>('[data-shell] button, [data-shell] input, [data-shell] a, [data-shell] [tabindex]').forEach((el) => { el.tabIndex = -1; });
 </script>

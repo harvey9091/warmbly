@@ -126,7 +126,7 @@ const railToneClass = (tone: string, active: boolean) => {
   <!-- ─────────────────────────────────────────────────────────────
        1) TOP STRIP - UniboxHeader (h-10)
   ────────────────────────────────────────────────────────────── -->
-  <header class="h-10 px-3 sm:px-4 border-b border-slate-200 bg-white flex items-center gap-2 sm:gap-3 shrink-0 overflow-x-auto">
+  <header class="h-10 px-3 @sm:px-4 border-b border-slate-200 bg-white flex items-center gap-2 @sm:gap-3 shrink-0 overflow-x-auto">
     <span class="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-semibold shrink-0">Inbox</span>
     <div class="h-4 w-px bg-slate-200 shrink-0"></div>
     <div class="flex items-center gap-3.5 min-w-0">
@@ -305,7 +305,7 @@ const railToneClass = (tone: string, active: boolean) => {
           ))}
         </div>
       </div>
-      <div class="h-6 px-2 shrink-0 border-t border-slate-200/80 bg-slate-50/60 hidden md:flex items-center gap-2 text-[10px] text-slate-500 overflow-x-auto">
+      <div class="h-6 px-2 shrink-0 border-t border-slate-200/80 bg-slate-50/60 hidden @md:flex items-center gap-2 text-[10px] text-slate-500 overflow-x-auto">
         <kbd class="px-1 h-3.5 rounded-sm bg-white border border-slate-200 text-slate-600 font-mono text-[9px] inline-flex items-center shrink-0">j</kbd>/<kbd class="px-1 h-3.5 rounded-sm bg-white border border-slate-200 text-slate-600 font-mono text-[9px] inline-flex items-center shrink-0">k</kbd>
         <span class="text-slate-400">move</span> <kbd class="px-1 h-3.5 rounded-sm bg-white border border-slate-200 text-slate-600 font-mono text-[9px] inline-flex items-center shrink-0">↵</kbd> <span class="text-slate-400">open</span>
         <kbd class="px-1 h-3.5 rounded-sm bg-white border border-slate-200 text-slate-600 font-mono text-[9px] inline-flex items-center shrink-0">esc</kbd> <span class="text-slate-400">close</span> <kbd class="px-1 h-3.5 rounded-sm bg-white border border-slate-200 text-slate-600 font-mono text-[9px] inline-flex items-center shrink-0">/</kbd> <span class="text-slate-400">search</span>
@@ -320,9 +320,9 @@ const railToneClass = (tone: string, active: boolean) => {
         <div class="h-4 w-px bg-slate-200"></div>
         <span class="text-[12.5px] text-slate-900 font-medium truncate min-w-0">Follow up on Q1 proposal</span>
         <span class="ml-1 inline-flex items-center gap-1 h-5 px-1.5 rounded bg-slate-100 text-slate-600 text-[10.5px] font-medium font-mono shrink-0">hello@company.com</span>
-        <span class="hidden md:inline-flex items-center gap-1 shrink-0">
-          <span class="inline-flex items-center gap-1 h-4 pl-1 pr-1 text-[10px] rounded font-medium" style="background-color:rgba(239,68,68,0.12);color:#ef4444;border:1px solid rgba(239,68,68,0.25);"><span class="size-1.5 rounded-full shrink-0" style="background-color:#ef4444;"></span><span class="truncate max-w-[72px] md:max-w-none">Urgent</span></span>
-          <span class="inline-flex items-center gap-1 h-4 pl-1 pr-1 text-[10px] rounded font-medium" style="background-color:rgba(245,158,11,0.12);color:#f59e0b;border:1px solid rgba(245,158,11,0.25);"><span class="size-1.5 rounded-full shrink-0" style="background-color:#f59e0b;"></span><span class="truncate max-w-[72px] md:max-w-none">Clients</span></span>
+        <span class="hidden @md:inline-flex items-center gap-1 shrink-0">
+          <span class="inline-flex items-center gap-1 h-4 pl-1 pr-1 text-[10px] rounded font-medium" style="background-color:rgba(239,68,68,0.12);color:#ef4444;border:1px solid rgba(239,68,68,0.25);"><span class="size-1.5 rounded-full shrink-0" style="background-color:#ef4444;"></span><span class="truncate max-w-[72px] @md:max-w-none">Urgent</span></span>
+          <span class="inline-flex items-center gap-1 h-4 pl-1 pr-1 text-[10px] rounded font-medium" style="background-color:rgba(245,158,11,0.12);color:#f59e0b;border:1px solid rgba(245,158,11,0.25);"><span class="size-1.5 rounded-full shrink-0" style="background-color:#f59e0b;"></span><span class="truncate max-w-[72px] @md:max-w-none">Clients</span></span>
         </span>
         <div class="ml-auto flex items-center gap-1">
           <span class="inline-flex size-7 rounded-md items-center justify-center transition-colors text-slate-500">
@@ -354,7 +354,7 @@ const railToneClass = (tone: string, active: boolean) => {
       <!-- messages -->
       <div class="flex-1 overflow-y-auto divide-y divide-slate-200/60">
         {messages.map((m) => (
-          <article class="group px-3 sm:px-5 py-4">
+          <article class="group px-3 @sm:px-5 py-4">
             <header class="flex items-start gap-3 mb-3 cursor-pointer">
               <div class="size-7 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center text-[10px] font-semibold shrink-0">{m.initials}</div>
               <div class="min-w-0 flex-1">
@@ -367,7 +367,7 @@ const railToneClass = (tone: string, active: boolean) => {
                 </div>
               </div>
               <div class="flex items-center gap-1 shrink-0">
-                <div class="flex items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                <div class="flex items-center gap-0.5 opacity-100 @md:opacity-0 @md:group-hover:opacity-100 transition-opacity">
                   <span class="size-6 rounded text-slate-500 inline-flex items-center justify-center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg></span>
                   <span class="size-6 rounded text-slate-500 inline-flex items-center justify-center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/></svg></span>
                 </div>

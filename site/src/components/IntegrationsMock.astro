@@ -100,13 +100,13 @@ const settingsIcon = '<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 
 <div class="ig relative w-full flex flex-col bg-white overflow-hidden" style="min-height:500px;" data-demo="ig">
 
   <!-- PageTopbar -->
-  <div class="min-h-12 md:h-12 px-5 py-1.5 md:py-0 border-b border-slate-200 flex flex-wrap md:flex-nowrap items-center gap-3 gap-y-1.5 shrink-0 bg-white sticky top-0 z-10">
+  <div class="min-h-12 @md:h-12 px-5 py-1.5 @md:py-0 border-b border-slate-200 flex flex-wrap @md:flex-nowrap items-center gap-3 gap-y-1.5 shrink-0 bg-white sticky top-0 z-10">
     <span class="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">Integrations</span>
     <div class="h-4 w-px bg-slate-200"></div>
     <span class="text-[12.5px] text-slate-600 truncate">Connect your stack — CRMs, alerts, automation, meetings, and data</span>
-    <div class="ml-auto flex items-center gap-1.5 min-w-0 flex-wrap justify-end md:flex-nowrap">
+    <div class="ml-auto flex items-center gap-1.5 min-w-0 flex-wrap justify-end @md:flex-nowrap">
       <div class="flex items-center gap-2">
-        <div class="w-48 hidden sm:block">
+        <div class="w-48 hidden @sm:block">
           <div class="h-7 pl-2 pr-1 rounded-md border border-slate-200 bg-white flex items-center gap-1.5 min-w-0">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-400 shrink-0" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
             <span class="flex-1 min-w-0 h-full inline-flex items-center text-[12.5px] text-slate-400">Search integrations</span>
@@ -120,7 +120,7 @@ const settingsIcon = '<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 
   </div>
 
   <!-- StatStrip -->
-  <div class="grid border-b border-slate-200 shrink-0 bg-white grid-cols-2 md:grid-cols-4">
+  <div class="grid border-b border-slate-200 shrink-0 bg-white grid-cols-2 @md:grid-cols-4">
     {stats.map((s) => (
       <div class={`group px-5 py-4 transition-colors ${!s.last ? 'border-r border-slate-200' : ''}`}>
         <div class="flex items-center gap-2">
@@ -137,11 +137,11 @@ const settingsIcon = '<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 
   <div class="flex-1 min-h-0 overflow-hidden">
     <!-- Connected rail -->
     <section>
-      <div class="min-h-9 md:h-9 px-5 py-1.5 md:py-0 border-b border-slate-200/60 flex flex-wrap md:flex-nowrap items-center gap-x-2.5 gap-y-1.5 shrink-0">
+      <div class="min-h-9 @md:h-9 px-5 py-1.5 @md:py-0 border-b border-slate-200/60 flex flex-wrap @md:flex-nowrap items-center gap-x-2.5 gap-y-1.5 shrink-0">
         <span class="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">Your connections</span>
         <span class="font-mono text-[10.5px] text-slate-400 tabular-nums">{connections.length}</span>
       </div>
-      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-px bg-slate-200/60 border-b border-slate-200/60">
+      <div class="grid @sm:grid-cols-2 @lg:grid-cols-3 gap-px bg-slate-200/60 border-b border-slate-200/60">
         {connections.map((c) => (
           <div class="text-left bg-white p-4 flex items-center gap-3">
             <Fragment set:html={glyph(c.provider, c.name)} />
@@ -158,11 +158,11 @@ const settingsIcon = '<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 
     <!-- Catalog by category: hairline gaps, white cards, no radius (CatalogCard) -->
     {sections.map((sec) => (
       <section>
-        <div class="min-h-9 md:h-9 px-5 py-1.5 md:py-0 border-b border-slate-200/60 flex flex-wrap md:flex-nowrap items-center gap-x-2.5 gap-y-1.5 shrink-0">
+        <div class="min-h-9 @md:h-9 px-5 py-1.5 @md:py-0 border-b border-slate-200/60 flex flex-wrap @md:flex-nowrap items-center gap-x-2.5 gap-y-1.5 shrink-0">
           <span class="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">{sec.label}</span>
           <span class="font-mono text-[10.5px] text-slate-400 tabular-nums">{sec.entries.length}</span>
         </div>
-        <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-px bg-slate-200/60 border-b border-slate-200/60">
+        <div class="grid @sm:grid-cols-2 @lg:grid-cols-3 gap-px bg-slate-200/60 border-b border-slate-200/60">
           {sec.entries.map((t) => {
             const isSlack = t.provider === 'slack';
             return (
@@ -209,7 +209,7 @@ const settingsIcon = '<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 
     ))}
 
     <!-- Meeting bookings -->
-    <div class="min-h-9 md:h-9 px-5 py-1.5 md:py-0 border-b border-slate-200/60 flex flex-wrap md:flex-nowrap items-center gap-x-2.5 gap-y-1.5 shrink-0">
+    <div class="min-h-9 @md:h-9 px-5 py-1.5 @md:py-0 border-b border-slate-200/60 flex flex-wrap @md:flex-nowrap items-center gap-x-2.5 gap-y-1.5 shrink-0">
       <span class="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">Meeting bookings</span>
       <span class="font-mono text-[10.5px] text-slate-400 tabular-nums">14</span>
       <div class="ml-auto flex items-center gap-1.5 flex-wrap justify-end min-w-0">
@@ -220,7 +220,7 @@ const settingsIcon = '<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 
       {bookings.map((b) => (
         <div class="px-5 h-12 flex items-center gap-3 text-[12.5px]">
           <span class={`size-1.5 rounded-full shrink-0 ${b.source === 'calendly' ? 'bg-rose-400' : 'bg-indigo-400'}`}></span>
-          <span class="font-medium text-slate-900 truncate max-w-[40%] sm:max-w-none sm:w-60">{b.email}</span>
+          <span class="font-medium text-slate-900 truncate max-w-[40%] @sm:max-w-none @sm:w-60">{b.email}</span>
           <span class="text-slate-500 truncate flex-1">{b.event}</span>
           <span class="font-mono text-[10.5px] text-slate-400 tabular-nums shrink-0">{b.when}</span>
         </div>
@@ -232,7 +232,7 @@ const settingsIcon = '<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 
   <!-- Portaled to the body in the app: fixed over the whole window, the drawer on its right edge. -->
   <div class="ig-react fixed inset-0 z-40 flex" aria-hidden="true">
     <div class="ig-scrim absolute inset-0 bg-slate-900/30 backdrop-blur-[2px]"></div>
-    <div class="ig-drawer ml-auto h-full w-full sm:w-[480px] sm:max-w-[92vw] bg-white shadow-xl flex flex-col z-10 relative">
+    <div class="ig-drawer ml-auto h-full w-full @sm:w-[480px] @sm:max-w-[1178px] bg-white shadow-xl flex flex-col z-10 relative">
       <div class="h-12 px-5 border-b border-slate-200 flex items-center gap-3 shrink-0">
         <Fragment set:html={glyph('slack', 'Slack', 7)} />
         <div class="min-w-0 flex-1">

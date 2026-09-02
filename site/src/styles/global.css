@@ -7,6 +7,10 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Nothing may widen the page: on iOS one overflowing row scales the whole
+   layout viewport. clip (not hidden) keeps the sticky header working. */
+html, body { overflow-x: clip; }
+
 /* ----------------------------------------------------------------
    Color tokens — mirrors web/src/global.css OKLCH neutrals,
    with brand sky/indigo accents for the marketing surface.
@@ -904,15 +908,40 @@ body {
    hidden, one radius. A transformed child (a scaled screen, a sliding track)
    gets its own compositor layer, and Safari and Chrome both skip a rounded
    overflow clip on those unless the box is a layer itself and masked. */
+/* Phones: a backdrop filter inside a scaled app shell makes iOS Safari keep a
+   snapshot of everything behind it per mock, and at that size the blur is
+   invisible anyway. Desktop keeps the real thing. */
+@media (hover: none) {
+  [data-stage] [class*="backdrop-blur"] {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* clip-path, not the translateZ + mask-image trick: that pairs a forced 3D
+   layer with a mask buffer per frame, and iOS Safari runs out of GPU memory
+   with fourteen of them on one page. clip-path clips composited children
+   (the WebGL canvas, scaled screens) just as well. */
 .round-clip {
   position: relative;
   overflow: hidden;
   border-radius: 28px;
   isolation: isolate;
-  transform: translateZ(0);
-  -webkit-mask-image: -webkit-radial-gradient(white, black);
-  mask-image: radial-gradient(white, black);
+  clip-path: inset(0 round 28px);
 }
+
+/* A shell that is off screen (AppShellMock's observer) keeps its pings and
+   pulses still; a phone with fifteen shells cannot animate them all. */
+[data-stage].is-off *,
+[data-stage].is-off *::before,
+[data-stage].is-off *::after {
+  animation-play-state: paused !important;
+}
+
+/* Diagnostics for the phone: ?noshell hides every app shell, ?noanim stops
+   every animation, ?nogl (GrainBackdrop) skips WebGL. */
+html[data-diag~="noshell"] [data-stage] { display: none !important; }
+html[data-diag~="noanim"] *, html[data-diag~="noanim"] *::before, html[data-diag~="noanim"] *::after { animation: none !important; transition: none !important; }
 
 /* The outer clip. clip-path (not just overflow) because the shader canvas
    carries `contain: strict` and a negative z-index from the library's own
