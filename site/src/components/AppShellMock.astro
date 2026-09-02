@@ -1,0 +1,491 @@
+---
+/**
+ * The Warmbly app shell, drawn around any screen mock.
+ *
+ * Maps 1:1 to the real chrome:
+ *   - web/src/components/layout/SkyChrome.tsx  - the off-white #f5f6f8 base
+ *   - web/src/components/layout/AppHeader.tsx  - the h-14 breadcrumb bar with
+ *     PlanPill, CreditsMeter, PresenceAvatars, ConnectionIndicator,
+ *     NotificationBell, the assistant button and Search
+ *   - web/src/components/layout/AppNav.tsx     - the w-64 sidebar: LivePanel,
+ *     nav rows with their live counts (TabStat / TabDualStat and the
+ *     campaign dot-grid, warmup flame and overdue ping motifs)
+ *
+ * The counts tick the way the realtime layer ticks them in the app: sends
+ * land every couple of seconds (hero number, capacity meter, Analytics), the
+ * inbox picks up unread replies, mailboxes start and stop warming.
+ *
+ * The shell is authored at 1280x900, a desktop browser viewport, so a window
+ * holding it has the proportions of an actual screenshot. 56px of that is the
+ * header, which is why the body floor is 844: the height the real nav needs
+ * to show every row, Audit log included, without scrolling.
+ *
+ * `data-stage` + contain:paint make the shell the containing block for
+ * anything fixed inside it, so a mock's dialog covers header and sidebar
+ * exactly as the portaled one covers the real viewport, and the demo cursor
+ * can travel the whole screen.
+ *
+ * `chrome="lg"` drops the header and sidebar below lg, so a narrow frame
+ * shows the screen alone instead of spending half a phone width on nav.
+ * `chrome="always"` keeps the whole desktop shell at every width (the hero
+ * deliberately bleeds a desktop shot off the right edge on mobile).
+ */
+import { nextId } from '../lib/uid';
+
+interface Props {
+  /** Breadcrumb leaf + the highlighted sidebar row. */
+  crumb: string;
+  /** Sidebar row to mark active; defaults to the crumb. */
+  active?: string;
+  /** Extra breadcrumb segment after the section, e.g. "Q1 sales". */
+  sub?: string;
+  chrome?: 'always' | 'lg';
+}
+const { crumb, active = crumb, sub, chrome = 'lg' } = Astro.props;
+
+const shellShow = chrome === 'always' ? 'flex' : 'hidden lg:flex';
+const headerShow = chrome === 'always' ? 'flex' : 'hidden lg:flex';
+// The sidebar is taken out of flow so the screen mock, not the nav, decides
+// how tall the shell is; the nav clips and the footer stays pinned, exactly
+// as it behaves in the app.
+const mainEdge =
+  chrome === 'always'
+    ? 'ml-64 rounded-tl-2xl border-t border-l border-slate-200/70'
+    : 'border-t border-slate-200/70 lg:ml-64 lg:rounded-tl-2xl lg:border-l';
+// 1280x900 minus the 56px header. Fixed, so every window is exactly a viewport
+// whichever screen is inside it, and the sidebar always draws itself whole.
+const bodyMin = chrome === 'always' ? 'min-h-[844px]' : 'lg:min-h-[844px]';
+
+const navIcons: Record<string, string> = {
+  Inbox:       '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  Accounts:    '<path d="m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7"/><rect x="2" y="4" width="20" height="16" rx="2"/>',
+  Campaigns:   '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
+  Contacts:    '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M16 3.128a4 4 0 0 1 0 7.744"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/>',
+  Forms:       '<rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/>',
+  Analytics:   '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
+  Deliverability: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+  Tasks:       '<path d="M21 10.656V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11.344"/><path d="m9 11 3 3L22 4"/>',
+  Meetings:    '<path d="M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h5"/><path d="M17.5 17.5 16 16.25V14"/><circle cx="16" cy="16" r="6"/>',
+  Templates:   '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+  Automations: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>',
+  Pipelines:   '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+  Deals:       '<circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 18V6"/>',
+  Integrations:'<path d="M17 21v-2a1 1 0 0 1-1-1v-1a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1a1 1 0 0 1-1 1v2"/><path d="M19 15V6.5a1 1 0 0 0-7 0v11a1 1 0 0 1-7 0V9"/><path d="M21 21v-2h-4"/><path d="M3 5h4V3"/><path d="M7 5a1 1 0 0 1 1 1v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1V3"/>',
+  'API Keys':  '<path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"/><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/>',
+  'Audit log': '<path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>',
+};
+
+const flameIcon = '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>';
+
+// compactN from AppNav.tsx: 12.3k, 48k, 1.2M.
+function compactN(n: number): string {
+  const v = Math.round(n);
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 10_000) return `${Math.round(v / 1000)}k`;
+  if (v >= 1_000) return `${(v / 1000).toFixed(1)}k`;
+  return String(v);
+}
+
+// The count cluster at the end of a nav row. `active` makes it a dual stat
+// (light total | coloured live subset with its motif); `live` names the
+// counter the ticker updates.
+interface Stat {
+  total: number;
+  active?: number;
+  glyph?: 'grid' | 'flame' | 'ping-red' | 'ping-sky' | 'ping-amber';
+  activeClass?: string;
+  live?: string;
+  liveActive?: string;
+}
+interface Row { title: string; badge?: boolean; stat?: Stat }
+
+// The `sections` table in AppNav.tsx, row for row, as the owner sees it.
+const sidebarSections: { label: string; items: Row[] }[] = [
+  { label: '', items: [{ title: 'Inbox', badge: true }] },
+  { label: 'Email', items: [
+    { title: 'Accounts', stat: { total: 128, active: 96, glyph: 'flame', activeClass: 'text-orange-500', liveActive: 'warming' } },
+    { title: 'Campaigns', stat: { total: 24, active: 7, glyph: 'grid', activeClass: 'text-sky-600', liveActive: 'sending' } },
+    { title: 'Contacts', stat: { total: 48213 } },
+    { title: 'Forms' },
+    { title: 'Analytics', stat: { total: 84320, live: 'period' } },
+    { title: 'Deliverability' },
+  ]},
+  { label: 'CRM', items: [
+    { title: 'Pipelines', stat: { total: 3 } },
+    { title: 'Deals', stat: { total: 41, live: 'deals' } },
+    { title: 'Tasks', stat: { total: 18, active: 2, glyph: 'ping-red', activeClass: 'text-red-600' } },
+    { title: 'Meetings', stat: { total: 6, active: 1, glyph: 'ping-sky', activeClass: 'text-sky-600' } },
+  ]},
+  { label: 'Resources', items: [
+    { title: 'Templates', stat: { total: 12 } },
+    { title: 'Integrations', stat: { total: 5, active: 0, glyph: 'ping-amber', activeClass: 'text-amber-600' } },
+    { title: 'Automations' },
+    { title: 'API Keys', stat: { total: 3 } },
+    { title: 'Audit log' },
+  ]},
+];
+
+const COUNT_LIGHT = 'text-[10.5px] font-medium tabular-nums leading-none text-slate-300';
+
+// ── LivePanel data ───────────────────────────────────────────────
+// Mirrors AppNav.tsx: today's sends against the summed per-mailbox daily
+// cap (128 mailboxes x 50/day), a capacity meter, a 14-day area sparkline,
+// then mailboxes / active / unread as one quiet chips row.
+const mailboxes = 128;
+const activeMailboxes = 122;
+const unread = 12;
+const capacity = 6400;
+const trend = [3120, 3480, 2960, 4110, 4620, 4380, 1980, 2240, 4890, 5240, 5010, 5680, 5320, 5420];
+const sentToday = trend[trend.length - 1];
+const meterPct = Math.min(100, (sentToday / capacity) * 100);
+
+// Same geometry and Catmull-Rom smoothing as the real Sparkline, so the
+// curve in the mock is the curve the app draws.
+const SPARK_W = 238, SPARK_H = 34, PAD_X = 6, PAD_TOP = 6, PAD_BOTTOM = 3;
+const baseY = SPARK_H - PAD_BOTTOM;
+const maxSent = Math.max(...trend, 1);
+const pts = trend.map((v, i) => ({
+  x: PAD_X + (i / (trend.length - 1)) * (SPARK_W - PAD_X * 2),
+  y: baseY - (v / maxSent) * (baseY - PAD_TOP),
+}));
+const clampY = (y: number) => Math.min(baseY, Math.max(PAD_TOP, y));
+let linePath = `M ${pts[0].x} ${pts[0].y}`;
+for (let i = 0; i < pts.length - 1; i++) {
+  const p0 = pts[i - 1] ?? pts[i];
+  const p1 = pts[i];
+  const p2 = pts[i + 1];
+  const p3 = pts[i + 2] ?? p2;
+  linePath += ` C ${p1.x + (p2.x - p0.x) / 6} ${clampY(p1.y + (p2.y - p0.y) / 6)},`
+    + ` ${p2.x - (p3.x - p1.x) / 6} ${clampY(p2.y - (p3.y - p1.y) / 6)},`
+    + ` ${p2.x} ${p2.y}`;
+}
+const areaPath = `${linePath} L ${pts[pts.length - 1].x} ${baseY} L ${pts[0].x} ${baseY} Z`;
+const endDot = pts[pts.length - 1];
+
+const sparkId = nextId('spark');
+
+// CreditsMeter: plan credits left this month, with the ring at that fraction.
+const creditsLeft = 3140;
+const creditsAllowance = 5000;
+const ringR = 5.5;
+const ringC = 2 * Math.PI * ringR;
+const ringOffset = ringC * (1 - creditsLeft / creditsAllowance);
+
+// PresenceAvatars: teammates online, the amber one is editing something.
+const online = [
+  { initials: 'JL', hot: false },
+  { initials: 'AK', hot: true },
+  { initials: 'RS', hot: false },
+];
+---
+<!-- SkyChrome - #f5f6f8 base + ambient cloud blurs -->
+<div class="relative overflow-hidden" style="background:#f5f6f8; contain: paint;" data-stage data-shell aria-hidden="true">
+  <span aria-hidden="true" class="absolute pointer-events-none" style="top:-80px; left:-60px; width:520px; height:240px; background:rgba(255,255,255,0.95); border-radius:50% 50% 18% 18%; filter:blur(60px); opacity:0.7;"></span>
+  <span aria-hidden="true" class="absolute pointer-events-none" style="top:10%; right:8%; width:380px; height:180px; background:rgba(255,255,255,0.85); border-radius:50% 50% 18% 18%; filter:blur(70px); opacity:0.55;"></span>
+  <span aria-hidden="true" class="absolute pointer-events-none" style="top:32%; left:26%; width:300px; height:140px; background:rgba(255,255,255,0.9); border-radius:50% 50% 22% 22%; filter:blur(70px); opacity:0.45;"></span>
+
+  <!-- ── AppHeader (h-14) ── -->
+  <div class={`relative z-10 h-14 items-center shrink-0 ${headerShow}`}>
+    <div class="w-64 px-5 h-full flex items-center gap-2.5 shrink-0">
+      <svg viewBox="0 0 746 764" class="w-7 text-slate-900" fill="currentColor"><path d="M222.805 644.772L186.274 108.881L704.5 451.158L484.5 451.158L245.5 196.158L444 463.5L222.805 644.772Z"/></svg>
+      <span class="font-extrabold text-[15.5px] tracking-tight text-slate-900" style="font-family: var(--font-display);">Warmbly</span>
+    </div>
+
+    <div class="flex items-center gap-1.5 min-w-0 flex-1 pr-4">
+      <div class="flex items-center gap-2 min-w-0">
+        <div class="w-full flex items-center gap-2 pl-1 pr-2 h-8 rounded-md text-left">
+          <span class="size-6 rounded-md ring-1 ring-slate-200 flex items-center justify-center shrink-0 overflow-hidden bg-slate-900"><span class="text-[10px] font-bold text-white leading-none tracking-tight">A</span></span>
+          <span class="text-[12.5px] font-medium text-slate-900 truncate flex-1 min-w-0">Acme</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-400 shrink-0"><path d="m6 9 6 6 6-6"/></svg>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 min-w-0">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-300 shrink-0"><polyline points="9 18 15 12 9 6"/></svg>
+        <span class={`text-[13px] truncate ${sub ? 'text-slate-500' : 'font-medium text-slate-900'}`}>{crumb}</span>
+      </div>
+      {sub && (
+        <div class="flex items-center gap-2 min-w-0">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-300 shrink-0"><polyline points="9 18 15 12 9 6"/></svg>
+          <span class="text-[13px] font-medium text-slate-900 truncate">{sub}</span>
+        </div>
+      )}
+    </div>
+
+    <div class="flex items-center gap-2 px-4 shrink-0">
+      <!-- PlanPill -->
+      <span class="inline-flex items-center gap-1.5 h-6 px-2 rounded border text-[11px] font-semibold uppercase tracking-[0.08em] bg-amber-50 text-amber-700 border-amber-100">
+        <span class="size-1.5 rounded-full bg-amber-500"></span>
+        Grow
+      </span>
+      <!-- CreditsMeter -->
+      <span class="flex items-center gap-1.5 px-2 h-7 rounded-md text-[11.5px] font-medium tabular-nums text-slate-500">
+        <svg viewBox="0 0 14 14" class="w-3.5 h-3.5 -rotate-90 shrink-0" aria-hidden="true">
+          <circle cx="7" cy="7" r={ringR} fill="none" stroke="currentColor" stroke-width="2" opacity="0.2" />
+          <circle cx="7" cy="7" r={ringR} fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray={ringC} stroke-dashoffset={ringOffset} />
+        </svg>
+        <span class="flex items-baseline">{creditsLeft.toLocaleString('en-US')}<span class="opacity-60 font-normal">/{creditsAllowance.toLocaleString('en-US')}</span></span>
+      </span>
+      <div class="h-4 w-px bg-slate-200/80"></div>
+      <!-- PresenceAvatars -->
+      <div class="flex items-center -space-x-1.5">
+        {online.map((m) => (
+          <span class={`relative flex size-6 shrink-0 overflow-hidden select-none items-center justify-center rounded-full ring-2 ring-white border text-[9.5px] font-semibold ${m.hot ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-emerald-300/70 bg-emerald-50 text-emerald-700'}`}>{m.initials}</span>
+        ))}
+      </div>
+      <!-- ConnectionIndicator -->
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+        <span class="text-xs text-[oklch(0.55_0.01_260)]">Live</span>
+      </div>
+      <!-- NotificationBell -->
+      <span class="relative w-7 h-7 rounded-md flex items-center justify-center text-slate-500">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></svg>
+        <span class="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] px-1 rounded-full bg-rose-500 text-white text-[9px] font-semibold flex items-center justify-center">3</span>
+      </span>
+      <!-- AssistantButton (AgentMark) -->
+      <span class="relative flex items-center justify-center size-7 rounded-md text-slate-500">
+        <svg viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4" aria-hidden="true"><path d="M9.5 4c.62 4.7 3.3 7.38 8 8-4.7.62-7.38 3.3-8 8-.62-4.7-3.3-7.38-8-8 4.7-.62 7.38-3.3 8-8Z"/><path d="M18.5 2c.31 2.35 1.65 3.69 4 4-2.35.31-3.69 1.65-4 4-.31-2.35-1.65-3.69-4-4 2.35-.31 3.69-1.65 4-4Z"/></svg>
+      </span>
+      <span class="flex items-center gap-2 px-2 h-7 rounded-md text-slate-500 text-[12.5px]">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <span>Search</span>
+        <kbd class="inline-flex h-4 items-center px-1 rounded border border-slate-300/70 bg-white/60 font-mono text-[10px] text-slate-500 ml-0.5">&#8984;K</kbd>
+      </span>
+    </div>
+  </div>
+
+  <!-- ── Body: sidebar + content panel ── -->
+  <div class={`relative z-10 flex ${bodyMin}`}>
+    <aside class={`absolute inset-y-0 left-0 w-64 overflow-hidden flex-col text-slate-900 ${shellShow}`}>
+      <!-- LivePanel: hero number, capacity meter, 14-day sparkline, chips -->
+      <div class="mx-2 mt-2 mb-3 rounded-md bg-white/80 border border-slate-200/70 pt-2 overflow-hidden">
+        <div class="px-2.5 flex items-baseline gap-1.5 whitespace-nowrap">
+          <span class="text-[19px] font-semibold text-slate-900 leading-none" data-live="sent" data-v={sentToday}>{sentToday.toLocaleString('en-US')}</span>
+          <span class="text-[10.5px] text-slate-500">of {capacity.toLocaleString('en-US')} sent today</span>
+        </div>
+
+        <div class="mt-1.5 px-2.5">
+          <div class="h-1 rounded-full bg-sky-100 overflow-hidden">
+            <div class="h-full rounded-full bg-sky-500 transition-[width] duration-700 ease-out" data-live="meter" data-cap={capacity} style={`width:${meterPct.toFixed(1)}%`}></div>
+          </div>
+        </div>
+
+        <svg viewBox={`0 0 ${SPARK_W} ${SPARK_H}`} preserveAspectRatio="none" aria-hidden="true" class="mt-1 block w-full h-[34px] text-sky-500">
+          <defs>
+            <linearGradient id={sparkId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="currentColor" stop-opacity="0.18" />
+              <stop offset="100%" stop-color="currentColor" stop-opacity="0.02" />
+            </linearGradient>
+          </defs>
+          <path d={areaPath} fill={`url(#${sparkId})`} />
+          <path d={linePath} fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+          <circle cx={endDot.x} cy={endDot.y} r="2.5" fill="currentColor" stroke="#ffffff" stroke-width="1.5" />
+        </svg>
+
+        <div class="border-t border-slate-100 px-2.5 py-1.5 flex items-center gap-3 text-[10.5px]">
+          <span class="inline-flex items-center gap-1 text-slate-500">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-400"><path d="m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7"/><rect x="2" y="4" width="20" height="16" rx="2"/></svg>
+            <span class="font-mono tabular-nums">{mailboxes}</span>
+          </span>
+          <span class="inline-flex items-center gap-1 text-emerald-600">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+            <span class="font-mono tabular-nums">{activeMailboxes}</span>
+          </span>
+          <span class="ml-auto inline-flex items-center gap-1 text-sky-600">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+            <span class="font-mono tabular-nums" data-live="unread">{unread}</span>
+          </span>
+        </div>
+      </div>
+
+      <nav class="flex-1 overflow-hidden pb-3">
+        {sidebarSections.map((s, si) => (
+          <div class={si === 0 ? '' : 'mt-4 pt-4 border-t border-slate-200/50'}>
+            {s.label && (
+              <div class="px-4 mb-1.5">
+                <span class="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">{s.label}</span>
+              </div>
+            )}
+            <div class="space-y-px">
+              {s.items.map((it) => {
+                const isActive = it.title === active;
+                const path = navIcons[it.title] ?? '<circle cx="12" cy="12" r="3"/>';
+                const st = it.stat;
+                return (
+                  <div class={`mx-2 flex items-center gap-2.5 px-2.5 h-7 rounded-md text-[12.5px] ${isActive ? 'bg-slate-200/70 text-slate-900 font-medium' : 'text-slate-600'}`}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width={isActive ? 2 : 1.6} class={isActive ? 'shrink-0 text-slate-700' : 'shrink-0 text-slate-400'} set:html={path}></svg>
+                    <span class="truncate flex-1 min-w-0">{it.title}</span>
+                    {it.badge && (
+                      <span class="text-[10px] font-medium bg-red-500 text-white rounded-full min-w-[16px] h-4 flex items-center justify-center px-1 tabular-nums" data-live="unread">{unread}</span>
+                    )}
+                    {st && st.active == null && (
+                      <span class="ml-auto inline-flex items-center gap-1.5 shrink-0">
+                        <span class={COUNT_LIGHT} data-live={st.live} data-v={st.total} data-fmt="compact">{compactN(st.total)}</span>
+                      </span>
+                    )}
+                    {st && st.active != null && (
+                      <span class="ml-auto inline-flex items-center gap-2.5 shrink-0">
+                        <span class={COUNT_LIGHT}>{compactN(st.total)}</span>
+                        <span class="h-3 w-px shrink-0 bg-slate-200" aria-hidden="true"></span>
+                        <span class={`inline-flex items-center gap-1 ${st.active > 0 ? st.activeClass : 'text-slate-300'}`}>
+                          {st.active > 0 && st.glyph === 'grid' && <span class="campaign-grid" aria-hidden="true"></span>}
+                          {st.active > 0 && st.glyph === 'flame' && (
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="flame-flicker" set:html={flameIcon}></svg>
+                          )}
+                          {st.active > 0 && st.glyph === 'ping-red' && (
+                            <span class="relative inline-flex shrink-0"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span><span class="absolute inset-0 rounded-full bg-red-500/40 animate-ping"></span></span>
+                          )}
+                          {st.active > 0 && st.glyph === 'ping-sky' && (
+                            <span class="relative inline-flex shrink-0"><span class="w-1.5 h-1.5 rounded-full bg-sky-500"></span><span class="absolute inset-0 rounded-full bg-sky-500/40 animate-ping"></span></span>
+                          )}
+                          <span class="text-[10.5px] font-semibold tabular-nums leading-none" data-live={st.liveActive} data-v={st.active} data-fmt="compact">{compactN(st.active)}</span>
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </nav>
+
+      <div class="border-t border-slate-200/60 py-1 shrink-0">
+        <div class="mx-2 flex items-center gap-2.5 px-2.5 h-7 rounded-md text-[12.5px] text-slate-600">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" class="shrink-0 text-slate-400"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span>Settings</span>
+        </div>
+      </div>
+      <!-- UserNav: initials from the email, the email under the name, no trailing icon. -->
+      <div class="border-t border-slate-200/60 shrink-0">
+        <div class="flex items-center gap-2.5 mx-3 my-2 px-1.5 py-1 rounded-md w-[calc(100%-1.5rem)]">
+          <div class="w-7 h-7 rounded-full bg-slate-900 flex items-center justify-center shrink-0 overflow-hidden">
+            <span class="text-[11px] font-medium text-white leading-none">MA</span>
+          </div>
+          <div class="flex-1 min-w-0 text-left">
+            <div class="text-[13px] text-slate-900 truncate">Maya Okonkwo</div>
+            <div class="text-[10.5px] text-slate-500 truncate">maya@acme.com</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- [&>*]:flex-1 stretches the screen mock to the shell height, so a
+         short one does not leave a white band under the sidebar. -->
+    <main class={`flex-1 min-w-0 bg-white overflow-hidden flex flex-col [&>*]:flex-1 ${mainEdge}`}>
+      <slot />
+    </main>
+  </div>
+</div>
+
+<script>
+  // The sidebar's realtime feel: counters tween to new values (the app's
+  // AnimatedNumber: 600ms, ease-out) as sends land, replies arrive and
+  // mailboxes come and go from warmup. One ticker per shell, paused off
+  // screen and under reduced motion.
+  const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function compactN(n: number): string {
+    const v = Math.round(n);
+    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+    if (v >= 10_000) return `${Math.round(v / 1000)}k`;
+    if (v >= 1_000) return `${(v / 1000).toFixed(1)}k`;
+    return String(v);
+  }
+  const fmt = (el: HTMLElement, v: number) =>
+    el.dataset.fmt === 'compact' ? compactN(v) : Math.round(v).toLocaleString('en-US');
+  // Close to framer's [0.16, 1, 0.3, 1].
+  const ease = (t: number) => 1 - Math.pow(1 - t, 4);
+
+  function tween(el: HTMLElement, to: number) {
+    const from = Number(el.dataset.v ?? el.textContent ?? 0);
+    el.dataset.v = String(to);
+    const t0 = performance.now();
+    const step = (now: number) => {
+      const u = Math.min(1, (now - t0) / 600);
+      el.textContent = fmt(el, from + (to - from) * ease(u));
+      if (u < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  function live(shell: HTMLElement) {
+    const q = (k: string) => [...shell.querySelectorAll<HTMLElement>(`[data-live="${k}"]`)];
+    const sentEls = q('sent');
+    const meter = shell.querySelector<HTMLElement>('[data-live="meter"]');
+    const cap = Number(meter?.dataset.cap ?? 6400);
+    if (!sentEls.length || !meter) return;
+
+    const state = {
+      sent: Number(sentEls[0].dataset.v),
+      period: Number(q('period')[0]?.dataset.v ?? 0),
+      unread: Number(q('unread')[0]?.textContent ?? 0),
+      warming: Number(q('warming')[0]?.dataset.v ?? 0),
+      sending: Number(q('sending')[0]?.dataset.v ?? 0),
+      deals: Number(q('deals')[0]?.dataset.v ?? 0),
+    };
+    const set = (k: string, v: number) => q(k).forEach((el) => tween(el, v));
+
+    const timers: number[] = [];
+    let running = false;
+    const every = (min: number, max: number, fn: () => void) => {
+      const tick = () => {
+        if (!running) return;
+        fn();
+        timers.push(window.setTimeout(tick, min + Math.random() * (max - min)));
+      };
+      timers.push(window.setTimeout(tick, min + Math.random() * (max - min)));
+    };
+
+    const start = () => {
+      if (running) return;
+      running = true;
+      // A batch of sends lands.
+      every(900, 2600, () => {
+        const n = 1 + Math.floor(Math.random() * 3);
+        state.sent = Math.min(cap, state.sent + n);
+        state.period += n;
+        set('sent', state.sent);
+        set('period', state.period);
+        meter.style.width = `${Math.min(100, (state.sent / cap) * 100).toFixed(1)}%`;
+      });
+      // A reply reaches the inbox.
+      every(6000, 11000, () => {
+        state.unread = Math.min(99, state.unread + 1);
+        set('unread', state.unread);
+      });
+      // A mailbox finishes or starts its warmup.
+      every(12000, 20000, () => {
+        state.warming = Math.max(90, Math.min(100, state.warming + (Math.random() < 0.5 ? -1 : 1)));
+        set('warming', state.warming);
+      });
+      // A campaign starts or completes.
+      every(18000, 30000, () => {
+        state.sending = state.sending === 7 ? 8 : 7;
+        set('sending', state.sending);
+      });
+      // A positive reply opens a deal.
+      every(25000, 40000, () => {
+        state.deals += 1;
+        set('deals', state.deals);
+      });
+    };
+    const stop = () => {
+      running = false;
+      for (const t of timers) clearTimeout(t);
+      timers.length = 0;
+    };
+
+    let onScreen = false;
+    const sync = () => (onScreen && !document.hidden ? start() : stop());
+    new IntersectionObserver((entries) => {
+      onScreen = entries.some((e) => e.isIntersecting);
+      sync();
+    }, { threshold: 0.1 }).observe(shell);
+    document.addEventListener('visibilitychange', sync);
+  }
+
+  if (!REDUCED) document.querySelectorAll<HTMLElement>('[data-shell]').forEach(live);
+  // The shell is a picture: nothing inside it is a real tab stop.
+  document.querySelectorAll<HTMLElement>('[data-shell] button, [data-shell] input, [data-shell] a, [data-shell] [tabindex]').forEach((el) => { el.tabIndex = -1; });
+</script>

@@ -8,10 +8,12 @@ import CampaignBuilderMock from '../components/CampaignBuilderMock.astro';
 import ScheduleMock from '../components/ScheduleMock.astro';
 import UniboxMock from '../components/UniboxMock.astro';
 import AnalyticsMock from '../components/AnalyticsMock.astro';
-import AIAssistantMock from '../components/AIAssistantMock.astro';
 import IntegrationsMock from '../components/IntegrationsMock.astro';
 import DeveloperMock from '../components/DeveloperMock.astro';
 import CRMMock from '../components/CRMMock.astro';
+import FormsMock from '../components/FormsMock.astro';
+import FormBuilderMock from '../components/FormBuilderMock.astro';
+import HostedFormMock from '../components/HostedFormMock.astro';
 import TemplatingShowcase from '../components/TemplatingShowcase.astro';
 import ChangelogShowcase from '../components/ChangelogShowcase.astro';
 import OpenSourceShowcase from '../components/OpenSourceShowcase.astro';
@@ -19,8 +21,6 @@ import AutomationsShowcase from '../components/AutomationsShowcase.astro';
 import MobileAppShowcase from '../components/MobileAppShowcase.astro';
 import BentoGrid from '../components/BentoGrid.astro';
 
-// "How we differ": warmup ramp bars for the guardrails card (10 -> 40, +1/day).
-const diffRamp = [25, 32, 40, 47, 55, 62, 70, 77, 85, 92, 100];
 
 // Mirrors web/src/lib/plans.ts — single source of truth.
 const plans = [
@@ -177,24 +177,22 @@ const softwareJsonLd = {
           Star on GitHub
         </a>
       </div>
-      <p class="mt-4 text-[12.5px] text-white/65">
-        Free forever when you self-host. When Warmbly Cloud launches, a hosted workspace starts free with 10 mailboxes and warmup, and linked instances get their warmup run for them.
-      </p>
+      <ul class="mt-5 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-[13.5px] md:text-[14px] text-white/85">
+        <li class="inline-flex items-center gap-1.5"><Icon name="check" size={14} class="shrink-0 text-emerald-300" />Free to self-host</li>
+        <li class="inline-flex items-center gap-1.5"><Icon name="check" size={14} class="shrink-0 text-emerald-300" />Free plan with 10 mailboxes</li>
+        <li class="inline-flex items-center gap-1.5"><Icon name="check" size={14} class="shrink-0 text-emerald-300" />No credit card</li>
+      </ul>
     </div>
 
-    <!-- Dashboard mock — full width inside container, overlaps down -->
+    <!-- Dashboard mock — full width inside container, overlaps down. -->
     <div class="container-page relative pt-6 md:pt-10 -mb-10 md:-mb-[200px] lg:-mb-[240px]">
-      <div
-        class="relative rounded-[14px] overflow-hidden ring-1 ring-black/[0.08]"
-        style="box-shadow: var(--shadow-xl);"
-      >
-        <!-- Desktop layout, scaled uniformly to fit its width: full-size on
-             desktop, a clean shrunk-down version on mobile (same scale-to-fit
-             the feature windows use), so it always shows the real desktop app. -->
-        <div class="hero-fit relative w-full overflow-hidden">
-          <div class="hero-screen w-[1360px] absolute top-0 left-0 origin-top-left md:static md:w-full">
-            <DashboardMock />
-          </div>
+      <!-- No mat and no chrome: the whole 1280x800 monitor at md+, uniformly
+           scaled, sitting straight on the sky. Below md the same desktop shot
+           bleeds off the right edge instead of shrinking to a thumbnail. -->
+      <div class="relative w-full rounded-[28px] ring-1 ring-white/20" style="box-shadow: var(--shadow-xl);">
+      <div class="hero-fit round-clip w-full">
+        <div class="hero-screen w-[1280px] absolute top-0 left-0 origin-top-left">
+          <DashboardMock />
         </div>
 
         <!-- Floating live notification on top of the mock -->
@@ -216,6 +214,7 @@ const softwareJsonLd = {
             </div>
           </div>
         </div>
+      </div>
       </div>
     </div>
   </section>
@@ -252,15 +251,19 @@ const softwareJsonLd = {
     <FeatureSection
       eyebrow="Campaigns"
       title="Sequences that branch on real behavior."
-      description="Build a multi-step flow on the canvas, then drag a connector from any step to fork on opens, clicks, and replies. It's the exact builder you'll use in the app."
+      description="Build the flow on a canvas and fork it on opens, clicks and replies."
       side="right"
       bg="sky"
       url="app.warmbly.com/campaigns/q1-sales/sequences"
+      nav="Campaigns"
+      crumb="Q1 sales"
+      anchor="tr"
+      zoom={1000}
       cursor="a"
       callouts={[
-        { label: 'Drag to branch', text: 'Pull a link from a step to add an “if opened / clicked / replied” path. No match just stops.' },
-        { label: 'A/B at every step', text: 'Weighted subject + body variants; the stronger one keeps sending.' },
-        { label: 'Threaded follow-ups', text: 'Follow-ups reply on the previous subject, so they land in the same conversation.' },
+        { label: 'Drag to branch', text: 'Pull a link from any step to add a path.' },
+        { label: 'A/B at every step', text: 'Weighted variants, the stronger one keeps sending.' },
+        { label: 'Threaded follow-ups', text: 'Replies land in the same conversation.' },
       ]}
       cta={{ text: 'Explore campaigns', href: '/campaigns/' }}
     >
@@ -270,15 +273,19 @@ const softwareJsonLd = {
     <FeatureSection
       eyebrow="Scheduling"
       title="Send only inside their working hours."
-      description="A calendar-style editor with full per-day control. Draw a sending window on any weekday, drag to move it, grab an edge to resize. Everything snaps to 30 minutes."
+      description="Draw a sending window on any weekday. Drag to move it, grab an edge to resize."
       side="left"
       bg="light"
       url="app.warmbly.com/campaigns/q1-sales/schedule"
+      nav="Campaigns"
+      crumb="Schedule"
+      anchor="tl"
+      zoom={1120}
       cursor="b"
       callouts={[
-        { label: 'Per-day windows', text: 'Independent windows for each day: mornings only, or split shifts. Several per day is fine.' },
-        { label: 'Timezone-aware', text: 'Sends follow the chosen timezone; worker IPs spread the volume naturally.' },
-        { label: 'One-click presets', text: 'Mon–Fri 9–5 in a tap, then fine-tune by dragging the blocks.' },
+        { label: 'Per-day windows', text: 'Mornings only, split shifts, several a day.' },
+        { label: 'Timezone-aware', text: 'Sends follow the timezone you pick.' },
+        { label: 'One-click presets', text: 'Mon to Fri, 9 to 5, in a tap.' },
       ]}
       cta={{ text: 'See sending controls', href: '/sending/' }}
     >
@@ -288,15 +295,18 @@ const softwareJsonLd = {
     <FeatureSection
       eyebrow="Unified inbox"
       title="Every reply, triaged the moment it lands."
-      description="Replies from every connected mailbox stream into one searchable queue. The classifier tags each one on arrival so you act on the labels that matter."
+      description="Replies from every mailbox stream into one queue, labeled on arrival."
       side="right"
       bg="navy"
       url="app.warmbly.com/unibox"
+      nav="Inbox"
+      anchor="br"
+      zoom={1000}
       cursor="c"
       callouts={[
-        { label: 'One queue, every mailbox', text: 'Scope by inbox, tag, or status: unread, awaiting reply, snoozed, scheduled.' },
-        { label: 'Classified on arrival', text: 'Positive, out-of-office, unsubscribe and bounce are labeled before you open them.' },
-        { label: 'Reply in place', text: 'Snooze, schedule, and send from the same pane, keyboard-first.' },
+        { label: 'One queue', text: 'Scope by inbox, tag or status.' },
+        { label: 'Classified on arrival', text: 'Positive, out of office, unsubscribe, bounce.' },
+        { label: 'Reply in place', text: 'Snooze, schedule and send from the same pane.' },
       ]}
       cta={{ text: 'Tour the inbox', href: '/inbox/' }}
     >
@@ -306,51 +316,71 @@ const softwareJsonLd = {
     <FeatureSection
       eyebrow="Analytics"
       title="Proof of what actually landed."
-      description="Deliverability across the whole workspace: sent, opens, clicks, replies and bounces, with per-campaign breakdowns and account health on one screen."
+      description="Sent, opens, clicks, replies and bounces, with account health on one screen."
       side="left"
       bg="wallpaper"
       url="app.warmbly.com/analytics"
+      nav="Analytics"
+      anchor="tl"
+      zoom={1280}
+      wide
+      slides={[{ url: 'app.warmbly.com/analytics?share=1' }]}
       cursor="d"
       callouts={[
-        { label: 'Placement, not vanity', text: 'Track the metrics that move reputation, over 7, 30 or 90 days.' },
-        { label: 'Best performers, surfaced', text: 'Top campaigns and account health rank themselves as sends roll in.' },
-        { label: 'Shareable report card', text: 'Export a branded image of any range in a single tap.' },
+        { label: 'Placement, not vanity', text: 'The metrics that move reputation, over 7, 30 or 90 days.' },
+        { label: 'Best performers', text: 'Top campaigns rank themselves as sends roll in.' },
+        { label: 'Shareable report', text: 'Export a branded image of any range.' },
       ]}
       cta={{ text: 'View analytics', href: '/analytics/' }}
     >
-      <AnalyticsMock />
+      <AnalyticsMock demo="off" />
+      <AnalyticsMock demo="open" slot="slide2" />
     </FeatureSection>
 
     <FeatureSection
-      eyebrow="AI assistant"
-      title="Draft the whole email from one line."
-      description="Describe what the email should do and the assistant writes it in your voice, merge fields and tone already in place. Edit inline, regenerate, or keep what works."
+      eyebrow="AI"
+      title="AI that writes the email and runs the steps."
+      description="Ask at the caret and the draft lands where you type. Put a Switch or an AI step in the flow and the model decides each contact's path."
       side="right"
       bg="sky"
       url="app.warmbly.com/campaigns/q1-sales/steps"
+      nav="Campaigns"
+      crumb="Steps"
+      anchor="br"
+      zoom={1020}
+      slides={[
+        { url: 'app.warmbly.com/campaigns/q1-sales/steps', crumb: 'Steps' },
+        { url: 'app.warmbly.com/campaigns/q1-sales/steps', crumb: 'Steps' },
+      ]}
       cursor="a"
       callouts={[
-        { label: 'One-line briefs', text: 'Tell it the goal; get back a ready-to-send draft with variables filled in.' },
-        { label: 'Tone presets', text: 'Friendly, professional, concise, persuasive. Switch and regenerate in a click.' },
-        { label: 'Credits, no surprises', text: 'Each draft uses one writing credit, shown before you generate.' },
+        { label: 'Where you type', text: 'A sparkle on the line, or ⌘J. Undo or run it again.' },
+        { label: 'Switch on AI', text: 'A prompt reads each reply and picks a case, every case its own path.' },
+        { label: 'AI step', text: 'An agent that tags, tasks and unsubscribes. Only the actions you allow.' },
       ]}
       cta={{ text: 'Try the assistant', href: '/campaigns/' }}
     >
-      <AIAssistantMock />
+      <CampaignBuilderMock demo="ai" />
+      <CampaignBuilderMock demo="switch" slot="slide2" />
+      <CampaignBuilderMock demo="agent" slot="slide3" />
     </FeatureSection>
 
     <FeatureSection
       eyebrow="Integrations"
       title="Plug into the stack you already run."
-      description="Connect Gmail, Microsoft 365, your CRM, Slack and Zapier over OAuth. Tokens are encrypted at rest and every webhook is HMAC-signed."
+      description="Gmail, Microsoft 365, your CRM, Slack and Zapier, connected over OAuth."
       side="left"
       bg="light"
       url="app.warmbly.com/integrations"
+      nav="Integrations"
+      anchor="tl"
+      zoom={1280}
+      wide
       cursor="b"
       callouts={[
-        { label: 'OAuth in two clicks', text: 'Authorize a provider and Warmbly handles the rest. Revoke anytime.' },
-        { label: 'Signed webhooks', text: 'Every event is HMAC-signed and HTTPS by default, with SSRF protection.' },
-        { label: 'Encrypted at rest', text: 'Secrets are sealed with your data key, never stored in plaintext.' },
+        { label: 'OAuth in two clicks', text: 'Authorize once, revoke any time.' },
+        { label: 'Signed webhooks', text: 'HMAC-signed and HTTPS by default.' },
+        { label: 'Encrypted at rest', text: 'Secrets sealed with your data key.' },
       ]}
       cta={{ text: 'Browse integrations', href: '/integrations/' }}
     >
@@ -373,15 +403,19 @@ const softwareJsonLd = {
     <FeatureSection
       eyebrow="Developers"
       title="An API you can build a product on."
-      description="Everything in the dashboard is a REST endpoint: scoped API keys, idempotent writes, opaque cursors, and HMAC-signed webhooks."
+      description="Everything in the dashboard is a REST endpoint."
       side="right"
       bg="navy"
       url="app.warmbly.com/api-keys"
+      nav="API Keys"
+      anchor="tl"
+      zoom={1280}
+      wide
       cursor="c"
       callouts={[
-        { label: 'Scoped keys', text: 'Mint read, write, or send-only keys per environment and rotate without downtime.' },
-        { label: 'Idempotent by default', text: 'Send an Idempotency-Key and retries are always safe.' },
-        { label: 'Webhooks that verify', text: 'Subscribe to events like contact.replied with signed payloads.' },
+        { label: 'Scoped keys', text: 'Read, write or send-only, per environment.' },
+        { label: 'Idempotent by default', text: 'Send an Idempotency-Key and retries are safe.' },
+        { label: 'Webhooks that verify', text: 'Signed payloads for every event.' },
       ]}
       cta={{ text: 'Read the API docs', href: '/developers/' }}
     >
@@ -391,151 +425,56 @@ const softwareJsonLd = {
     <FeatureSection
       eyebrow="CRM"
       title="From positive reply to closed won."
-      description="When a reply lands positive, Warmbly opens the deal and pauses the sequence on its own. From there you get one timeline that threads every send, open, reply, and stage change back to the exact sequence step that started it."
+      description="A positive reply opens the deal and pauses the sequence on its own."
       side="left"
       bg="wallpaper"
       url="app.warmbly.com/crm/deals"
+      nav="Deals"
+      anchor="tr"
+      zoom={1280}
+      wide
       cursor="d"
       callouts={[
-        { label: 'Born from the reply', text: 'A reply classified positive in the unibox opens the deal and pauses the sequence, so nothing keeps sending to someone who already said yes.' },
-        { label: 'One timeline, traced to the send', text: 'Every send, open, reply, and stage change lands on the deal, each tagged with the sequence step and mailbox it came from.' },
-        { label: 'Pipeline and forecast in one view', text: 'Move deals across your stages on the board while value, weighted total, and probability stay current on the record.' },
-        { label: 'Tasks with a type and an owner', text: 'A positive reply spins up a typed follow-up task on the deal, assigned to a teammate with a due date, so the next step never slips.' },
+        { label: 'Born from the reply', text: 'Nothing keeps sending to someone who said yes.' },
+        { label: 'Board and value', text: 'Stages with their open value at a glance.' },
+        { label: 'Edit in place', text: 'Stage, value and close date in one dialog.' },
       ]}
       cta={{ text: 'See the CRM', href: '/crm/' }}
     >
       <CRMMock />
     </FeatureSection>
 
+    <FeatureSection
+      eyebrow="Forms"
+      title="Lead capture that lands in the same pipeline."
+      description="Hosted forms whose submissions become contacts, attributed to the send that brought them."
+      side="right"
+      bg="sky"
+      url="app.warmbly.com/forms"
+      nav="Forms"
+      anchor="tl"
+      zoom={1100}
+      slides={[
+        { url: 'app.warmbly.com/forms/book-a-demo', crumb: 'Book a demo' },
+        { url: 'forms.northwind.dev/f/book-a-demo', shell: false },
+      ]}
+      cursor="a"
+      callouts={[
+        { label: 'Themes and layouts', text: 'Card, wide or split, with a brand cover.' },
+        { label: 'Personalized links', text: 'Prefilled per contact, no second email ask.' },
+        { label: 'Your own domain', text: 'Serve every form from a subdomain you own.' },
+      ]}
+      cta={{ text: 'Read the forms guide', href: 'https://docs.warmbly.com/guides/forms/' }}
+    >
+      <FormsMock />
+      <FormBuilderMock slot="slide2" />
+      <HostedFormMock slot="slide3" />
+    </FeatureSection>
+
     <!-- Changelog, open-source CTA, and Go templating sections after the feature showcase -->
     <ChangelogShowcase />
     <OpenSourceShowcase />
     <TemplatingShowcase />
-
-    <!-- ============================================================
-         COMPARE — serious data table
-    ============================================================ -->
-    <section class="container-page py-20 md:py-28">
-      <div class="grid lg:grid-cols-12 gap-12 lg:gap-16 mb-10">
-        <div class="lg:col-span-5">
-          <div class="text-[11px] uppercase tracking-[0.18em] text-muted-foreground font-mono mb-3">How we differ</div>
-          <h2 class="text-[34px] md:text-[44px] font-semibold tracking-[-0.025em] leading-[1.08] text-heading">
-            Defaults that protect reputation.
-          </h2>
-        </div>
-        <div class="lg:col-span-7">
-          <p class="text-[15.5px] text-foreground/75 leading-relaxed">
-            Cold-email platforms typically optimise for volume. Warmbly optimises for sender reputation. The numbers below ship as defaults and the system enforces them.
-          </p>
-        </div>
-      </div>
-
-      <!-- Six guardrails, drawn instead of written, joined into one panel the
-           way pricing is: shared 1px dividers, one ring, no gaps. -->
-      <div class="diff-panel mt-4 rounded-[14px] bg-white ring-1 ring-[color:var(--border)] overflow-hidden shadow-[0_18px_50px_-28px_rgba(15,23,42,0.32)]">
-        <div class="grid sm:grid-cols-2 lg:grid-cols-3">
-
-        <!-- 1 · Daily cap: our fill stops at the cap; the rest of the track
-             is where others go. -->
-        <div class="p-5 md:p-6 border-[color:var(--border)]">
-          <div class="h-[88px] flex flex-col justify-center">
-            <div class="relative h-2 rounded-full bg-slate-200/70">
-              <span class="bar-fill absolute inset-y-0 left-0 rounded-full bg-[color:var(--brand)]" data-target="25%"></span>
-              <span class="absolute left-[25%] top-1/2 -translate-y-1/2 w-[3px] h-4 rounded-full bg-[color:var(--sky-6)]"></span>
-            </div>
-            <div class="relative mt-2 h-4 text-[10px] font-mono">
-              <span class="absolute left-[25%] -translate-x-1/2 text-[color:var(--brand-strong)] font-semibold whitespace-nowrap">50, our cap</span>
-              <span class="absolute right-0 text-muted-foreground/60">200+, elsewhere</span>
-            </div>
-          </div>
-          <div class="mt-3 text-[15px] font-semibold tracking-[-0.01em] text-heading">50 a day per mailbox</div>
-          <p class="mt-1 text-[12.5px] text-foreground/65 leading-snug">The default cap. Raising it takes proof, not a request.</p>
-        </div>
-
-        <!-- 2 · Spacing: even dots vs a burst. -->
-        <div class="p-5 md:p-6 border-[color:var(--border)] border-t sm:border-t-0 sm:border-l">
-          <div class="h-[88px] flex flex-col justify-center gap-4">
-            <div>
-              <div class="flex items-center justify-between">
-                {[0, 1, 2, 3, 4, 5].map(() => <span class="w-2 h-2 rounded-full bg-[color:var(--brand)]"></span>)}
-              </div>
-              <div class="mt-1.5 text-[10px] font-mono text-[color:var(--brand-strong)] font-semibold">10 minutes apart, always</div>
-            </div>
-            <div>
-              <div class="flex items-center gap-[3px]">
-                {[0, 1, 2, 3, 4, 5].map(() => <span class="w-2 h-2 rounded-full bg-slate-300"></span>)}
-              </div>
-              <div class="mt-1.5 text-[10px] font-mono text-muted-foreground/60">bursts, elsewhere</div>
-            </div>
-          </div>
-          <div class="mt-3 text-[15px] font-semibold tracking-[-0.01em] text-heading">Sends are spaced out</div>
-          <p class="mt-1 text-[12.5px] text-foreground/65 leading-snug">600 seconds minimum between two emails from one mailbox.</p>
-        </div>
-
-        <!-- 3 · Quarantine line: one axis, two markers. The whole argument. -->
-        <div class="p-5 md:p-6 border-[color:var(--border)] border-t lg:border-t-0 lg:border-l">
-          <div class="h-[88px] flex flex-col justify-center">
-            <div class="relative">
-              <div class="h-2 rounded-full" style="background: linear-gradient(90deg, #34d399 0%, #fbbf24 35%, #f43f5e 85%);"></div>
-              <span class="absolute left-[10%] -translate-x-1/2 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-white ring-[2.5px] ring-[color:var(--sky-6)]"></span>
-              <span class="absolute left-[80%] -translate-x-1/2 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-white ring-[2.5px] ring-slate-300"></span>
-            </div>
-            <div class="relative mt-2.5 h-8 text-[10px] font-mono">
-              <span class="absolute left-[10%] -translate-x-1/2 text-center text-[color:var(--brand-strong)] font-semibold leading-tight">10%<br />we quarantine</span>
-              <span class="absolute left-[80%] -translate-x-1/2 text-center text-muted-foreground/60 leading-tight">80%<br />others react</span>
-            </div>
-          </div>
-          <div class="mt-3 text-[15px] font-semibold tracking-[-0.01em] text-heading">Acts before it hurts</div>
-          <p class="mt-1 text-[12.5px] text-foreground/65 leading-snug">A mailbox is pulled at 10% spam placement, not 80%.</p>
-        </div>
-
-        <!-- 4 · Warmup ramp: the staircase. -->
-        <div class="p-5 md:p-6 border-[color:var(--border)] border-t sm:border-l lg:border-l-0">
-          <div class="h-[88px] flex flex-col justify-end">
-            <div class="flex items-end gap-[4px] h-[60px]">
-              {diffRamp.map((v) => (
-                <span class="flex-1 rounded-t-[3px] bg-gradient-to-t from-sky-500/90 to-sky-300/90" style={`height:${v}%`}></span>
-              ))}
-            </div>
-            <div class="mt-1.5 flex justify-between text-[10px] font-mono">
-              <span class="text-[color:var(--brand-strong)] font-semibold">10 / day</span>
-              <span class="text-[color:var(--brand-strong)] font-semibold">40 / day</span>
-            </div>
-          </div>
-          <div class="mt-3 text-[15px] font-semibold tracking-[-0.01em] text-heading">Warmup climbs by one</div>
-          <p class="mt-1 text-[12.5px] text-foreground/65 leading-snug">One more email per day. Elsewhere: full volume on day one.</p>
-        </div>
-
-        <!-- 5 · Auth checks: three green pills. -->
-        <div class="p-5 md:p-6 border-[color:var(--border)] border-t lg:border-l">
-          <div class="h-[88px] flex flex-col justify-center gap-2">
-            <div class="flex flex-wrap gap-1.5">
-              {['SPF', 'DKIM', 'DMARC'].map((c) => (
-                <span class="inline-flex items-center gap-1 h-6 px-2 rounded-full text-[10.5px] font-mono font-semibold bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">
-                  <Icon name="check" size={10} strokeWidth={2.5} />{c}
-                </span>
-              ))}
-            </div>
-            <div class="text-[10px] font-mono text-muted-foreground/60">elsewhere: paste DNS records, hope</div>
-          </div>
-          <div class="mt-3 text-[15px] font-semibold tracking-[-0.01em] text-heading">Verified on connect</div>
-          <p class="mt-1 text-[12.5px] text-foreground/65 leading-snug">A mailbox does not send until its auth records check out.</p>
-        </div>
-
-        <!-- 6 · Open source: the actual constant. -->
-        <div class="p-5 md:p-6 border-[color:var(--border)] border-t sm:border-l">
-          <div class="h-[88px] flex items-center">
-            <div class="w-full rounded-[10px] bg-[#0c1224] ring-1 ring-white/10 px-3.5 py-3 font-mono text-[11.5px] leading-[1.8]">
-              <div class="text-white/35">// constants.go</div>
-              <div><span class="text-sky-300">CampaignLimitDefault</span><span class="text-white/60"> = </span><span class="text-emerald-300">50</span></div>
-            </div>
-          </div>
-          <div class="mt-3 text-[15px] font-semibold tracking-[-0.01em] text-heading">Read the defaults</div>
-          <p class="mt-1 text-[12.5px] text-foreground/65 leading-snug">Every number on this page is open source. Elsewhere: trust us.</p>
-        </div>
-        </div>
-      </div>
-    </section>
 
 
     <!-- ============================================================
@@ -875,7 +814,6 @@ const softwareJsonLd = {
     // The panel reveals as one surface; staggering the joined columns would
     // pop them in one by one inside their own shared border.
     tag('.pricing-grid',    0);
-    tag('.diff-panel',      0);
     tag('.step-card',       0.10);
     tag('.feature-card',    0.10);
     tag('.metric-cell',     0.06);
@@ -1009,28 +947,23 @@ const softwareJsonLd = {
   </script>
 
   <script>
-    // Hero dashboard mock: render the full desktop layout, uniformly scaled to
-    // fit its container at every width (full-size on desktop, a clean shrunk
-    // miniature on mobile) - the same scale-to-fit the feature windows use.
-    // Below md (768px) the desktop mock is shown at a readable scale and bleeds
-    // off the right edge - the way Linear / Stripe / Vercel show a desktop app
-    // shot on a phone, instead of shrinking the whole thing to a microscopic
-    // full-width thumbnail. HERO_MOBILE_VISIBLE = how many of the mock's design
-    // px fill the phone width; the rest crops off the right. At md+ it falls
-    // back to the fluid desktop layout (CSS: md:static md:w-full), so desktop
-    // stays full-size and overlaps the section below.
+    // Hero dashboard mock: the 1280x800 shell, uniformly scaled to the plinth.
+    // At md+ the whole monitor is shown, so the hero viewport inherits its
+    // 16:10. Below md that same desktop shot is scaled up and bleeds off the
+    // right edge - the way Linear / Stripe / Vercel show a desktop app on a
+    // phone, instead of shrinking it to a microscopic thumbnail.
+    // HERO_MOBILE_VISIBLE = how many design px fill the phone width.
+    const HERO_MONITOR = 1280;
     const HERO_MOBILE_VISIBLE = 720;
     function fitHero(screen: HTMLElement) {
       const box = screen.parentElement as HTMLElement | null;
       if (!box) return;
-      if (window.innerWidth >= 768) {
-        screen.style.transform = '';
-        box.style.height = '';
-        return;
-      }
-      const s = box.clientWidth / HERO_MOBILE_VISIBLE;
+      const visible = window.innerWidth >= 768 ? HERO_MONITOR : HERO_MOBILE_VISIBLE;
+      const s = box.clientWidth / visible;
       screen.style.transform = `scale(${s})`;
-      box.style.height = `${screen.offsetHeight * s}px`;
+      // The shell is 1280x900; the hero shows it as a 16:9 monitor and lets
+      // the bottom rows run off, so the visual does not tower over the copy.
+      box.style.height = `${Math.min(screen.offsetHeight * s, box.clientWidth * (9 / 16))}px`;
     }
     function runHero() {
       document.querySelectorAll<HTMLElement>('.hero-screen').forEach((s) => fitHero(s));

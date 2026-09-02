@@ -1,278 +1,141 @@
 ---
 /**
- * Pixel-faithful mock of the Warmbly /app/emails screen.
+ * The hero screen: the real /app/emails page inside the full app shell.
  *
- * Maps 1:1 to the real shell:
- *   - web/src/components/layout/AppShell.tsx - the outer frame
- *   - web/src/components/layout/SkyChrome.tsx - the off-white #f5f6f8 chrome
- *   - web/src/components/layout/AppHeader.tsx - top breadcrumb bar (h-14)
- *   - web/src/components/layout/AppNav.tsx - the w-64 sidebar (LivePanel + sections)
- *   - web/src/app/app/emails/page.tsx - the content panel (PageTopbar/StatStrip/SectionBar/table)
- *
- * The white content panel meets the bottom + right edges of the frame
- * and has only its inner top-left corner rounded (rounded-tl-2xl) plus
- * a hairline border on the top + left edges.
+ * Chrome (header, sidebar, LivePanel) lives in AppShellMock so the hero and
+ * every feature window show the same dashboard. This file is only the
+ * content panel — web/src/app/app/emails/page.tsx.
  */
-const rows = [
-  { email: 'founder@acme.co',     sent: 37, warm: 22, status: 'healthy' },
-  { email: 'hello@acme.co',       sent: 24, warm: 18, status: 'healthy' },
-  { email: 'team@northwind.dev',  sent: 46, warm: 34, status: 'healthy' },
-  { email: 'ml@helio.gen',        sent: 18, warm: 12, status: 'warming' },
+import AppShellMock from './AppShellMock.astro';
+
+// Warmup: current/target while warming (orange, with the dot-grid), else the
+// state word. Health: healthTone() gives "Healthy N", "At risk N" (pulse) or
+// "Issue N" (pulse).
+type Row = { email: string; warm?: [number, number]; warmState?: 'Off' | 'Paused'; health: 'healthy' | 'risk' | 'issue'; score: number };
+const rows: Row[] = [
+  { email: 'founder@acme.co',     warm: [22, 40], health: 'healthy', score: 96 },
+  { email: 'hello@acme.co',       warm: [18, 40], health: 'healthy', score: 94 },
+  { email: 'team@northwind.dev',  warm: [34, 40], health: 'healthy', score: 97 },
+  { email: 'ml@helio.gen',        warm: [12, 40], health: 'risk',    score: 71 },
+  { email: 'sales@brightco.io',   warm: [27, 40], health: 'healthy', score: 92 },
+  { email: 'maya@sunriselabs.io', warm: [25, 40], health: 'healthy', score: 95 },
+  { email: 'ops@coastline.io',    warm: [10, 40], health: 'healthy', score: 88 },
+  { email: 'growth@acme.co',      warm: [31, 40], health: 'healthy', score: 96 },
+  { email: 'jonas@helio.gen',     warmState: 'Off', health: 'healthy', score: 90 },
+  { email: 'partners@acme.co',    warm: [14, 40], health: 'healthy', score: 93 },
+  { email: 'ana@brightco.io',     warm: [26, 40], health: 'healthy', score: 95 },
+  { email: 'leo@northwind.dev',   warm: [33, 40], health: 'healthy', score: 98 },
+  { email: 'sofia@coastline.io',  warmState: 'Paused', health: 'healthy', score: 91 },
+  { email: 'dev@sunriselabs.io',  warm: [8, 40],  health: 'issue',   score: 42 },
+  { email: 'hello@brightco.io',   warm: [29, 40], health: 'healthy', score: 94 },
 ];
 
-const statusStyle = (s: string) => {
-  if (s === 'healthy') return { dot: 'bg-emerald-500', text: 'text-emerald-600' };
-  if (s === 'warming') return { dot: 'bg-amber-500',   text: 'text-amber-600'   };
-  return { dot: 'bg-red-500', text: 'text-red-500' };
+const healthTone = (h: Row['health'], score: number) => {
+  if (h === 'healthy') return { dot: 'bg-emerald-500', text: 'text-emerald-600', label: `Healthy ${score}`, pulse: false };
+  if (h === 'risk') return { dot: 'bg-amber-500', text: 'text-amber-600', label: `At risk ${score}`, pulse: true };
+  return { dot: 'bg-rose-500', text: 'text-rose-600', label: `Issue ${score}`, pulse: true };
 };
-
-const navIcons: Record<string, string> = {
-  Inbox:       '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m22 7-10 5L2 7"/>',
-  Accounts:    '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
-  Campaigns:   '<polygon points="3 11 22 2 13 21 11 13 3 11"/>',
-  Contacts:    '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>',
-  Analytics:   '<line x1="18" x2="18" y1="20" y2="10"/><line x1="12" x2="12" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="14"/>',
-  Pipelines:   '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
-  Deals:       '<circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>',
-  Tasks:       '<rect x="3" y="5" width="6" height="6" rx="1"/><path d="m9 8 11 0"/><rect x="3" y="13" width="6" height="6" rx="1"/><path d="m9 16 11 0"/>',
-  Templates:   '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
-  'API Keys':  '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>',
-  'Audit log': '<line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/>',
-};
-
-const sidebarSections: { label: string; items: { title: string; active?: boolean; badge?: string }[] }[] = [
-  { label: '', items: [
-    { title: 'Inbox', badge: '12' },
-  ]},
-  { label: 'Email', items: [
-    { title: 'Accounts', active: true },
-    { title: 'Campaigns' },
-    { title: 'Contacts' },
-    { title: 'Analytics' },
-  ]},
-  { label: 'CRM', items: [
-    { title: 'Pipelines' },
-    { title: 'Deals' },
-  ]},
-];
 ---
-<!-- Outer SkyChrome - #f5f6f8 base + cloud blurs -->
-<div class="relative overflow-hidden text-slate-900" style="background:#f5f6f8;">
-  <!-- cloud blurs (subtle, ambient) -->
-  <span aria-hidden="true" class="absolute pointer-events-none" style="top:-80px; left:-60px; width:520px; height:240px; background:rgba(255,255,255,0.95); border-radius:50% 50% 18% 18%; filter:blur(60px); opacity:0.7;"></span>
-  <span aria-hidden="true" class="absolute pointer-events-none" style="top:10%; right:8%; width:380px; height:180px; background:rgba(255,255,255,0.85); border-radius:50% 50% 18% 18%; filter:blur(70px); opacity:0.55;"></span>
-  <span aria-hidden="true" class="absolute pointer-events-none" style="top:32%; left:26%; width:300px; height:140px; background:rgba(255,255,255,0.9); border-radius:50% 50% 22% 22%; filter:blur(70px); opacity:0.45;"></span>
-
-  <!-- ── AppHeader (h-14, sits over SkyChrome) ── -->
-  <div class="relative z-10 h-14 flex items-center shrink-0">
-    <!-- Logo zone - sidebar-width -->
-    <div class="w-64 px-5 h-full flex items-center gap-2.5 shrink-0">
-      <svg viewBox="0 0 746 764" class="w-7 h-7 text-slate-900" fill="currentColor"><path d="M222.805 644.772L186.274 108.881L704.5 451.158L484.5 451.158L245.5 196.158L444 463.5L222.805 644.772Z"/></svg>
-      <span class="font-extrabold text-[15.5px] tracking-tight text-slate-900">Warmbly</span>
-    </div>
-
-    <!-- Breadcrumb -->
-    <div class="flex items-center gap-1.5 min-w-0 flex-1 pr-4">
-      <!-- OrgSwitcher -->
-      <div class="flex items-center gap-2 px-1.5 h-7 rounded-md">
-        <span class="size-[18px] rounded bg-slate-900 flex items-center justify-center shrink-0 text-white text-[10px] font-bold">A</span>
-        <span class="text-[13px] text-slate-700 font-medium truncate">Acme</span>
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-400"><polyline points="6 9 12 15 18 9"/></svg>
-      </div>
-      <!-- > section -->
-      <div class="flex items-center gap-2 min-w-0">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-300 shrink-0"><polyline points="9 18 15 12 9 6"/></svg>
-        <span class="text-[13px] font-medium text-slate-900 truncate">Accounts</span>
+<AppShellMock crumb="Accounts" chrome="always">
+  <!-- One root, so the shell stretches this column and not each band. -->
+  <div class="flex flex-col">
+    <!-- PageTopbar -->
+    <div class="min-h-12 md:h-12 px-5 py-1.5 md:py-0 border-b border-slate-200 flex flex-wrap md:flex-nowrap items-center gap-3 gap-y-1.5 shrink-0 bg-white sticky top-0 z-10">
+      <span class="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">Accounts</span>
+      <div class="h-4 w-px bg-slate-200"></div>
+      <span class="text-[12.5px] text-slate-600 truncate">128 mailboxes</span>
+      <div class="ml-auto flex items-center gap-1.5 min-w-0 flex-wrap justify-end md:flex-nowrap">
+        <button class="h-7 px-2.5 rounded-md inline-flex items-center gap-1.5 text-[12px] font-medium transition-colors bg-sky-600 text-white">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+          Add account
+        </button>
       </div>
     </div>
 
-    <!-- Right actions: PlanPill + divider + ⌘K -->
-    <div class="flex items-center gap-2 px-4 shrink-0">
-      <span class="inline-flex items-center h-6 px-2 rounded border text-[10.5px] font-semibold uppercase tracking-[0.06em] bg-indigo-50 text-indigo-700 border-indigo-100">
-        <span class="w-1.5 h-1.5 rounded-full bg-indigo-500 mr-1.5"></span>
-        Growth
-      </span>
-      <div class="h-4 w-px bg-slate-200/80"></div>
-      <div class="inline-flex items-center gap-1.5 text-slate-500">
-        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-        <span class="text-[11px] font-mono">28ms</span>
-      </div>
-      <button class="flex items-center gap-2 px-2 h-7 rounded-md text-slate-500 text-[12.5px]">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-        <span>Search</span>
-        <kbd class="inline-flex h-4 items-center px-1 rounded border border-slate-300/70 bg-white/60 font-mono text-[10px] text-slate-500 ml-0.5">⌘K</kbd>
-      </button>
+    <!-- StatStrip -->
+    <div class="grid border-b border-slate-200 shrink-0 bg-white grid-cols-2 md:grid-cols-4">
+      {[
+        { label: 'Total',           value: '128', sub: 'connected',     accent: false, last: false },
+        { label: 'Healthy',         value: '98',  sub: 'sending now',   accent: true,  last: false },
+        { label: 'Warming',         value: '21',  sub: 'ramping up',    accent: false, last: false },
+        { label: 'Needs attention', value: '9',   sub: 'paused or failing', accent: false, last: true  },
+      ].map((s) => (
+        <div class={`group px-5 py-4 transition-colors ${!s.last ? 'border-r border-slate-200' : ''}`}>
+          <div class="flex items-center gap-2">
+            <span class="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">{s.label}</span>
+            {s.accent && <span class="size-1.5 rounded-full bg-sky-500 animate-pulse"></span>}
+          </div>
+          <div class="text-[26px] text-slate-900 font-light leading-none mt-2 tabular-nums">{s.value}</div>
+          <div class="text-[10px] text-slate-400 mt-1.5 font-mono truncate">{s.sub}</div>
+        </div>
+      ))}
     </div>
-  </div>
 
-  <!-- ── Body: sidebar + white content panel ── -->
-  <div class="relative z-10 flex min-h-[380px]">
-    <!-- AppNav sidebar (w-64) sits on SkyChrome -->
-    <aside class="w-64 shrink-0 flex flex-col text-slate-900">
-      <!-- LivePanel -->
-      <div class="mx-2 mt-0 mb-3 rounded-md bg-white/85 border border-slate-200/70 px-2.5 py-2">
-        <div class="flex items-center gap-1.5">
-          <span class="relative inline-flex shrink-0">
-            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-            <span class="absolute inset-0 rounded-full bg-emerald-500/40 animate-ping"></span>
-          </span>
-          <span class="text-[10px] uppercase tracking-[0.14em] text-slate-500 font-semibold">LIVE</span>
-          <span class="ml-auto font-mono text-[10px] tabular-nums text-emerald-600">28ms</span>
+    <!-- SectionBar -->
+    <div class="min-h-9 md:h-9 px-5 py-1.5 md:py-0 border-b border-slate-200/60 flex flex-wrap md:flex-nowrap items-center gap-x-2.5 gap-y-1.5 shrink-0">
+      <span class="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">Mailboxes</span>
+      <span class="font-mono text-[10.5px] text-slate-400 tabular-nums">128</span>
+      <div class="ml-auto flex items-center gap-1.5 flex-wrap justify-end min-w-0">
+        <div class="h-7 pl-2 pr-1 rounded-md border border-slate-200 bg-white flex items-center gap-1.5 min-w-0 w-56">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-400 shrink-0"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
+          <span class="flex-1 min-w-0 text-[12.5px] text-slate-400">Search by email&hellip;</span>
         </div>
-        <div class="mt-1.5 flex items-baseline gap-1.5">
-          <span class="text-[15px] text-slate-900 tabular-nums leading-none">128</span>
-          <span class="text-[11px] text-slate-500">mailboxes</span>
-          <span class="ml-auto text-[10.5px] text-emerald-600 tabular-nums">122 active</span>
-        </div>
-        <div class="mt-1.5 flex items-center justify-between gap-2 text-[10.5px]">
-          <span class="text-slate-400">Inbox</span>
-          <span class="font-mono tabular-nums text-sky-600">12 unread</span>
-        </div>
-        <div class="mt-1 flex items-center justify-between gap-2 text-[10.5px]">
-          <span class="text-slate-400">Today</span>
-          <span class="font-mono text-slate-400 tabular-nums">5,420 / 6,400</span>
-        </div>
-        <div class="mt-2 flex items-end gap-0.5 h-4">
-          {[20,30,40,55,70,82,90,95,80,60,55,70,82,90].map((v) => (
-            <div class="flex-1 rounded-sm bg-slate-300" style={`height:${Math.max(8, v)}%; min-height:2px;`}></div>
-          ))}
-        </div>
+        <button class="h-7 px-2 rounded-md border border-slate-200 bg-white text-slate-700 inline-flex items-center gap-1.5 text-[12px] font-medium transition-colors">
+          <span class="text-slate-400 shrink-0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg></span>
+          <span class="truncate max-w-[160px]">All accounts</span>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="text-slate-400 shrink-0"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
       </div>
+    </div>
 
-      <!-- Nav sections -->
-      <nav class="flex-1 overflow-y-auto pb-3">
-        {sidebarSections.map((s, si) => (
-          <div class={si === 0 ? '' : 'mt-4 pt-4 border-t border-slate-200/50'}>
-            {s.label && (
-              <div class="px-4 mb-1.5">
-                <span class="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">{s.label}</span>
-              </div>
-            )}
-            <div class="space-y-px">
-              {s.items.map((it) => {
-                const path = navIcons[it.title] ?? '<circle cx="12" cy="12" r="3"/>';
-                return (
-                  <div class={`group mx-2 flex items-center gap-2.5 px-2.5 h-7 rounded-md text-[12.5px] ${it.active ? 'bg-slate-200/70 text-slate-900 font-medium' : 'text-slate-600'}`}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width={it.active ? 2 : 1.6} class={it.active ? 'text-slate-700' : 'text-slate-400'} set:html={path}></svg>
-                    <span class="truncate flex-1">{it.title}</span>
-                    {it.badge && (
-                      <span class="text-[10px] font-medium bg-slate-900 text-white rounded-full min-w-[16px] h-4 flex items-center justify-center px-1 tabular-nums">{it.badge}</span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </nav>
-
-      <!-- Settings + UserNav at the bottom -->
-      <div class="border-t border-slate-200/60 py-1 shrink-0">
-        <div class="mx-2 flex items-center gap-2.5 px-2.5 h-7 rounded-md text-[12.5px] text-slate-600">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" class="text-slate-400"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          <span>Settings</span>
-        </div>
-      </div>
-      <div class="border-t border-slate-200/60 shrink-0 px-3 py-2 flex items-center gap-2">
-        <div class="w-7 h-7 rounded-full bg-gradient-to-br from-violet-400 to-indigo-500"></div>
-        <div class="flex-1 min-w-0">
-          <div class="text-[12px] font-medium text-slate-900 truncate">Maya Okonkwo</div>
-          <div class="text-[10.5px] text-slate-500 truncate">Owner · Acme</div>
-        </div>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-400"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
-      </div>
-    </aside>
-
-    <!-- Content panel - white with rounded inner top-left corner -->
-    <main class="flex-1 min-w-0 rounded-tl-2xl bg-white overflow-hidden border-t border-l border-slate-200/70">
-      <!-- PageTopbar -->
-      <div class="h-12 px-5 border-b border-slate-200 flex items-center gap-3 shrink-0 bg-white">
-        <span class="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">Accounts</span>
-        <div class="h-4 w-px bg-slate-200"></div>
-        <span class="text-[12.5px] text-slate-600 truncate">128 mailboxes</span>
-        <div class="ml-auto flex items-center gap-1.5">
-          <button class="h-7 px-2.5 rounded-md inline-flex items-center gap-1.5 text-[12px] font-medium bg-sky-600 text-white">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            Add account
-          </button>
-        </div>
-      </div>
-
-      <!-- StatStrip -->
-      <div class="grid grid-cols-4 border-b border-slate-200 shrink-0 bg-white">
-        {[
-          { label: 'Total',           value: '128', sub: 'connected',     accent: false, last: false },
-          { label: 'Healthy',         value: '122', sub: 'sending now',   accent: true,  last: false },
-          { label: 'Warming',         value: '6',   sub: 'ramping up',    accent: false, last: false },
-          { label: 'Needs attention', value: '0',   sub: 'paused / fail', accent: false, last: true  },
-        ].map((s) => (
-          <div class={`px-5 py-4 ${!s.last ? 'border-r border-slate-200' : ''}`}>
-            <div class="flex items-center gap-2">
-              <span class="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">{s.label}</span>
-              {s.accent && <span class="w-1.5 h-1.5 rounded-full bg-sky-500 animate-pulse-soft"></span>}
-            </div>
-            <div class="text-[26px] text-slate-900 font-light leading-none mt-2 tabular-nums">{s.value}</div>
-            <div class="text-[10px] text-slate-400 mt-1.5 font-mono truncate">{s.sub}</div>
-          </div>
-        ))}
-      </div>
-
-      <!-- SectionBar -->
-      <div class="h-9 px-5 border-b border-slate-200/60 flex items-center gap-2.5 shrink-0">
-        <span class="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">Mailboxes</span>
-        <span class="font-mono text-[10.5px] text-slate-400 tabular-nums">128</span>
-        <div class="ml-auto flex items-center gap-2">
-          <div class="inline-flex items-center gap-2 h-7 px-2.5 rounded-md border border-slate-200 bg-white text-[12px] text-slate-500 w-56">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-            <span class="text-slate-400">Search by email…</span>
-          </div>
-          <button class="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-slate-200 bg-white text-[12px] font-medium text-slate-700">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
-            All accounts
-          </button>
-        </div>
-      </div>
-
-      <!-- Table -->
-      <table class="w-full text-left">
-        <thead class="bg-white">
-          <tr class="border-b border-slate-200">
-            <th class="pl-5 pr-2 py-2 w-9"><span class="w-3.5 h-3.5 rounded border border-slate-300 inline-block"></span></th>
-            <th class="px-3 py-2 text-[10px] font-medium text-slate-400 uppercase tracking-[0.14em]">Account</th>
-            <th class="px-3 py-2 text-[10px] font-medium text-slate-400 uppercase tracking-[0.14em] w-20 text-right">Sent</th>
-            <th class="px-3 py-2 text-[10px] font-medium text-slate-400 uppercase tracking-[0.14em] w-24 text-right">Warmup</th>
-            <th class="px-3 py-2 text-[10px] font-medium text-slate-400 uppercase tracking-[0.14em] w-28">Status</th>
-            <th class="px-3 py-2 w-16"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => {
-            const s = statusStyle(r.status);
-            return (
-              <tr class="border-b border-slate-200/60 h-11">
-                <td class="pl-5 pr-2"><span class="w-3.5 h-3.5 rounded border border-slate-300 inline-block"></span></td>
-                <td class="px-3">
-                  <div class="flex items-center gap-2.5">
+    <!-- Table -->
+    <table class="w-full text-left">
+      <thead class="sticky top-0 bg-white z-[1]">
+        <tr class="border-b border-slate-200">
+          <th class="pl-5 pr-2 py-2 w-9"><input type="checkbox" class="w-3.5 h-3.5 rounded accent-sky-600" /></th>
+          <th class="px-3 py-2 text-[10px] font-medium text-slate-400 uppercase tracking-[0.14em]">Account</th>
+          <th class="px-3 py-2 text-[10px] font-medium text-slate-400 uppercase tracking-[0.14em] w-24 text-right">Warmup</th>
+          <th class="px-3 py-2 text-[10px] font-medium text-slate-400 uppercase tracking-[0.14em] w-10 md:w-32"><span class="hidden md:inline">Health</span></th>
+          <th class="px-3 py-2 w-16"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => {
+          const t = healthTone(r.health, r.score);
+          return (
+            <tr class="border-b border-slate-200/60 hover:bg-slate-50/80 transition-colors group h-11 cursor-pointer">
+              <td class="pl-5 pr-2"><input type="checkbox" class="w-3.5 h-3.5 rounded accent-sky-600" /></td>
+              <td class="px-3 max-w-0 md:max-w-none">
+                <div class="flex w-full min-w-0 items-center gap-2">
+                  <div class="flex min-w-0 flex-1 items-center gap-2.5 text-left">
                     <div class="w-6 h-6 rounded-full bg-sky-100 flex items-center justify-center shrink-0">
                       <span class="text-[9.5px] font-semibold text-sky-700">{r.email.slice(0, 2).toUpperCase()}</span>
                     </div>
                     <span class="text-[12.5px] font-medium text-slate-900 truncate">{r.email}</span>
                   </div>
+                </div>
+              </td>
+              {r.warm ? (
+                <td class="px-3 text-[12px] tabular-nums text-right font-mono text-orange-600">
+                  <span class="inline-flex items-center justify-end gap-1.5"><span class="campaign-grid shrink-0"></span><span>{r.warm[0]}/{r.warm[1]}</span></span>
                 </td>
-                <td class="px-3 text-[12px] text-slate-500 tabular-nums text-right font-mono">{r.sent}</td>
-                <td class="px-3 text-[12px] text-slate-500 tabular-nums text-right font-mono">{r.warm}</td>
-                <td class="px-3">
-                  <span class={`inline-flex items-center gap-1.5 text-[11px] font-medium ${s.text}`}>
-                    <span class={`w-1.5 h-1.5 rounded-full ${s.dot}`}></span>
-                    <span class="uppercase tracking-[0.08em]">{r.status}</span>
+              ) : (
+                <td class={`px-3 text-[12px] tabular-nums text-right font-mono ${r.warmState === 'Paused' ? 'text-amber-600' : 'text-slate-400'}`}>{r.warmState}</td>
+              )}
+              <td class="px-3">
+                <span class={`inline-flex items-center gap-1.5 text-[11px] font-medium ${t.text}`}>
+                  <span class="relative flex w-1.5 h-1.5">
+                    {t.pulse && <span class={`absolute inline-flex h-full w-full rounded-full opacity-60 animate-ping ${t.dot}`}></span>}
+                    <span class={`relative inline-flex w-1.5 h-1.5 rounded-full ${t.dot}`}></span>
                   </span>
-                </td>
-                <td class="px-3"></td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </main>
+                  <span class="uppercase tracking-[0.08em] hidden md:inline">{t.label}</span>
+                </span>
+              </td>
+              <td class="px-3"></td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   </div>
-</div>
+</AppShellMock>
