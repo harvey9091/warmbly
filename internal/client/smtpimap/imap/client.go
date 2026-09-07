@@ -62,9 +62,86 @@ type Client struct {
 	// When nil, WORKER_BIND_IP is consulted; when still unset, the OS default
 	// route is used.
 	BindIP *net.TCPAddr
+
+	// lifecycle guards the client field itself. A reconnect holds the write
+	// lock through dial, auth and assignment; every command holds the read
+	// lock for its duration, so a reconnect never swaps the session out from
+	// under a command, and two paths that both see the drop dial once.
+	// Lock order: mu before lifecycle, and never nest a read lock.
+	lifecycle sync.RWMutex
+
+	// conn is the transport under client, nil until the first Connect. It
+	// is swapped under the lifecycle write lock and read under the read lock
+	// like client itself.
+	conn *idleConn
+
+	// IdleTimeout bounds how long a command waits for the server to say
+	// anything before the session is declared dead. Zero means
+	// config.ImapCommandIdleTimeout.
+	IdleTimeout time.Duration
+
+	// plaintext dials without TLS at all. Only the tests set it, to talk to
+	// the in-process server; no product path reaches it, because an IMAP
+	// session in the clear would put the mailbox password on the wire.
+	plaintext bool
+
+	// condStore is whether the current session advertised CONDSTORE after
+	// authentication, which decides between the mod-sequence and the UIDNEXT
+	// incremental sync.
+	condStore atomic.Bool
+
+	// folderOverflow is what the last Folders call had to leave out for the
+	// cap, folderConflicts what it left out for a duplicate UIDVALIDITY.
+	folderOverflow  atomic.Int32
+	folderConflicts atomic.Int32
+}
+
+// begin starts the idle clock for one command; call the result on exit.
+// Callers hold the lifecycle read lock, so conn cannot change underneath.
+func (c *Client) begin() func() {
+	if c.conn == nil {
+		return func() {}
+	}
+	return c.conn.arm()
+}
+
+// HasCondStore reports whether the session supports CONDSTORE, the
+// mod-sequence path of the incremental sync. Without it the sync loop keys
+// on UIDNEXT and mirrors flags with a periodic scan.
+func (c *Client) HasCondStore() bool {
+	return c.condStore.Load()
+}
+
+// ensureConnected re-dials after the server has dropped the session. go-imap
+// parks a dead client in the Logout state and fails every later command with
+// net.ErrClosed; nothing re-dialed, so one drop (Gmail closes sessions after a
+// while) left the mailbox a zombie until the worker restarted: no sync, no
+// sent copies. Every entry point that starts a command runs through here,
+// before taking its own read lock.
+func (c *Client) ensureConnected() *errx.MailError {
+	c.lifecycle.Lock()
+	defer c.lifecycle.Unlock()
+
+	// Only a session that got past auth is worth keeping: a failed Login
+	// leaves go-imap in NotAuthenticated, which is just as unusable as Logout.
+	if c.client != nil {
+		switch c.client.State() {
+		case imap.ConnStateAuthenticated, imap.ConnStateSelected:
+			return nil
+		}
+	}
+	return c.connectLocked()
 }
 
 func (c *Client) Connect() *errx.MailError {
+	c.lifecycle.Lock()
+	defer c.lifecycle.Unlock()
+	return c.connectLocked()
+}
+
+// connectLocked dials and authenticates a fresh session. lifecycle must be
+// held for writing.
+func (c *Client) connectLocked() *errx.MailError {
 	var addr, host, security string
 	var port int
 	switch c.AuthType {
@@ -77,32 +154,50 @@ func (c *Client) Connect() *errx.MailError {
 
 	tlsConf := &tls.Config{
 		ServerName:         host,
-		InsecureSkipVerify: netbind.InsecureTLS(),
+		InsecureSkipVerify: netbind.InsecureTLS(), //nolint:gosec // MAIL_TLS_INSECURE, local dev only
 	}
 
+	// Dial through netbind so both paths honour WORKER_BIND_IP, and wrap the
+	// socket before TLS so the idle clock sits under the encryption.
+	timeout := c.IdleTimeout
+	if timeout <= 0 {
+		timeout = config.ImapCommandIdleTimeout
+	}
+	raw, err := netbind.Dialer(c.BindIP).DialContext(context.Background(), "tcp", addr)
+	if err != nil {
+		return errx.ErrMailServerUnreachable
+	}
+	conn := &idleConn{Conn: raw, timeout: timeout}
+
 	var client *imapclient.Client
-	if models.ResolveIMAPSecurity(security, port) == models.MailSecurityStartTLS {
-		// Plaintext greeting, upgraded in-band. Dial through netbind so the
-		// STARTTLS path honours WORKER_BIND_IP like the implicit one.
-		conn, err := netbind.Dialer(c.BindIP).DialContext(context.Background(), "tcp", addr)
-		if err != nil {
-			return errx.ErrMailServerUnreachable
-		}
-		// NewStartTLS closes conn itself when the upgrade fails.
+	switch {
+	case c.plaintext:
+		client = imapclient.New(conn, nil)
+	case models.ResolveIMAPSecurity(security, port) == models.MailSecurityStartTLS:
+		// Plaintext greeting, upgraded in-band. NewStartTLS closes conn
+		// itself when the upgrade fails.
 		client, err = imapclient.NewStartTLS(conn, &imapclient.Options{TLSConfig: tlsConf})
 		if err != nil {
 			return errx.ErrMailServerUnreachable
 		}
-	} else {
-		conn, err := netbind.TLSDialer(c.BindIP, tlsConf).DialContext(context.Background(), "tcp", addr)
+	default:
+		tconn := tls.Client(conn, tlsConf)
+		hctx, cancel := context.WithTimeout(context.Background(), timeout)
+		err = tconn.HandshakeContext(hctx)
+		cancel()
 		if err != nil {
+			_ = tconn.Close()
 			return errx.ErrMailServerUnreachable
 		}
-		client = imapclient.New(conn, nil)
+		client = imapclient.New(tconn, nil)
 	}
 
 	c.client = client
+	c.conn = conn
 	c.selected.Store(false)
+	c.condStore.Store(false)
+	done := conn.arm()
+	defer done()
 
 	var xerr *errx.MailError
 
@@ -113,20 +208,27 @@ func (c *Client) Connect() *errx.MailError {
 		xerr = c.oauth2Auth()
 	}
 	if xerr != nil {
+		// Drop the half-open session so the next ensureConnected re-dials
+		// instead of reusing an unauthenticated client.
+		_ = client.Close()
 		return xerr
 	}
 
-	// CONDSTORE backs the ChangedSince incremental sync. Servers (Gmail,
+	// CONDSTORE backs the mod-sequence incremental sync. Servers (Gmail,
 	// Dovecot, ...) typically advertise it only after authentication, so the
-	// check must run post-auth.
-	if !c.client.Caps().Has(imap.CapCondStore) {
-		return errx.ErrMailCondStoreNotSupported
-	}
+	// check must run post-auth. Without it (Outlook.com, Microsoft 365 over
+	// IMAP, Yahoo, many hosted servers) the sync loop keys on UIDNEXT instead.
+	c.condStore.Store(c.client.Caps().Has(imap.CapCondStore))
 
 	return nil
 }
 
 func (c *Client) Close() error {
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	if c.client == nil {
+		return nil
+	}
 	return c.client.Close()
 }
 
@@ -164,49 +266,10 @@ func (c *Client) oauth2Auth() *errx.MailError {
 	return nil
 }
 
-func (c *Client) Folders() ([]models.Mailbox, *errx.MailError) {
-	var resp []models.Mailbox
-
-	// LIST-STATUS: without requesting these, f.Status is nil for every
-	// folder and the sync loop sees an empty account.
-	cmd := c.client.List("", "%", &imap.ListOptions{
-		ReturnStatus: &imap.StatusOptions{
-			UIDValidity:   true,
-			HighestModSeq: true,
-		},
-	})
-
-	for f := cmd.Next(); f != nil; f = cmd.Next() {
-		if len(resp) >= config.MaxEmailFolders {
-			return nil, errx.ErrMailFoldersMax
-		}
-
-		var attrs []string = make([]string, len(f.Attrs))
-
-		for i := range f.Attrs {
-			attrs[i] = string(f.Attrs[i])
-		}
-
-		if f.Status == nil {
-			continue
-		}
-
-		resp = append(resp, models.Mailbox{
-			Name:          f.Mailbox,
-			Attrs:         attrs,
-			UIDValidity:   f.Status.UIDValidity,
-			HighestModSeq: f.Status.HighestModSeq,
-		})
-	}
-
-	if err := cmd.Close(); err != nil {
-		return nil, c.handleError(err)
-	}
-
-	return resp, nil
-}
-
 func (c *Client) Mailbox(mailbox string, uidvali, opts *imap.SelectOptions) error {
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	defer c.begin()()
 	if _, err := c.selectMailbox(mailbox, opts); err != nil {
 		return err
 	}
@@ -217,7 +280,7 @@ func (c *Client) Mailbox(mailbox string, uidvali, opts *imap.SelectOptions) erro
 // selectMailbox is the single SELECT funnel: every path that changes the
 // selected mailbox goes through it so ReleaseMailbox knows whether there is
 // one to release. A failed SELECT leaves the session with no mailbox
-// selected (RFC 3501 6.3.1).
+// selected (RFC 3501 6.3.1). The caller holds the lifecycle read lock.
 func (c *Client) selectMailbox(mailbox string, opts *imap.SelectOptions) (*imap.SelectData, error) {
 	data, err := c.client.Select(mailbox, opts).Wait()
 	c.selected.Store(err == nil)
@@ -230,7 +293,11 @@ func (c *Client) selectMailbox(mailbox string, opts *imap.SelectOptions) (*imap.
 // what arms ChangedSince. The count lets the caller skip the fetch entirely
 // for an empty mailbox, where a 1:* set is a server error.
 func (c *Client) SelectForSync(mailbox string) (uint32, *errx.MailError) {
-	data, err := c.selectMailbox(mailbox, &imap.SelectOptions{ReadOnly: true, CondStore: true})
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	defer c.begin()()
+	// (CONDSTORE) on a server without it is a BAD.
+	data, err := c.selectMailbox(mailbox, &imap.SelectOptions{ReadOnly: true, CondStore: c.condStore.Load()})
 	if err != nil {
 		return 0, c.handleError(err)
 	}
@@ -247,10 +314,13 @@ func (c *Client) SelectForSync(mailbox string) (uint32, *errx.MailError) {
 func (c *Client) ReleaseMailbox() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
 
 	if c.client == nil || !c.selected.Load() || !c.client.Caps().Has(imap.CapUnselect) {
 		return
 	}
+	defer c.begin()()
 	if err := c.client.Unselect().Wait(); err == nil {
 		c.selected.Store(false)
 	}
@@ -281,7 +351,87 @@ func (c *Client) SearchChangedSince(modSeq uint64) ([]imap.UID, *errx.MailError)
 	return c.uidSearch(&imap.SearchCriteria{ModSeq: &imap.SearchCriteriaModSeq{ModSeq: modSeq + 1}})
 }
 
+// SearchNewSince returns the UIDs at or above uidNext: the mail that arrived
+// since the folder's UIDNEXT was last recorded. It is the incremental set on
+// a server without CONDSTORE. A "n:*" set with n past the end answers with
+// the highest UID in the folder (RFC 3501 6.4.8), so the result is filtered.
+func (c *Client) SearchNewSince(uidNext uint32) ([]imap.UID, *errx.MailError) {
+	if uidNext == 0 {
+		uidNext = 1
+	}
+	var set imap.UIDSet
+	set.AddRange(imap.UID(uidNext), 0)
+	uids, err := c.uidSearch(&imap.SearchCriteria{UID: []imap.UIDSet{set}})
+	if err != nil {
+		return nil, err
+	}
+	out := uids[:0]
+	for _, uid := range uids {
+		if uint32(uid) >= uidNext {
+			out = append(out, uid)
+		}
+	}
+	return out, nil
+}
+
+// FlagState is one message as the flag scan sees it: enough to find the
+// platform's copy (the RFC Message-ID, which is the map key) and to compare
+// its flags with the previous scan. Bodies and envelopes are not read.
+type FlagState struct {
+	MessageID string
+	Flags     []string
+}
+
+// FetchFlags reads the flags and Message-ID of every message at or above
+// uidFrom in the selected mailbox, in one round trip with no bodies. It is
+// how flag and read-state changes are found on a server without CONDSTORE:
+// the caller diffs it against the previous scan.
+func (c *Client) FetchFlags(ctx context.Context, uidFrom uint32) (map[uint32]FlagState, *errx.MailError) {
+	if uidFrom == 0 {
+		uidFrom = 1
+	}
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	defer c.begin()()
+	var set imap.UIDSet
+	set.AddRange(imap.UID(uidFrom), 0)
+	cmd := c.client.Fetch(set, &imap.FetchOptions{UID: true, Flags: true, Envelope: true})
+	out := map[uint32]FlagState{}
+	for em := cmd.Next(); em != nil; em = cmd.Next() {
+		var uid uint32
+		var st FlagState
+		for item := em.Next(); item != nil; item = em.Next() {
+			switch item := item.(type) {
+			case imapclient.FetchItemDataUID:
+				uid = uint32(item.UID)
+			case imapclient.FetchItemDataFlags:
+				st.Flags = make([]string, 0, len(item.Flags))
+				for _, f := range item.Flags {
+					st.Flags = append(st.Flags, string(f))
+				}
+			case imapclient.FetchItemDataEnvelope:
+				if item.Envelope != nil {
+					st.MessageID = item.Envelope.MessageID
+				}
+			}
+		}
+		if uid >= uidFrom {
+			out[uid] = st
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if err := cmd.Close(); err != nil {
+		return nil, c.handleError(err)
+	}
+	return out, nil
+}
+
 func (c *Client) uidSearch(criteria *imap.SearchCriteria) ([]imap.UID, *errx.MailError) {
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	defer c.begin()()
 	data, err := c.client.UIDSearch(criteria, nil).Wait()
 	if err != nil {
 		return nil, c.handleError(err)
@@ -300,6 +450,9 @@ func (c *Client) FetchEnvelopes(ctx context.Context, uids []imap.UID) ([]*Fetche
 	for _, uid := range uids {
 		set.AddNum(uid)
 	}
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	defer c.begin()()
 	cmd := c.client.Fetch(set, &imap.FetchOptions{
 		UID:      true,
 		Envelope: true,
@@ -382,6 +535,9 @@ func (c *Client) FetchBody(f *Fetched) {
 	if f == nil || f.Email == nil {
 		return
 	}
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	defer c.begin()()
 	f.Email.BodyPlain, f.Email.BodyHTML = fetchTextParts(c.client, f.uid, f.body)
 }
 

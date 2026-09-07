@@ -7,6 +7,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/getsentry/sentry-go"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
@@ -52,16 +54,41 @@ func sanitizeFilename(name string) string {
 
 func mb(b int64) int64 { return b / (1024 * 1024) }
 
-// UploadCampaignAttachment — POST /campaigns/:id/attachments (multipart "file")
-func (h *Handler) UploadCampaignAttachment(c *gin.Context) {
+// attachmentCampaign resolves the campaign these attachment routes address and
+// proves it belongs to the caller's organization. The route id is a raw path
+// parameter, so without this an attachment could be listed, uploaded or deleted
+// on another workspace's campaign.
+func (h *Handler) attachmentCampaign(c *gin.Context) (campaignID, orgID uuid.UUID, xerr *errx.Error) {
 	campaignID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		errx.JSON(c, errx.ErrUuid)
-		return
+		return uuid.Nil, uuid.Nil, errx.ErrUuid
 	}
-	orgID := middleware.GetOrganizationID(c)
-	if orgID == nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "no organization selected"))
+	org := middleware.GetOrganizationID(c)
+	if org == nil {
+		return uuid.Nil, uuid.Nil, errx.New(errx.BadRequest, "no organization selected")
+	}
+	if _, xerr := h.CampaignService.Get(c.Request.Context(), org.String(), campaignID.String()); xerr != nil {
+		return uuid.Nil, uuid.Nil, xerr
+	}
+	return campaignID, *org, nil
+}
+
+// deleteObjectDetached removes an object whose row was never written, on a
+// bounded context that is not cancelled with the request: a client that gives
+// up mid-upload must not leave bytes in storage that no quota counts.
+func (h *Handler) deleteObjectDetached(ctx context.Context, key string) {
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	if err := h.Storage.Delete(cleanup, key); err != nil {
+		sentry.CaptureException(fmt.Errorf("attachment %s: cleanup after refused reservation: %w", key, err))
+	}
+}
+
+// UploadCampaignAttachment — POST /campaigns/:id/attachments (multipart "file")
+func (h *Handler) UploadCampaignAttachment(c *gin.Context) {
+	campaignID, orgID, xerr := h.attachmentCampaign(c)
+	if xerr != nil {
+		errx.JSON(c, xerr)
 		return
 	}
 	userID, err := uuid.Parse(middleware.GetUserID(c))
@@ -74,16 +101,32 @@ func (h *Handler) UploadCampaignAttachment(c *gin.Context) {
 		return
 	}
 
-	// Optional sequence_id form field scopes the attachment to one step.
+	// Cap the body before anything reads it, so a huge upload can't pin a
+	// worker: the first form field read parses the whole multipart body.
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, attachmentMaxBytes+(1<<20))
+
+	// Optional step_id scopes the attachment to one step; without it the file
+	// rides every step of the campaign. A malformed or foreign step is refused
+	// rather than silently widened to the whole campaign.
 	var seqID *uuid.UUID
-	if s := strings.TrimSpace(c.PostForm("step_id")); s != "" {
-		if id, perr := uuid.Parse(s); perr == nil {
-			seqID = &id
+	if raw := strings.TrimSpace(c.PostForm("step_id")); raw != "" {
+		id, perr := uuid.Parse(raw)
+		if perr != nil {
+			errx.JSON(c, errx.New(errx.BadRequest, "step_id must be a uuid"))
+			return
 		}
+		belongs, berr := h.AttachmentRepo.StepBelongsToCampaign(c.Request.Context(), campaignID, id)
+		if berr != nil {
+			errx.JSON(c, errx.InternalError())
+			return
+		}
+		if !belongs {
+			errx.JSON(c, errx.New(errx.NotFound, "step not found in this campaign"))
+			return
+		}
+		seqID = &id
 	}
 
-	// Cap the body before parsing so a huge upload can't pin a worker.
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, attachmentMaxBytes+(1<<20))
 	fh, err := c.FormFile("file")
 	if err != nil {
 		errx.JSON(c, errx.New(errx.BadRequest, "file is required"))
@@ -99,20 +142,21 @@ func (h *Handler) UploadCampaignAttachment(c *gin.Context) {
 		return
 	}
 
-	// Plan-based overall storage quota (org-wide).
-	limit, xerr := h.FeatureGateService.GetStorageLimitBytes(c.Request.Context(), *orgID)
+	// Plan-based overall storage quota (org-wide). This read is only a fast
+	// refusal before the bytes are copied to storage; the check that counts
+	// is CreateWithinQuota below, which runs under the org's quota lock.
+	limit, xerr := h.FeatureGateService.GetStorageLimitBytes(c.Request.Context(), orgID)
 	if xerr != nil {
 		errx.JSON(c, xerr)
 		return
 	}
-	used, err := h.AttachmentRepo.SumStorageUsedByOrg(c.Request.Context(), *orgID)
+	used, err := h.AttachmentRepo.SumStorageUsedByOrg(c.Request.Context(), orgID)
 	if err != nil {
 		errx.JSON(c, errx.InternalError())
 		return
 	}
 	if used+fh.Size > limit {
-		errx.JSON(c, errx.New(errx.BadRequest, fmt.Sprintf(
-			"storage limit reached (%d MB of %d MB used) — remove attachments or upgrade your plan", mb(used), mb(limit))))
+		errx.JSON(c, errx.StorageLimitReached(used, limit, fh.Size))
 		return
 	}
 
@@ -148,9 +192,28 @@ func (h *Handler) UploadCampaignAttachment(c *gin.Context) {
 		MimeType:   mimeType,
 		S3Key:      key,
 	}
-	if err := h.AttachmentRepo.Create(c.Request.Context(), att); err != nil {
-		_ = h.Storage.Delete(c.Request.Context(), key) // best-effort cleanup
+	// The row is the reservation: it is written only if the total still fits
+	// once this upload is counted, so concurrent uploads cannot interleave
+	// past the limit. The limit is re-read under the lock so a plan change
+	// that lands between the pre-check and the insert is honored. A refused
+	// file is removed from storage again, on a context that outlives the
+	// request so a cancelled upload cannot strand the object.
+	limitFn := func(ctx context.Context) (int64, error) {
+		l, xerr := h.FeatureGateService.GetStorageLimitBytes(ctx, orgID)
+		if xerr != nil {
+			return 0, xerr
+		}
+		return l, nil
+	}
+	created, used, limit, err := h.AttachmentRepo.CreateWithinQuota(c.Request.Context(), att, orgID, limitFn)
+	if err != nil {
+		h.deleteObjectDetached(c.Request.Context(), key)
 		errx.JSON(c, errx.InternalError())
+		return
+	}
+	if !created {
+		h.deleteObjectDetached(c.Request.Context(), key)
+		errx.JSON(c, errx.StorageLimitReached(used, limit, fh.Size))
 		return
 	}
 
@@ -163,9 +226,9 @@ func (h *Handler) UploadCampaignAttachment(c *gin.Context) {
 
 // ListCampaignAttachments — GET /campaigns/:id/attachments
 func (h *Handler) ListCampaignAttachments(c *gin.Context) {
-	campaignID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		errx.JSON(c, errx.ErrUuid)
+	campaignID, _, xerr := h.attachmentCampaign(c)
+	if xerr != nil {
+		errx.JSON(c, xerr)
 		return
 	}
 	atts, err := h.AttachmentRepo.ListByCampaign(c.Request.Context(), campaignID)
@@ -182,9 +245,9 @@ func (h *Handler) ListCampaignAttachments(c *gin.Context) {
 
 // DeleteCampaignAttachment — DELETE /campaigns/:id/attachments/:attachmentId
 func (h *Handler) DeleteCampaignAttachment(c *gin.Context) {
-	campaignID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		errx.JSON(c, errx.ErrUuid)
+	campaignID, _, xerr := h.attachmentCampaign(c)
+	if xerr != nil {
+		errx.JSON(c, xerr)
 		return
 	}
 	attID, err := uuid.Parse(c.Param("attachmentId"))

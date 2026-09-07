@@ -8,11 +8,14 @@
 // Constants:
 //
 //   - max size: 2 MiB. Anything larger gets a 400.
-//   - accepted MIME: image/png, image/jpeg, image/webp, image/gif.
-//   - object key: avatars/{kind}/{id}-{epoch}.{ext}
+//   - accepted MIME: image/png, image/jpeg (see allowedAvatarMIME).
+//   - object key: avatars/{kind}/{id}-{epoch_ms}-{nonce}.{ext}
 //
 // The epoch suffix forces cache busting on replacement so the
-// browser doesn't keep showing the old avatar at the same URL.
+// browser doesn't keep showing the old avatar at the same URL (the
+// objects are served immutable, so a reused key would never refresh).
+// The previous object is deleted best-effort once the row points at
+// the new one, so replacing or removing an avatar doesn't leak blobs.
 
 package handler
 
@@ -42,6 +45,9 @@ import (
 const (
 	avatarMaxBytes     int64 = 2 * 1024 * 1024
 	avatarMaxDimension       = 1024 // px — reject anything bigger so a phone-camera dump doesn't sneak through
+
+	userAvatarKeyPrefix = "avatars/users/"
+	orgAvatarKeyPrefix  = "avatars/organizations/"
 )
 
 // Intentionally narrow allowlist: only PNG and JPEG. WebP, GIF and
@@ -77,17 +83,23 @@ func (h *Handler) UploadUserAvatar(c *gin.Context) {
 		return
 	}
 
-	key := fmt.Sprintf("avatars/users/%s-%d%s", userID.String(), time.Now().Unix(), ext)
-	url, xerr := putPublicObject(c.Request.Context(), h.Storage, key, bytesRead, mime)
+	ctx := c.Request.Context()
+	previous := h.currentUserAvatarURL(ctx, userID)
+
+	key := avatarObjectKey(userAvatarKeyPrefix, userID, ext)
+	url, xerr := putPublicObject(ctx, h.Storage, key, bytesRead, mime)
 	if xerr != nil {
 		errx.Handle(c, xerr)
 		return
 	}
 
-	if err := h.UserRepo.UpdateAvatar(c.Request.Context(), userID, &url); err != nil {
-		errx.Handle(c, errx.InternalError())
+	// Through the service, not the repo: /auth/me is served from a cached
+	// copy, and only the service drops it.
+	if xerr := h.UserService.UpdateAvatar(ctx, userID, &url); xerr != nil {
+		errx.Handle(c, xerr)
 		return
 	}
+	h.deleteAvatarObject(ctx, previous, userAvatarKeyPrefix, key)
 
 	h.auditOrg(c, models.AuditActionUpdate, models.AuditEntityUser, &userID, nil, map[string]string{"field": "avatar_url"})
 
@@ -103,10 +115,14 @@ func (h *Handler) DeleteUserAvatar(c *gin.Context) {
 		return
 	}
 
-	if err := h.UserRepo.UpdateAvatar(c.Request.Context(), userID, nil); err != nil {
-		errx.Handle(c, errx.InternalError())
+	ctx := c.Request.Context()
+	previous := h.currentUserAvatarURL(ctx, userID)
+
+	if xerr := h.UserService.UpdateAvatar(ctx, userID, nil); xerr != nil {
+		errx.Handle(c, xerr)
 		return
 	}
+	h.deleteAvatarObject(ctx, previous, userAvatarKeyPrefix, "")
 
 	h.auditOrg(c, models.AuditActionUpdate, models.AuditEntityUser, &userID, nil, map[string]string{"field": "avatar_url", "value": "cleared"})
 
@@ -140,17 +156,21 @@ func (h *Handler) UploadOrganizationAvatar(c *gin.Context) {
 		return
 	}
 
-	key := fmt.Sprintf("avatars/organizations/%s-%d%s", orgID.String(), time.Now().Unix(), ext)
-	url, xerr := putPublicObject(c.Request.Context(), h.Storage, key, bytesRead, mime)
+	ctx := c.Request.Context()
+	previous := h.currentOrgAvatarURL(ctx, *orgID)
+
+	key := avatarObjectKey(orgAvatarKeyPrefix, *orgID, ext)
+	url, xerr := putPublicObject(ctx, h.Storage, key, bytesRead, mime)
 	if xerr != nil {
 		errx.Handle(c, xerr)
 		return
 	}
 
-	if err := h.OrgRepo.UpdateAvatar(c.Request.Context(), *orgID, &url); err != nil {
+	if err := h.OrgRepo.UpdateAvatar(ctx, *orgID, &url); err != nil {
 		errx.Handle(c, errx.InternalError())
 		return
 	}
+	h.deleteAvatarObject(ctx, previous, orgAvatarKeyPrefix, key)
 
 	h.auditOrg(c, models.AuditActionUpdate, models.AuditEntityOrganization, orgID, nil, map[string]string{"field": "avatar_url"})
 
@@ -175,12 +195,80 @@ func (h *Handler) DeleteOrganizationAvatar(c *gin.Context) {
 		return
 	}
 
-	if err := h.OrgRepo.UpdateAvatar(c.Request.Context(), *orgID, nil); err != nil {
+	ctx := c.Request.Context()
+	previous := h.currentOrgAvatarURL(ctx, *orgID)
+
+	if err := h.OrgRepo.UpdateAvatar(ctx, *orgID, nil); err != nil {
 		errx.Handle(c, errx.InternalError())
 		return
 	}
+	h.deleteAvatarObject(ctx, previous, orgAvatarKeyPrefix, "")
+
+	// Audited like the upload so teammates' org switcher refreshes live.
+	h.auditOrg(c, models.AuditActionUpdate, models.AuditEntityOrganization, orgID, nil, map[string]string{"field": "avatar_url", "value": "cleared"})
 
 	c.Status(http.StatusNoContent)
+}
+
+// avatarObjectKey builds a key that is unique per upload: the epoch keeps keys
+// sortable, the random nonce keeps two uploads in the same millisecond from
+// sharing an immutably cached URL.
+func avatarObjectKey(prefix string, id uuid.UUID, ext string) string {
+	nonce := strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+	return fmt.Sprintf("%s%s-%d-%s%s", prefix, id.String(), time.Now().UnixMilli(), nonce, ext)
+}
+
+// currentUserAvatarURL returns the avatar URL stored on the user row, or ""
+// when there is none or the lookup fails (cleanup is best-effort).
+func (h *Handler) currentUserAvatarURL(ctx context.Context, userID uuid.UUID) string {
+	u, xerr := h.UserService.GetUser(ctx, userID)
+	if xerr != nil || u == nil || u.AvatarURL == nil {
+		return ""
+	}
+	return *u.AvatarURL
+}
+
+// currentOrgAvatarURL is the organization counterpart of currentUserAvatarURL.
+func (h *Handler) currentOrgAvatarURL(ctx context.Context, orgID uuid.UUID) string {
+	org, xerr := h.OrganizationService.Get(ctx, orgID)
+	if xerr != nil || org == nil || org.AvatarURL == nil {
+		return ""
+	}
+	return *org.AvatarURL
+}
+
+// deleteAvatarObject removes the object behind a previous avatar URL once the
+// row no longer points at it. Only keys under our own prefix are touched, so
+// an external URL (an OAuth profile picture, say) is left alone, and keepKey
+// guards the freshly written object. Failures are ignored: an orphaned blob
+// is harmless, a failed request after a successful update is not.
+func (h *Handler) deleteAvatarObject(ctx context.Context, previousURL, prefix, keepKey string) {
+	if h.Storage == nil || previousURL == "" {
+		return
+	}
+	key := avatarKeyFromURL(previousURL, prefix)
+	if key == "" || key == keepKey {
+		return
+	}
+	_ = h.Storage.Delete(ctx, key)
+}
+
+// avatarKeyFromURL recovers the object key from a public avatar URL. Both
+// storage backends build the URL differently, but the key always starts with
+// the known prefix, so that is what is looked for.
+func avatarKeyFromURL(url, prefix string) string {
+	idx := strings.Index(url, prefix)
+	if idx < 0 {
+		return ""
+	}
+	key := url[idx:]
+	if q := strings.IndexAny(key, "?#"); q >= 0 {
+		key = key[:q]
+	}
+	if key == prefix || strings.Contains(key, "..") {
+		return ""
+	}
+	return key
 }
 
 func (h *Handler) requireOrgOwner(c *gin.Context, orgID, userID uuid.UUID) *errx.Error {

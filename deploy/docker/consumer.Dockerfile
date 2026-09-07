@@ -7,6 +7,8 @@ FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 
 ARG GO_TAGS=""
 ARG TARGETOS TARGETARCH
+# Build identity shown in the admin panel; see internal/version.
+ARG VERSION="" COMMIT="" BUILT_AT=""
 RUN apk add --no-cache git ca-certificates && \
     if echo "$GO_TAGS" | grep -qw kafka; then apk add --no-cache gcc musl-dev librdkafka-dev; fi
 
@@ -19,7 +21,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     set -eux; \
     if echo "$GO_TAGS" | grep -qw kafka; then CGO=1; TAGS="musl kafka"; else CGO=0; TAGS=""; fi; \
-    CGO_ENABLED=$CGO GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags "$TAGS" -ldflags="-s -w" -o /out/consumer ./cmd/consumer
+    CGO_ENABLED=$CGO GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags "$TAGS" -ldflags="-s -w -X github.com/warmbly/warmbly/internal/version.Version=$VERSION -X github.com/warmbly/warmbly/internal/version.Commit=$COMMIT -X github.com/warmbly/warmbly/internal/version.BuiltAt=$BUILT_AT" -o /out/consumer ./cmd/consumer
 
 # Runtime stage
 FROM alpine:3.23

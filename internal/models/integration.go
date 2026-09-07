@@ -289,6 +289,13 @@ const (
 	// with REALTIME_SUBSCRIBE on the org websocket) receive it with no public URL,
 	// so it replaces an outbound webhook for "tell my system this happened".
 	IntegrationActionFireEvent IntegrationAction = "warmbly.fire_event"
+	// IntegrationActionUpsertContact creates a contact from templated event
+	// fields, or enriches the one already holding that email, then tags it and
+	// enrols it in a campaign. The lead-intake action: an inbound webhook or a
+	// form submission becomes a contact without leaving Warmbly.
+	IntegrationActionUpsertContact IntegrationAction = "warmbly.upsert_contact"
+	// IntegrationActionAddToCampaign enrols the event's contact in a campaign.
+	IntegrationActionAddToCampaign IntegrationAction = "warmbly.add_to_campaign"
 
 	// AI nodes mirror the campaign step types: one unified AI step plus an AI
 	// switch router.
@@ -328,6 +335,7 @@ func IsNativeAction(a IntegrationAction) bool {
 		IntegrationActionCreateDeal, IntegrationActionMoveDealStage, IntegrationActionUnsubscribe,
 		IntegrationActionRunAutomation, IntegrationActionLabelEmail,
 		IntegrationActionSetVariables, IntegrationActionFireEvent,
+		IntegrationActionUpsertContact, IntegrationActionAddToCampaign,
 		IntegrationActionAIStep, IntegrationActionAISwitch:
 		return true
 	default:

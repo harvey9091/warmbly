@@ -13,7 +13,6 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/pkg/tmplfuncs"
 	"github.com/warmbly/warmbly/internal/pkg/warmpersona"
-	"github.com/warmbly/warmbly/internal/repository"
 )
 
 // Conversation represents a warmup conversation for AI generation
@@ -162,21 +161,31 @@ func TemplateError(tmpl string) error {
 // intentionally left untouched here (single-brace {a|b} survives the template
 // pass) and expanded later in the pipeline where applicable.
 func RenderTemplate(tmpl string, contact models.Contact) string {
+	return RenderTemplateWith(tmpl, contact, nil)
+}
+
+// RenderTemplateWith is RenderTemplate with per-send values that are not
+// contact fields (today: the recipient's unsubscribe link). They win a name
+// collision with a custom field, like the standard fields do.
+func RenderTemplateWith(tmpl string, contact models.Contact, extra map[string]string) string {
 	if tmpl == "" {
 		return tmpl
 	}
 
 	data := buildTemplateData(contact)
+	for k, v := range extra {
+		data[k] = v
+	}
 	prepared := rewriteSpacedFieldRefs(tmpl)
 
 	t := compiledTemplate(prepared)
 	if t == nil {
-		return naiveRenderTemplate(tmpl, contact) // known-bad -> legacy path
+		return naiveRenderTemplate(tmpl, contact, extra) // known-bad -> legacy path
 	}
 
 	var b strings.Builder
 	if err := t.Execute(&b, data); err != nil {
-		return naiveRenderTemplate(tmpl, contact)
+		return naiveRenderTemplate(tmpl, contact, extra)
 	}
 	return b.String()
 }
@@ -185,8 +194,11 @@ func RenderTemplate(tmpl string, contact models.Contact) string {
 // substitution for the standard fields and every custom field. It is the
 // graceful fallback when text/template parsing or execution fails, so a body
 // always renders even for malformed conditional syntax.
-func naiveRenderTemplate(tmpl string, contact models.Contact) string {
+func naiveRenderTemplate(tmpl string, contact models.Contact, extra map[string]string) string {
 	result := tmpl
+	for k, v := range extra {
+		result = strings.ReplaceAll(result, fmt.Sprintf("{{.%s}}", k), v)
+	}
 	result = strings.ReplaceAll(result, "{{.FirstName}}", contact.FirstName)
 	result = strings.ReplaceAll(result, "{{.LastName}}", contact.LastName)
 	result = strings.ReplaceAll(result, "{{.Email}}", contact.Email)
@@ -210,18 +222,32 @@ type TemplatePreview struct {
 	Unresolved []string `json:"unresolved,omitempty"` // literal {{…}} tokens left after render
 }
 
+// PreviewUnsubscribeLink stands in for the per-recipient link in previews.
+const PreviewUnsubscribeLink = "https://example.com/unsubscribe/preview"
+
 // unresolvedToken matches a {{…}} token still present after rendering (i.e. one
 // that failed to parse and fell through to literal substitution).
 var unresolvedToken = regexp.MustCompile(`\{\{[^{}]*\}\}`)
+
+// bodyClose matches a closing body tag in any case, since HTML tag names are
+// case-insensitive and a pasted document may well carry </BODY>.
+var bodyClose = regexp.MustCompile(`(?i)</body\s*>`)
 
 // PreviewTemplates renders subject/html/plain against contact EXACTLY as the
 // send path does (template render + spintax), and reports parse errors plus any
 // tokens that did not resolve.
 func PreviewTemplates(subject, bodyHTML, bodyPlain string, contact models.Contact) TemplatePreview {
+	return previewTemplatesWith(subject, bodyHTML, bodyPlain, contact, PreviewUnsubscribeLink)
+}
+
+// previewTemplatesWith is PreviewTemplates with the unsubscribe link the
+// {{unsubscribe_link}} variable resolves to.
+func previewTemplatesWith(subject, bodyHTML, bodyPlain string, contact models.Contact, unsubscribeURL string) TemplatePreview {
+	extra := map[string]string{UnsubscribeLinkVar: unsubscribeURL}
 	p := TemplatePreview{
-		Subject:   expandSpintax(RenderTemplate(subject, contact)),
-		BodyHTML:  expandSpintax(RenderTemplate(bodyHTML, contact)),
-		BodyPlain: expandSpintax(RenderTemplate(bodyPlain, contact)),
+		Subject:   expandSpintax(RenderTemplateWith(subject, contact, extra)),
+		BodyHTML:  expandSpintax(RenderTemplateWith(bodyHTML, contact, extra)),
+		BodyPlain: expandSpintax(RenderTemplateWith(bodyPlain, contact, extra)),
 	}
 	for _, f := range []struct{ name, raw string }{{"subject", subject}, {"body", bodyHTML}, {"plain text", bodyPlain}} {
 		if err := TemplateError(f.raw); err != nil {
@@ -240,17 +266,25 @@ func PreviewTemplates(subject, bodyHTML, bodyPlain string, contact models.Contac
 	return p
 }
 
-// AddSignature adds signature to email body
+// AddSignature places the mailbox signature under the body. HTML gets its own
+// block with a top margin, not <br><br>: the breaks stacked against the body's
+// own trailing margin and showed as blank lines in Apple Mail and Outlook.
 func AddSignature(body string, signature string, isHTML bool) string {
 	if signature == "" {
 		return body
 	}
 
-	if isHTML {
-		return body + "<br><br>" + signature
+	if !isHTML {
+		return body + "\n\n" + signature
 	}
 
-	return body + "\n\n" + signature
+	block := `<div style="margin-top:16px">` + signature + `</div>`
+	// Trailing content belongs inside the document, as for the pixel and footer.
+	if loc := bodyClose.FindAllStringIndex(body, -1); loc != nil {
+		at := loc[len(loc)-1][0]
+		return body[:at] + block + body[at:]
+	}
+	return body + block
 }
 
 // AddOpenTrackingPixel adds an invisible tracking pixel to HTML email.
@@ -275,62 +309,6 @@ func AddOpenTrackingPixel(htmlBody string, taskID uuid.UUID, trackingDomain stri
 
 	// Otherwise append to end
 	return htmlBody + pixel
-}
-
-// WrapLinksForTracking rewrites every external link to an opaque
-// click-tracking ticket (https://<domain>/c/<id>) and returns the minted
-// rows. The destination never travels inside the link, so there is nothing
-// to forge: the tracking service resolves tickets via the backend internal
-// API and 404s anything it does not know. The caller MUST persist the
-// returned rows before using the rewritten body (and fall back to the
-// original body on failure) so an email can never ship dead tickets.
-func WrapLinksForTracking(htmlBody string, taskID, campaignID uuid.UUID, trackingDomain string) (string, []repository.TrackedLink) {
-	// No tracking host means no ticket can be resolved, and a wrapped link
-	// would be a dead link in a real customer's email. Ship the originals.
-	trackingDomain = config.NormalizeTrackingHost(trackingDomain)
-	if trackingDomain == "" {
-		return htmlBody, nil
-	}
-
-	// Regex to find href attributes
-	linkRegex := regexp.MustCompile(`href="([^"]+)"`)
-	var links []repository.TrackedLink
-
-	result := linkRegex.ReplaceAllStringFunc(htmlBody, func(match string) string {
-		// Extract the original URL
-		originalURL := linkRegex.FindStringSubmatch(match)[1]
-
-		// Skip if already a tracking link or anchor link
-		if strings.HasPrefix(originalURL, "#") ||
-			strings.Contains(originalURL, trackingDomain) ||
-			strings.HasPrefix(originalURL, "mailto:") ||
-			strings.HasPrefix(originalURL, "tel:") {
-			return match
-		}
-
-		// Skip data URLs and javascript links
-		if strings.HasPrefix(originalURL, "data:") ||
-			strings.HasPrefix(originalURL, "javascript:") {
-			return match
-		}
-
-		// Only http(s) destinations are storable redirect targets
-		if !strings.HasPrefix(originalURL, "http://") && !strings.HasPrefix(originalURL, "https://") {
-			return match
-		}
-
-		id := uuid.New()
-		links = append(links, repository.TrackedLink{
-			ID:          id,
-			TaskID:      taskID,
-			CampaignID:  campaignID,
-			Destination: originalURL,
-		})
-
-		return fmt.Sprintf(`href="%s"`, config.TrackingURL(trackingDomain, "/c/"+id.String()))
-	})
-
-	return result, links
 }
 
 // personaPick chooses from a mailbox's preferred subset of phrasing options so

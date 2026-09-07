@@ -9,6 +9,8 @@
 # $TARGETARCH (no QEMU).
 FROM --platform=$BUILDPLATFORM node:22-alpine AS appbuilder
 WORKDIR /app
+# No TTY in a build: CI=true makes pnpm reinstall instead of prompting.
+ENV CI=true
 RUN corepack enable && corepack prepare pnpm@11.9.0 --activate
 COPY forms/package.json forms/pnpm-lock.yaml forms/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
@@ -18,6 +20,8 @@ RUN pnpm build
 FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 
 ARG TARGETOS TARGETARCH
+# Build identity shown in the admin panel; see internal/version.
+ARG VERSION="" COMMIT="" BUILT_AT=""
 RUN apk add --no-cache git ca-certificates
 
 WORKDIR /app
@@ -27,7 +31,7 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/forms ./cmd/forms
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w -X github.com/warmbly/warmbly/internal/version.Version=$VERSION -X github.com/warmbly/warmbly/internal/version.Commit=$COMMIT -X github.com/warmbly/warmbly/internal/version.BuiltAt=$BUILT_AT" -o /out/forms ./cmd/forms
 
 # Runtime stage
 FROM alpine:3.23

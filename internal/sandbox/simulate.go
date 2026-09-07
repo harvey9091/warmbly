@@ -212,9 +212,25 @@ func (s *simulator) actAsContact(ctx context.Context, c contactInfo, msg *mailpi
 		body = msg.Text
 	}
 
+	// A security gateway scans the message at delivery: pixel plus every
+	// link, one after another, before anyone could have read it. The
+	// consumer must label these as machine and never count them as clicks.
+	if p.Scanned {
+		s.sleep(ctx, 500*time.Millisecond, 2*time.Second)
+		if task := firstMatch(pixelRe, body); task != "" {
+			s.hitTracking(ctx, "/t/o/"+task+".png", c.Email)
+		}
+		for _, ticket := range allMatches(clickRe, body) {
+			s.hitTracking(ctx, "/c/"+ticket, c.Email)
+		}
+		fmt.Printf("scanned    %-34s %q\n", c.Email, msg.Subject)
+	}
+
 	if p.Opens {
 		if task := firstMatch(pixelRe, body); task != "" {
-			s.sleep(ctx, 5*time.Second, 40*time.Second)
+			// Never inside the machine window: a person needs the message
+			// delivered, noticed and opened first.
+			s.sleep(ctx, 15*time.Second, 40*time.Second)
 			s.hitTracking(ctx, "/t/o/"+task+".png", c.Email)
 			fmt.Printf("opened     %-34s %q\n", c.Email, msg.Subject)
 		}
@@ -273,4 +289,18 @@ func firstMatch(re *regexp.Regexp, body string) string {
 		return ""
 	}
 	return m[1]
+}
+
+// allMatches returns every distinct first capture group, in document order.
+func allMatches(re *regexp.Regexp, body string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range re.FindAllStringSubmatch(body, -1) {
+		if len(m) < 2 || seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		out = append(out, m[1])
+	}
+	return out
 }

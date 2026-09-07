@@ -202,8 +202,15 @@ export default function CampaignPreferences() {
             ...(newData.text_only !== campaign.text_only && { text_only: newData.text_only }),
             ...(newData.open_tracking !== campaign.open_tracking && { open_tracking: newData.open_tracking }),
             ...(newData.link_tracking !== campaign.link_tracking && { link_tracking: newData.link_tracking }),
+            ...(newData.utm_tracking !== campaign.utm_tracking && { utm_tracking: newData.utm_tracking }),
+            ...(newData.utm_source !== campaign.utm_source && { utm_source: newData.utm_source }),
+            ...(newData.utm_medium !== campaign.utm_medium && { utm_medium: newData.utm_medium }),
+            ...(newData.utm_campaign !== campaign.utm_campaign && { utm_campaign: newData.utm_campaign }),
             ...(newData.unsubscribe_header !== campaign.unsubscribe_header && {
                 unsubscribe_header: newData.unsubscribe_header,
+            }),
+            ...(newData.unsubscribe_mode !== campaign.unsubscribe_mode && {
+                unsubscribe_mode: newData.unsubscribe_mode,
             }),
 
             // Rotation
@@ -223,6 +230,7 @@ export default function CampaignPreferences() {
             ...(newData.prioritize_new_leads !== campaign.prioritize_new_leads && {
                 prioritize_new_leads: newData.prioritize_new_leads,
             }),
+            ...(newData.continuous !== campaign.continuous && { continuous: newData.continuous }),
             ...(newData.risky_emails !== campaign.risky_emails && { risky_emails: newData.risky_emails }),
 
             // Auto-pause guardrails

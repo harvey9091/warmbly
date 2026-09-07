@@ -2,14 +2,25 @@
 // as decided by the running backend. The endpoint returns only checks that
 // are not ok, so an empty response is a real all-clear and not a stub.
 
-import { Link } from "react-router-dom";
-import { AlertTriangle, CheckCircle2, Info, RefreshCw, XCircle } from "lucide-react";
+import { useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import {
+    AlertTriangle,
+    ArrowUpCircle,
+    CheckCircle2,
+    Info,
+    Loader2,
+    RefreshCw,
+    XCircle,
+} from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { ErrorState } from "@/components/ErrorState";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InstanceFindings } from "./InstanceHealthPanel";
+import { UpdateDialog } from "@/components/layout/UpdateDialog";
 import { useInstanceHealth } from "@/hooks/useInstanceHealth";
+import { buildLabel, isUpdating, useUpdateState } from "@/hooks/useUpdateState";
 import type { InstanceHealthSummary } from "@/lib/api/client/admin/instance";
 
 export default function HealthPage() {
@@ -42,6 +53,8 @@ export default function HealthPage() {
                     {healthQ.isFetching ? "Checking..." : "Run checks"}
                 </Button>
             </PageHeader>
+
+            <UpdateCard />
 
             {healthQ.isLoading && (
                 <div className="space-y-3">
@@ -85,6 +98,61 @@ export default function HealthPage() {
                     )}
                 </>
             )}
+        </div>
+    );
+}
+
+// Version and update status, above the findings: the same facts as the pill
+// in the top bar, on the page an operator opens to ask "is this instance ok".
+function UpdateCard() {
+    const updateQ = useUpdateState();
+    // ?update=1 is how the dashboard's version pill deep-links an admin
+    // straight into the dialog.
+    const [params] = useSearchParams();
+    const [open, setOpen] = useState(params.get("update") === "1");
+    const state = updateQ.data;
+    if (!state) return null;
+
+    const updating = isUpdating(state);
+    const available = state.update_available;
+    const tone = updating
+        ? "border-sky-200 bg-sky-50/60"
+        : available
+          ? "border-amber-200 bg-amber-50/60"
+          : "border-border bg-white";
+
+    return (
+        <div className={`mb-5 flex flex-wrap items-center gap-3 rounded-lg border p-3 ${tone}`}>
+            {updating ? (
+                <Loader2 className="size-4 shrink-0 animate-spin text-sky-600" />
+            ) : available ? (
+                <ArrowUpCircle className="size-4 shrink-0 text-amber-600" />
+            ) : (
+                <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />
+            )}
+            <div className="min-w-0 flex-1 text-[13px]">
+                <span className="font-semibold text-foreground">
+                    {updating
+                        ? "Updating this instance"
+                        : available
+                          ? `${state.latest?.tag && state.reason === "release" ? state.latest.tag : "A newer version"} is available`
+                          : "Up to date"}
+                </span>
+                <span className="text-muted-foreground">
+                    {" "}
+                    running {buildLabel(state)}
+                    {state.updater.checkout && !state.updater.checkout.detached
+                        ? ` on ${state.updater.checkout.branch}`
+                        : ""}
+                    {state.checked_at
+                        ? `, checked ${new Date(state.checked_at).toLocaleTimeString()}`
+                        : ""}
+                </span>
+            </div>
+            <Button size="sm" variant={available ? "default" : "outline"} onClick={() => setOpen(true)}>
+                {updating ? "Progress" : available ? "Update" : "Details"}
+            </Button>
+            <UpdateDialog open={open} onOpenChange={setOpen} />
         </div>
     );
 }

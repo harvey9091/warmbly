@@ -261,7 +261,7 @@ function AIVariableConfigBody({
     };
 
     return (
-        <div className="flex max-h-[calc(100dvh-4rem)] min-h-[340px]">
+        <div className="flex flex-col md:flex-row max-h-[calc(100dvh-4rem)] min-h-[340px]">
             {/* LEFT — the instruction, in the same editor used everywhere else */}
             <div className="flex min-w-0 flex-1 flex-col">
                 <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 pb-4 pt-5">
@@ -359,7 +359,9 @@ function AIVariableConfigBody({
             </div>
 
             {/* RIGHT — the live sample */}
-            <div className="flex w-[300px] shrink-0 flex-col border-l border-slate-200 bg-slate-50/60 p-4">
+            {/* The sample sits beside the form on desktop and under it on a
+                phone, where a 300px column would leave the form no room. */}
+            <div className="flex w-full max-h-[32dvh] md:max-h-none md:w-[300px] shrink-0 flex-col border-t md:border-t-0 md:border-l border-slate-200 bg-slate-50/60 p-4">
                 <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-slate-400">
                     Sample for Alex Rivera at Acme
                 </span>

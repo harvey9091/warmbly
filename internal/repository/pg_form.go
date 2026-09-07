@@ -125,6 +125,24 @@ func (r *formRepository) GetByPublicID(ctx context.Context, publicID string) (*m
 	return f, nil
 }
 
+// formWriteValues renders the columns a Go zero value would corrupt: a form
+// with no domains and no fields yet is exactly what "New form" creates, and
+// its nil slices would bind as NULL against a NOT NULL allowed_domains and a
+// fields column CHECKed to hold a JSON array (issue #343).
+func formWriteValues(f *models.Form) (fields, design []byte, domains []string, err error) {
+	list := f.Fields
+	if list == nil {
+		list = []models.FormField{}
+	}
+	if fields, err = json.Marshal(list); err != nil {
+		return nil, nil, nil, err
+	}
+	if design, err = json.Marshal(f.Design); err != nil {
+		return nil, nil, nil, err
+	}
+	return fields, design, textArray(f.AllowedDomains), nil
+}
+
 func (r *formRepository) Create(ctx context.Context, orgID uuid.UUID, createdBy *uuid.UUID, f *models.Form) (*models.Form, *errx.Error) {
 	var count int
 	if err := r.DB.QueryRow(ctx, `SELECT COUNT(*) FROM forms WHERE organization_id = $1`, orgID).Scan(&count); err != nil {
@@ -135,8 +153,11 @@ func (r *formRepository) Create(ctx context.Context, orgID uuid.UUID, createdBy 
 		return nil, errx.New(errx.BadRequest, fmt.Sprintf("at most %d forms per organization", models.FormsPerOrgMax))
 	}
 
-	fields, _ := json.Marshal(f.Fields)
-	design, _ := json.Marshal(f.Design)
+	fields, design, domains, err := formWriteValues(f)
+	if err != nil {
+		db.CaptureError(err, "forms create", nil, "marshal")
+		return nil, errx.InternalError()
+	}
 
 	tx, err := r.DB.Begin(ctx)
 	if err != nil {
@@ -152,7 +173,7 @@ func (r *formRepository) Create(ctx context.Context, orgID uuid.UUID, createdBy 
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING id
 	`, orgID, createdBy, f.PublicID, f.Name, f.Status, fields, design,
-		f.SuccessMessage, f.RedirectURL, f.CampaignID, f.AllowedDomains, f.CaptchaEnabled).Scan(&id)
+		f.SuccessMessage, f.RedirectURL, f.CampaignID, domains, f.CaptchaEnabled).Scan(&id)
 	if err != nil {
 		db.CaptureError(err, "forms create", nil, "insert")
 		return nil, errx.InternalError()
@@ -168,8 +189,11 @@ func (r *formRepository) Create(ctx context.Context, orgID uuid.UUID, createdBy 
 }
 
 func (r *formRepository) Update(ctx context.Context, orgID uuid.UUID, f *models.Form) (*models.Form, *errx.Error) {
-	fields, _ := json.Marshal(f.Fields)
-	design, _ := json.Marshal(f.Design)
+	fields, design, domains, err := formWriteValues(f)
+	if err != nil {
+		db.CaptureError(err, "forms update", nil, "marshal")
+		return nil, errx.InternalError()
+	}
 
 	tx, err := r.DB.Begin(ctx)
 	if err != nil {
@@ -184,7 +208,7 @@ func (r *formRepository) Update(ctx context.Context, orgID uuid.UUID, f *models.
 			published_at = $12, updated_at = NOW()
 		WHERE organization_id = $1 AND id = $2
 	`, orgID, f.ID, f.Name, f.Status, fields, design, f.SuccessMessage,
-		f.RedirectURL, f.CampaignID, f.AllowedDomains, f.CaptchaEnabled, f.PublishedAt)
+		f.RedirectURL, f.CampaignID, domains, f.CaptchaEnabled, f.PublishedAt)
 	if err != nil {
 		db.CaptureError(err, "forms update", nil, "exec")
 		return nil, errx.InternalError()

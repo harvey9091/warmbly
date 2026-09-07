@@ -9,6 +9,8 @@ export const API_URL = runtimeEnv("API_URL", import.meta.env.VITE_API_URL);
 // (no path), so this is the single place the /v1 prefix is applied.
 export const API_BASE_URL = `${API_URL}/v1`;
 export const TURNSTILE_KEY = runtimeEnv("TURNSTILE_KEY", import.meta.env.VITE_TURNSTILE_KEY);
+// Empty means browser error reporting is never initialised. See lib/observability.
+export const SENTRY_DSN = runtimeEnv("SENTRY_DSN", import.meta.env.VITE_SENTRY_DSN);
 export const HUMAN_VERIFICATION_FAIL = "We couldn’t verify you’re human. Please try the security check again or reload the page.";
 export const PASSWORD_FAIL = "The password must be at least 8 characters long and contain both uppercase and lowercase letters, as well as a number."
 export const TOKEN_KEY = "auth_token";

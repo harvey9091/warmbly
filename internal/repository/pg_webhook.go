@@ -105,6 +105,11 @@ func (r *webhookRepository) CreateEndpoint(ctx context.Context, endpoint *models
 	}
 	endpoint.CreatedAt = time.Now().UTC()
 	endpoint.UpdatedAt = endpoint.CreatedAt
+	// An omitted filter is the documented "every non-firehose event", which
+	// the matcher reads as an empty array; NULL is not allowed. Normalized on
+	// the struct too, so the created endpoint reads back the way a later GET
+	// returns it instead of echoing a null filter.
+	endpoint.EventTypes = textArray(endpoint.EventTypes)
 
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO webhook_endpoints (
@@ -123,6 +128,7 @@ func (r *webhookRepository) CreateEndpoint(ctx context.Context, endpoint *models
 
 func (r *webhookRepository) UpdateEndpoint(ctx context.Context, endpoint *models.WebhookEndpoint) error {
 	endpoint.UpdatedAt = time.Now().UTC()
+	endpoint.EventTypes = textArray(endpoint.EventTypes)
 	cmd, err := r.db.Exec(ctx, `
 		UPDATE webhook_endpoints
 		SET url = $1, description = $2, event_types = $3, enabled = $4, updated_at = $5
@@ -291,7 +297,7 @@ func (r *webhookRepository) UpsertAppEndpoint(ctx context.Context, orgID, appID 
 		DO UPDATE SET url = EXCLUDED.url, secret = EXCLUDED.secret,
 		    event_types = EXCLUDED.event_types, enabled = true,
 		    auto_disabled_at = NULL, disabled_reason = NULL, updated_at = NOW()
-	`, orgID, url, "Managed by OAuth app", secret, eventTypes, appID)
+	`, orgID, url, "Managed by OAuth app", secret, textArray(eventTypes), appID)
 	return err
 }
 

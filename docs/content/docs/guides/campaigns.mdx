@@ -11,9 +11,23 @@ You need at least one active mailbox and a contact list. Warm new mailboxes befo
 
 ## Create a campaign
 
-**Campaigns** > **New campaign** opens a four-step wizard: **Basics** (name, description), **Schedule** (timezone, sending days, hours), **Sending** (mailbox tags, daily limit per mailbox, stop on reply, open and click tracking, unsubscribe header), and **First email** (subject, body, optional follow-ups). Follow-ups added here are connected in order, each waiting the number of days you set after the previous step; open the Steps tab to rearrange, branch, or change the waits. Only a name is required; the first email can be skipped and written in the full editor on the Steps tab, and everything else can be changed later from settings. Closing a wizard with unsaved edits asks before discarding them.
+**Campaigns** > **New campaign** opens a wizard that first asks what you are sending: a **sequence** or a [one-time email](#one-time-emails). For a sequence the steps are **Basics** (name, description), **Schedule** (timezone, sending days, hours), **Sending** (mailbox tags, daily limit per mailbox, stop on reply, open and click tracking, UTM parameters, unsubscribe header), and **First email** (subject, body, optional follow-ups). Follow-ups added here are connected in order, each waiting the number of days you set after the previous step; open the Steps tab to rearrange, branch, or change the waits. Only a name is required; the first email can be skipped and written in the full editor on the Steps tab, and everything else except the campaign type can be changed later from settings. The choice between a sequence and a one-time email is fixed at creation: switching means creating a new campaign. Closing a wizard with unsaved edits asks before discarding them.
 
 The campaign starts as a **draft**. Nothing sends until you start it.
+
+## One-time emails
+
+A one-time email is a campaign with a single message and no follow-ups: an announcement, an update, a single ask to a segment. It is still a campaign underneath, so it sends through your mailbox pool with the same rotation, per-mailbox daily caps, spacing, suppression, tracking and analytics as a sequence. What changes is the flow and the wording.
+
+Pick **One-time email** on the wizard's first step. The steps are then **Basics**, **Email** (subject and body, both required), **Audience** (one or more [segments](/guides/segments/); every current member becomes a lead, and a contact in several of them is emailed once), **Sending** (mailbox tags, daily limit, tracking, unsubscribe header) and **Send**. The last step chooses **Send now** or **Schedule for later** with a date and time, sets the sending days and window, and shows an estimate: how many recipients the segments resolve to, how many mailboxes will send, the pool's daily ceiling, and the day the last send is expected to land. The estimate is the earliest finish under the daily caps, not a promise. A thousand contacts on one mailbox at the default cap is a multi-week send, and the wizard says so before you confirm.
+
+Confirming creates the campaign, links the segments (so the campaign keeps enrolling contacts who join them later, exactly like [linking a segment](/guides/segments/#linking-a-segment-to-a-campaign)), and starts it. A scheduled one waits for its date, then sends inside the window. If the start is refused, for example because the segments are empty or the list fails the [launch check](#the-launch-check-on-your-list), the email is kept as a draft and its page explains why.
+
+In the campaigns list a one-time email carries a **One-time** badge and reads **draft**, **scheduled** (started, waiting for its date), **sending** or **sent**; the **Type** filter shows only sequences or only one-time emails. The Overview tab reports opens, clicks, replies and bounces the same way it does for a sequence. Adding a second email step to a one-time email is refused: create a sequence when you want a reminder later.
+
+## Plain text only
+
+**Settings** > **Plain text only** sends the campaign without an HTML part. Recipients get the plain-text body with the mailbox's plain-text signature, and because open pixels and wrapped links need HTML, open and click tracking are off for that campaign whatever their toggles say. Test emails respect it too, so what lands in your own inbox is what recipients get.
 
 ## Senders and rotation
 
@@ -49,6 +63,8 @@ Warmbly is mailbox-first: safe volume is the sum of each mailbox's budget, not o
 
 The campaign daily limit applies as a minimum against the cold cap, so it can lower a mailbox's volume but never raise it above the mailbox's own daily cap (default `50`/day).
 
+Only an email actually handed to a sending worker counts against a mailbox's daily budget and its minimum gap. The scheduler's own wake-ups, a step it deferred because its slot was not due yet, and action or wait steps never do, so a campaign started outside its sending window still has its whole budget when the window opens. When every mailbox on a campaign has used its budget for the day, the campaign stays active and waits for the next day; the activity log notes it once per day. It also waits, rather than pausing, when every mailbox is outside its own hours, resting, or held back by warmup health.
+
 <Callout type="warn" title="Don't push past the defaults casually">
 Anything above `50`/day per cold mailbox needs positive reputation signals and a low complaint rate behind it. Adding mailboxes is safer than forcing a few to send more.
 </Callout>
@@ -57,11 +73,17 @@ Anything above `50`/day per cold mailbox needs positive reputation signals and a
 
 **Lead flow** throttles new contacts with **Max new leads per day** (`0` for unlimited, up to `1000`). At the cap, follow-ups to in-flight contacts continue and new leads resume tomorrow. You can prioritize new leads over follow-ups, and choose whether to attempt addresses verification flagged risky.
 
+**Keep running for new leads** turns a campaign into an ongoing one: when it runs out of leads it stays **active** and shows **waiting for leads** instead of finishing, then sends the sequence to each lead as they arrive from a linked segment, a form, the API, Zapier, Make, n8n or an automation. Linking a segment, pointing a form at the campaign, or saving an automation that enrols leads in it turns it on, and so does pressing play on a finished campaign whose every lead is done; turn it off in the campaign's preferences to have the campaign finish once every lead is done. A campaign with this on can be started with no leads yet. An end date still ends it.
+
 ### Adding leads
 
 The **Leads** tab takes contacts four ways. **From contacts** opens a picker over the workspace contact list: search by name, email or company, filter by category, tick individual people or **Select loaded**, or **Select all matching** to add everyone the search returns (up to 1,000 per batch; repeat for the rest). Contacts already in the campaign are marked as leads and skipped. **Import** runs the file import wizard with this campaign preselected (its Options step can also pin the file into segments), **Sheet sync** attaches a Google Sheet, and **Add lead** creates a single new contact in the campaign. Any workspace member with contact access can add leads to any campaign in the workspace, whoever created it.
 
-**Segments** on the same toolbar links [segments](/guides/segments/) to the campaign as a live audience, up to 20 per campaign. Linking enrols every current member immediately, and contacts who enter a linked segment later are enrolled on their own, within a couple of minutes. An active campaign wakes to send to them, a finished one restarts through the usual launch checks, and a paused one accumulates them for later. Enrolment is additive: a contact who leaves the segment keeps their lead row, and detaching a segment stops future enrolment without touching existing leads. See [linking a segment to a campaign](/guides/segments/#linking-a-segment-to-a-campaign).
+**Segments** on the same toolbar links [segments](/guides/segments/) to the campaign as a live audience, up to 20 per campaign. Linking enrols every current member immediately and turns on **Keep running for new leads**, and contacts who enter a linked segment later are enrolled on their own, within a couple of minutes. An active campaign wakes to send to them (a campaign waiting for leads picks up straight away), a finished one restarts through the usual launch checks, and a paused one accumulates them for later. Enrolment is additive: a contact who leaves the segment keeps their lead row, and detaching a segment stops future enrolment without touching existing leads. See [linking a segment to a campaign](/guides/segments/#linking-a-segment-to-a-campaign).
+
+Every linked segment is shown in a **Linked segments** strip under the toolbar, so the audience feeding the list is always visible. Each chip names the segment and shows how many of its members are leads right now (`120/120`); clicking it filters the list to that segment's leads, and the arrow next to it opens the segment. A segment that matches no contacts says **no contacts** instead of a count, and one whose members were removed from the campaign by hand shows how many are **held out** with an **Add back** action, which re-enrols every current member and clears the removals. When a campaign has linked segments but no leads, the empty state explains why (the segments are empty, or their members were removed by hand) rather than offering to link a segment again.
+
+**Export** on the toolbar downloads the leads as CSV, XLSX or JSON. The scope is the campaign: **Every lead** exports the whole list, **Filtered** the leads matching the current filters, **Selected** the ticked rows. The **Campaign-ready** column preset adds each lead's status and whether they opened, clicked or replied. The same export lives on a segment page for its members.
 
 A lead can also be taken out again: the remove button on a lead's row, or **Remove from campaign** in the selection bar when several are ticked, drops the lead from this campaign without deleting the contact. The removal sticks: a linked segment will not re-enrol that contact automatically, even while they still match it, until you add them back yourself. Neither offers to delete the contact itself: inside a campaign the destructive action is leaving the campaign, and deleting a contact from the workspace is done from the contacts list.
 
@@ -81,7 +103,9 @@ A lead is **Processing** only while steps remain, so a finished campaign reads a
 
 ### Who opened, clicked and replied
 
-Next to each lead's status, the Leads list shows three engagement columns: **Opened**, **Clicked** and **Replied**, each with the number of emails in the sequence the person engaged with. A dash means the lead was emailed and has not engaged; the cell is blank for a lead not emailed yet. An open counts only when a person opened the email. Mail clients that fetch every image automatically (Apple Mail Privacy Protection, for example) show as **auto** instead, the same opens the campaign overview reports as automatic, so they never pass for engagement.
+Next to each lead's status, the Leads list shows three engagement columns: **Opened**, **Clicked** and **Replied**, each with the number of emails in the sequence the person engaged with. A dash means the lead was emailed and has not engaged; the cell is blank for a lead not emailed yet. An open counts when a person opened the email, or clicked a link in it. Mail clients that fetch every image automatically (Apple Mail Privacy Protection, for example) show as **auto** instead, the same opens the campaign overview reports as automatic, so they never pass for engagement. Clicks are held to the same standard: a link followed within ten seconds of the send, or several links of one email followed within a few seconds of each other, is a security gateway scanning the message, not the recipient. Those clicks are kept on the contact's activity marked **auto**, counted apart on the campaign overview, and never make a lead **Clicked**, never fire a clicked branch or automation, and never send a webhook. See [Link tracking and UTM parameters](#link-tracking-and-utm-parameters).
+
+Opens depend on the recipient's mail client loading images. Outlook, many corporate setups and some privacy-minded clients block them, so a person can read an email and still show no open; the info icon on the column says as much. A click is stronger evidence, so a click by the person always counts as an open too. Open the contact's Activity tab to see each open and click with the mail client and location it came from.
 
 The chips above the list are filters. Click a status chip (**Processing**, **Done**, **Replied**, **Queued**, **Bounced**, **Unsub**) or an engagement chip (**Opened**, **Not opened**, **Clicked**, **Not clicked**, **Replied**, **Not replied**) to show only those leads; click it again to clear. One status and one engagement chip can be active at once and both must match. The numbers on the chips are campaign-wide totals, and filtering happens on the server, so a scope shows every matching lead however long the list is. **Not opened**, **Not clicked** and **Not replied** only cover leads that have been sent at least one email: a queued lead has not had the chance. The same filters live in the **Filters** sheet under **Lead status** and **Engagement**.
 
@@ -106,6 +130,21 @@ A step counts as sent only once the sending worker has handed it to the mailbox 
 
 No contact is emailed the same step twice. Each step is recorded as attempted before the send is handed to a worker, so a crash, a restart, or a database hiccup in the moment between the two cannot make the step look unsent and send it again. The trade-off is a step whose outcome is genuinely unknown, when the worker stops responding mid-send: after 30 minutes with no answer the step is treated as a failed attempt, appears in **Needs attention**, and is retried like any other failure.
 
+## Link tracking and UTM parameters
+
+With **Link tracking** on, every link in the email body becomes its own tracked link, so Warmbly records which link was clicked, not only that one was. Open a contact's **Activity** tab and a click reads **Clicked Pricing**, with the campaign, step and sending mailbox on the row and, expanded, the link's text, its full URL, every UTM parameter it carried, the browser, and whether a person or a scanner followed it. The campaign's live feed names the link the same way, and the `campaign.email_clicked` webhook carries the URL and the link text.
+
+**UTM parameters** (on by default for campaigns created in the dashboard, off for campaigns created through the API unless you send `utm_tracking`) tag every link when the email is sent, so nobody has to add them by hand and clicks show up attributed in your web analytics:
+
+| Parameter | Value |
+|-----------|-------|
+| `utm_source` | `warmbly`, or the value you set on the campaign |
+| `utm_medium` | `email`, or the value you set |
+| `utm_campaign` | The campaign name as a slug (`q3_outbound`), or the value you set |
+| `utm_content` | The link's own text as a slug (`pricing_page`); a link with no text, such as an image, is numbered `link_1`, `link_2` in order |
+
+A link that already carries one of these keeps the hand-written value; only the missing parameters are added. Existing query strings and fragments are left exactly as written, and the tags go on the real destination, so they survive the tracking redirect. Anchors, `mailto:` and `tel:` links, and anything that is not `http(s)` are never touched. UTM tagging works with link tracking off too: the tags are added and the link is otherwise left as written. Bare URLs in the plain-text part are tagged as well, numbered `link_1`, `link_2` since they have no text. Change the source, medium and campaign values under **Settings** > **Deliverability**; leave a field empty to use the default.
+
 ## Scheduling
 
 Campaigns send only inside the **weekly sending windows** you define, in the campaign's timezone. Each day is independent, with different hours or several windows per day, set from presets like `Mon-Fri 9-5` or by dragging on the grid (which is Monday-first).
@@ -122,9 +161,9 @@ Optional **campaign dates** bound when it may send. Leave both blank to run open
 
 The play and pause buttons work from the list row or the detail view. Starting moves the campaign to **active** and begins scheduling inside your windows and limits; pausing stops new scheduling immediately and resumes from where it left off.
 
-A campaign can pause itself: **paused, no accounts** when it loses every sender, **paused, trial expired** when a trial ends, **auto-paused** when a guardrail trips, **needs verification** when address verification has refused every remaining lead (the campaign offers to re-verify them or send anyway; see [address verification](/guides/deliverability/#address-verification)), and plain **paused** if it ever loses its workspace, because unsubscribes, bounces and complaints are checked per workspace and cannot be honoured without one. It moves to **finished** once every contact completes the sequence or its end date passes. Configured to do so, it also stops following up with a contact the moment they reply.
+A campaign can pause itself: **paused, no accounts** when it loses every sender or no sender can send under its settings (a sending behaviour profile with no working days), **paused, trial expired** when a trial ends, **auto-paused** when a guardrail trips, **needs verification** when address verification has refused every remaining lead (the campaign offers to re-verify them or send anyway; see [address verification](/guides/deliverability/#address-verification)), and plain **paused** if it ever loses its workspace, because unsubscribes, bounces and complaints are checked per workspace and cannot be honoured without one. It moves to **finished** once every contact completes the sequence or its end date passes, unless **Keep running for new leads** is on: then it stays active and shows **waiting for leads** until the next lead arrives, and only its end date finishes it. Configured to do so, it also stops following up with a contact the moment they reply.
 
-A finished campaign can be started again: after extending or clearing its end date, or adding new leads, pressing play resumes it. If there is genuinely nothing left to send it finishes again immediately with a message saying so.
+A finished campaign starts again on its own when a lead is added to it, whether by a linked segment, the API, a form, an integration or an automation, through the same launch checks as pressing play. If a check refuses the restart (the list is a bounce risk, the plan cannot send, too many campaigns are active), the activity log says so and the new leads wait until you fix the cause and press play. Pressing play also works after extending or clearing the end date. If there is genuinely nothing left to send, pressing play turns on **Keep running for new leads** and the campaign stays active, **waiting for leads**, so it never dead-ends on a campaign that only ran out of people to write to; the activity log notes the switch.
 
 ## Duplicate and delete
 
@@ -135,6 +174,8 @@ Every campaign has a **⋯** menu, on its row in the list and in the header of i
 **Delete** asks for confirmation that spells out what goes: the campaign, its steps, lead progress and activity. Contacts and emails already sent stay. A running campaign can be deleted directly; the confirmation says so, and sending stops immediately because every task waiting for the campaign is cancelled together with it. The same action is available at the bottom of the campaign's **Settings**. Deletion cannot be undone.
 
 ## Auto-pause guardrails
+
+**Preferences** > **Opt-out line** chooses what this campaign appends after the signature: the workspace default from **Settings > Sending**, a reply-to-opt-out sentence, an unsubscribe link, or nothing. **Unsubscribe header** attaches the RFC 8058 headers alongside. See [unsubscribe and suppression](/guides/unsubscribe/).
 
 **Preferences** > **Auto-pause** stops a campaign the moment its rates leave the band you set, instead of waiting for a mailbox provider to react. Off by default.
 

@@ -47,3 +47,46 @@ export function campaignStatusLabel(status?: string): string {
 export function campaignStatusTone(status: string): string {
     return CAMPAIGN_STATUS_TONE[status] ?? CAMPAIGN_STATUS_TONE.draft;
 }
+
+// The subset of a campaign the display helpers need, so list rows, pickers
+// and the detail header can all pass their own shape.
+export interface CampaignStatusSubject {
+    status?: string;
+    kind?: string;
+    start_date?: Date | string | null;
+    idle_since?: Date | string | null;
+}
+
+// An active continuous campaign with nothing left to send: still running,
+// waiting for leads. Its own label and tone, so it never reads as stuck.
+export function isIdleCampaign(c: Pick<CampaignStatusSubject, "status" | "idle_since">): boolean {
+    return c.status === "active" && !!c.idle_since;
+}
+
+export const CAMPAIGN_IDLE_LABEL = "waiting for leads";
+export const CAMPAIGN_IDLE_TONE = "text-sky-600";
+
+export function campaignDisplayTone(c: CampaignStatusSubject): string {
+    if (isIdleCampaign(c)) return CAMPAIGN_IDLE_TONE;
+    return campaignStatusTone(c.status ?? "draft");
+}
+
+export function isOneTimeCampaign(c: Pick<CampaignStatusSubject, "kind">): boolean {
+    return c.kind === "one_time";
+}
+
+// A one-time email reads as a message, not a sequence: draft, scheduled
+// (active but waiting on its start date), sending, sent. Paused variants keep
+// their sequence wording since the reasons are the same.
+export function campaignDisplayLabel(c: CampaignStatusSubject): string {
+    const status = c.status ?? "draft";
+    if (isIdleCampaign(c)) return CAMPAIGN_IDLE_LABEL;
+    if (!isOneTimeCampaign(c)) return campaignStatusLabel(status);
+    if (status === "completed") return "sent";
+    if (status === "active") {
+        const start = c.start_date ? new Date(c.start_date) : null;
+        if (start && !Number.isNaN(start.getTime()) && start.getTime() > Date.now()) return "scheduled";
+        return "sending";
+    }
+    return campaignStatusLabel(status);
+}

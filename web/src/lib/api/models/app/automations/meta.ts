@@ -10,6 +10,8 @@ import type { AutomationCondition } from "@/lib/api/models/app/automations/Autom
 // a real event, only via a campaign "Run automation" step (RunAutomationByID).
 export const TRIGGER_EVENTS: string[] = [
     "campaign.reply_received",
+    "contact.created",
+    "form.submitted",
     "meeting.booked",
     "meeting.rescheduled",
     "meeting.canceled",
@@ -52,6 +54,8 @@ export const ACTION_LABELS: Record<string, string> = {
     "warmbly.label_email": "Label the email",
     "warmbly.set_variables": "Set variables",
     "warmbly.fire_event": "Fire event",
+    "warmbly.upsert_contact": "Create or update contact",
+    "warmbly.add_to_campaign": "Add to campaign",
     "warmbly.ai_step": "AI step",
     "warmbly.ai_switch": "AI switch",
 };
@@ -66,6 +70,8 @@ export function actionLabel(a: string): string {
 export const NATIVE_CONNECTION = "__native__";
 
 export const NATIVE_ACTIONS: string[] = [
+    "warmbly.upsert_contact",
+    "warmbly.add_to_campaign",
     "warmbly.add_tag",
     "warmbly.remove_tag",
     "warmbly.create_task",
@@ -117,10 +123,16 @@ export function nativeActionNeeds(
     | "automation"
     | "vars"
     | "event"
+    | "contact"
+    | "campaign"
     | "ai_step"
     | "ai_switch"
     | "none" {
     switch (action) {
+        case "warmbly.upsert_contact":
+            return "contact";
+        case "warmbly.add_to_campaign":
+            return "campaign";
         case "warmbly.ai_step":
             return "ai_step";
         case "warmbly.ai_switch":
@@ -217,7 +229,32 @@ const DELIVERABILITY_FIELDS: TriggerFieldDef[] = [
     { key: "campaign_id", label: "From a campaign", type: "string", defaultOperator: "exists" },
 ];
 
+export const CONTACT_SOURCES = [
+    { value: "manual", label: "Added manually" },
+    { value: "campaign", label: "Added from a campaign" },
+    { value: "api", label: "API" },
+    { value: "form", label: "Form submission" },
+    { value: "automation", label: "Automation" },
+    { value: "ai_assistant", label: "AI assistant" },
+];
+
 export const TRIGGER_FIELDS: Record<string, TriggerFieldDef[]> = {
+    "contact.created": [
+        { key: "source", label: "Source", type: "enum", options: CONTACT_SOURCES, defaultOperator: "equals" },
+        { key: "source_detail", label: "Source detail", type: "string", defaultOperator: "contains" },
+        { key: "contact_email", label: "Contact email", type: "string", defaultOperator: "contains" },
+        { key: "company", label: "Company", type: "string", defaultOperator: "contains" },
+        { key: "phone", label: "Phone", type: "string", defaultOperator: "exists" },
+        { key: "subscribed", label: "Subscribed", type: "bool", defaultOperator: "is_true" },
+    ],
+    "form.submitted": [
+        { key: "form_name", label: "Form", type: "string", defaultOperator: "equals" },
+        { key: "contact_email", label: "Contact email", type: "string", defaultOperator: "contains" },
+        { key: "company", label: "Company", type: "string", defaultOperator: "contains" },
+        { key: "source_url", label: "Page URL", type: "string", defaultOperator: "contains" },
+        { key: "campaign_id", label: "From a campaign", type: "string", defaultOperator: "exists" },
+        { key: "contact_id", label: "Matched contact", type: "string", defaultOperator: "exists" },
+    ],
     "campaign.reply_received": [
         { key: "intent", label: "Reply intent", type: "enum", options: REPLY_INTENT_OPTIONS, defaultOperator: "equals" },
         { key: "confidence", label: "Classifier confidence", type: "number", defaultOperator: "gte" },
@@ -354,6 +391,8 @@ export function defaultOperatorFor(field: string): string {
 // The keys present in each trigger's event payload, offered as {{.key}} inserts
 // (standard Go-template dotted field access) in action message/URL/value fields.
 export const TRIGGER_VARIABLES: Record<string, string[]> = {
+    "contact.created": ["contact_email", "contact_id", "first_name", "last_name", "company", "phone", "source", "source_detail", "subscribed"],
+    "form.submitted": ["contact_email", "contact_id", "first_name", "last_name", "company", "phone", "form_name", "form_id", "submission_id", "source_url", "campaign_id"],
     "campaign.reply_received": ["contact_email", "contact_id", "campaign_id", "intent", "confidence", "subject", "snippet"],
     "meeting.booked": ["invitee_name", "invitee_email", "event_name", "scheduled_for", "join_url", "source", "contact_id"],
     "meeting.rescheduled": ["invitee_name", "invitee_email", "event_name", "scheduled_for", "join_url", "source", "contact_id"],
@@ -417,6 +456,26 @@ export function sampleEventData(triggerEvent: string): Record<string, unknown> {
             base.previous_state = "healthy";
             base.reason = "spam placement rising";
             break;
+        case "contact.created":
+            delete base.campaign_id;
+            delete base.campaign_name;
+            base.phone = "+1 555 0100";
+            base.subscribed = true;
+            base.custom_fields = { industry: "SaaS" };
+            base.source = "form";
+            base.source_detail = "Demo request";
+            base.campaign_ids = [];
+            base.category_ids = [];
+            break;
+        case "form.submitted":
+            delete base.campaign_name;
+            base.form_id = "00000000-0000-0000-0000-000000000003";
+            base.form_name = "Demo request";
+            base.submission_id = "00000000-0000-0000-0000-000000000004";
+            base.phone = "+1 555 0100";
+            base.source_url = "https://example.com/pricing";
+            base.data = { email: "jane@example.com", first_name: "Jane", last_name: "Doe", company: "Example Inc", team_size: "10-50" };
+            break;
     }
     return base;
 }
@@ -451,6 +510,7 @@ export function conditionLabel(c?: AutomationCondition): string {
         const valLbl =
             REPLY_INTENT_OPTIONS.find((o) => o.value === c.value)?.label ??
             WARMUP_STATES.find((o) => o.value === c.value)?.label ??
+            (key === "source" ? CONTACT_SOURCES.find((o) => o.value === c.value)?.label : undefined) ??
             String(c.value ?? "…");
         return `${prettyKey(key)} ${opLbl} ${valLbl}`;
     }

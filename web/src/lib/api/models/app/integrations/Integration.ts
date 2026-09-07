@@ -309,6 +309,8 @@ export const REPLY_INTENT_OPTIONS: { value: string; label: string }[] = [
 // Human labels for the Warmbly event vocabulary (subset surfaced as triggers).
 export const EVENT_LABELS: Record<string, string> = {
     "campaign.reply_received": "Prospect replies",
+    "contact.created": "Contact created",
+    "form.submitted": "Form submitted",
     "campaign.email_bounced": "Email bounces",
     "campaign.unsubscribed": "Contact unsubscribes",
     "warmup.health_changed": "Warmup health changes",

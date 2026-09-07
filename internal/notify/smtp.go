@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
+	wsmtp "github.com/warmbly/warmbly/internal/client/smtpimap/smtp"
 	"github.com/warmbly/warmbly/internal/config"
 )
 
@@ -171,7 +172,7 @@ func (s *smtpEmailNotificationService) authenticate(client *smtp.Client) error {
 
 	// Credentials only travel over an encrypted link. Loopback is exempt so a
 	// sidecar relay on the same host still works.
-	if _, isTLS := client.TLSConnectionState(); !isTLS && !isLoopback(s.cfg.Host) {
+	if _, isTLS := client.TLSConnectionState(); !isTLS && !wsmtp.IsLoopbackHost(s.cfg.Host) {
 		return ErrSMTPCleartextAuth
 	}
 
@@ -193,7 +194,7 @@ func (s *smtpEmailNotificationService) authMechanism(client *smtp.Client) (smtp.
 	case config.SMTPAuthPlain:
 		return smtp.PlainAuth("", s.cfg.Username, s.cfg.Password, s.cfg.Host), nil
 	case config.SMTPAuthLogin:
-		return newLoginAuth(s.cfg.Username, s.cfg.Password, s.cfg.Host), nil
+		return wsmtp.NewLoginAuth(s.cfg.Username, s.cfg.Password, s.cfg.Host), nil
 	case config.SMTPAuthCRAMMD5:
 		return smtp.CRAMMD5Auth(s.cfg.Username, s.cfg.Password), nil
 	}
@@ -210,7 +211,7 @@ func (s *smtpEmailNotificationService) authMechanism(client *smtp.Client) (smtp.
 	case strings.Contains(mechs, "CRAM-MD5"):
 		return smtp.CRAMMD5Auth(s.cfg.Username, s.cfg.Password), nil
 	case strings.Contains(mechs, "LOGIN"):
-		return newLoginAuth(s.cfg.Username, s.cfg.Password, s.cfg.Host), nil
+		return wsmtp.NewLoginAuth(s.cfg.Username, s.cfg.Password, s.cfg.Host), nil
 	case strings.Contains(mechs, "PLAIN"):
 		return smtp.PlainAuth("", s.cfg.Username, s.cfg.Password, s.cfg.Host), nil
 	default:
@@ -228,55 +229,4 @@ func (s *smtpEmailNotificationService) ehloName() string {
 		return s.Address[at+1:]
 	}
 	return ""
-}
-
-func isLoopback(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
-	}
-	return false
-}
-
-// loginAuth implements the non-standard but widely required AUTH LOGIN
-// mechanism, which net/smtp does not ship. Exchange Online and many appliance
-// relays advertise it exclusively.
-type loginAuth struct {
-	username string
-	password string
-	host     string
-}
-
-func newLoginAuth(username, password, host string) smtp.Auth {
-	return &loginAuth{username: username, password: password, host: host}
-}
-
-func (a *loginAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
-	if !server.TLS && !isLoopback(server.Name) {
-		return "", nil, ErrSMTPCleartextAuth
-	}
-	return "LOGIN", nil, nil
-}
-
-func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
-	if !more {
-		return nil, nil
-	}
-	// Servers vary in how they word the prompts, so match on the decoded
-	// challenge rather than expecting an exact string.
-	switch strings.ToLower(string(fromServer)) {
-	case "username:", "user name":
-		return []byte(a.username), nil
-	case "password:":
-		return []byte(a.password), nil
-	}
-	if strings.Contains(strings.ToLower(string(fromServer)), "user") {
-		return []byte(a.username), nil
-	}
-	if strings.Contains(strings.ToLower(string(fromServer)), "pass") {
-		return []byte(a.password), nil
-	}
-	return nil, fmt.Errorf("smtp: unexpected LOGIN challenge %q", string(fromServer))
 }

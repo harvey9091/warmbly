@@ -213,7 +213,7 @@ function Inner({ apiKey, onClose }: { apiKey: APIKey; onClose: () => void }) {
                             {apiKey.description && (
                                 <p className="text-[12px] text-slate-500 mt-0.5 leading-relaxed">{apiKey.description}</p>
                             )}
-                            <div className="mt-2 grid grid-cols-3 gap-3 text-[10.5px]">
+                            <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3 text-[10.5px]">
                                 <MiniField label="Created" value={fmtRelative(apiKey.created_at)} />
                                 <MiniField label="Last used" value={apiKey.last_used_at ? fmtRelative(apiKey.last_used_at) : "never"} />
                                 <MiniField label="Last IP" value={apiKey.last_request_ip || "—"} mono />

@@ -97,11 +97,12 @@ func Run(
 	// postMessages code+state to the SPA opener, which calls oauth/finish.
 	r.GET("/integrations/oauth/callback", h.IntegrationOAuthCallback)
 
-	// Public List-Unsubscribe endpoint (RFC 8058). GET = recipient clicks the
-	// link; POST = mailbox provider's one-click (body List-Unsubscribe=One-Click).
-	// Both suppress the recipient org-wide. Unauthenticated by design.
-	r.GET("/unsubscribe", h.Unsubscribe)
-	r.POST("/unsubscribe", h.Unsubscribe)
+	// Public recipient unsubscribe (RFC 8058 one-click and the link in the
+	// email). The path token is signed per recipient; GET only shows a
+	// confirm page, POST suppresses. Unauthenticated by design.
+	r.GET("/unsubscribe/:token", h.UnsubscribePage)
+	r.POST("/unsubscribe/:token", h.UnsubscribeSubmit)
+	r.POST("/unsubscribe/:token/resubscribe", h.UnsubscribeUndo)
 
 	// Public invitation preview for the /invite landing page. Unauthenticated:
 	// the secret token in the query is the capability.
@@ -239,6 +240,18 @@ func Run(
 		poolLinkPublic.POST("/poll", h.PoolLinkPoll)
 	}
 
+	// `warmbly auth login`. Unauthenticated by nature (the CLI has no key yet),
+	// so it is throttled per source IP, but on its OWN budget: one sign-in
+	// polls around 200 times, which would exhaust the auth allowance and then
+	// lock the same address out of the browser login for the rest of the
+	// window.
+	cliAuthPublic := v1.Group("/auth/cli")
+	cliAuthPublic.Use(m.CLIAuthIPRateLimitMiddleware())
+	{
+		cliAuthPublic.POST("/code", h.CLIAuthStart)
+		cliAuthPublic.POST("/poll", h.CLIAuthPoll)
+	}
+
 	auth := v1.Group("/auth")
 	// Every unauthenticated auth route shares one per-IP budget. Nothing
 	// throttled these before: RateLimitMiddleware is keyed on the user id and
@@ -315,6 +328,10 @@ func Run(
 		protectedAuth.DELETE("/sessions", h.SessionRevokeOthers)
 		protectedAuth.DELETE("/sessions/:id", h.SessionRevoke)
 
+		// The instance's version and whether an update exists, for the
+		// dashboard's version pill. Any member may read it; applying an update
+		// stays behind the admin permissions on /admin/instance/update.
+		protectedAuth.GET("/instance", h.InstanceVersion)
 		protectedAuth.GET("/me", h.GetUser)
 		protectedAuth.PATCH("/me", h.UpdateUserProfile)
 		protectedAuth.PATCH("/me/onboarding", h.CompleteOnboarding)
@@ -394,6 +411,8 @@ func Run(
 				// Bulk tag add/remove across many mailboxes (set semantics,
 				// naturally idempotent). Static path beside /:id like /verify.
 				emails.PATCH("/tags", m.RequireAccess(models.PermManageEmails, models.APIPermWriteEmails), h.BulkTagEmails)
+				// How many mailboxes the workspace holds and may hold, and why.
+				emails.GET("/allowance", m.RequireOrganization(), m.RequireAccess(models.PermManageEmails, models.APIPermReadEmails), h.GetMailboxAllowance)
 				emails.GET("/:id/track", m.RequireAccess(models.PermViewCampaigns, models.APIPermReadEmails), middleware.RequireAPIKeyEmailAccountParam("id"), h.GetEmailTrackingDomain)
 				emails.PATCH("/:id/track", m.RequireAccess(models.PermManageEmails, models.APIPermWriteEmails), middleware.RequireAPIKeyEmailAccountParam("id"), h.UpdateEmailTrackingDomain)
 				// Write-scoped like the auth-check refresh: persisting the
@@ -432,6 +451,9 @@ func Run(
 				onboardingEmails.POST("/oauth/start", h.StartEmailOAuth)
 				onboardingEmails.POST("/oauth/finish", h.FinishEmailOAuth)
 				onboardingEmails.POST("/smtp-imap", h.ConnectEmailSMTPIMAP)
+				// The CSV import: up to MailboxBulkBatchMax rows per call, answered
+				// per row. Same bar as a single connect.
+				onboardingEmails.POST("/smtp-imap/bulk", h.ConnectEmailSMTPIMAPBulk)
 				// Reconnect flows for an existing mailbox whose credential the
 				// provider invalidated (issue #274). They mutate an existing
 				// org asset, so unlike first connect they sit behind the same
@@ -459,6 +481,10 @@ func Run(
 			// campaign id; can't be a static sibling of /campaigns/:id, so it
 			// lives one level up).
 			protected.GET("/campaigns-overview", m.RequireOrganization(), m.RequireAccess(models.PermViewCampaigns, models.APIPermReadCampaigns), h.GetCampaignsOverview)
+
+			// Audience-versus-pool projection for the campaign wizard (no
+			// campaign id yet). Read-level: it writes nothing.
+			protected.POST("/campaigns-estimate", m.RateLimitMiddleware(models.RateLimitRead), m.RequireOrganization(), m.RequireAccess(models.PermViewCampaigns, models.APIPermReadCampaigns), h.EstimateCampaign)
 
 			campaigns := protected.Group("/campaigns")
 			campaigns.Use(m.RateLimitMiddleware(models.RateLimitWrite))
@@ -740,6 +766,11 @@ func Run(
 			// API key management. JWT users need PermManageAPIKeys; API keys
 			// need the APIPermAPIKeys self-service bit. This lets an integration
 			// rotate its own keys without going through the dashboard.
+			// Self-revocation, outside the API_KEYS gate below on purpose: any
+			// valid key may end itself, which is what makes signing a machine
+			// out actually end its access.
+			protected.DELETE("/api-keys/self", m.RequireOrganization(), m.RateLimitMiddleware(models.RateLimitWrite), h.RevokeOwnAPIKey)
+
 			apiKeys := protected.Group("/api-keys")
 			apiKeys.Use(m.RequireOrganization(), m.RequireAccess(models.PermManageAPIKeys, models.APIPermAPIKeys))
 			apiKeys.Use(m.RateLimitMiddleware(models.RateLimitWrite))
@@ -792,6 +823,17 @@ func Run(
 			{
 				outreach.GET("/settings", h.GetOutreachSettings)
 				outreach.PATCH("/settings", h.UpdateOutreachSettings)
+			}
+
+			// The workspace suppression list (org-scoped). Reading it is a
+			// contacts read; adding or lifting an entry changes who gets mail,
+			// so it needs the contacts write permission.
+			suppressions := protected.Group("/suppressions")
+			suppressions.Use(m.RequireOrganization())
+			{
+				suppressions.GET("", m.RateLimitMiddleware(models.RateLimitRead), m.RequireAccess(models.PermViewContacts, models.APIPermReadContacts), h.ListSuppressions)
+				suppressions.POST("", m.RateLimitMiddleware(models.RateLimitWrite), m.RequireAccess(models.PermManageContacts, models.APIPermWriteContacts), h.AddSuppressions)
+				suppressions.DELETE("/:id", m.RateLimitMiddleware(models.RateLimitWrite), m.RequireAccess(models.PermManageContacts, models.APIPermWriteContacts), h.RemoveSuppression)
 			}
 
 			// Deliverability event ingestion (org-scoped). API-key callable so
@@ -1198,6 +1240,18 @@ func Run(
 				poolLink.GET("/instances", m.RequireOrganization(), m.RequirePermission(models.PermManageSettings), h.PoolLinkListInstances)
 				poolLink.DELETE("/instances/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageSettings), h.PoolLinkRevokeInstance)
 			}
+
+			// Browser half of `warmbly auth login`: a member reviews the code
+			// and approves it into one of their workspaces. Session-only, like
+			// the pool link approval, because approving mints a credential and
+			// an API key must not be able to mint another CLI's key.
+			cliAuth := jwtOnly.Group("/auth/cli")
+			cliAuth.Use(m.RateLimitMiddleware(models.RateLimitWrite))
+			{
+				cliAuth.GET("/codes/:code", h.CLIAuthDescribeCode)
+				cliAuth.POST("/codes/:code/approve", h.CLIAuthApproveCode)
+				cliAuth.POST("/codes/:code/deny", h.CLIAuthDenyCode)
+			}
 			// The linked instance's own surface, authenticated by its token.
 			poolLinkInstance := base.Group("/pool-link/instance")
 			poolLinkInstance.Use(m.PoolLinkAuthMiddleware())
@@ -1437,6 +1491,16 @@ func Run(
 		adminRoutes.GET("/instance/limits", middleware.RequireAdminPermission(models.AdminPermViewAnalytics), h.AdminInstanceLimits)
 		adminRoutes.GET("/instance/settings", middleware.RequireAdminPermission(models.AdminPermManageSettings), h.AdminGetInstanceSettings)
 		adminRoutes.PUT("/instance/settings", middleware.RequireAdminPermission(models.AdminPermManageSettings), h.AdminPutInstanceSettings)
+		// Operator notification channels: the channels themselves are part of
+		// the settings document above; these two are the event catalog the
+		// panel renders and the on-demand delivery probe.
+		adminRoutes.GET("/instance/notifications/events", middleware.RequireAdminPermission(models.AdminPermManageSettings), h.AdminNotificationEvents)
+		adminRoutes.POST("/instance/notifications/test", middleware.RequireAdminPermission(models.AdminPermManageSettings), h.AdminTestNotificationChannel)
+		// Updates: the top-bar indicator polls the state; applying one goes
+		// through the host-side updater and restarts this process.
+		adminRoutes.GET("/instance/update", middleware.RequireAdminPermission(models.AdminPermViewAnalytics), h.AdminUpdateState)
+		adminRoutes.POST("/instance/update/check", middleware.RequireAdminPermission(models.AdminPermManageSettings), h.AdminUpdateCheck)
+		adminRoutes.POST("/instance/update/apply", middleware.RequireAdminPermission(models.AdminPermManageSettings), h.AdminUpdateApply)
 
 		// Analytics Dashboard
 		adminRoutes.GET("/analytics/overview", middleware.RequireAdminPermission(models.AdminPermViewAnalytics), h.AdminGetPlatformOverview)

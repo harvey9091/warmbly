@@ -47,6 +47,7 @@ import {
     HistoryIcon,
     Link2Icon,
     Loader2Icon,
+    MegaphoneIcon,
     MessageSquareIcon,
     PlayIcon,
     PlusIcon,
@@ -57,6 +58,7 @@ import {
     TriangleAlertIcon,
     Trash2Icon,
     UserMinusIcon,
+    UserPlusIcon,
     WandSparklesIcon,
     XCircleIcon,
     XIcon,
@@ -115,6 +117,7 @@ import {
 } from "@/lib/api/models/app/automations/meta";
 import { API_URL } from "@/lib/information";
 import CategoryPicker from "@/components/app/contacts/CategoryPicker";
+import CampaignPicker from "@/components/app/campaigns/CampaignPicker";
 import { ExpressionReference } from "@/components/app/automations/ExpressionReference";
 import DealStagePicker from "@/components/app/crm/DealStagePicker";
 import TaskTypePicker from "@/components/app/crm/TaskTypePicker";
@@ -289,8 +292,18 @@ const switchCaseHandle = (name: string) => "label:" + name.trim();
 
 // Fresh config for a newly-created action node: agent mode for the AI step, two
 // starter cases for the AI switch (so its case dots show at once), else empty.
-function defaultConfigForAction(action: string): Record<string, unknown> {
+// The event key that carries the person's address differs per trigger, so a
+// fresh create-or-update-contact node starts from the one this trigger has.
+function defaultEmailTemplate(trigger: string): string {
+    const vars = triggerVariables(trigger);
+    if (vars.includes("contact_email")) return "{{.contact_email}}";
+    if (vars.includes("invitee_email")) return "{{.invitee_email}}";
+    return "{{.email}}";
+}
+
+function defaultConfigForAction(action: string, trigger: string): Record<string, unknown> {
     if (action === "warmbly.ai_step") return { mode: "agent" };
+    if (action === "warmbly.upsert_contact") return { email: defaultEmailTemplate(trigger), if_exists: "update" };
     if (action === "warmbly.ai_switch") return { switch_on: "ai", cases: ["interested", "not interested"] };
     return {};
 }
@@ -1005,7 +1018,7 @@ export default function AutomationFlow({
                                     connection_id: undefined,
                                     // A fresh AI step defaults to agent mode; a fresh AI switch
                                     // seeds two cases so its case dots show immediately.
-                                    config: defaultConfigForAction(presetAction),
+                                    config: defaultConfigForAction(presetAction, trigger),
                                     title: actionLabel(presetAction),
                                     sub: presetAction === "warmbly.ai_switch" ? "Routes to one case" : native ? "Built-in action" : "Pick an integration…",
                                     provider: "",
@@ -1100,6 +1113,16 @@ export default function AutomationFlow({
                 }
                 if (need === "event" && !String(d.config?.event_name ?? "").trim()) {
                     toast.error("A fire-event action needs an event name");
+                    setSelectedId(n.id);
+                    return false;
+                }
+                if (need === "contact" && !String(d.config?.email ?? "").trim()) {
+                    toast.error("A create-or-update-contact action needs an email");
+                    setSelectedId(n.id);
+                    return false;
+                }
+                if (need === "campaign" && !String(d.config?.campaign_id ?? "").trim()) {
+                    toast.error("An add-to-campaign action needs a campaign");
                     setSelectedId(n.id);
                     return false;
                 }
@@ -2273,6 +2296,8 @@ const ACTION_VISUAL: Record<string, { Icon: typeof TagIcon; tint: string; bg: st
     "warmbly.label_email": { Icon: TagsIcon, tint: "text-fuchsia-600", bg: "bg-fuchsia-50", desc: "Label the conversation the contact replied on." },
     "warmbly.set_variables": { Icon: WandSparklesIcon, tint: "text-amber-600", bg: "bg-amber-50", desc: "Compute named values from templates for later steps to reuse." },
     "warmbly.fire_event": { Icon: SendIcon, tint: "text-sky-600", bg: "bg-sky-50", desc: "Publish a custom event to the realtime gateway — your app receives it over the API websocket, no public URL." },
+    "warmbly.upsert_contact": { Icon: UserPlusIcon, tint: "text-emerald-600", bg: "bg-emerald-50", desc: "Create a contact from the event's fields, or enrich the one with that email, then tag it and enrol it in a campaign." },
+    "warmbly.add_to_campaign": { Icon: MegaphoneIcon, tint: "text-sky-600", bg: "bg-sky-50", desc: "Enrol the event's contact in a campaign. Sending still follows the campaign's mailboxes, caps and spacing." },
     "warmbly.ai_step": { Icon: SparklesIcon, tint: "text-purple-600", bg: "bg-purple-50", desc: "One AI step: an agent that takes reversible actions (tag, task, deal, label…), or a single-shot classify, extract, or generate over the event. Billed in credits." },
     "warmbly.ai_switch": { Icon: GitBranchIcon, tint: "text-purple-600", bg: "bg-purple-50", desc: "Route the event: AI picks one of your cases, or match a value template. AI mode costs 1 credit; value mode is free." },
     "slack.notify": { Icon: MessageSquareIcon, tint: "text-violet-600", bg: "bg-violet-50" },
@@ -2494,7 +2519,7 @@ function ActionEditor({
     const pickAction = (action: string) =>
         onAction({
             action,
-            config: defaultConfigForAction(action),
+            config: defaultConfigForAction(action, trigger),
             title: actionLabel(action),
             native: isNativeAction(action),
             ...(isNativeAction(action) ? { connection_id: undefined } : {}),
@@ -2749,6 +2774,25 @@ function NativeActionConfig({
 
             {need === "automation" && <RunAnotherAutomationFields config={config} patchConfig={patchConfig} selfId={selfId} />}
 
+            {need === "contact" && <UpsertContactFields trigger={trigger} config={config} patchConfig={patchConfig} />}
+
+            {need === "campaign" && (
+                <div className="space-y-2">
+                    <div>
+                        <Label>Campaign</Label>
+                        <CampaignPicker
+                            campaignId={config.campaign_id ? String(config.campaign_id) : null}
+                            campaignName={String(config.campaign_name ?? "")}
+                            onChange={(id, name) => patchConfig({ campaign_id: id ?? "", campaign_name: name })}
+                            noneLabel="Pick a campaign…"
+                        />
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                        Enrols the contact this event is about (by <code>contact_id</code> or <code>contact_email</code>). Sending still runs through the campaign&apos;s mailboxes, daily caps and spacing, and the campaign keeps running for new leads instead of finishing between runs.
+                    </p>
+                </div>
+            )}
+
             {need === "event" && <FireEventFields config={config} patchConfig={patchConfig} />}
 
             {need === "vars" && <SetVariablesFields config={config} patchConfig={patchConfig} />}
@@ -2767,6 +2811,142 @@ function NativeActionConfig({
 }
 
 type SetVarRow = { key: string; value: string };
+
+const IF_EXISTS_OPTIONS: SelectOption[] = [
+    { value: "update", label: "Update it (fill blanks, add tags and campaign)" },
+    { value: "skip", label: "Leave it alone" },
+];
+
+// The contact columns a lead-intake action fills, each a template rendered
+// against the event data. Email is the identity; the rest enrich.
+const UPSERT_FIELDS: { key: string; label: string; placeholder: string }[] = [
+    { key: "first_name", label: "First name", placeholder: "{{.first_name}}" },
+    { key: "last_name", label: "Last name", placeholder: "{{.last_name}}" },
+    { key: "company", label: "Company", placeholder: "{{.company}}" },
+    { key: "phone", label: "Phone", placeholder: "{{.phone}}" },
+];
+
+// UpsertContactFields edits the lead-intake action: which event fields become
+// the contact, where it lands (tags, campaign), and what to do when the email
+// already exists. Every value is a Go template against the trigger data, so an
+// inbound webhook's own JSON keys map straight onto contact columns.
+function UpsertContactFields({
+    trigger,
+    config,
+    patchConfig,
+}: {
+    trigger: string;
+    config: Record<string, unknown>;
+    patchConfig: (p: Record<string, unknown>) => void;
+}) {
+    const vars = triggerVariables(trigger);
+    const insertInto = (k: string, token: string) => patchConfig({ [k]: `${String(config[k] ?? "")}{{.${token}}}` });
+    const rows: SetVarRow[] = Array.isArray(config.custom_fields)
+        ? (config.custom_fields as SetVarRow[]).map((v) => ({ key: String(v?.key ?? ""), value: String(v?.value ?? "") }))
+        : [];
+    const update = (next: SetVarRow[]) => patchConfig({ custom_fields: next });
+    const setRow = (i: number, patch: Partial<SetVarRow>) => update(rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+    const addRow = () => update([...rows, { key: "", value: "" }]);
+    const removeRow = (i: number) => update(rows.filter((_, idx) => idx !== i));
+
+    return (
+        <div className="space-y-3">
+            <div>
+                <Label>Email</Label>
+                <TextInput
+                    value={String(config.email ?? "")}
+                    onChange={(v) => patchConfig({ email: v })}
+                    placeholder="{{.email}}"
+                    className="w-full font-mono"
+                />
+                <VarChips vars={vars} onPick={(t) => insertInto("email", t)} />
+                <p className="mt-1 text-[11px] text-slate-400 leading-relaxed">
+                    The contact&apos;s identity. An existing contact with this address is matched instead of duplicated.
+                </p>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+                {UPSERT_FIELDS.map((f) => (
+                    <div key={f.key}>
+                        <Label>{f.label}</Label>
+                        <TextInput
+                            value={String(config[f.key] ?? "")}
+                            onChange={(v) => patchConfig({ [f.key]: v })}
+                            placeholder={f.placeholder}
+                            className="w-full font-mono"
+                        />
+                    </div>
+                ))}
+            </div>
+            <div>
+                <Label>Custom fields</Label>
+                <div className="space-y-2">
+                    {rows.map((row, i) => (
+                        <div key={i} className="flex items-center gap-2">
+                            <TextInput
+                                value={row.key}
+                                onChange={(v) => setRow(i, { key: v })}
+                                placeholder="field"
+                                className="w-28 shrink-0 font-mono"
+                            />
+                            <span className="text-[12.5px] text-slate-400">=</span>
+                            <TextInput
+                                value={row.value}
+                                onChange={(v) => setRow(i, { value: v })}
+                                placeholder="{{.team_size}}"
+                                className="flex-1 min-w-0 font-mono"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => removeRow(i)}
+                                className="shrink-0 text-slate-400 hover:text-rose-500"
+                                aria-label="Remove custom field"
+                            >
+                                <XIcon className="w-3.5 h-3.5" />
+                            </button>
+                        </div>
+                    ))}
+                </div>
+                <button
+                    type="button"
+                    onClick={addRow}
+                    className="mt-2 inline-flex items-center gap-1 text-[12px] text-sky-600 hover:text-sky-700"
+                >
+                    <PlusIcon className="w-3.5 h-3.5" /> Add custom field
+                </button>
+            </div>
+            <div>
+                <Label>Tags</Label>
+                <CategoryPicker
+                    value={Array.isArray(config.category_ids) ? (config.category_ids as string[]) : []}
+                    onChange={(ids) => patchConfig({ category_ids: ids })}
+                    placeholder="Pick tags…"
+                />
+            </div>
+            <div>
+                <Label>Add to campaign</Label>
+                <CampaignPicker
+                    campaignId={config.campaign_id ? String(config.campaign_id) : null}
+                    campaignName={String(config.campaign_name ?? "")}
+                    onChange={(id, name) => patchConfig({ campaign_id: id ?? "", campaign_name: name })}
+                />
+            </div>
+            <div>
+                <Label>If the contact already exists</Label>
+                <SelectMenu
+                    value={String(config.if_exists ?? "update")}
+                    onChange={(v) => patchConfig({ if_exists: v })}
+                    options={IF_EXISTS_OPTIONS}
+                    className="w-full"
+                    fullWidth
+                />
+            </div>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+                A blank value never erases what the contact already has. The written contact becomes this event&apos;s contact, so the
+                steps after it (tag, task, deal) act on it. A campaign picked here keeps running for new leads instead of finishing between runs.
+            </p>
+        </div>
+    );
+}
 
 // SetVariablesFields edits a list of named template values written back into the
 // event data for later steps to reuse (the safe "transform" node).

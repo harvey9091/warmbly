@@ -9,13 +9,13 @@ import React from "react";
 import { createPortal } from "react-dom";
 import type { Editor } from "@tiptap/react";
 import { AnimatePresence, motion } from "framer-motion";
-import { BracesIcon, GitBranchIcon, FunctionSquareIcon, ClipboardListIcon } from "lucide-react";
+import { BracesIcon, GitBranchIcon, FunctionSquareIcon, ClipboardListIcon, LinkIcon } from "lucide-react";
 import useCustomFieldKeys from "@/lib/api/hooks/app/contacts/useCustomFieldKeys";
 import { useForms } from "@/lib/api/hooks/app/forms";
-import { STANDARD_VARS, buildToken, buildFormLinkToken, cleanFieldName, isStandardKey } from "@/lib/templateVars";
+import { STANDARD_VARS, LINK_VARS, buildToken, buildFormLinkToken, cleanFieldName, isStandardKey } from "@/lib/templateVars";
 import { useAnchoredFloating, caretReference } from "@/hooks/useAnchoredFloating";
 
-type Group = "Fields" | "Forms" | "Logic" | "Functions";
+type Group = "Fields" | "Links" | "Forms" | "Logic" | "Functions";
 
 // How picking an item mutates the doc, after the typed `{{…` trigger is removed.
 type Insert =
@@ -35,6 +35,7 @@ interface Item {
 
 const GROUP_ICON: Record<Group, typeof BracesIcon> = {
     Fields: BracesIcon,
+    Links: LinkIcon,
     Forms: ClipboardListIcon,
     Logic: GitBranchIcon,
     Functions: FunctionSquareIcon,
@@ -94,7 +95,10 @@ const HELPERS: Item[] = [
     },
 ];
 
-export default function EditorSuggest({ editor }: { editor: Editor }) {
+// links are the per-send link tokens this editor may offer (the recipient's
+// unsubscribe link); only campaign email bodies resolve them at send time, so
+// an AI prompt editor passes none.
+export default function EditorSuggest({ editor, links = [] }: { editor: Editor; links?: string[] }) {
     const { data: customKeys = [] } = useCustomFieldKeys();
     const { data: forms = [] } = useForms();
     const [trigger, setTrigger] = React.useState<{ from: number; query: string } | null>(null);
@@ -133,8 +137,16 @@ export default function EditorSuggest({ editor }: { editor: Editor }) {
                 search: `form link ${f.name}`.toLowerCase(),
                 insert: { type: "formLink" as const, publicId: f.public_id },
             }));
-        return [...fields, ...formLinks, ...HELPERS];
-    }, [customKeys, forms]);
+        const linkItems: Item[] = LINK_VARS.filter((v) => links.includes(v.token)).map((v) => ({
+            id: `l:${v.key}`,
+            group: "Links" as const,
+            label: v.label,
+            hint: v.token,
+            search: `${v.key} ${v.label} unsubscribe opt out`.toLowerCase(),
+            insert: { type: "chip" as const, token: v.token },
+        }));
+        return [...fields, ...linkItems, ...formLinks, ...HELPERS];
+    }, [customKeys, forms, links]);
 
     const items = React.useMemo<Item[]>(() => {
         if (!trigger) return [];

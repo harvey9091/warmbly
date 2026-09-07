@@ -39,6 +39,14 @@ func (s *service) Dispatch(ctx context.Context, orgID uuid.UUID, eventType model
 	if err != nil {
 		log.Warn().Err(err).Str("event", string(eventType)).Msg("integration dispatch: failed to load automations")
 	}
+	// An event raised by an automation's own action (a contact it created, a
+	// deal it opened) carries its depth. Past the chain cap it still reaches
+	// customer webhooks and legacy subscriptions, but runs no more flows, so
+	// "on new contact, create a contact" cannot loop.
+	if depth := int(toFloat(data[automationDepthKey])); depth >= maxAutomationChainDepth && len(autos) > 0 {
+		log.Warn().Str("event", string(eventType)).Int("depth", depth).Msg("integration dispatch: automation chain depth limit reached; not running automations")
+		autos = nil
+	}
 	if len(targets) == 0 && len(autos) == 0 {
 		return
 	}
@@ -290,6 +298,11 @@ func renderEventMessage(sub models.IntegrationEventSubscription, data map[string
 		m.Title = "✅ Campaign completed"
 	case models.WebhookEventContactCreated:
 		m.Title = "🧑 Contact created"
+	case models.WebhookEventFormSubmitted:
+		m.Title = "📝 Form submitted"
+		if n := stringFromMap(data, "form_name"); n != "" {
+			m.Title = "📝 Form submitted: " + n
+		}
 	case models.WebhookEventContactUpdated:
 		m.Title = "✏️ Contact updated"
 	case models.WebhookEventCRMDealCreated:

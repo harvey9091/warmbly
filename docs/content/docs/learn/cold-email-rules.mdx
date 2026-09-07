@@ -73,8 +73,9 @@ Requires consent (express, inferred or implied), accurate sender identification 
 ## How Warmbly helps
 
 - Sender profiles include physical address fields that render in every send.
-- Opt-out detection on incoming replies (STOP, unsubscribe, "please remove me").
-- Workspace-wide suppression list shared across [sequences](/guides/sequences/).
+- Every campaign email carries an opt-out: a reply-to-opt-out line by default, or an unsubscribe link, plus optional RFC 8058 headers. See [unsubscribe and suppression](/guides/unsubscribe/).
+- Opt-out detection on incoming replies (unsubscribe, "remove me", "stop emailing me").
+- Workspace-wide suppression list shared across [sequences](/guides/sequences/), with addresses and whole domains added by hand.
 - Contact source captured at [import](/guides/contacts-crm/); preserved through merges.
 - Region-aware sending windows so you don't accidentally blast at 3am local time.
 

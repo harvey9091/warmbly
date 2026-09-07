@@ -81,6 +81,14 @@ type SyncState struct {
 	// server but not yet stored. Drops back to zero once they are admitted.
 	Deferred int `json:"deferred" avro:"deferred"`
 
+	// FoldersSkippedCap and FoldersSkippedConflict are what the last folder
+	// listing could not follow: more folders than the sync covers, and
+	// folders the server gave the same internal id. Carried as state rather
+	// than raised as an error once, so the warning goes away by itself when
+	// the user fixes it.
+	FoldersSkippedCap      int `json:"folders_skipped_cap,omitempty" avro:"folders_skipped_cap"`
+	FoldersSkippedConflict int `json:"folders_skipped_conflict,omitempty" avro:"folders_skipped_conflict"`
+
 	LastSyncedAt *time.Time `json:"last_synced_at,omitempty" avro:"last_synced_at"`
 }
 

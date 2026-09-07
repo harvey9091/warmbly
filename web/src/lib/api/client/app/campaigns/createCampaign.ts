@@ -1,4 +1,5 @@
 import type Campaign from "@/lib/api/models/app/campaigns/Campaign";
+import type { CampaignKind } from "@/lib/api/models/app/campaigns/Campaign";
 import Request from "../../Request";
 
 // Wire shape for POST /campaigns. Everything other than `name` is optional;
@@ -7,11 +8,17 @@ import Request from "../../Request";
 export interface CreateCampaignInput {
     name: string;
     description?: string;
+    // Defaults to "sequence". A "one_time" campaign takes at most one step.
+    kind?: CampaignKind;
 
     // Sending rules / tracking
     stop_on_reply?: boolean;
     open_tracking?: boolean;
     link_tracking?: boolean;
+    utm_tracking?: boolean;
+    utm_source?: string;
+    utm_medium?: string;
+    utm_campaign?: string;
     text_only?: boolean;
     daily_limit?: number;
     unsubscribe_header?: boolean;
@@ -42,6 +49,7 @@ export interface CreateCampaignInput {
     esp_match_mode?: 'off' | 'prefer' | 'strict';
     max_new_leads_per_day?: number;
     prioritize_new_leads?: boolean;
+    continuous?: boolean;
     tracking_domain?: string;
 
     // Initial sequences (ordered)

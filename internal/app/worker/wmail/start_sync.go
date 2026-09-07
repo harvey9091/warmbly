@@ -11,7 +11,8 @@ import (
 )
 
 // syncBackoffMax is the longest a mailbox waits between passes: while fair
-// use holds it, or after the provider itself asked us to slow down.
+// use holds it, after the provider asked us to slow down, or while the mail
+// server is unreachable.
 const syncBackoffMax = 5 * time.Minute
 
 // StartSyncWorker runs the mail sync loop until the context is cancelled.
@@ -43,10 +44,17 @@ func (w *WMail) StartSyncWorker(ctx context.Context) {
 // nextSyncDelay picks the wait before the next pass.
 func (w *WMail) nextSyncDelay(base time.Duration, last *errx.MailError) time.Duration {
 	d := base
-	if last != nil && last.Code == errx.MailErrorCodeSendingTooFast {
+	switch {
+	case last != nil && last.Code == errx.MailErrorCodeSendingTooFast:
 		// The provider returned 429: back off well past the base interval.
 		d = syncBackoffMax
-	} else if w.tracker != nil && w.tracker.state.ThrottledUntil != nil {
+	case last != nil && isTransportError(last):
+		// The server is unreachable. Retry soon after the first failure (a
+		// dropped session reconnects on the next pass and costs one dial),
+		// then step back toward the ceiling while it stays down, so a server
+		// that is out for a day does not write a warning every minute.
+		d = min(base<<min(w.transportFailures, 8), syncBackoffMax)
+	case w.tracker != nil && w.tracker.state.ThrottledUntil != nil:
 		// Held by fair use: no point asking every minute; wake when the
 		// window rolls, bounded so a priority reply still lands promptly.
 		if until := time.Until(*w.tracker.state.ThrottledUntil); until > d {
@@ -74,9 +82,34 @@ func (w *WMail) syncOnce(ctx context.Context) (result *errx.MailError) {
 		}
 	}()
 	if err := w.SyncMail(ctx); err != nil {
+		// A server that is down answers every pass the same way. Report the
+		// first one and then stay quiet until it comes back, so one outage is
+		// one warning in the drawer rather than one a minute.
+		if isTransportError(err) {
+			w.transportFailures++
+			if w.transportFailures > 1 {
+				log.Debug().Err(err).Str("email_id", w.ID.String()).Int("consecutive", w.transportFailures).Msg("mail server still unreachable")
+				return err
+			}
+		}
 		w.CaptureError(err)
 		log.Warn().Err(err).Str("email_id", w.ID.String()).Msg("mail sync error")
 		return err
 	}
+	w.transportFailures = 0
 	return nil
+}
+
+// isTransportError is the mail server being unreachable rather than refusing
+// what we asked: a dropped session, a refused dial, a timeout. These retry on
+// their own and must not be treated as a mailbox problem.
+func isTransportError(err *errx.MailError) bool {
+	if err == nil {
+		return false
+	}
+	switch err.Code {
+	case errx.MailErrorCodeServerUnreachable, errx.MailErrorCodeConnectionLost:
+		return true
+	}
+	return false
 }

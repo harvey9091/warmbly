@@ -14,6 +14,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/behavior"
 	"github.com/warmbly/warmbly/internal/app/bootstrap"
 	"github.com/warmbly/warmbly/internal/app/campaign"
+	"github.com/warmbly/warmbly/internal/app/cliauth"
 	"github.com/warmbly/warmbly/internal/app/cloudlink"
 	"github.com/warmbly/warmbly/internal/app/compose"
 	"github.com/warmbly/warmbly/internal/app/contact"
@@ -35,6 +36,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/mcp"
 	"github.com/warmbly/warmbly/internal/app/notification"
 	"github.com/warmbly/warmbly/internal/app/oauth"
+	"github.com/warmbly/warmbly/internal/app/opsnotify"
 	"github.com/warmbly/warmbly/internal/app/organization"
 	"github.com/warmbly/warmbly/internal/app/orgrisk"
 	"github.com/warmbly/warmbly/internal/app/orgtransfer"
@@ -59,6 +61,8 @@ import (
 	"github.com/warmbly/warmbly/internal/app/twofa"
 	"github.com/warmbly/warmbly/internal/app/tz"
 	"github.com/warmbly/warmbly/internal/app/unibox"
+	"github.com/warmbly/warmbly/internal/app/unsublink"
+	"github.com/warmbly/warmbly/internal/app/updates"
 	"github.com/warmbly/warmbly/internal/app/user"
 	"github.com/warmbly/warmbly/internal/app/warmup"
 	"github.com/warmbly/warmbly/internal/app/warmupcontent"
@@ -160,12 +164,17 @@ type Handler struct {
 	WorkerRepo         repository.WorkerRepository
 	CredentialsRepo    repository.CredentialsRepository
 	ReleasesService    *releases.Service
+	// UpdatesService backs the admin panel's update indicator and button.
+	UpdatesService *updates.Service
 
 	// Notifications
 	EmailNotificationService notify.EmailNotificationService
 
 	// Advanced outreach controls
 	AdvancedService advanced.Service
+	// UnsubscribeLinks verifies the signed tokens on recipient unsubscribe
+	// links. Nil when the instance has no public API URL to mint them on.
+	UnsubscribeLinks *unsublink.Signer
 
 	// Website tracking snippet: settings and the page-view ingest path.
 	WebsiteTrackingService websitetracking.Service
@@ -304,6 +313,9 @@ type Handler struct {
 	PoolLinkService  poollink.Service
 	CloudLinkService cloudlink.Service
 
+	// Device-code sign-in for the `warmbly` CLI. Nil-safe: routes answer 501.
+	CLIAuthService cliauth.Service
+
 	// Infrastructure liveness probes for the admin System Status page.
 	// Wired in cmd/backend/main.go where the concrete clients live.
 	SystemChecker *sysstatus.Checker
@@ -321,4 +333,7 @@ type Handler struct {
 	// InstanceSettings is the database-backed settings tier. It holds only
 	// keys no environment variable owns.
 	InstanceSettings instancesettings.Service
+	// OpsNotifier delivers instance-wide operator alerts. Nil disables the
+	// notification admin surface.
+	OpsNotifier opsnotify.Notifier
 }

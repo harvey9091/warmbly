@@ -86,6 +86,19 @@ func (w *ScheduleWindows) Scan(src any) error {
 	return nil
 }
 
+// Campaign kinds. A sequence is the multi-step default; a one-time email is
+// one message to an audience with no follow-ups. Both send through the same
+// pacer and caps; the kind is fixed at creation.
+const (
+	CampaignKindSequence = "sequence"
+	CampaignKindOneTime  = "one_time"
+)
+
+// ValidCampaignKind reports whether k is a known campaign kind.
+func ValidCampaignKind(k string) bool {
+	return k == CampaignKindSequence || k == CampaignKindOneTime
+}
+
 type Campaign struct {
 	ID             uuid.UUID  `json:"id"`
 	UserID         string     `json:"user_id"`
@@ -94,6 +107,7 @@ type Campaign struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Status      string `json:"status"`
+	Kind        string `json:"kind"`
 
 	StopOnReply       bool `json:"stop_on_reply"`
 	OpenTracking      bool `json:"open_tracking"`
@@ -102,6 +116,8 @@ type Campaign struct {
 	DailyLimit        int  `json:"daily_limit"`
 	UnsubscribeHeader bool `json:"unsubscribe_header"`
 	RiskyEmails       bool `json:"risky_emails"`
+	// UnsubscribeMode is the in-body opt-out: inherit | text | link | off.
+	UnsubscribeMode string `json:"unsubscribe_mode"`
 
 	CC  []string `json:"cc"`
 	BCC []string `json:"bcc"`
@@ -148,6 +164,11 @@ type Campaign struct {
 	MaxNewLeadsPerDay  int  `json:"max_new_leads_per_day"`
 	PrioritizeNewLeads bool `json:"prioritize_new_leads"`
 
+	// Continuous keeps the campaign active when it runs out of leads: it waits
+	// for more instead of finishing. IdleSince is set while it waits.
+	Continuous bool       `json:"continuous"`
+	IdleSince  *time.Time `json:"idle_since,omitempty"`
+
 	// Auto-pause guardrails. Rates are evaluated over a rolling window and the
 	// campaign is paused the moment a band is breached, rather than waiting for
 	// a mailbox provider to react first. A rate threshold of 0 disables that
@@ -170,6 +191,14 @@ type Campaign struct {
 	TrackingDomain           string     `json:"tracking_domain"`
 	TrackingDomainVerified   bool       `json:"tracking_domain_verified"`
 	TrackingDomainVerifiedAt *time.Time `json:"tracking_domain_verified_at,omitempty"`
+
+	// Automatic UTM tagging of every link in the email body. Empty source,
+	// medium and campaign values mean the defaults ("warmbly", "email", the
+	// campaign name); utm_content is always the link's own text.
+	UTMTracking bool   `json:"utm_tracking"`
+	UTMSource   string `json:"utm_source"`
+	UTMMedium   string `json:"utm_medium"`
+	UTMCampaign string `json:"utm_campaign"`
 
 	LastStatusChangeAt *time.Time `json:"last_status_change_at,omitempty"`
 
@@ -211,7 +240,34 @@ type CampaignsOverview struct {
 	Paused    int64                 `json:"paused"`
 	Draft     int64                 `json:"draft"`
 	Completed int64                 `json:"completed"`
+	OneTime   int64                 `json:"one_time"`
 	Folders   []CampaignFolderCount `json:"folders"`
+}
+
+// CampaignEstimate is the request for POST /campaigns-estimate: how many
+// contacts a set of segments resolves to and how long a sender pool needs
+// to reach them under the per-mailbox caps. Nothing is written.
+type CampaignEstimate struct {
+	SegmentIDs  []string   `json:"segment_ids"`
+	EmailTagIDs []string   `json:"email_tag_ids,omitempty"`
+	DailyLimit  *int       `json:"daily_limit,omitempty"`
+	Days        *uint8     `json:"days,omitempty"`
+	Timezone    *string    `json:"timezone,omitempty"`
+	StartDate   *time.Time `json:"start_date,omitempty"`
+}
+
+// CampaignEstimateResult is the projection. DailyCapacity is the pool's
+// per-day ceiling under the campaign limit; RemainingToday subtracts what the
+// mailboxes already sent today. SendingDays is how many sending days the
+// audience needs and EstimatedFinishAt the calendar day the last send lands
+// on, both nil when the pool has no capacity.
+type CampaignEstimateResult struct {
+	Recipients        int        `json:"recipients"`
+	Mailboxes         int        `json:"mailboxes"`
+	DailyCapacity     int        `json:"daily_capacity"`
+	RemainingToday    int        `json:"remaining_today"`
+	SendingDays       *int       `json:"sending_days"`
+	EstimatedFinishAt *time.Time `json:"estimated_finish_at"`
 }
 
 type CampaignFolderCount struct {
@@ -224,13 +280,14 @@ type UpdateCampaign struct {
 	Description *string `json:"description"`
 	Status      *string `json:"status,omitempty"`
 
-	StopOnReply       *bool `json:"stop_on_reply"`
-	OpenTracking      *bool `json:"open_tracking"`
-	LinkTracking      *bool `json:"link_tracking"`
-	TextOnly          *bool `json:"text_only"`
-	DailyLimit        *int  `json:"daily_limit"`
-	UnsubscribeHeader *bool `json:"unsubscribe_header"`
-	RiskyEmails       *bool `json:"risky_emails"`
+	StopOnReply       *bool   `json:"stop_on_reply"`
+	OpenTracking      *bool   `json:"open_tracking"`
+	LinkTracking      *bool   `json:"link_tracking"`
+	TextOnly          *bool   `json:"text_only"`
+	DailyLimit        *int    `json:"daily_limit"`
+	UnsubscribeHeader *bool   `json:"unsubscribe_header"`
+	RiskyEmails       *bool   `json:"risky_emails"`
+	UnsubscribeMode   *string `json:"unsubscribe_mode"`
 
 	CC  []string `json:"cc"`
 	BCC []string `json:"bcc"`
@@ -267,7 +324,13 @@ type UpdateCampaign struct {
 	ESPMatchMode       *string `json:"esp_match_mode,omitempty"`
 	MaxNewLeadsPerDay  *int    `json:"max_new_leads_per_day,omitempty"`
 	PrioritizeNewLeads *bool   `json:"prioritize_new_leads,omitempty"`
+	Continuous         *bool   `json:"continuous,omitempty"`
 	TrackingDomain     *string `json:"tracking_domain,omitempty"`
+
+	UTMTracking *bool   `json:"utm_tracking,omitempty"`
+	UTMSource   *string `json:"utm_source,omitempty"`
+	UTMMedium   *string `json:"utm_medium,omitempty"`
+	UTMCampaign *string `json:"utm_campaign,omitempty"`
 
 	// Auto-pause guardrails. GuardrailTrippedAt/Reason are server-owned and
 	// are cleared when the campaign is started again, so they are not settable
@@ -294,15 +357,19 @@ func (u *UpdateCampaign) TouchesSchedule() bool {
 type CreateCampaign struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	// Kind defaults to "sequence". A "one_time" campaign accepts a single
+	// email step here and refuses further ones later.
+	Kind *string `json:"kind,omitempty"`
 
 	// Sending rules / tracking
-	StopOnReply       *bool `json:"stop_on_reply,omitempty"`
-	OpenTracking      *bool `json:"open_tracking,omitempty"`
-	LinkTracking      *bool `json:"link_tracking,omitempty"`
-	TextOnly          *bool `json:"text_only,omitempty"`
-	DailyLimit        *int  `json:"daily_limit,omitempty"`
-	UnsubscribeHeader *bool `json:"unsubscribe_header,omitempty"`
-	RiskyEmails       *bool `json:"risky_emails,omitempty"`
+	StopOnReply       *bool   `json:"stop_on_reply,omitempty"`
+	OpenTracking      *bool   `json:"open_tracking,omitempty"`
+	LinkTracking      *bool   `json:"link_tracking,omitempty"`
+	TextOnly          *bool   `json:"text_only,omitempty"`
+	DailyLimit        *int    `json:"daily_limit,omitempty"`
+	UnsubscribeHeader *bool   `json:"unsubscribe_header,omitempty"`
+	RiskyEmails       *bool   `json:"risky_emails,omitempty"`
+	UnsubscribeMode   *string `json:"unsubscribe_mode,omitempty"`
 
 	CC  []string `json:"cc,omitempty"`
 	BCC []string `json:"bcc,omitempty"`
@@ -314,6 +381,9 @@ type CreateCampaign struct {
 	Days      *uint8     `json:"days,omitempty"`
 	StartTime *string    `json:"start_time,omitempty"`
 	EndTime   *string    `json:"end_time,omitempty"`
+
+	// Authoritative per-day schedule. When sent, supersedes Days/StartTime/EndTime.
+	ScheduleWindows *ScheduleWindows `json:"schedule_windows,omitempty"`
 
 	// Sender pool — accepts UUIDs already created by the user.
 	EmailTagIDs []string `json:"email_tag_ids,omitempty"`
@@ -335,7 +405,14 @@ type CreateCampaign struct {
 	ESPMatchMode       *string `json:"esp_match_mode,omitempty"`
 	MaxNewLeadsPerDay  *int    `json:"max_new_leads_per_day,omitempty"`
 	PrioritizeNewLeads *bool   `json:"prioritize_new_leads,omitempty"`
+	Continuous         *bool   `json:"continuous,omitempty"`
 	TrackingDomain     *string `json:"tracking_domain,omitempty"`
+
+	// Automatic UTM tagging (off unless sent). Empty values keep the defaults.
+	UTMTracking *bool   `json:"utm_tracking,omitempty"`
+	UTMSource   *string `json:"utm_source,omitempty"`
+	UTMMedium   *string `json:"utm_medium,omitempty"`
+	UTMCampaign *string `json:"utm_campaign,omitempty"`
 
 	// Initial sequences (in order) — caller can also create them after.
 	Sequences []CreateSequenceInput `json:"steps,omitempty"`

@@ -137,7 +137,7 @@ export default function TemplatesPage() {
             </div>
 
             <SectionBar label={query.isPending ? "Loading…" : `${list.length} templates`} />
-            <PageBody className="px-5 py-5">
+            <PageBody className="px-3 py-4 sm:px-5 sm:py-5">
                 {query.isPending ? (
                     <SkeletonRows />
                 ) : list.length === 0 ? (

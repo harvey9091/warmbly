@@ -1,4 +1,5 @@
 import React from "react";
+import { Link } from "react-router-dom";
 import { useAppStore } from "@/stores";
 import { TextInput } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
@@ -169,16 +170,14 @@ export default function WorkspaceSettingsPage() {
                 eyebrow="Privacy & compliance"
                 description="Headers and identifiers attached to every send."
             >
-                <ToggleRow
-                    label="Include List-Unsubscribe header"
-                    description="Required by Gmail/Outlook for bulk senders. Strongly recommended."
-                    defaultOn
-                />
-                <ToggleRow
-                    label="Append unsubscribe link"
-                    description="Plain-text footer link respecting the suppression list."
-                    defaultOn
-                />
+                <Row
+                    label="Unsubscribe and opt-out"
+                    description="The opt-out line every campaign email carries, and the suppression list, live under Sending."
+                >
+                    <Link to="/app/settings/sending" className="text-[12px] text-sky-700 hover:text-sky-800 font-medium">
+                        Open sending settings
+                    </Link>
+                </Row>
                 <ToggleRow
                     label="Track opens by default"
                     description="Inserts a 1×1 pixel. Disable for highest deliverability."

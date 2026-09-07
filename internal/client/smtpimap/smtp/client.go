@@ -25,6 +25,21 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// sendTimeout bounds one whole SMTP conversation: dial, greeting, AUTH, the
+// recipients, the message and the server's verdict. It is generous because a
+// large message to a slow relay is legitimate, and it exists so a peer that
+// stops answering cannot hold a send goroutine forever.
+const sendTimeout = 90 * time.Second
+
+// ehloName is the domain to announce in EHLO, taken from the sender's own
+// address. Empty leaves net/smtp's default in place.
+func ehloName(address string) string {
+	if at := strings.LastIndex(address, "@"); at >= 0 && at+1 < len(address) {
+		return address[at+1:]
+	}
+	return ""
+}
+
 type Client struct {
 	FirstName string
 	LastName  string
@@ -33,6 +48,11 @@ type Client struct {
 	AuthType    models.AuthType
 	Credentials *models.Service
 	Oauth2      *models.Oauth2Service
+
+	// plaintext skips the STARTTLS requirement. Only the tests set it, to
+	// talk to an in-process server; no product path reaches it, because SMTP
+	// AUTH in the clear would put the mailbox password on the wire.
+	plaintext bool
 
 	// BindIP optionally pins outbound TCP to a specific local source address.
 	// When nil, WORKER_BIND_IP is consulted; when still unset, the OS default
@@ -54,6 +74,7 @@ type Attachment struct {
 // caller that ignores them is unaffected.
 func (c *Client) Send(
 	ctx context.Context,
+	fromName string,
 	to, cc, bcc []string,
 	messageID,
 	subject, bodyPlain, bodyHTML,
@@ -61,7 +82,13 @@ func (c *Client) Send(
 	attachments []Attachment,
 	customHeaders ...map[string]string,
 ) ([]byte, *errx.MailError) {
-	from := mail.Address{Address: c.Email, Name: fmt.Sprintf("%s %s", c.FirstName, c.LastName)}
+	// A per-send name (the mailbox as renamed in the dashboard) wins over the
+	// one cached at load time.
+	fromName = strings.TrimSpace(fromName)
+	if fromName == "" {
+		fromName = strings.TrimSpace(c.FirstName + " " + c.LastName)
+	}
+	from := mail.Address{Address: c.Email, Name: fromName}
 
 	// ----- Headers -----
 	headers := map[string]string{
@@ -228,8 +255,17 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 	addr := fmt.Sprintf("%s:%d", host, port)
 	tlsConf := &tls.Config{
 		ServerName:         host,
-		InsecureSkipVerify: netbind.InsecureTLS(),
+		InsecureSkipVerify: netbind.InsecureTLS(), //nolint:gosec // MAIL_TLS_INSECURE, local dev only
+		MinVersion:         tls.VersionTLS12,
 	}
+
+	// Everything after the dial gets a deadline. net/smtp sets none of its
+	// own and only the connect was bounded, so a peer that stopped answering
+	// without closing the connection parked the send goroutine forever: the
+	// greeting, AUTH, each RCPT and the wait for the server's verdict at the
+	// end of DATA all block with nothing to fail them.
+	ctx, cancel := context.WithTimeout(ctx, sendTimeout)
+	defer cancel()
 
 	var conn net.Conn
 	var err error
@@ -246,6 +282,9 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 		return errx.ErrMailServerUnreachable
 	}
 	defer conn.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
 
 	// Use the resolved host: c.Credentials is nil for OAuth2-configured clients.
 	client, err := smtp.NewClient(conn, host)
@@ -253,6 +292,14 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 		return errx.ErrMailServerUnreachable
 	}
 	defer client.Quit()
+
+	// Announce the sender's own domain. net/smtp says "localhost" when left
+	// alone, which relays read as a spam signal.
+	if name := ehloName(c.Email); name != "" {
+		if err := client.Hello(name); err != nil {
+			return errx.ErrMailServerUnreachable
+		}
+	}
 
 	// TLS is mandatory. The MAIL_TLS_INSECURE dev knob additionally allows a
 	// server with no STARTTLS at all (the local mailpit sink) — never taken in
@@ -262,7 +309,7 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 			if err := client.StartTLS(tlsConf); err != nil {
 				return errx.ErrMailServerUnreachable
 			}
-		} else if !netbind.InsecureTLS() {
+		} else if !netbind.InsecureTLS() && !c.plaintext {
 			return errx.ErrMailServerUnreachable
 		}
 	}
@@ -270,9 +317,31 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 	// --- Auth ---
 	switch c.AuthType {
 	case models.AuthPlain:
-		auth := smtp.PlainAuth("", c.Credentials.Username, c.Credentials.Password, c.Credentials.Host)
-		if err := client.Auth(auth); err != nil {
-			return errx.ErrMailInvalidCredentials
+		// Negotiated, not assumed: a server that advertises only LOGIN
+		// rejects a blind AUTH PLAIN, and that rejection reads exactly like a
+		// wrong password, so the mailbox was deactivated over credentials
+		// that were correct.
+		auth, aerr := NegotiateAuth(client, c.Credentials.Username, c.Credentials.Password, c.Credentials.Host)
+		if aerr != nil {
+			return errx.ErrMailAuthUnsupported
+		}
+		if auth != nil {
+			if err := client.Auth(auth); err != nil {
+				// Our own refusal to authenticate over an unencrypted link,
+				// raised before anything reaches the server. Retrying cannot
+				// encrypt it, and calling it an outage sends the operator
+				// looking at a server that is answering fine.
+				if errors.Is(err, ErrSMTPCleartextAuth) {
+					return errx.ErrMailCleartextAuth
+				}
+				// A 4xx is the server saying "not now" (rate-limited AUTH, a
+				// backend it cannot reach); only a 5xx means the credentials
+				// themselves are refused.
+				if !permanentReply(err) {
+					return errx.ErrMailServerUnreachable
+				}
+				return errx.ErrMailInvalidCredentials
+			}
 		}
 	case models.AuthOAuth2:
 		tk, err := c.Oauth2.Token.Token()
@@ -293,6 +362,15 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 	}
 
 	if err := client.Mail(from); err != nil {
+		// A refused MAIL FROM is how a blocked sender, an over-quota mailbox
+		// and a relay-denied policy arrive. Retrying a 5xx never succeeds and
+		// reports an outage that is not happening.
+		if permanentReply(err) {
+			if isDomainAuthRejection(err) {
+				return errx.ErrMailDomainAuthRejected
+			}
+			return errx.ErrMailSendRejected(err.Error())
+		}
 		return errx.ErrMailServerUnreachable
 	}
 	for _, r := range to {
@@ -304,8 +382,12 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 			}
 			// A refused RCPT is a recipient problem (bad address, policy
 			// rejection), not a dead server; classifying it as unreachable
-			// hid rejections from bounce accounting.
-			return errx.ErrMailRecipientRejected
+			// hid rejections from bounce accounting. A 4xx is greylisting or
+			// a busy server, which is worth another attempt.
+			if !permanentReply(err) {
+				return errx.ErrMailServerUnreachable
+			}
+			return errx.ErrMailRecipientRejected(err.Error())
 		}
 	}
 	w, err := client.Data()
@@ -320,6 +402,9 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 		// Microsoft returns 5.7.515. Retrying it as an outage never succeeds.
 		if isDomainAuthRejection(err) {
 			return errx.ErrMailDomainAuthRejected
+		}
+		if permanentReply(err) {
+			return errx.ErrMailSendRejected(err.Error())
 		}
 		return errx.ErrMailServerUnreachable
 	}

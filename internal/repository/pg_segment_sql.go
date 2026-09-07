@@ -197,7 +197,7 @@ func (b *segmentBuilder) condition(c models.SegmentCondition, visited map[uuid.U
 		case "is_catch_all":
 			expr = "c.is_catch_all"
 		case "suppressed":
-			expr = fmt.Sprintf("EXISTS (SELECT 1 FROM suppressed_recipients sr WHERE sr.organization_id = %s AND lower(sr.email) = lower(c.email) AND (sr.expires_at IS NULL OR sr.expires_at > now()))", b.bind(b.orgID))
+			expr = fmt.Sprintf("recipient_suppressed(%s, c.email)", b.bind(b.orgID))
 		default:
 			return "FALSE"
 		}

@@ -18,6 +18,11 @@ type AnalyticsRepository interface {
 	GetCampaignSummary(ctx context.Context, userID, campaignID uuid.UUID) (*models.CampaignSummary, *errx.Error)
 	GetCampaignDailyStats(ctx context.Context, campaignID uuid.UUID, from, to time.Time) ([]models.CampaignDailyStats, *errx.Error)
 	GetSequenceStats(ctx context.Context, campaignID uuid.UUID) ([]models.SequenceStats, *errx.Error)
+	// GetCampaignEngagementBreakdown groups the campaign's human opens and
+	// clicks by country, client and device: distinct contacts per bucket, the
+	// busiest `limit` buckets of each. A click counts as an open, as it does
+	// on the progress row.
+	GetCampaignEngagementBreakdown(ctx context.Context, campaignID uuid.UUID, limit int) (*models.CampaignEngagementBreakdown, *errx.Error)
 
 	// Email account status
 	GetAccountsWithErrors(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, *errx.Error)
@@ -97,6 +102,13 @@ func (r *analyticsRepository) GetCampaignSummary(ctx context.Context, userID, ca
 			COUNT(CASE WHEN ccp.opened_at IS NOT NULL THEN 1 END) as unique_opens,
 			COUNT(CASE WHEN ccp.opened_at IS NOT NULL AND ccp.opened_machine THEN 1 END) as machine_opens,
 			COUNT(CASE WHEN ccp.clicked_at IS NOT NULL THEN 1 END) as unique_clicks,
+			COUNT(CASE WHEN ccp.clicked_at IS NULL AND EXISTS (
+				SELECT 1 FROM email_link_clicks lc
+				WHERE lc.campaign_id = ccp.campaign_id AND lc.contact_id = ccp.contact_id AND lc.sequence_id = ccp.sequence_id AND lc.machine
+			) AND NOT EXISTS (
+				SELECT 1 FROM email_link_clicks lc
+				WHERE lc.campaign_id = ccp.campaign_id AND lc.contact_id = ccp.contact_id AND lc.sequence_id = ccp.sequence_id AND NOT lc.machine
+			) THEN 1 END) as machine_clicks,
 			COUNT(CASE WHEN ccp.replied_at IS NOT NULL THEN 1 END) as replies,
 			COUNT(CASE WHEN ccp.bounced_at IS NOT NULL THEN 1 END) as bounces
 		FROM campaign_contact_progress ccp
@@ -114,6 +126,7 @@ func (r *analyticsRepository) GetCampaignSummary(ctx context.Context, userID, ca
 		&summary.UniqueOpens,
 		&summary.MachineOpens,
 		&summary.UniqueClicks,
+		&summary.MachineClicks,
 		&summary.Replies,
 		&summary.Bounces,
 	)
@@ -170,6 +183,70 @@ func (r *analyticsRepository) GetCampaignDailyStats(ctx context.Context, campaig
 	}
 
 	return stats, nil
+}
+
+func (r *analyticsRepository) GetCampaignEngagementBreakdown(ctx context.Context, campaignID uuid.UUID, limit int) (*models.CampaignEngagementBreakdown, *errx.Error) {
+	if limit <= 0 {
+		limit = 8
+	}
+	// One query per dimension over the union of both logs; the key
+	// expression is the only difference. The client falls back to the
+	// browser so a plain webmail open still lands in a named bucket, and
+	// unknown stays the empty key.
+	bucket := func(keyExpr string) ([]models.EngagementBucket, *errx.Error) {
+		query := `
+			WITH ev AS (
+				SELECT contact_id, 'open' AS kind, client, browser, device_type, country_code
+				FROM email_opens
+				WHERE campaign_id = $1 AND NOT machine
+				UNION ALL
+				SELECT contact_id, 'click' AS kind, client, browser, device_type, country_code
+				FROM email_link_clicks
+				WHERE campaign_id = $1 AND NOT machine
+			)
+			SELECT ` + keyExpr + ` AS key,
+			       COUNT(DISTINCT contact_id) AS opens,
+			       COUNT(DISTINCT contact_id) FILTER (WHERE kind = 'click') AS clicks
+			FROM ev
+			GROUP BY 1
+			ORDER BY opens + clicks DESC, key ASC
+			LIMIT $2
+		`
+		rows, err := r.DB.Query(ctx, query, campaignID, limit)
+		if err != nil {
+			db.CaptureError(err, query, []any{campaignID, limit}, "GetCampaignEngagementBreakdown")
+			return nil, errx.InternalError()
+		}
+		defer rows.Close()
+		out := []models.EngagementBucket{}
+		for rows.Next() {
+			var b models.EngagementBucket
+			if err := rows.Scan(&b.Key, &b.Opens, &b.Clicks); err != nil {
+				db.CaptureError(err, "", nil, "GetCampaignEngagementBreakdown scan")
+				return nil, errx.InternalError()
+			}
+			out = append(out, b)
+		}
+		if err := rows.Err(); err != nil {
+			db.CaptureError(err, query, []any{campaignID, limit}, "GetCampaignEngagementBreakdown rows")
+			return nil, errx.InternalError()
+		}
+		return out, nil
+	}
+
+	countries, xerr := bucket(`country_code`)
+	if xerr != nil {
+		return nil, xerr
+	}
+	clients, xerr := bucket(`COALESCE(NULLIF(client, ''), browser)`)
+	if xerr != nil {
+		return nil, xerr
+	}
+	devices, xerr := bucket(`CASE WHEN device_type = 'unknown' THEN '' ELSE device_type END`)
+	if xerr != nil {
+		return nil, xerr
+	}
+	return &models.CampaignEngagementBreakdown{Countries: countries, Clients: clients, Devices: devices}, nil
 }
 
 func (r *analyticsRepository) GetSequenceStats(ctx context.Context, campaignID uuid.UUID) ([]models.SequenceStats, *errx.Error) {
@@ -345,6 +422,13 @@ func (r *analyticsRepository) GetDashboardOverallStats(ctx context.Context, orgI
 			COUNT(CASE WHEN ccp.opened_at IS NOT NULL AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 THEN 1 END) as total_opens,
 			COUNT(CASE WHEN ccp.opened_at IS NOT NULL AND ccp.opened_machine AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 THEN 1 END) as machine_opens,
 			COUNT(CASE WHEN ccp.clicked_at IS NOT NULL AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 THEN 1 END) as total_clicks,
+			COUNT(CASE WHEN ccp.clicked_at IS NULL AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 AND EXISTS (
+				SELECT 1 FROM email_link_clicks lc
+				WHERE lc.campaign_id = ccp.campaign_id AND lc.contact_id = ccp.contact_id AND lc.sequence_id = ccp.sequence_id AND lc.machine
+			) AND NOT EXISTS (
+				SELECT 1 FROM email_link_clicks lc
+				WHERE lc.campaign_id = ccp.campaign_id AND lc.contact_id = ccp.contact_id AND lc.sequence_id = ccp.sequence_id AND NOT lc.machine
+			) THEN 1 END) as machine_clicks,
 			COUNT(CASE WHEN ccp.replied_at IS NOT NULL AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 THEN 1 END) as total_replies,
 			COUNT(CASE WHEN ccp.bounced_at IS NOT NULL AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 THEN 1 END) as total_bounces,
 			(SELECT COUNT(*) FROM campaigns WHERE organization_id = $1 AND status = 'active') as active_campaigns,
@@ -362,6 +446,7 @@ func (r *analyticsRepository) GetDashboardOverallStats(ctx context.Context, orgI
 		&stats.TotalOpens,
 		&stats.MachineOpens,
 		&stats.TotalClicks,
+		&stats.MachineClicks,
 		&stats.TotalReplies,
 		&stats.TotalBounces,
 		&stats.ActiveCampaigns,
@@ -397,9 +482,13 @@ func (r *analyticsRepository) GetRecentActivity(ctx context.Context, orgID uuid.
 
 			UNION ALL
 
-			-- Clicks
+			-- Clicks (the first link a person clicked on the step, when logged per link)
 			SELECT 'clicked' as type, ccp.campaign_id, c.name as campaign_name,
-				   co.email as contact_email, ccp.contact_id, ccp.clicked_at as timestamp, NULL as link
+				   co.email as contact_email, ccp.contact_id, ccp.clicked_at as timestamp,
+				   (SELECT lc.destination FROM email_link_clicks lc
+				    WHERE lc.campaign_id = ccp.campaign_id AND lc.contact_id = ccp.contact_id
+				      AND lc.sequence_id = ccp.sequence_id AND lc.machine = false
+				    ORDER BY lc.clicked_at LIMIT 1) as link
 			FROM campaign_contact_progress ccp
 			JOIN campaigns c ON c.id = ccp.campaign_id
 			JOIN contacts co ON co.id = ccp.contact_id

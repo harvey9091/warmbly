@@ -342,6 +342,9 @@ export function useRealtimeEvents() {
           // Segment membership is computed from contact data, so a contact
           // change moves segment counts too.
           contact: [['contacts'], ['segments']],
+          // A suppression entry changes who a campaign can reach, so the
+          // list, the contact drawers and the audience counts all move.
+          suppression: [['suppressions'], ['contacts'], ['analytics']],
           segment: [['segments'], ['contacts', 'list']],
           form: [['forms']],
           campaign: [['campaigns'], ['analytics']],
@@ -411,7 +414,17 @@ export function useRealtimeEvents() {
         if (entityId && entityType === 'contact') invalidate([['contacts', entityId]])
         if (entityId && entityType === 'segment') invalidate([['segments', entityId]])
         if (entityId && entityType === 'form') invalidate([['forms', entityId]])
-        if (entityId && entityType === 'campaign') invalidate([['campaigns', entityId]])
+        if (entityId && entityType === 'campaign') {
+          invalidate([['campaigns', entityId], ['segments', 'campaign', entityId]])
+          // A campaign write can enrol leads (linking a segment), so only the
+          // contact lists scoped to that campaign move, not every list.
+          void queryClient.invalidateQueries({
+            predicate: (q) => {
+              const [root, kind, options] = q.queryKey as [unknown, unknown, { campaign_ids?: string[] } | undefined]
+              return root === 'contacts' && kind === 'list' && !!options?.campaign_ids?.includes(entityId)
+            },
+          })
+        }
         if (entityId && entityType === 'automation') invalidate([['automations', entityId]])
         return
       }

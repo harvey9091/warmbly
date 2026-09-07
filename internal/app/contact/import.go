@@ -445,6 +445,11 @@ func (s *contactService) ImportCommit(
 		return nil, xerr
 	}
 
+	// A file or sheet is a bulk arrival, not fifty thousand "new contact"
+	// moments: the per-contact event stays quiet so automations and webhooks
+	// are not flooded by a single import.
+	ctx = WithoutCreatedEvents(ctx)
+
 	// Insert in chunks so a 50k row import doesn't blow up a single
 	// pgx batch. 500 lines up with the Search page size.
 	for start := 0; start < len(toInsert); start += 500 {

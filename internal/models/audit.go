@@ -65,6 +65,8 @@ const (
 	AuditEntityAWSCredentials AuditEntityType = "aws_credentials"
 	AuditEntityWorkerProfile  AuditEntityType = "worker_profile"
 	AuditEntityRelease        AuditEntityType = "release"
+	// AuditEntityInstance is the deployment itself: settings and updates.
+	AuditEntityInstance AuditEntityType = "instance"
 
 	// Org-scoped configuration & governance entities
 	AuditEntityOrganizationMember AuditEntityType = "organization_member"
@@ -80,6 +82,7 @@ const (
 	AuditEntityForm               AuditEntityType = "form"
 	AuditEntitySubscription       AuditEntityType = "subscription"
 	AuditEntitySettings           AuditEntityType = "settings"
+	AuditEntitySuppression        AuditEntityType = "suppression"
 
 	// CRM entities
 	AuditEntityCRMPipeline AuditEntityType = "crm_pipeline"

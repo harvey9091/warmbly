@@ -22,18 +22,32 @@ export const STANDARD_VARS: TemplateVar[] = [
     { token: "{{.Phone}}", key: "Phone", label: "Phone", desc: "The contact's phone number", sample: "+1 555-0100" },
 ];
 
+// Per-send values that are not contact fields. Only campaign email bodies
+// resolve these (template.go RenderTemplateWith); a deal name or automation
+// value has no recipient link to offer.
+export const LINK_VARS: TemplateVar[] = [
+    {
+        token: "{{.UnsubscribeLink}}",
+        key: "UnsubscribeLink",
+        label: "Unsubscribe link",
+        desc: "This recipient's own unsubscribe link. Use it to place the opt-out in your copy instead of the footer line",
+        sample: "https://example.com/unsubscribe/preview",
+    },
+];
+
 // The token list many surfaces already consume as `string[]`.
 export const VARIABLES: string[] = STANDARD_VARS.map((v) => v.token);
+export const LINK_VARIABLES: string[] = LINK_VARS.map((v) => v.token);
 
 // Friendly metadata keyed by token, for pickers that render label + description.
 export const TOKEN_META: Record<string, { label: string; desc: string }> = Object.fromEntries(
-    STANDARD_VARS.map((v) => [v.token, { label: v.label, desc: v.desc }]),
+    [...STANDARD_VARS, ...LINK_VARS].map((v) => [v.token, { label: v.label, desc: v.desc }]),
 );
 
 // Client-side preview sample context: standard fields plus a couple of common
 // custom-field examples so a {{.role}} in a preview resolves to something.
 export const SAMPLE: Record<string, string> = {
-    ...Object.fromEntries(STANDARD_VARS.map((v) => [v.key, v.sample])),
+    ...Object.fromEntries([...STANDARD_VARS, ...LINK_VARS].map((v) => [v.key, v.sample])),
     role: "Engineer",
     city: "Berlin",
 };

@@ -135,3 +135,47 @@ func TestLiveFormLifecycle(t *testing.T) {
 		t.Fatalf("delete: %v", xerr)
 	}
 }
+
+// Issue #343: the builder's "New form" hands the repository a Form with no
+// allowed domains and no fields at all. Both columns reject NULL, so the nil
+// slices have to reach Postgres as empty values instead.
+func TestLiveFormCreateEmptyLists(t *testing.T) {
+	handle, pool := liveContactDB(t)
+	f := newSharedOrgFixture(t, pool)
+	repo := NewFormRepository(handle)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), `DELETE FROM forms WHERE organization_id = $1`, f.org); err != nil {
+			t.Errorf("cleanup forms: %v", err)
+		}
+	})
+
+	created, xerr := repo.Create(ctx, f.org, &f.owner, &models.Form{
+		PublicID:       "livetest-" + uuid.New().String()[:13],
+		Name:           "Empty lists",
+		Status:         models.FormStatusDraft,
+		SuccessMessage: "Thanks",
+	})
+	if xerr != nil {
+		t.Fatalf("create: %v", xerr)
+	}
+	if created.AllowedDomains == nil || len(created.AllowedDomains) != 0 {
+		t.Fatalf("allowed domains: %#v", created.AllowedDomains)
+	}
+	if created.Fields == nil || len(created.Fields) != 0 {
+		t.Fatalf("fields: %#v", created.Fields)
+	}
+
+	// The same nil slices on the way back out (publishing a form the builder
+	// never gave domains to).
+	created.AllowedDomains = nil
+	created.Fields = nil
+	created.Status = models.FormStatusPublished
+	updated, xerr := repo.Update(ctx, f.org, created)
+	if xerr != nil {
+		t.Fatalf("update: %v", xerr)
+	}
+	if len(updated.AllowedDomains) != 0 || len(updated.Fields) != 0 {
+		t.Fatalf("update round-trip: %#v %#v", updated.AllowedDomains, updated.Fields)
+	}
+}

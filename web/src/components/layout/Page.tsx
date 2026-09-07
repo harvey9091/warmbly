@@ -219,7 +219,7 @@ export function Stat({
         </>
     );
     const cls = cn(
-        "group px-5 py-4 transition-colors",
+        "group px-5 py-3 md:py-4 transition-colors",
         !last && "border-r border-slate-200",
         (href || onClick) && "hover:bg-slate-50 cursor-pointer",
     );

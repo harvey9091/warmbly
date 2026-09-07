@@ -26,6 +26,10 @@ const (
 	docsCaptcha    = "/development/configuration/#captcha"
 	docsSSO        = "/development/accounts-and-access/#single-sign-on"
 	docsFirstOwner = "/development/accounts-and-access/#first-owner"
+	docsUpdates    = "/development/updates/"
+	// The database-backed settings document, which is the one tier the
+	// environment does not own.
+	docsSettingsDoc = "/development/configuration/#settings-stored-in-the-database"
 )
 
 // table is the static inventory. Declaration order is display order.
@@ -507,6 +511,12 @@ var table = []Entry{
 		DocsAnchor: docsFirstOwner,
 		Resolve:    envValue("WARMBLY_BOOTSTRAP_ORG"),
 	},
+	{
+		Key: "WARMBLY_SETTINGS_BOOTSTRAP", Group: GroupDeployment, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Seeds the database-backed settings document (sync budgets, retention windows) on an instance that has never saved one. A no-op from the first save in Instance settings onwards, so leaving it here cannot undo an edit made there.",
+		DocsAnchor: docsSettingsDoc,
+		Resolve:    envValue("WARMBLY_SETTINGS_BOOTSTRAP"),
+	},
 
 	// Captcha.
 	{
@@ -772,6 +782,49 @@ var table = []Entry{
 		Effect:     "Error reporting. Optional in every environment; unset simply logs instead.",
 		DocsAnchor: docsDeployment,
 		Resolve:    envValue("SENTRY_DSN"),
+	},
+
+	// Updates.
+	{
+		Key: "UPDATE_CHECK_ENABLED", Group: GroupUpdates, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Polls GitHub Releases for a newer Warmbly and shows it in the admin panel's top bar and on Setup and health.",
+		DocsAnchor: docsUpdates,
+		Resolve:    boolOr("UPDATE_CHECK_ENABLED", true),
+	},
+	{
+		Key: "UPDATE_CHECK_INTERVAL", Group: GroupUpdates, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "How often the release check runs. Minimum 5m.",
+		DocsAnchor: docsUpdates,
+		Resolve:    envOr("UPDATE_CHECK_INTERVAL", "30m"),
+	},
+	{
+		Key: "UPDATE_CHANNEL", Group: GroupUpdates, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "stable follows releases; dev also offers prereleases.",
+		DocsAnchor: docsUpdates,
+		Resolve:    envOr("UPDATE_CHANNEL", "stable"),
+	},
+	{
+		Key: "RELEASES_GITHUB_REPO", Group: GroupUpdates, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "The owner/repo whose releases count as Warmbly versions. Point a fork's instance at the fork.",
+		DocsAnchor: docsUpdates,
+		Resolve:    envOr("RELEASES_GITHUB_REPO", "warmbly/warmbly"),
+	},
+	{
+		Key: "UPDATER_URL", Group: GroupUpdates, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "The host-side updater that applies an update (pull, rebuild, restart). Unset leaves the panel report-only.",
+		DocsAnchor: docsUpdates,
+		Resolve:    envValue("UPDATER_URL"),
+	},
+	{
+		Key: "UPDATER_TOKEN", Group: GroupUpdates, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "The bearer token the backend presents to the updater. Falls back to INTERNAL_API_TOKEN.",
+		DocsAnchor: docsUpdates, WhenUnset: SourceDerived,
+		Resolve: func(*Runtime) string {
+			if v := trimmed("UPDATER_TOKEN"); v != "" {
+				return v
+			}
+			return trimmed("INTERNAL_API_TOKEN")
+		},
 	},
 }
 

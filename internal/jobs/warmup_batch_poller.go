@@ -10,8 +10,8 @@ import (
 )
 
 // WarmupBatchPoller reconciles in-flight OpenAI Batch API warmup-generation jobs:
-// it polls each active batch, ingests completed ones into the content bank, and
-// marks failed/expired/cancelled ones. It is a thin scheduler around
+// it polls each active batch, ingests what each finished one produced into the
+// content bank, and marks empty ones failed. It is a thin scheduler around
 // warmupcontent.Service.PollBatches; all policy lives in the service. Batches run
 // async (up to a 24h window) so a coarse 5-minute tick is plenty.
 type WarmupBatchPoller struct {

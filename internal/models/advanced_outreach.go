@@ -2,6 +2,7 @@ package models
 
 import (
 	"math"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -77,6 +78,86 @@ func (s *AdvancedOutreachSettings) Normalize() {
 	if s.Preflight.MinContentScore < 1 {
 		s.Preflight.MinContentScore = 1
 	}
+	if !ValidUnsubscribeMode(string(s.Unsubscribe.Mode)) || s.Unsubscribe.Mode == UnsubscribeModeInherit {
+		s.Unsubscribe.Mode = UnsubscribeModeText
+	}
+	s.Unsubscribe.Text = clampLine(s.Unsubscribe.Text)
+	s.Unsubscribe.LinkIntro = clampLine(s.Unsubscribe.LinkIntro)
+	s.Unsubscribe.LinkText = clampLine(s.Unsubscribe.LinkText)
+}
+
+// clampLine trims a one-line copy field and caps it; the email footer is not
+// the place for a paragraph or for line breaks.
+func clampLine(v string) string {
+	v = strings.Join(strings.Fields(v), " ")
+	if r := []rune(v); len(r) > UnsubscribeCopyMaxLen {
+		v = string(r[:UnsubscribeCopyMaxLen])
+	}
+	return v
+}
+
+// UnsubscribeMode is how a campaign email carries its opt-out. "text" appends
+// a plain sentence inviting a reply (the default: it reads as a personal
+// email and the reply is honoured automatically), "link" appends a sentence
+// with a real unsubscribe link, "off" appends nothing. A campaign's own
+// column may also hold "inherit", which follows the workspace setting.
+type UnsubscribeMode string
+
+const (
+	UnsubscribeModeInherit UnsubscribeMode = "inherit"
+	UnsubscribeModeText    UnsubscribeMode = "text"
+	UnsubscribeModeLink    UnsubscribeMode = "link"
+	UnsubscribeModeOff     UnsubscribeMode = "off"
+)
+
+// ValidUnsubscribeMode reports whether m is a value a campaign may store.
+func ValidUnsubscribeMode(m string) bool {
+	switch UnsubscribeMode(m) {
+	case UnsubscribeModeInherit, UnsubscribeModeText, UnsubscribeModeLink, UnsubscribeModeOff:
+		return true
+	}
+	return false
+}
+
+const (
+	DefaultUnsubscribeText      = "If this isn't relevant, just reply and let me know and I won't email you again."
+	DefaultUnsubscribeLinkIntro = "Not the right person, or not interested?"
+	DefaultUnsubscribeLinkText  = "Unsubscribe"
+	UnsubscribeCopyMaxLen       = 300
+)
+
+// UnsubscribeSettings is the workspace default for the in-body opt-out. The
+// List-Unsubscribe header is a per-campaign flag and is not part of this.
+type UnsubscribeSettings struct {
+	Mode UnsubscribeMode `json:"mode"`
+	// Text is the sentence appended in "text" mode.
+	Text string `json:"text"`
+	// LinkIntro and LinkText make up the "link" mode line: "<intro> <a>text</a>".
+	LinkIntro string `json:"link_intro"`
+	LinkText  string `json:"link_text"`
+}
+
+// Effective resolves a campaign's stored mode against the workspace default
+// and fills any blank copy with the defaults, so the send path never has to
+// think about settings written before this block existed.
+func (u UnsubscribeSettings) Effective(campaignMode string) UnsubscribeSettings {
+	out := u
+	if m := UnsubscribeMode(campaignMode); m != "" && m != UnsubscribeModeInherit && ValidUnsubscribeMode(campaignMode) {
+		out.Mode = m
+	}
+	if !ValidUnsubscribeMode(string(out.Mode)) || out.Mode == UnsubscribeModeInherit {
+		out.Mode = UnsubscribeModeText
+	}
+	if strings.TrimSpace(out.Text) == "" {
+		out.Text = DefaultUnsubscribeText
+	}
+	if strings.TrimSpace(out.LinkIntro) == "" {
+		out.LinkIntro = DefaultUnsubscribeLinkIntro
+	}
+	if strings.TrimSpace(out.LinkText) == "" {
+		out.LinkText = DefaultUnsubscribeLinkText
+	}
+	return out
 }
 
 type DeliverabilityDashboardSettings struct {
@@ -94,6 +175,7 @@ type AdvancedOutreachSettings struct {
 	SendTimeOptimization SendTimeOptimizationSettings    `json:"send_time_optimization"`
 	Preflight            PreflightValidationSettings     `json:"preflight"`
 	Dashboard            DeliverabilityDashboardSettings `json:"dashboard"`
+	Unsubscribe          UnsubscribeSettings             `json:"unsubscribe"`
 	Custom               map[string]interface{}          `json:"custom,omitempty"`
 }
 
@@ -116,7 +198,47 @@ const (
 	DeliverabilityEventOpen        DeliverabilityEventType = "open"
 	DeliverabilityEventClick       DeliverabilityEventType = "click"
 	DeliverabilityEventReply       DeliverabilityEventType = "reply"
+
+	// Suppression-only sources: never ingested as deliverability events, but
+	// they share the column so one list explains why every entry is there.
+	SuppressionSourceManual DeliverabilityEventType = "manual"
+	SuppressionSourceImport DeliverabilityEventType = "import"
 )
+
+// SuppressionKind says what a suppression row matches: one address, or every
+// address at a domain.
+type SuppressionKind string
+
+const (
+	SuppressionKindEmail  SuppressionKind = "email"
+	SuppressionKindDomain SuppressionKind = "domain"
+)
+
+// SuppressionListResult is the GET /suppressions page.
+type SuppressionListResult struct {
+	Data       []SuppressedRecipient `json:"data"`
+	Pagination CPagination           `json:"pagination"`
+}
+
+// AddSuppressionsRequest adds addresses and domains by hand or from a pasted
+// list. A value without "@" (or with a leading "@") is a domain.
+type AddSuppressionsRequest struct {
+	Entries []SuppressionEntry `json:"entries"`
+	// Reason applies to every entry that does not carry its own.
+	Reason string `json:"reason"`
+}
+
+type SuppressionEntry struct {
+	Value  string `json:"value"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// AddSuppressionsResult reports what the request did. Skipped lists the
+// values that were neither a valid address nor a valid domain.
+type AddSuppressionsResult struct {
+	Added   int      `json:"added"`
+	Skipped []string `json:"skipped"`
+}
 
 type DeliverabilityEvent struct {
 	ID             uuid.UUID               `json:"id"`
@@ -146,16 +268,18 @@ type IngestDeliverabilityEventRequest struct {
 }
 
 type SuppressedRecipient struct {
-	ID             uuid.UUID               `json:"id"`
-	OrganizationID uuid.UUID               `json:"organization_id"`
-	Email          string                  `json:"email"`
-	Reason         string                  `json:"reason"`
-	Source         DeliverabilityEventType `json:"source"`
-	CampaignID     *uuid.UUID              `json:"campaign_id,omitempty"`
-	ExpiresAt      *time.Time              `json:"expires_at,omitempty"`
-	Metadata       map[string]interface{}  `json:"metadata,omitempty"`
-	CreatedAt      time.Time               `json:"created_at"`
-	UpdatedAt      time.Time               `json:"updated_at"`
+	ID             uuid.UUID `json:"id"`
+	OrganizationID uuid.UUID `json:"organization_id"`
+	// Email holds the address, or the bare domain when Kind is "domain".
+	Email      string                  `json:"email"`
+	Kind       SuppressionKind         `json:"kind"`
+	Reason     string                  `json:"reason"`
+	Source     DeliverabilityEventType `json:"source"`
+	CampaignID *uuid.UUID              `json:"campaign_id,omitempty"`
+	ExpiresAt  *time.Time              `json:"expires_at,omitempty"`
+	Metadata   map[string]interface{}  `json:"metadata,omitempty"`
+	CreatedAt  time.Time               `json:"created_at"`
+	UpdatedAt  time.Time               `json:"updated_at"`
 }
 
 type CampaignABVariant struct {
@@ -490,6 +614,15 @@ func DefaultAdvancedOutreachSettings() AdvancedOutreachSettings {
 			ShowSuppressionLog: true,
 			ShowIntentSummary:  true,
 			ShowDLQStats:       true,
+		},
+		// A plain reply-to-opt-out sentence by default: it satisfies CAN-SPAM,
+		// CASL and the Spam Act (all accept a reply mechanism), and it reads
+		// as a personal email where a formal link reads as bulk mail.
+		Unsubscribe: UnsubscribeSettings{
+			Mode:      UnsubscribeModeText,
+			Text:      DefaultUnsubscribeText,
+			LinkIntro: DefaultUnsubscribeLinkIntro,
+			LinkText:  DefaultUnsubscribeLinkText,
 		},
 		Custom: map[string]interface{}{},
 	}

@@ -113,6 +113,18 @@ Every tool is gated by its API permission. `tools/list` returns only the tools y
 | `add_contact` / `delete_contact` | Create or delete a contact | `WRITE_CONTACTS` |
 | `bulk_edit_contacts` | Tag or subscribe many contacts at once | `BULK_CONTACTS` |
 | `get_contact_timeline` / `get_contact_sent_emails` | Read a contact's activity and sent mail | `READ_CONTACTS` |
+| `list_segments` / `get_segment` / `list_segment_fields` | Read saved audiences, and the fields a condition can name | `READ_CONTACTS` |
+| `preview_segment` | Count what a set of conditions would match, saving nothing | `READ_CONTACTS` |
+| `create_segment` / `update_segment` / `delete_segment` | Manage saved audiences | `WRITE_CONTACTS` |
+| `set_segment_members` | Pin contacts into or out of a segment | `WRITE_CONTACTS` |
+| `list_campaign_segments` | Read the segments feeding a campaign | `READ_CAMPAIGNS` |
+| `set_campaign_segments` / `add_segment_to_campaign` | Link an audience to a campaign, or enrol its members once | `WRITE_CAMPAIGNS` |
+| `list_forms` / `get_form` / `list_form_submissions` / `get_form_stats` | Read hosted forms, their submissions, and their funnel | `READ_CONTACTS` |
+| `create_form` / `update_form` / `delete_form` | Manage hosted forms | `WRITE_CONTACTS` |
+| `mint_form_link` | Get one contact's personalized form URL | `WRITE_CONTACTS` |
+| `get_campaign_forms` | How a campaign's forms performed for its recipients | `READ_CAMPAIGNS` |
+| `list_suppressions` | Read the do-not-contact list, and why each entry is on it | `READ_CONTACTS` |
+| `add_suppressions` / `remove_suppression` | Suppress an address or domain, or lift one | `WRITE_CONTACTS` |
 | `list_pipelines` / `list_deals` / `get_deal` / `list_deals_by_contact` | Read CRM pipelines and deals | `READ_CRM` |
 | `create_task` / `create_deal` | Create CRM records | `WRITE_CRM` |
 | `update_deal` / `move_deal_stage` / `delete_deal` | Edit, move, or delete a deal | `WRITE_CRM` |
@@ -142,6 +154,8 @@ Every tool is gated by its API permission. `tools/list` returns only the tools y
 | `create_webhook` / `update_webhook` / `delete_webhook` / `rotate_webhook_secret` / `verify_webhook` | Manage webhook endpoints | `WEBHOOKS` |
 | `search_web` / `fetch_url` | Search and read public pages | any |
 | `load_skill` | Read one of your playbooks | any |
+
+Two form surfaces are deliberately absent: brand-asset uploads (logo, cover, background) are multipart images with dimension and MIME limits that a tool call cannot express, and the custom forms domain is workspace-wide branding behind a DNS check, so it lives in settings rather than in a tool.
 
 Rate limits apply to MCP calls exactly as they do to the rest of the API (per-key for API keys, per-user for OAuth tokens). `SEND_CAMPAIGNS` appears in the table because `set_campaign_status` needs it, but that tool is still withheld from MCP: no send-class tool is ever exposed over the MCP transport regardless of scope.
 

@@ -24,6 +24,7 @@ import OutboxIndicator from "@/components/app/unibox/compose/OutboxIndicator";
 import { NotificationBell } from "./NotificationBell";
 import { OrgSwitcher } from "./OrgSwitcher";
 import { PlanPill } from "./PlanPill";
+import { VersionPill } from "./VersionPill";
 import { CreditsMeter } from "./CreditsMeter";
 
 // Pretty labels for path segments. Anything missing falls back to the
@@ -145,6 +146,7 @@ export function AppHeader({ onMenu }: { onMenu?: () => void }) {
             <div className="flex items-center gap-2 px-2 sm:px-4 shrink-0">
                 <div className="hidden sm:flex items-center gap-2">
                     <PlanPill />
+                    <VersionPill />
                     <CreditsMeter />
                     <div className="h-4 w-px bg-border" />
                 </div>

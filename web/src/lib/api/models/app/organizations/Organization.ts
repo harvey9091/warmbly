@@ -2,6 +2,8 @@ export default interface Organization {
     id: string
     name: string
     avatar?: string
+    // Public URL of the workspace avatar, null/undefined when none is set.
+    avatar_url?: string | null
     plan?: string
     // Built-in role id or a custom role's name.
     role: string

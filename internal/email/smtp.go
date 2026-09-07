@@ -8,6 +8,7 @@ import (
 	"net/smtp"
 
 	"github.com/warmbly/warmbly/internal/client/netbind"
+	wsmtp "github.com/warmbly/warmbly/internal/client/smtpimap/smtp"
 	"github.com/warmbly/warmbly/internal/models"
 )
 
@@ -22,7 +23,8 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 	// knob for the local self-signed sandbox, never set in production.
 	tlsConf := &tls.Config{
 		ServerName:         host,
-		InsecureSkipVerify: netbind.InsecureTLS(),
+		InsecureSkipVerify: netbind.InsecureTLS(), //nolint:gosec // MAIL_TLS_INSECURE, local dev only
+		MinVersion:         tls.VersionTLS12,
 	}
 
 	var conn net.Conn
@@ -62,7 +64,18 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 		}
 	}
 
-	auth := smtp.PlainAuth("", user, pass, host)
+	// Negotiated from what the server advertised, like the send path: a
+	// server that offers only LOGIN refuses a blind AUTH PLAIN, and probing
+	// with PLAIN alone rejected mailboxes whose credentials were correct.
+	auth, aerr := wsmtp.NegotiateAuth(c, user, pass, host)
+	if aerr != nil {
+		return false
+	}
+	if auth == nil {
+		// No AUTH offered at all: nothing to verify, and the send path will
+		// not authenticate either.
+		return true
+	}
 
 	done := make(chan error, 1)
 	go func() { done <- c.Auth(auth) }()

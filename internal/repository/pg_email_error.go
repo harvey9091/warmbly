@@ -53,6 +53,10 @@ type EmailAccountErrorRepository interface {
 	// ResolveByCodes resolves the account's unresolved errors carrying any of
 	// the given codes, for a flow that just fixed that class of error.
 	ResolveByCodes(ctx context.Context, accountID uuid.UUID, codes []string, resolvedBy string) *errx.Error
+	// ResolveByCodesBefore is ResolveByCodes bounded to errors raised before
+	// a given moment, so evidence of recovery cannot resolve a failure that
+	// happened after it.
+	ResolveByCodesBefore(ctx context.Context, accountID uuid.UUID, codes []string, before time.Time, resolvedBy string) *errx.Error
 	ResolveAllForAccount(ctx context.Context, accountID uuid.UUID, resolvedBy string) *errx.Error
 }
 
@@ -241,6 +245,37 @@ func (r *emailAccountErrorRepository) ResolveByCodes(ctx context.Context, accoun
 	_, err := r.DB.Exec(ctx, query, resolvedBy, accountID, codes)
 	if err != nil {
 		db.CaptureError(err, query, []any{resolvedBy, accountID, codes}, "exec")
+		return errx.InternalError()
+	}
+
+	return nil
+}
+
+// ResolveByCodesBefore resolves the account's unresolved errors carrying any
+// of the codes that were raised before the given moment.
+//
+// The bound matters because the bus can redeliver: JetStream is configured
+// with MaxDeliver and no MaxAckPending, so an older event can arrive after a
+// newer one. Without it, a stale "the sync succeeded" could clear a failure
+// that happened afterwards, and the mailbox would look healthy while it was
+// not, until the next distinct outage raised a fresh row.
+func (r *emailAccountErrorRepository) ResolveByCodesBefore(ctx context.Context, accountID uuid.UUID, codes []string, before time.Time, resolvedBy string) *errx.Error {
+	if len(codes) == 0 {
+		return nil
+	}
+
+	query := `
+		UPDATE email_account_errors
+		SET resolved_at = NOW(), resolved_by = $1
+		WHERE email_account_id = $2
+		  AND error_code = ANY($3::text[])
+		  AND created_at < $4
+		  AND resolved_at IS NULL
+	`
+
+	_, err := r.DB.Exec(ctx, query, resolvedBy, accountID, codes, before)
+	if err != nil {
+		db.CaptureError(err, query, []any{resolvedBy, accountID, codes, before}, "exec")
 		return errx.InternalError()
 	}
 

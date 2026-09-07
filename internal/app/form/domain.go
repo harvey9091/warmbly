@@ -33,7 +33,7 @@ type OrgStore interface {
 // sitting in a recipient's inbox into a dead link, which is worse than a link
 // on the shared host.
 func (s *service) FormsHost(ctx context.Context, orgID uuid.UUID) string {
-	shared := config.FormsHostname()
+	shared := config.FormsURLHost()
 	if s.domains == nil {
 		return shared
 	}

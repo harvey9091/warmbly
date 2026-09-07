@@ -72,6 +72,9 @@ type SendRequest struct {
 	// Attachments, when present, are encoded as multipart/mixed parts after the
 	// multipart/alternative text body. Warmup sends never carry attachments.
 	Attachments []Attachment
+	// FromName is the display name the control plane holds for the mailbox at
+	// publish time. Empty falls back to the name cached from ADD_EMAIL.
+	FromName string
 }
 
 // buildSendHeaders assembles the outbound custom headers: the warmup
@@ -104,6 +107,21 @@ type SendResult struct {
 }
 
 const maxSendRetries = 3
+
+// permanentSendFailure is a refusal no retry can turn into a delivery: the
+// receiving server rejected the sender, the recipient or the message itself
+// with a 5xx. Named codes rather than the resolve method, because several
+// warnings carry a non-retry method while still being worth another attempt.
+func permanentSendFailure(err *errx.MailError) bool {
+	if err == nil {
+		return false
+	}
+	switch err.Code {
+	case errx.MailErrorCodeSendRejected, errx.MailErrorCodeRecipientRejected:
+		return true
+	}
+	return false
+}
 
 // Send attempts to send an email with retry for transient failures
 func (w *WMail) Send(ctx context.Context, req *SendRequest) *SendResult {
@@ -138,8 +156,14 @@ func (w *WMail) Send(ctx context.Context, req *SendRequest) *SendResult {
 			return result
 		}
 
-		// Don't retry critical/auth errors - only transient ones
+		// Don't retry critical/auth errors - only transient ones.
 		if result.Error != nil && result.Error.Type == errx.MailErrorCritical {
+			return result
+		}
+		// A permanent refusal is not critical but is just as final: the
+		// server answered with a 5xx, so it will answer the same way next
+		// time and another attempt only spends the mailbox's daily budget.
+		if permanentSendFailure(result.Error) {
 			return result
 		}
 
@@ -190,6 +214,7 @@ func (w *WMail) sendViaGmail(ctx context.Context, req *SendRequest, bodyHTML str
 	// Send via Gmail API
 	gmailMsg, err := w.GoogleData.Client.SendMessage(
 		ctx,
+		req.FromName,
 		req.To,
 		req.Cc,
 		req.Bcc,
@@ -260,6 +285,7 @@ func (w *WMail) sendViaGraph(ctx context.Context, req *SendRequest, bodyHTML str
 
 	sentMessageID, err := w.GraphData.Client.SendMessage(
 		ctx,
+		req.FromName,
 		req.To,
 		req.Cc,
 		req.Bcc,
@@ -324,6 +350,7 @@ func (w *WMail) sendViaSMTP(ctx context.Context, req *SendRequest, bodyHTML stri
 	// empty list still selects the same code path.
 	raw, merr := w.SmtpImapData.SmtpClient.Send(
 		ctx,
+		req.FromName,
 		req.To,
 		req.Cc,
 		req.Bcc,

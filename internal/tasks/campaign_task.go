@@ -204,9 +204,13 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 		}
 		if errors.Is(err, scheduler.ErrCampaignDeferred) {
 			// A valid contact exists but no eligible mailbox right now (ESP-strict
-			// has no same-provider mailbox, or the daily new-lead cap is reached).
+			// has no same-provider mailbox, the daily new-lead cap is reached, or
+			// every mailbox has spent its daily budget or is outside its hours).
 			// Reschedule at the deferred slot WITHOUT sending and WITHOUT touching
 			// progress / daily counters / rotation — mirrors the daily-limit path.
+			// This task completes without a send, and completing it must not
+			// spend the mailbox's budget either (issue #306): the budget counts
+			// reserved sends, never bare wake-ups.
 			// Capped: the next-due moment can be days out, and until this chain
 			// wakes nothing re-reads the campaign, so leads imported meanwhile
 			// would sit queued until then.
@@ -214,6 +218,7 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 			if cerr := s.createCampaignTask(ctx, campaign.ID, accountID, scheduledNext); cerr != nil {
 				log.Warn().Err(cerr).Str("campaign_id", campaign.ID.String()).Str("task_id", taskID.String()).Msg("Failed to schedule deferred campaign task")
 			}
+			s.clearIdle(ctx, campaign)
 			s.taskRepo.UpdateTaskStatus(ctx, taskID, "completed")
 			executionStatus = "completed"
 			return nil
@@ -237,6 +242,13 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 					return nil
 				}
 				reason = fmt.Sprintf("%s (%d lead(s) skipped: address verification refused them)", reason, n)
+			}
+			// A continuous campaign out of leads is waiting, not finished
+			// (issue #336). Only its end date ends it.
+			if errors.Is(err, scheduler.ErrCampaignCompleted) && campaign.Continuous {
+				s.idleCampaign(ctx, campaign, taskID)
+				executionStatus = "completed"
+				return nil
 			}
 			s.campaignRepo.UpdateStatus(ctx, campaign.ID, "completed")
 			if s.campaignLogRepo != nil {
@@ -294,6 +306,8 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 		executionStatus = "failed"
 		return errx.InternalError()
 	}
+
+	s.clearIdle(ctx, campaign)
 
 	// STEP 7: Load contact and sequence
 	contact, xerr := s.contactRepo.GetByID(ctx, nextPair.ContactID)
@@ -413,23 +427,10 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 		return nil
 	}
 
-	// Load campaign attachments (campaign-wide; metadata only — the worker
-	// fetches the bytes from object storage by S3 key at send time).
-	var attachmentRefs []models.AttachmentRef
-	if s.attachmentRepo != nil {
-		atts, attErr := s.attachmentRepo.ListByCampaign(ctx, campaign.ID)
-		if attErr != nil {
-			log.Warn().Err(attErr).Str("campaign_id", campaign.ID.String()).Str("task_id", taskID.String()).Msg("Failed to load campaign attachments")
-		} else {
-			for _, a := range atts {
-				attachmentRefs = append(attachmentRefs, models.AttachmentRef{
-					S3Key:    a.S3Key,
-					Filename: a.Filename,
-					MimeType: a.MimeType,
-				})
-			}
-		}
-	}
+	// Load this step's attachments (campaign-wide files plus the step's own;
+	// metadata only — the worker fetches the bytes from object storage by S3
+	// key at send time).
+	attachmentRefs := s.campaignAttachmentRefs(ctx, campaign.ID, sequence.ID)
 
 	// STEP 7.5: Update campaign task with contact_id and sequence_id for tracking
 	// This allows the tracking consumer to find the correct contact/sequence when
@@ -457,12 +458,23 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 	rawSubject, rawBodyHTML, rawBodyPlain := sequence.Subject, sequence.BodyHTML, sequence.BodyPlain
 	s.resolveFormLinks(ctx, orgID, campaign, contact, &rawSubject, &rawBodyHTML, &rawBodyPlain)
 
+	// STEP 9.75: The recipient's opt-out. The signed link (when the instance
+	// can mint one) backs the List-Unsubscribe header, the link-mode footer
+	// and any {{.UnsubscribeLink}} the step places by hand; the footer mode
+	// comes from Settings > Sending unless the campaign overrides it.
+	optOut := s.resolveOptOut(ctx, orgID, campaign)
+	var unsubscribeURL string
+	if s.unsubLinks != nil && s.unsubLinks.Enabled() {
+		unsubscribeURL = s.unsubLinks.URL(orgID, campaign.ID, contact.ID, time.Now())
+	}
+	extra := map[string]string{UnsubscribeLinkVar: unsubscribeURL}
+
 	// STEP 10: Render email template with contact variables, then expand any
 	// {a|b|c} spintax per-recipient (only real |-groups; literal braces/CSS are
 	// left intact) so each send varies for deliverability.
-	subject := expandSpintax(RenderTemplate(rawSubject, *contact))
-	bodyHTML := expandSpintax(RenderTemplate(rawBodyHTML, *contact))
-	bodyPlain := expandSpintax(RenderTemplate(rawBodyPlain, *contact))
+	subject := expandSpintax(RenderTemplateWith(rawSubject, *contact, extra))
+	bodyHTML := expandSpintax(RenderTemplateWith(rawBodyHTML, *contact, extra))
+	bodyPlain := expandSpintax(RenderTemplateWith(rawBodyPlain, *contact, extra))
 
 	// If no plain text provided, extract from HTML
 	if bodyPlain == "" && bodyHTML != "" {
@@ -475,9 +487,16 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 			return sxerr
 		}
 		if selection != nil {
-			subject = selection.Subject
-			bodyHTML = selection.BodyHTML
-			bodyPlain = selection.BodyPlain
+			// A chosen variant is stored template text, so it goes through the
+			// same render as the step's own copy; the control arm comes back
+			// already rendered, for which this pass is a no-op.
+			subject = expandSpintax(RenderTemplateWith(selection.Subject, *contact, extra))
+			bodyHTML = expandSpintax(RenderTemplateWith(selection.BodyHTML, *contact, extra))
+			bodyPlain = expandSpintax(RenderTemplateWith(selection.BodyPlain, *contact, extra))
+			// A variant may carry HTML only; keep the plain-text alternative.
+			if bodyPlain == "" && bodyHTML != "" {
+				bodyPlain = ExtractPlainTextFromHTML(bodyHTML)
+			}
 		}
 	}
 
@@ -512,6 +531,16 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 		}
 	}
 
+	// STEP 10.6: A plain-text campaign ships no HTML part at all. Tracking
+	// below only rewrites HTML, so dropping it here is what makes the
+	// setting's "disables tracking" promise true.
+	if campaign.TextOnly {
+		if bodyPlain == "" && bodyHTML != "" {
+			bodyPlain = ExtractPlainTextFromHTML(bodyHTML)
+		}
+		bodyHTML = ""
+	}
+
 	// STEP 10.75: Score the copy the recipient will actually receive, after
 	// merge fields, spintax, A/B and AI blocks have resolved. Advisory: it
 	// warns once per step and never blocks or delays the send.
@@ -537,17 +566,29 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 		bodyHTML = AddOpenTrackingPixel(bodyHTML, taskID, trackingDomain)
 	}
 
-	if campaign.LinkTracking && bodyHTML != "" {
-		wrapped, links := WrapLinksForTracking(bodyHTML, taskID, campaign.ID, trackingDomain)
+	if bodyHTML != "" && (campaign.LinkTracking || campaign.UTMTracking) {
+		linkOpts := LinkTracking{
+			TaskID:         taskID,
+			CampaignID:     campaign.ID,
+			TrackingDomain: trackingDomain,
+			Wrap:           campaign.LinkTracking,
+			UTM:            CampaignUTM(campaign),
+		}
+		tracked, links := TrackLinks(bodyHTML, linkOpts)
 		if len(links) == 0 {
-			bodyHTML = wrapped
+			bodyHTML = tracked
 		} else if err := s.trackedLinkRepo.CreateBatch(ctx, links); err != nil {
 			// Tracking is a nicety: ship the original working links rather
-			// than tickets that would 404 at the tracking service.
+			// than tickets that would 404 at the tracking service. UTM tags
+			// need no ticket, so they still go on.
 			log.Warn().Err(err).Str("campaign_id", campaign.ID.String()).Str("task_id", taskID.String()).Msg("Failed to store tracked links; sending untracked")
+			bodyHTML, _ = TrackLinks(bodyHTML, LinkTracking{TrackingDomain: linkOpts.TrackingDomain, UTM: linkOpts.UTM})
 		} else {
-			bodyHTML = wrapped
+			bodyHTML = tracked
 		}
+	}
+	if campaign.UTMTracking && bodyPlain != "" {
+		bodyPlain = TagPlainTextLinks(bodyPlain, CampaignUTM(campaign), trackingDomain)
 	}
 
 	// STEP 12: Add signature
@@ -559,6 +600,10 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 			bodyPlain = AddSignature(bodyPlain, account.SignaturePlain, false)
 		}
 	}
+
+	// STEP 12.5: Opt-out footer, after the signature and after click tracking
+	// so the link is never rewritten into a tracked ticket.
+	bodyHTML, bodyPlain = appendOptOut(bodyHTML, bodyPlain, optOut, unsubscribeURL)
 
 	// STEP 13: Warm the organization DEK so the publisher's encrypt pass (the
 	// one whose ciphertext is actually sent) fails fast here if KMS is down.
@@ -575,8 +620,10 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 	messageID := generateMessageID(account.Email)
 
 	// STEP 15: Build tracking info (worker receives the already-resolved host).
+	// A plain-text send carries none: there is no HTML for a pixel or a
+	// wrapped link to live in.
 	var tracking *models.TrackingInfo
-	if campaign.OpenTracking || campaign.LinkTracking {
+	if !campaign.TextOnly && (campaign.OpenTracking || campaign.LinkTracking) {
 		tracking = &models.TrackingInfo{
 			OpenTracking:   campaign.OpenTracking,
 			LinkTracking:   campaign.LinkTracking,
@@ -584,11 +631,12 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 		}
 	}
 
-	// STEP 15.5: Generate List-Unsubscribe URL if enabled
-	var unsubscribeURL string
+	// STEP 15.5: The List-Unsubscribe header carries the same signed link.
+	// Off when the campaign disabled it, or when no link could be minted: a
+	// header pointing nowhere is worse than none.
+	headerURL := ""
 	if campaign.UnsubscribeHeader {
-		unsubscribeURL = fmt.Sprintf("https://%s/unsubscribe?cid=%s&rid=%s",
-			config.Domain, campaign.ID.String(), contact.ID.String())
+		headerURL = unsubscribeURL
 	}
 
 	// STEP 15.9: Reserve the send BEFORE it goes on the bus. Once the command is
@@ -637,7 +685,7 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 		MessageID:      messageID,
 		IsWarmup:       false,
 		Tracking:       tracking,
-		UnsubscribeURL: unsubscribeURL,
+		UnsubscribeURL: headerURL,
 		Attachments:    attachmentRefs,
 	}
 
@@ -861,7 +909,7 @@ func autoPauseReason(err error) string {
 	case errors.Is(err, scheduler.ErrDomainAuthFailing):
 		return "Campaign auto-paused: every mailbox is sending from a domain that fails SPF or DMARC authentication"
 	case errors.Is(err, scheduler.ErrNoEligibleMailbox):
-		return "Campaign auto-paused: every mailbox is outside its sending window or over its daily budget"
+		return "Campaign auto-paused: no mailbox can send under its current sending settings (check each mailbox's sending behaviour profile and timezone)"
 	default:
 		return "Campaign auto-paused: no active email accounts available"
 	}
@@ -895,6 +943,56 @@ func (s *tasksService) pauseUndeliverable(ctx context.Context, campaignID, taskI
 			CampaignID: campaignID.String(),
 			Status:     "paused_undeliverable",
 		})
+	}
+}
+
+// CampaignIdleEventType is the activity log entry written when a continuous
+// campaign runs out of leads and waits; CampaignIdleMessage is its text.
+const (
+	CampaignIdleEventType = "idle"
+	CampaignIdleMessage   = "Waiting for new leads: every lead has finished the sequence. The campaign stays active and sends to leads as they arrive."
+)
+
+// idleCampaign parks a continuous campaign that has nothing left to send. It
+// stays active with no chain: a lead add wakes it, and the reconciler re-checks
+// it every pass. Logged and broadcast once per wait, not once per pass.
+func (s *tasksService) idleCampaign(ctx context.Context, campaign *models.Campaign, taskID uuid.UUID) {
+	if taskID != uuid.Nil {
+		s.taskRepo.UpdateTaskStatus(ctx, taskID, "completed")
+	}
+	transitioned, err := s.campaignRepo.MarkIdle(ctx, campaign.ID)
+	if err != nil {
+		log.Warn().Err(err).Str("campaign_id", campaign.ID.String()).Msg("could not mark the campaign idle")
+		return
+	}
+	if !transitioned {
+		return
+	}
+	if s.campaignLogRepo != nil {
+		s.campaignLogRepo.CreateLog(ctx, &repository.CampaignLogEntry{
+			CampaignID: campaign.ID,
+			EventType:  CampaignIdleEventType,
+			Message:    CampaignIdleMessage,
+		})
+	}
+	if s.streamingPublisher != nil {
+		s.streamingPublisher.PublishCampaignEvent(ctx, &pubsub.CampaignEvent{
+			BaseEvent:  pubsub.BaseEvent{EventType: pubsub.EventCampaignIdle, UserID: campaign.UserID},
+			OrgID:      campaignOrgID(campaign),
+			CampaignID: campaign.ID.String(),
+			Name:       campaign.Name,
+			Status:     "active",
+		})
+	}
+}
+
+// clearIdle ends an idle wait once the campaign has something to send again.
+func (s *tasksService) clearIdle(ctx context.Context, campaign *models.Campaign) {
+	if campaign.IdleSince == nil {
+		return
+	}
+	if err := s.campaignRepo.ClearIdle(ctx, campaign.ID); err != nil {
+		log.Warn().Err(err).Str("campaign_id", campaign.ID.String()).Msg("could not clear the campaign's idle mark")
 	}
 }
 
@@ -1282,4 +1380,17 @@ func (s *tasksService) recordSchedulerFailure(ctx context.Context, campaignID uu
 		Message:    message,
 		Metadata:   meta,
 	})
+}
+
+// resolveOptOut is the effective in-body opt-out for a campaign: the
+// workspace setting with the campaign's own mode applied. A settings read
+// failure falls back to the defaults rather than sending without an opt-out.
+func (s *tasksService) resolveOptOut(ctx context.Context, orgID uuid.UUID, campaign *models.Campaign) models.UnsubscribeSettings {
+	base := models.DefaultAdvancedOutreachSettings().Unsubscribe
+	if s.advanced != nil {
+		if settings, xerr := s.advanced.GetOrganizationSettings(ctx, orgID); xerr == nil && settings != nil {
+			base = settings.Unsubscribe
+		}
+	}
+	return base.Effective(campaign.UnsubscribeMode)
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/warmbly/warmbly/internal/app/webhook"
 	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/repository"
@@ -42,6 +43,11 @@ func (s *service) executeAutomationGraph(ctx context.Context, a models.Automatio
 			}
 		}
 	}
+
+	// Anything an action does under this context (a contact it creates, a deal
+	// it opens) is one hop deeper, so the events those writes fire carry the
+	// depth and Dispatch can stop a flow that keeps re-triggering itself.
+	ctx = webhook.WithAutomationDepth(ctx, int(toFloat(data[automationDepthKey]))+1)
 
 	// Best-effort run record — observability, never blocks the walk.
 	run := &models.AutomationRun{AutomationID: a.ID, OrganizationID: a.OrganizationID, TriggerEvent: eventType, Status: "running"}
@@ -178,7 +184,7 @@ func conditionSummary(c *models.AutomationCondition) string {
 // automation, that launcher MUST forward this key so a misconfigured loop
 // (campaign -> automation -> campaign -> ...) is bounded instead of infinite.
 const (
-	automationDepthKey      = "_automation_depth"
+	automationDepthKey      = webhook.AutomationDepthKey
 	maxAutomationChainDepth = 5
 )
 
@@ -386,6 +392,27 @@ func actionPreview(n models.AutomationNode, data map[string]any) map[string]any 
 		if cfg.TaskTitle != "" {
 			p["task_title"] = renderTemplate(cfg.TaskTitle, data)
 		}
+		if n.Action == models.IntegrationActionUpsertContact {
+			for k, v := range map[string]string{
+				"email": cfg.Email, "first_name": cfg.FirstName, "last_name": cfg.LastName,
+				"company": cfg.Company, "phone": cfg.Phone,
+			} {
+				if v != "" {
+					p[k] = renderTemplate(v, data)
+				}
+			}
+			for _, f := range cfg.CustomFields {
+				if k := strings.TrimSpace(f.Key); k != "" {
+					p["custom:"+k] = renderTemplate(f.Value, data)
+				}
+			}
+			if cfg.CampaignID != "" {
+				p["campaign_id"] = cfg.CampaignID
+			}
+		}
+		if n.Action == models.IntegrationActionAddToCampaign && cfg.CampaignID != "" {
+			p["campaign_id"] = cfg.CampaignID
+		}
 		if n.Action == models.IntegrationActionFireEvent {
 			p["event"] = renderTemplate(cfg.EventName, data)
 			for _, f := range cfg.EventFields {
@@ -406,6 +433,9 @@ func actionPreview(n models.AutomationNode, data map[string]any) map[string]any 
 func actionRunOutput(n models.AutomationNode, data map[string]any) map[string]any {
 	out := actionPreview(n, data)
 	switch {
+	case n.Action == models.IntegrationActionUpsertContact:
+		out["contact_id"] = valueString(data["contact_id"])
+		out["contact_created"] = valueString(data["contact_created"])
 	case n.Action == models.IntegrationActionSetVariables:
 		cfg := parseNativeConfig(n.Config)
 		for _, v := range cfg.SetVars {
@@ -459,6 +489,27 @@ func sampleEventData(triggerEvent string) map[string]any {
 		base["new_state"] = "watch"
 		base["previous_state"] = "healthy"
 		base["reason"] = "spam placement rising"
+	case "contact.created":
+		delete(base, "campaign_id")
+		delete(base, "campaign_name")
+		base["phone"] = "+1 555 0100"
+		base["subscribed"] = true
+		base["custom_fields"] = map[string]any{"industry": "SaaS"}
+		base["source"] = "form"
+		base["source_detail"] = "Demo request"
+		base["campaign_ids"] = []any{}
+		base["category_ids"] = []any{}
+	case "form.submitted":
+		delete(base, "campaign_name")
+		base["form_id"] = "00000000-0000-0000-0000-000000000003"
+		base["form_name"] = "Demo request"
+		base["submission_id"] = "00000000-0000-0000-0000-000000000004"
+		base["phone"] = "+1 555 0100"
+		base["source_url"] = "https://example.com/pricing"
+		base["data"] = map[string]any{
+			"email": "jane@example.com", "first_name": "Jane", "last_name": "Doe",
+			"company": "Example Inc", "team_size": "10-50",
+		}
 	}
 	return base
 }

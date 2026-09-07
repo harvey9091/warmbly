@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -25,6 +26,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/admin"
 	"github.com/warmbly/warmbly/internal/app/adminoutreach"
 	"github.com/warmbly/warmbly/internal/app/advanced"
+	"github.com/warmbly/warmbly/internal/app/unsublink"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/warmbly/warmbly/internal/app/advisor"
@@ -38,6 +40,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/bootstrap"
 	"github.com/warmbly/warmbly/internal/app/campaign"
 	"github.com/warmbly/warmbly/internal/app/cipher"
+	"github.com/warmbly/warmbly/internal/app/cliauth"
 	"github.com/warmbly/warmbly/internal/app/cloudlink"
 	"github.com/warmbly/warmbly/internal/app/compose"
 	"github.com/warmbly/warmbly/internal/app/contact"
@@ -67,6 +70,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/notification"
 	"github.com/warmbly/warmbly/internal/app/oauth"
 	"github.com/warmbly/warmbly/internal/app/oidcauth"
+	"github.com/warmbly/warmbly/internal/app/opsnotify"
 	"github.com/warmbly/warmbly/internal/app/organization"
 	orgrisk "github.com/warmbly/warmbly/internal/app/orgrisk"
 	"github.com/warmbly/warmbly/internal/app/orgtransfer"
@@ -95,6 +99,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/twofa"
 	"github.com/warmbly/warmbly/internal/app/tz"
 	"github.com/warmbly/warmbly/internal/app/unibox"
+	"github.com/warmbly/warmbly/internal/app/updates"
 	"github.com/warmbly/warmbly/internal/app/user"
 	warmupapp "github.com/warmbly/warmbly/internal/app/warmup"
 	"github.com/warmbly/warmbly/internal/app/warmupcontent"
@@ -159,6 +164,7 @@ func main() {
 	var emailService email.EmailService
 	var poolLinkService poollink.Service
 	var cloudLinkService cloudlink.Service
+	var cliAuthService cliauth.Service
 	var campaignService campaign.CampaignService
 	var analyticsService analytics.AnalyticsService
 	var rateLimitService ratelimit.RateLimitService
@@ -179,6 +185,7 @@ func main() {
 	var provisioningPolicyRepo repository.ProvisioningPolicyRepository
 	var tasksService tasks.TasksService
 	var advancedService advanced.Service
+	var unsubSigner *unsublink.Signer
 	var warmupContentRepo repository.WarmupContentRepository
 	var warmupContentService warmupcontent.Service
 	var creditRepository repository.CreditRepository
@@ -232,6 +239,7 @@ func main() {
 	var workerRepoForHandler repository.WorkerRepository
 	var credentialsRepository repository.CredentialsRepository
 	var releasesService *releases.Service
+	var updatesService *updates.Service
 
 	// Notifications
 	var emailNotificationService notify.EmailNotificationService
@@ -280,6 +288,10 @@ func main() {
 	// instanceSettings and the health registry are built after the handler
 	// dependencies, so the pool is hoisted out of the connection block.
 	var instanceSettings instancesettings.Service
+	// opsNotifier fans instance-wide operator alerts out to the Discord/Slack/
+	// webhook/email channels an admin configured. Nil-safe everywhere: a
+	// deployment with no channels simply never delivers anything.
+	var opsNotifier opsnotify.Notifier
 	var instanceChecksDB *pgxpool.Pool
 	var userRepoForHandler repository.UserRepository
 	var organizationRepoForHandler repository.OrganizationRepository
@@ -585,6 +597,7 @@ func main() {
 		trackedLinkRepository = repository.NewTrackedLinkRepository(primaryDB.Pool)
 		instanceChecksDB = primaryDB.Pool
 		instanceSettings = instancesettings.NewService(instancesettings.NewStore(primaryDB.Pool))
+		bootstrapInstanceSettings(ctx, instanceSettings)
 		if err != nil {
 			sentry.CaptureException(err)
 			log.Fatal(err)
@@ -711,6 +724,13 @@ func main() {
 		// trial start (planRepo + creditService, both already constructed above).
 		trialService = trial.NewService(subscriptionRepository, userRepostory, planRepository, creditService)
 		featureGateService = feature.NewService(subscriptionRepository, planRepository)
+		// An approved daily-send increase must raise what is enforced, not
+		// only what the dashboard shows.
+		if g, ok := featureGateService.(interface {
+			WireLimitOverrides(feature.LimitOverrideReader)
+		}); ok {
+			g.WireLimitOverrides(organizationRepository)
+		}
 		workerAssignmentService = worker.NewAssignmentService(workerRepository, subscriptionRepository, planRepository)
 		subscriptionService = subscription.NewService(subscriptionRepository, planRepository)
 		// dailyThrottleService needs the cache that's constructed
@@ -813,6 +833,29 @@ func main() {
 			authService.WireInstanceSettings(instanceSettings)
 			if organizationService != nil {
 				organizationService.WireInstanceSettings(instanceSettings)
+			}
+
+			// Operator alerts. The channel list lives in the same settings
+			// document, so this needs nothing else configured to work.
+			opsNotifier = opsnotify.NewService(instanceSettings, emailNotificationService, config.AppBaseURL())
+			authService.WireOperatorNotifier(opsNotifier)
+			if organizationService != nil {
+				organizationService.WireOperatorNotifier(opsNotifier)
+			}
+			if aware, ok := warmupService.(interface {
+				WireOperatorNotifier(warmupapp.OperatorNotifier)
+			}); ok && warmupService != nil {
+				aware.WireOperatorNotifier(opsNotifier)
+			}
+			if aware, ok := orgRiskService.(interface {
+				WireOperatorNotifier(orgrisk.OperatorNotifier)
+			}); ok && orgRiskService != nil {
+				aware.WireOperatorNotifier(opsNotifier)
+			}
+			if aware, ok := stripeService.(interface {
+				WireOperatorNotifier(stripe.OperatorNotifier)
+			}); ok && stripeService != nil {
+				aware.WireOperatorNotifier(opsNotifier)
 			}
 		}
 		log.Printf("Auth policy: login_code=%s registration=%s (DISABLE_REGISTRATION) email_verification=%t sso_auto_provision=%t",
@@ -1122,12 +1165,31 @@ func main() {
 		)
 		releasesService.RunBootCheck(ctx)
 
+		// Update indicator and one-click update. The release check is on by
+		// default (one GitHub API read per interval); applying an update needs
+		// the host-side updater (UPDATER_URL), which the compose stack ships as
+		// the "updater" profile.
+		updateInterval, _ := time.ParseDuration(getenvDefault("UPDATE_CHECK_INTERVAL", "30m"))
+		updatesService = updates.New(updates.Config{
+			Enabled:      getenvDefault("UPDATE_CHECK_ENABLED", "true") != "false",
+			Interval:     updateInterval,
+			Channel:      getenvDefault("UPDATE_CHANNEL", "stable"),
+			GithubRepo:   getenvDefault("RELEASES_GITHUB_REPO", "warmbly/warmbly"),
+			GithubToken:  os.Getenv("RELEASES_GITHUB_TOKEN"),
+			UpdaterURL:   os.Getenv("UPDATER_URL"),
+			UpdaterToken: getenvDefault("UPDATER_TOKEN", os.Getenv("INTERNAL_API_TOKEN")),
+		})
+		updatesService.Start(ctx)
+
 		eventsPublisher := events.NewPublisher(bus, s3, codecImpl, cipherService)
 
 		// apiCfg.Hostname is the bind address, not a reachable base. Building
 		// the mailbox-connect redirect_uri from it sends the provider
 		// "0.0.0.0:8080/addresses/google/callback".
 		oauth2Cfg := config.LoadOauth2(oauthPublicBaseURL(apiCfg.Hostname))
+		// Recipient unsubscribe links live on the API origin, signed under the
+		// auth secret; the same base the OAuth callbacks are built on.
+		unsubSigner = unsublink.New(authCfg.AuthSecret, oauthPublicBaseURL(apiCfg.Hostname))
 		emailService = email.NewServiceWithWorker(
 			emailRepostory,
 			cipherService,
@@ -1141,10 +1203,9 @@ func main() {
 		)
 		// Fan out email-account lifecycle events to customer webhooks.
 		emailService.WireWebhooks(webhookService)
-		// Same wire-after-construct pattern for the daily throttle —
-		// only the prod backend has a real cache; jobs / tests build
-		// emailService without one.
-		emailService.WireThrottle(dailyThrottleService)
+		// Every connect path checks the workspace's mailbox allowance
+		// (fair use for paid plans, the free cap otherwise).
+		emailService.WireMailboxAllowance(organizationService)
 		// Seed Graph delta cursors when the reconciler reloads mailboxes.
 		emailService.WireGraphDelta(repository.NewEmailGraphDeltaRepository(primaryDB))
 		// The Gmail equivalent: without it a reloaded mailbox re-bootstraps its
@@ -1204,6 +1265,11 @@ func main() {
 		if aware, ok := contactService.(contact.SegmentAware); ok {
 			aware.WireSegments(segmentRepository, segmentService)
 		}
+		// A new contact is an event: customer webhooks and "contact created"
+		// automations hear about it from the one write path every creator uses.
+		if aware, ok := contactService.(contact.WebhookAware); ok {
+			aware.WireWebhooks(webhookServiceForHandler)
+		}
 		formRepository := repository.NewFormRepository(primaryDB)
 		formEventRepository := repository.NewFormEventRepository(primaryDB)
 		formService = form.NewService(formRepository)
@@ -1216,7 +1282,7 @@ func main() {
 		formService.SetLinks(repository.NewFormLinkRepository(primaryDB))
 		formService.SetEvents(formEventRepository)
 		formService.SetDomains(organizationRepoForHandler)
-		go jobs.NewFormEventsRetentionJob(formEventRepository).Start(ctx, 12*time.Hour)
+		go jobs.NewFormEventsRetentionJob(formEventRepository).WireRetention(instanceSettings).Start(ctx, 12*time.Hour)
 		go jobs.NewFormsDomainSweep(organizationRepoForHandler).Start(ctx, time.Hour)
 		// A visibly bad import is filed on the workspace's posture. On its own
 		// it can only reach `watch`, which changes nothing.
@@ -1231,6 +1297,9 @@ func main() {
 		leadSyncServiceForHandler = leadsync.NewService(leadSyncRepository, integrationServiceForHandler, contactService)
 
 		apiKeyService = apikey.NewService(cache, apiKeyRepository)
+		// `warmbly auth login`: the browser approval mints an ordinary API key
+		// through the service above, so it has to be built after it.
+		cliAuthService = cliauth.NewService(repository.NewCLIAuthRepository(primaryDB.Pool), apiKeyService, organizationService, userService, organizationRepository)
 		crmService = crm.NewService(crmRepository)
 		teamRepository := repository.NewTeamRepository(primaryDB.Pool)
 		teamService = team.NewService(teamRepository)
@@ -1300,9 +1369,18 @@ func main() {
 		if aware, ok := campaignService.(campaign.ProgressAware); ok {
 			aware.WireProgress(campaignProgressRepository)
 		}
+		// The wizard's audience-versus-pool estimate counts segment members.
+		if aware, ok := campaignService.(campaign.SegmentAware); ok {
+			aware.WireSegments(segmentService)
+		}
 		// Delete drops attachment objects and duplicate copies them, so the
 		// campaign service needs the store the attachment handler writes to.
 		if aware, ok := campaignService.(campaign.AttachmentAware); ok {
+			aware.WireAttachments(attachmentRepoForHandler, s3ForHandler)
+		}
+		// Deleting a step cascades its attachment rows away, so the sequence
+		// service needs the same store to drop the objects behind them.
+		if aware, ok := sequenceService.(sequence.AttachmentAware); ok {
 			aware.WireAttachments(attachmentRepoForHandler, s3ForHandler)
 		}
 		// Attaching a lead to a running campaign has to wake that campaign's
@@ -1311,9 +1389,14 @@ func main() {
 		// and Cloud Tasks client exist.
 		if segmentService != nil {
 			segmentService.SetCampaignWaker(campaignService)
-			// A completed campaign whose linked segments grow is restarted
-			// through the full launch checks, never by a raw status flip.
-			segmentService.SetCampaignStarter(campaignService)
+			// Sweep enrolments are audited as campaign updates so teammates'
+			// Leads tabs refresh through the audit spine.
+			segmentService.SetEnrolmentAuditor(auditService)
+		}
+		// A form that feeds a campaign turns on its "Keep running for new
+		// leads" setting, like a linked segment does.
+		if formService != nil {
+			formService.SetCampaigns(campaignService)
 		}
 		if contactService != nil {
 			contactService.SetCampaignWaker(campaignService)
@@ -1390,7 +1473,10 @@ func main() {
 			APIKeys:      apiKeyService,
 			Webhooks:     webhookServiceForHandler,
 			Subscription: subscriptionService,
+			Segments:     segmentService,
+			Forms:        formService,
 			Advanced:     advancedService,
+			Suppressions: advancedService,
 			FeatureGate:  featureGateService,
 			Skills:       skillsService,
 			AppBaseURL:   cfg.GetStringOptional(ctx, "APP_BASE_URL", "app_base_url", ""),
@@ -1430,9 +1516,11 @@ func main() {
 		// the advanced/contact/org services exist (the integration service was
 		// constructed earlier).
 		integrationServiceForHandler.SetNativeActions(nativeactions.Adapter{
-			Adv:      advancedService,
-			Contacts: contactRepostory,
-			Orgs:     organizationRepository,
+			Adv:        advancedService,
+			Contacts:   contactRepostory,
+			Orgs:       organizationRepository,
+			ContactSvc: contactService,
+			Campaigns:  campaignService,
 		})
 		integrationServiceForHandler.SetPublisher(streamingPublisher)
 		// AI automation nodes (ai_step / ai_switch) run over the same provider +
@@ -1517,6 +1605,7 @@ func main() {
 			trackedLinkRepository,
 			integrationServiceForHandler, // AutomationRunner for campaign run_automation steps
 		)
+		tasksService.SetUnsubscribeLinks(unsubSigner)
 		// Sequence action nodes that pin a contact into or out of a segment,
 		// both on the scheduled path (tasks) and the instant reply path (advanced).
 		if aware, ok := tasksService.(tasks.SegmentAware); ok {
@@ -1658,10 +1747,11 @@ func main() {
 		orgTransferScheduler := jobs.NewOrgTransferScheduler(orgTransferJob, 1*time.Hour)
 		go orgTransferScheduler.Start(ctx)
 
-		// Prune audit entries past the retention window (90 days). Bounding the
-		// trail's age also bounds how long PII is retained. auditRepository is
+		// Prune audit entries past the retention window. Bounding the trail's
+		// age also bounds how long PII is retained, so the window is an
+		// instance setting and is read on every pass. auditRepository is
 		// constructed earlier (before authService).
-		auditRetentionJob := jobs.NewAuditRetentionJob(auditRepository, 90*24*time.Hour)
+		auditRetentionJob := jobs.NewAuditRetentionJob(auditRepository).WireRetention(instanceSettings)
 		auditRetentionScheduler := jobs.NewAuditRetentionScheduler(auditRetentionJob, 6*time.Hour)
 		go auditRetentionScheduler.Start(ctx)
 
@@ -1838,6 +1928,7 @@ func main() {
 		Policy:    authPolicy,
 		DB:        instanceChecksDB,
 		Cache:     authCache,
+		Updates:   updatesService,
 	})
 
 	h := &handler.Handler{
@@ -1853,9 +1944,11 @@ func main() {
 		InstanceRuntime:  instanceRuntime,
 		InstanceChecks:   instanceChecks,
 		InstanceSettings: instanceSettings,
+		OpsNotifier:      opsNotifier,
 
 		PoolLinkService:  poolLinkService,
 		CloudLinkService: cloudLinkService,
+		CLIAuthService:   cliAuthService,
 
 		TokenService:     tokenService,
 		PasskeyService:   passkeyService,
@@ -1918,12 +2011,14 @@ func main() {
 		WorkerRepo:         workerRepoForHandler,
 		CredentialsRepo:    credentialsRepository,
 		ReleasesService:    releasesService,
+		UpdatesService:     updatesService,
 
 		// Notifications
 		EmailNotificationService: emailNotificationService,
 
 		// Advanced outreach controls
-		AdvancedService: advancedService,
+		AdvancedService:  advancedService,
+		UnsubscribeLinks: unsubSigner,
 
 		// Warmup health
 		WarmupService:     warmupService,
@@ -2136,4 +2231,34 @@ func (m advisorMembers) MemberPermissions(ctx context.Context, orgID, userID uui
 		return 0, errors.New("not a member of this organization")
 	}
 	return member.Permissions, nil
+}
+
+// bootstrapInstanceSettings applies WARMBLY_SETTINGS_BOOTSTRAP once, on an
+// instance whose settings document has never been written. It is how an
+// unattended install ships its data-control answers (what is imported, what is
+// kept and for how long) with the rest of the environment, so the wizard's
+// choices are in place before the first mailbox is connected instead of being
+// something the operator has to redo in the panel.
+//
+// The body is the same partial document PUT /admin/instance/settings takes.
+// From the first write onwards the panel is authoritative and this is a no-op,
+// so the variable can stay in .env without ever undoing a later edit.
+func bootstrapInstanceSettings(ctx context.Context, svc instancesettings.Service) {
+	raw := strings.TrimSpace(os.Getenv("WARMBLY_SETTINGS_BOOTSTRAP"))
+	if raw == "" || svc == nil {
+		return
+	}
+	var patch instancesettings.Patch
+	if err := json.Unmarshal([]byte(raw), &patch); err != nil {
+		log.Printf("WARMBLY_SETTINGS_BOOTSTRAP is not valid JSON and was ignored: %v", err)
+		return
+	}
+	applied, err := svc.Bootstrap(ctx, patch)
+	if err != nil {
+		log.Printf("WARMBLY_SETTINGS_BOOTSTRAP could not be applied: %v", err)
+		return
+	}
+	if applied {
+		log.Printf("instance settings seeded from WARMBLY_SETTINGS_BOOTSTRAP")
+	}
 }

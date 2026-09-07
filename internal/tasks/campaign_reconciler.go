@@ -76,6 +76,7 @@ func (s *tasksService) ReconcileCampaignSchedules(ctx context.Context, limit int
 				log.Warn().Err(err).Str("campaign_id", id.String()).Msg("campaign reconcile: re-seed failed")
 				continue
 			}
+			s.clearIdle(ctx, campaign)
 			seeded++
 		case errors.Is(cerr, scheduler.ErrNoEmailAccounts):
 			// No mailbox to send from: pause rather than spin every pass, and
@@ -87,6 +88,12 @@ func (s *tasksService) ReconcileCampaignSchedules(ctx context.Context, limit int
 			if errors.Is(cerr, scheduler.ErrCampaignCompleted) {
 				if n, uerr := s.campaignProgressRepo.CountUndeliverableLeads(ctx, id); uerr == nil && n > 0 {
 					s.pauseUndeliverable(ctx, id, uuid.Nil, n)
+					continue
+				}
+				// A continuous campaign sits here idle by design; every pass
+				// re-checks it so a lead the wake path missed is picked up.
+				if campaign.Continuous {
+					s.idleCampaign(ctx, campaign, uuid.Nil)
 					continue
 				}
 			}

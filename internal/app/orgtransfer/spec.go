@@ -654,6 +654,20 @@ var Tables = []Table{
 		Scope: `campaign_id IN ` + orgCampaigns,
 		Note:  "Click tickets already in the wild keep resolving after the move, provided the tracking domain follows.",
 	},
+	{
+		// Campaign engagement like campaign_contact_progress, one row per
+		// link. Sits below tracked_links because of the nullable ticket
+		// reference, which the importer blanks when send history stays behind.
+		Name: "email_link_clicks", Group: models.OrgDataGroupCampaigns,
+		Scope: `campaign_id IN ` + orgCampaigns,
+	},
+	{
+		// The per-event open log beside the click log: same keys, same
+		// scope, no ticket reference. task_id is an opaque id from the source
+		// instance, used only to group a step's opens.
+		Name: "email_opens", Group: models.OrgDataGroupCampaigns,
+		Scope: `campaign_id IN ` + orgCampaigns,
+	},
 
 	// ---------- delivery events ----------
 	{
@@ -772,6 +786,7 @@ var ExcludedTables = map[string]string{
 	"dedicated_worker_assignments": "Worker topology, which is a property of the instance rather than the workspace.",
 	"warmup_pools":                 "Instance-global pool definitions shared by every workspace on the instance.",
 	"pool_link_codes":              "In-flight link handshakes between a self-hosted instance and this cloud, valid for minutes.",
+	"cli_auth_codes":               "In-flight `warmbly auth login` handshakes, valid for minutes. The API key an approval mints does travel, with the api_keys rows.",
 	"pool_link_instances":          "Self-hosted instances linked to this workspace's pool allowance. The token hash only authenticates against this instance, and the enrolled mailboxes are mirrors of mailboxes that live elsewhere.",
 	"pool_link_mailboxes":          "Which mailbox rows are warmup-only mirrors for a linked instance. They follow pool_link_instances, which does not travel.",
 	"cloud_link":                   "This instance's own link to Warmbly Cloud: an instance property, not workspace data, and its token would be wrong on any other instance.",

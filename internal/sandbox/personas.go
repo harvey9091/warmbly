@@ -11,6 +11,10 @@ type persona struct {
 	Opens   bool
 	Clicks  bool
 	Replies bool
+	// Scanned marks a contact behind a corporate security gateway that
+	// opens the pixel and follows every link seconds after delivery with an
+	// ordinary browser user agent, so the sandbox exercises machine detection.
+	Scanned bool
 	Flavor  replyFlavor
 }
 
@@ -34,6 +38,7 @@ func personaFor(email string) persona {
 		Opens:   n%100 < 92,
 		Clicks:  n%7 < 4,  // ~57% of openers
 		Replies: n%11 < 5, // ~45% of openers
+		Scanned: n%5 == 0, // ~20% sit behind a link-scanning gateway
 	}
 	switch n % 10 {
 	case 0, 1, 2, 3:

@@ -46,7 +46,7 @@ import {
     useStartIntegrationOAuth,
 } from "@/lib/api/hooks/app/integrations/useIntegrationOAuth";
 import { openOAuthPopup } from "@/lib/integrations/oauthPopup";
-import useCampaigns from "@/lib/api/hooks/app/campaigns/useCampaigns";
+import CampaignPicker from "@/components/app/campaigns/CampaignPicker";
 import useGoogleConnection from "@/lib/api/hooks/app/leadsync/useGoogleConnection";
 import {
     useGetSpreadsheet,
@@ -676,53 +676,3 @@ function OptionsStep({
     );
 }
 
-// CampaignPicker — house-theme PopoverMenu campaign selector backed by the
-// existing campaigns list query. Single-select with an explicit "None".
-function CampaignPicker({
-    campaignId,
-    campaignName,
-    onChange,
-}: {
-    campaignId: string | null;
-    campaignName: string;
-    onChange: (id: string | null, name: string) => void;
-}) {
-    const [query, setQuery] = React.useState("");
-    const campaigns = useCampaigns({ query, folder: "" });
-    const label = campaignId ? campaignName || "Selected campaign" : "No campaign";
-
-    return (
-        <PopoverMenu align="start">
-            <PopoverMenuTrigger asChild>
-                <SelectButton label={label} className="w-full" />
-            </PopoverMenuTrigger>
-            <PopoverMenuContent minWidth={280}>
-                <div className="px-2 py-1.5 border-b border-slate-200">
-                    <input
-                        value={query}
-                        onChange={(e) => setQuery(e.target.value)}
-                        placeholder="Search campaigns…"
-                        className="w-full h-5 bg-transparent text-[12px] text-slate-900 placeholder:text-slate-400 outline-none"
-                    />
-                </div>
-                <PopoverMenuItem selected={!campaignId} onSelect={() => onChange(null, "")}>
-                    No campaign
-                </PopoverMenuItem>
-                {campaigns.campaigns.map((c) => (
-                    <PopoverMenuItem
-                        key={c.id}
-                        selected={c.id === campaignId}
-                        onSelect={() => onChange(c.id, c.name)}
-                    >
-                        {c.name}
-                    </PopoverMenuItem>
-                ))}
-                {campaigns.campaigns.length === 0 && (
-                    <div className="px-3 py-2 text-[11.5px] text-slate-400 text-center">
-                        {campaigns.isPending ? "Loading…" : "No campaigns found."}
-                    </div>
-                )}
-            </PopoverMenuContent>
-        </PopoverMenu>
-    );
-}

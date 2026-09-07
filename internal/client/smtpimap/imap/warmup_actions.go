@@ -15,6 +15,12 @@ func (c *Client) MarkAsRead(ctx context.Context, mailboxName string, uid uint32)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if merr := c.ensureConnected(); merr != nil {
+		return merr
+	}
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	defer c.begin()()
 	if _, err := c.selectMailbox(mailboxName, nil); err != nil {
 		return fmt.Errorf("select %q: %w", mailboxName, err)
 	}
@@ -36,6 +42,12 @@ func (c *Client) MarkImportant(ctx context.Context, mailboxName string, uid uint
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if merr := c.ensureConnected(); merr != nil {
+		return merr
+	}
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	defer c.begin()()
 	if _, err := c.selectMailbox(mailboxName, nil); err != nil {
 		return fmt.Errorf("select %q: %w", mailboxName, err)
 	}
@@ -67,6 +79,12 @@ func (c *Client) MoveToFolder(ctx context.Context, sourceMailbox, dstFolder stri
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if merr := c.ensureConnected(); merr != nil {
+		return merr
+	}
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	defer c.begin()()
 	dst := c.qualifyMailboxLocked(dstFolder)
 	if err := c.ensureMailboxExists(dst); err != nil {
 		return err
@@ -107,6 +125,12 @@ func (c *Client) qualifyMailboxLocked(name string) string {
 func (c *Client) moveUID(ctx context.Context, src, dst string, uid uint32) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if merr := c.ensureConnected(); merr != nil {
+		return merr
+	}
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	defer c.begin()()
 	return c.moveUIDLocked(src, dst, uid)
 }
 
@@ -161,19 +185,12 @@ func (c *Client) ensureMailboxExists(name string) error {
 	return nil
 }
 
-// IsSpamMailboxName returns true if the mailbox name looks like Junk/Spam.
-// Used as a guard so we never accidentally MOVE a non-spam message.
+// IsSpamMailboxName returns true if the mailbox name is a Junk/Spam folder.
+// Used as a guard so we never accidentally MOVE a non-spam message, so it
+// matches the leaf exactly rather than by substring: a user folder called
+// "Spam reports" holds mail its owner wants kept where it is.
 func IsSpamMailboxName(name string) bool {
-	lower := strings.ToLower(strings.TrimSpace(name))
-	for _, candidate := range ImapSpam {
-		if strings.EqualFold(name, candidate) {
-			return true
-		}
-		if strings.Contains(lower, strings.ToLower(candidate)) {
-			return true
-		}
-	}
-	return false
+	return matchesFolderName(strings.ToLower(leaf(strings.TrimSpace(name))), ImapSpam)
 }
 
 // IsSpamMailbox returns true if the mailbox's attributes or name identify it

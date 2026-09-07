@@ -51,6 +51,17 @@ Find Contact (by exact email), Find Deal, Find CRM Task, Find Campaign, Find Mai
 
 Pair a search with an action for idempotent flows: Find Contact, then Create or Update Contact.
 
+## Lead forms and other lead sources
+
+Facebook and Instagram Lead Ads, LinkedIn Lead Gen Forms and TikTok Lead Generation all deliver new form submissions to Make in real time, which makes Make the shortest route from an ad to a follow-up sent from your own mailbox.
+
+1. **Trigger:** *Facebook Lead Ads: Watch Leads* (or the LinkedIn or TikTok equivalent), picking the Page and form.
+2. **Module:** Warmbly *Create or Update Contact*. Map the form's email and name fields, put every other question into a custom field, and pick the categories. Then *Add to Campaign* with the campaign that follows up. Re-running the same lead updates the contact rather than duplicating it.
+
+Prefer to keep the mapping inside Warmbly? Use the *HTTP: Make a request* module to POST the lead as JSON to an [inbound webhook automation](/guides/automations/#lead-intake) instead. The automation's **Create or update contact** action maps the JSON keys onto contact fields with templates, and the same flow can tag, notify Slack and open a task.
+
+The follow-up still runs through the campaign's mailboxes, so a burst of leads queues under each mailbox's daily cap and spacing rather than going out at once. Cold email tools do not ship a native Meta connector; this route is what their customers use too.
+
 ## Good to know
 
 - **Sending respects your limits.** Send Email and Reply in Inbox honor each mailbox's daily cap and spacing, and support smart and scheduled send modes.

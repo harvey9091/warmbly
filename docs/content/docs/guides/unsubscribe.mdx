@@ -1,0 +1,70 @@
+---
+title: Unsubscribe and suppression
+description: How recipients opt out of campaign email, what Warmbly does when they do, and how the suppression list works.
+---
+
+Every campaign email gives its recipient a way to stop hearing from you, and every opt-out is honoured automatically across the whole workspace. This page covers the three mechanisms, the suppression list behind them, and the settings that shape what a recipient sees.
+
+## What a recipient sees
+
+Warmbly appends an opt-out to every campaign email, after the signature. There are three modes, set for the workspace under **Settings > Sending > Unsubscribe** and overridable per campaign under **Preferences**:
+
+| Mode | What is appended | Default |
+| --- | --- | --- |
+| Reply to opt out | A plain sentence such as "If this isn't relevant, just reply and let me know and I won't email you again." | Yes |
+| Unsubscribe link | A sentence with a real link, for example "Not the right person, or not interested? Unsubscribe" | |
+| Nothing | No opt-out in the body | |
+
+The wording of the sentence and of the link text is yours to change.
+
+**Reply to opt out** is the default because it reads as a personal email, which is what cold outreach is. A formal unsubscribe link and footer are the strongest signal a mailbox provider has that a message is bulk marketing, and several deliverability teams report worse placement for cold email that carries one. A reply that asks to stop is detected and honoured automatically (see below), so the plain sentence is a real mechanism, not a courtesy. CAN-SPAM, CASL and the Australian Spam Act all accept a reply as the opt-out method.
+
+**Unsubscribe link** is the right choice when your list skews toward consumers, when your legal team asks for a link, or when your volume is high enough that provider bulk-sender rules apply. The link is unique to the recipient and campaign, signed so it cannot be guessed or altered, and valid for a year after the send. Clicking it opens a plain confirmation page with one button. Nothing happens until the button is pressed, because link scanners and preview fetchers follow every link in an email. The page then offers a way back for anyone who unsubscribed by mistake.
+
+You can also place the link inside your own copy instead of the footer: insert the **Unsubscribe link** variable from the variable menu, or type `{{.UnsubscribeLink}}`. Click tracking never rewrites it, so an opt-out is never counted as a click.
+
+## The List-Unsubscribe header
+
+Independently of the body, each campaign can attach the `List-Unsubscribe` and `List-Unsubscribe-Post` headers (RFC 8058). Mail clients that recognise them show their own **Unsubscribe** control next to the sender's name, and pressing it opts the recipient out with no page at all. The toggle is **Preferences > Unsubscribe header**, on by default.
+
+Two things to know. Gmail only shows its button for mail it already classes as bulk, so a one-to-one style cold email from a Workspace mailbox usually does not get one. And Google and Yahoo require the header only above roughly five thousand messages a day to their consumer inboxes, which no mailbox at Warmbly's default limits approaches. The header costs nothing and is worth leaving on; it is not a substitute for the opt-out line.
+
+## Replies that ask to stop
+
+Warmbly reads every reply to a campaign email. One that asks to stop, in wording such as "unsubscribe", "remove me", "stop emailing me", "opt out" or "do not contact", puts the sender on the suppression list immediately. Only the new text of the reply is read: the quoted history below it carries your own opt-out wording and is ignored. Phrases match on whole words, so "stop by our booth" does not opt anyone out.
+
+A reply that says "not interested" is classed as negative and can stop the sequence, but it does not suppress the contact. Someone who says no today may be a fit next year; someone who says stop is asking not to be contacted at all.
+
+Turn this off with **Settings > Sending > Honour replies that ask to stop** if you would rather handle such replies by hand. Leaving it off with the reply-to-opt-out line in place means promising an opt-out you then honour manually.
+
+## The suppression list
+
+**Contacts > Suppression list** is every address and domain that no campaign in the workspace will email, however it got there:
+
+| Source | How it got there |
+| --- | --- |
+| Unsubscribed | Clicked the link, pressed the mail client's button, or replied asking to stop |
+| Spam complaint | The recipient's provider sent a complaint report for a message you sent |
+| Bounced | A permanent delivery failure for the address |
+| Added by hand | Someone on the team added it |
+| Imported | Pasted in as part of a list |
+
+The list is workspace-wide. An entry stops the address in every campaign, in new campaigns created later, and in the unibox composer, which refuses to send to it. Import a list containing a suppressed address and the contact is created but never mailed. The [launch check](/guides/campaigns/#the-launch-check-on-your-list) counts suppressed leads out of a campaign's deliverable total, so what the campaign says it will send is what it sends.
+
+**Adding entries.** Press **Add** and paste addresses or domains, one per line or as a column from a spreadsheet. A bare domain (`acme.com` or `@acme.com`) suppresses every address at it, which is the usual way to keep customers, partners and your own company out of outreach. An optional reason is kept with each entry.
+
+**Removing entries.** Each entry has a **Remove** action, and a suppressed contact's drawer shows the same. Removing an entry the recipient made themselves, by unsubscribing, complaining or bouncing, is confirmed with a stronger warning and recorded in the audit log with who lifted it and why the address was listed. Removing an address also restores the contact's **Subscribed** flag, so the two never disagree.
+
+**Contacts and the Subscribed flag.** The contact's own **Subscribed** toggle is a second gate: a contact switched off is skipped by every campaign even with no suppression entry. An opt-out sets both, so a contact who unsubscribed reads as unsubscribed everywhere.
+
+Suppression entries travel with a [workspace export](/guides/workspace-export-import/), so a workspace moved to another instance does not re-mail people who already opted out.
+
+## Webhooks and the API
+
+An opt-out fires the `campaign.unsubscribed` [webhook](/guides/webhooks/) with a `source` of `one_click` (the mail client's button), `link` (the link in the email), `reply` (a reply asking to stop) or `action` (a sequence's **Unsubscribe** step).
+
+The suppression list is available over the API as `GET /suppressions`, `POST /suppressions` and `DELETE /suppressions/:id`. See [deliverability and ops](/api/reference/deliverability-ops/#list-the-suppression-list).
+
+## Self-hosting
+
+Unsubscribe links are served by the API process on the origin in `API_PUBLIC_URL`, so that variable must be set to the address recipients can reach. Without it Warmbly cannot mint links: the header is left off, and the link mode falls back to the reply-to-opt-out sentence. Links are signed under `AUTH_SECRET`; rotating it invalidates links in emails already sent.

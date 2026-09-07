@@ -45,6 +45,10 @@ type SmtpImapData struct {
 	// folder is the canonical folder of the mailbox currently being walked,
 	// set alongside mailbox and stamped on every stored/updated message.
 	folder string
+	// overflowReported keeps the "more folders than we follow" warning to
+	// one per worker session; the condition is static until the user
+	// reorganizes their mail.
+	overflowReported bool
 }
 
 type WMail struct {
@@ -86,6 +90,12 @@ type WMail struct {
 	laneCache  laneCache
 	googleTick *tickStats
 	graphTick  *tickStats
+	// flagScan is the previous flag snapshot per folder, used only on IMAP
+	// servers without CONDSTORE, which cannot say what changed.
+	flagScan map[uint32]*folderFlagScan
+	// transportFailures counts consecutive passes that could not reach the
+	// mail server, which paces the retry and keeps one outage to one warning.
+	transportFailures int
 
 	Ctx           context.Context
 	Cancel        context.CancelFunc

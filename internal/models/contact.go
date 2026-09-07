@@ -1,6 +1,7 @@
 package models
 
 import (
+	"bytes"
 	"time"
 
 	"github.com/google/uuid"
@@ -61,6 +62,11 @@ type Contact struct {
 	// (the campaign Leads view); nil otherwise. Lets the Leads list show which
 	// leads are queued, in progress, replied, bounced, or unsubscribed.
 	CampaignLead *ContactCampaignProgress `json:"campaign_lead,omitempty"`
+
+	// IsNew is set by the upsert write when this call inserted the row rather
+	// than matching an existing contact. Server-side only: it decides whether
+	// a contact.created event fires.
+	IsNew bool `json:"-"`
 
 	UpdatedAt time.Time `json:"updated_at"`
 	CreatedAt time.Time `json:"created_at"`
@@ -315,8 +321,13 @@ type ContactEngagement struct {
 // ContactSuppression mirrors a row from suppressed_recipients for the
 // contact's email. Null on the wire when the contact is not suppressed.
 type ContactSuppression struct {
+	ID uuid.UUID `json:"id"`
+	// Kind is "email" for the contact's own address or "domain" when the
+	// whole domain is suppressed; Value is the matching list entry.
+	Kind      string     `json:"kind"`
+	Value     string     `json:"value"`
 	Reason    string     `json:"reason"`
-	Source    string     `json:"source"` // bounce | complaint | unsubscribe
+	Source    string     `json:"source"` // bounce | complaint | unsubscribe | manual | import
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	CreatedAt time.Time  `json:"created_at"`
 }
@@ -409,12 +420,73 @@ const (
 	TimelinePageHit ContactTimelineEventType = "page_hit"
 )
 
+// ContactTimelineSource ranks the tables the timeline is merged from. It is
+// the middle key of the feed's order (at, source, id): two events at the same
+// instant sort by source, then by that source's row id, so a page boundary
+// can never split a tie. The values are part of the cursor; never renumber.
+type ContactTimelineSource int
+
+const (
+	// campaign_contact_progress stamps, keyed by the step (sequence) id.
+	TimelineSourceProgressSent    ContactTimelineSource = 1
+	TimelineSourceProgressOpened  ContactTimelineSource = 2
+	TimelineSourceProgressClicked ContactTimelineSource = 3
+	TimelineSourceProgressReplied ContactTimelineSource = 4
+	TimelineSourceProgressBounced ContactTimelineSource = 5
+
+	TimelineSourceLinkClick      ContactTimelineSource = 6  // email_link_clicks
+	TimelineSourceOpen           ContactTimelineSource = 7  // email_opens
+	TimelineSourceReplyIntent    ContactTimelineSource = 8  // reply_intents
+	TimelineSourceDeliverability ContactTimelineSource = 9  // deliverability_events
+	TimelineSourceSuppression    ContactTimelineSource = 10 // suppressed_recipients
+	TimelineSourceNote           ContactTimelineSource = 11 // contact_notes
+	TimelineSourceMeeting        ContactTimelineSource = 12 // meeting_bookings
+	TimelineSourceActivity       ContactTimelineSource = 13 // contact_activities
+	TimelineSourcePageHit        ContactTimelineSource = 14 // website_page_hits
+)
+
+// Valid reports whether s names a source the timeline is merged from. A
+// cursor carrying any other rank is malformed: zero is reserved for the
+// legacy bare-timestamp bound and anything above the last source would
+// re-admit the events at the cursor's instant.
+func (s ContactTimelineSource) Valid() bool {
+	return s >= TimelineSourceProgressSent && s <= TimelineSourcePageHit
+}
+
+// ContactTimelineKey is one event's position in the merged feed. A page
+// resumes strictly after the key of the last event it returned, comparing
+// (At, Source, ID) as a tuple, which is what the opaque cursor carries.
+type ContactTimelineKey struct {
+	At     time.Time
+	Source ContactTimelineSource
+	ID     uuid.UUID
+}
+
+// Before reports whether k sorts after o in the feed's newest-first order,
+// which is to say it is the older position: a smaller time, or the same time
+// and a lower source rank, or the same time and source and a lower id (uuid
+// order is the byte order Postgres uses, so Go and SQL agree).
+func (k ContactTimelineKey) Before(o ContactTimelineKey) bool {
+	if !k.At.Equal(o.At) {
+		return k.At.Before(o.At)
+	}
+	if k.Source != o.Source {
+		return k.Source < o.Source
+	}
+	return bytes.Compare(k.ID[:], o.ID[:]) < 0
+}
+
 // ContactTimelineEvent is one entry in the merged activity feed. The
 // optional fields are tagged with omitempty so the JSON stays compact
 // for event types that don't carry that data.
 type ContactTimelineEvent struct {
 	Type ContactTimelineEventType `json:"type"`
 	At   time.Time                `json:"at"`
+
+	// Position in the feed, used for the merged sort and the next-page
+	// cursor. Not part of the wire shape: the row ids are not unique across
+	// sources, so a client gets an opaque cursor instead.
+	Key ContactTimelineKey `json:"-"`
 
 	// Mailbox sender (email_sent / opened / clicked / replied / bounced).
 	EmailAccountID    *uuid.UUID `json:"email_account_id,omitempty"`
@@ -458,15 +530,69 @@ type ContactTimelineEvent struct {
 	// Website page view (page_hit): URL, referrer, device, UTM, location.
 	PageHit *WebsitePageHit `json:"page_hit,omitempty"`
 
+	// Engagement classification (email_opened / email_clicked). Machine is
+	// true when the open or click came from an automated fetcher (a mail
+	// privacy proxy, a security gateway walking the links) rather than a
+	// person; MachineReason says which rule caught it.
+	Machine       *bool   `json:"machine,omitempty"`
+	MachineReason *string `json:"machine_reason,omitempty"`
+
+	// The exact link behind an email_clicked event, when the click was
+	// logged per link (every click since link attribution shipped).
+	Link *ContactLinkClick `json:"link,omitempty"`
+
+	// Where an email_opened / email_clicked event came from, when it was
+	// logged per event: mail client, device and rough location.
+	Origin *EngagementOrigin `json:"origin,omitempty"`
+
 	// Author (notes, lifecycle events).
 	UserID *uuid.UUID `json:"user_id,omitempty"`
 }
 
+// ContactLinkClick names the link a contact clicked: where it went, the
+// anchor text it was minted from, and the UTM parameters the destination
+// carried (automatic or hand-written).
+type ContactLinkClick struct {
+	ID          uuid.UUID `json:"id"`
+	URL         string    `json:"url"`
+	Label       string    `json:"label,omitempty"`
+	UTMSource   string    `json:"utm_source,omitempty"`
+	UTMMedium   string    `json:"utm_medium,omitempty"`
+	UTMCampaign string    `json:"utm_campaign,omitempty"`
+	UTMTerm     string    `json:"utm_term,omitempty"`
+	UTMContent  string    `json:"utm_content,omitempty"`
+	UserAgent   string    `json:"user_agent,omitempty"`
+}
+
+// EngagementOrigin is what an open or click said about where it came from.
+// Client names the mail client or image proxy when the user agent does
+// (Gmail, Apple Mail, Outlook); the browser fields describe the rest. The
+// location is resolved from the source network and the address itself is
+// never stored. Every field is empty when unknown.
+type EngagementOrigin struct {
+	Client         string `json:"client,omitempty"`
+	DeviceType     string `json:"device_type,omitempty"`
+	OS             string `json:"os,omitempty"`
+	Browser        string `json:"browser,omitempty"`
+	BrowserVersion string `json:"browser_version,omitempty"`
+	CountryCode    string `json:"country_code,omitempty"`
+	Region         string `json:"region,omitempty"`
+	City           string `json:"city,omitempty"`
+}
+
+// Empty reports whether nothing about the origin is known.
+func (o EngagementOrigin) Empty() bool {
+	return o == EngagementOrigin{}
+}
+
 type ContactTimelineResult struct {
 	Data []ContactTimelineEvent `json:"data"`
-	// True if we hit the per-call cap and the caller should paginate
-	// via the `before` query param.
+	// Deprecated: read pagination.has_more. Kept for clients written against
+	// the bare-timestamp pagination that predated the cursor envelope.
 	HasMore bool `json:"has_more"`
+	// NextCursor is an opaque (at, source, id) position; pass it back as
+	// `cursor` for the next page. Total is never counted across the sources.
+	Pagination Pagination `json:"pagination"`
 }
 
 type UpdateContact struct {
@@ -540,13 +666,17 @@ const (
 	ContactSourceAPI         ContactSource = "api"
 	ContactSourceAIAssistant ContactSource = "ai_assistant"
 	ContactSourceForm        ContactSource = "form"
+	// ContactSourceAutomation is a contact an automation's "create or update
+	// contact" action wrote; the detail is the automation's name.
+	ContactSourceAutomation ContactSource = "automation"
 )
 
 // Valid reports whether the value is one the database accepts.
 func (s ContactSource) Valid() bool {
 	switch s {
 	case ContactSourceUnknown, ContactSourceManual, ContactSourceCampaign, ContactSourceImport,
-		ContactSourceSheetSync, ContactSourceAPI, ContactSourceAIAssistant, ContactSourceForm:
+		ContactSourceSheetSync, ContactSourceAPI, ContactSourceAIAssistant, ContactSourceForm,
+		ContactSourceAutomation:
 		return true
 	}
 	return false

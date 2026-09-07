@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -21,7 +22,17 @@ type DuplicateCampaignInput struct {
 	UserID      uuid.UUID
 	Name        string
 	Attachments []models.CampaignAttachment
+	// OrganizationID and StorageLimit make the copied attachments count
+	// against the quota inside the same transaction that inserts them; the
+	// limit is resolved under the quota lock. A nil StorageLimit skips the
+	// check.
+	OrganizationID uuid.UUID
+	StorageLimit   StorageLimitFunc
 }
+
+// ErrStorageQuotaExceeded is returned by Duplicate when the copied attachments
+// would take the organization past StorageLimitBytes. Nothing is written.
+var ErrStorageQuotaExceeded = errors.New("storage quota exceeded")
 
 // Delete removes a campaign and everything that only means something inside
 // it. The pending tasks parked for the campaign (its wakeup chain and any
@@ -99,12 +110,13 @@ func (r *campaignRepository) Duplicate(ctx context.Context, in DuplicateCampaign
 			contact_order_by, contact_order_dir, contact_order_field,
 			sender_strategy, rotation_mode,
 			ramp_enabled, ramp_start, ramp_increment, ramp_ceiling, ramp_level, ramp_level_date,
-			esp_match_mode, max_new_leads_per_day, prioritize_new_leads,
+			esp_match_mode, max_new_leads_per_day, prioritize_new_leads, continuous,
 			tracking_domain, tracking_domain_verified, tracking_domain_verified_at,
 			guardrail_enabled, guardrail_bounce_rate_max, guardrail_complaint_rate_max,
 			guardrail_reply_rate_min, guardrail_min_sample, guardrail_window_days,
 			guardrail_tripped_at, guardrail_reason,
-			last_status_change_at, updated_at, created_at
+			utm_tracking, utm_source, utm_medium, utm_campaign,
+			last_status_change_at, updated_at, created_at, kind
 		)
 		SELECT
 			$2, $3, organization_id, $4, description, 'draft',
@@ -117,12 +129,13 @@ func (r *campaignRepository) Duplicate(ctx context.Context, in DuplicateCampaign
 			contact_order_by, contact_order_dir, contact_order_field,
 			sender_strategy, rotation_mode,
 			ramp_enabled, ramp_start, ramp_increment, ramp_ceiling, 0, NULL,
-			esp_match_mode, max_new_leads_per_day, prioritize_new_leads,
+			esp_match_mode, max_new_leads_per_day, prioritize_new_leads, continuous,
 			tracking_domain, tracking_domain_verified, tracking_domain_verified_at,
 			guardrail_enabled, guardrail_bounce_rate_max, guardrail_complaint_rate_max,
 			guardrail_reply_rate_min, guardrail_min_sample, guardrail_window_days,
 			NULL, '',
-			NULL, NOW(), NOW()
+			utm_tracking, utm_source, utm_medium, utm_campaign,
+			NULL, NOW(), NOW(), kind
 		FROM campaigns
 		WHERE id = $1
 	`
@@ -158,6 +171,29 @@ func (r *campaignRepository) Duplicate(ctx context.Context, in DuplicateCampaign
 
 	if err := copyCampaignVariantsTx(ctx, tx, in.SourceID, in.NewID, stepIDs); err != nil {
 		return nil, err
+	}
+
+	if len(in.Attachments) > 0 && in.StorageLimit != nil {
+		if err := LockStorageQuota(ctx, tx, in.OrganizationID); err != nil {
+			db.CaptureError(err, "", nil, "exec")
+			return nil, err
+		}
+		limit, err := in.StorageLimit(ctx)
+		if err != nil {
+			return nil, err
+		}
+		used, err := storageUsedTx(ctx, tx, in.OrganizationID)
+		if err != nil {
+			db.CaptureError(err, "", nil, "queryrow")
+			return nil, err
+		}
+		var adding int64
+		for _, att := range in.Attachments {
+			adding += att.Size
+		}
+		if used+adding > limit {
+			return nil, fmt.Errorf("%w: %d of %d bytes used, %d to add", ErrStorageQuotaExceeded, used, limit, adding)
+		}
 	}
 
 	const insertAttachment = `

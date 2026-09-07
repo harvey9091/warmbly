@@ -15,6 +15,21 @@ export PATH := $(GO_BIN):$(PATH)
 # fresh clones without any environment setup.
 COMPOSE := docker compose -p warmbly
 
+# Build identity stamped into the Go images (shown in the admin panel's top bar
+# and read by the update check). Empty outside a git checkout, which the
+# binaries report as "dev".
+export WARMBLY_BUILD_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null)
+export WARMBLY_BUILD_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null)
+export WARMBLY_BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# The updater sidecar (one-click "Update and restart" from the admin panel)
+# holds the docker socket, so it lives behind a compose profile. `make up`
+# turns it on; UPDATER=false leaves it off.
+UPDATER ?= true
+ifeq ($(UPDATER),true)
+UP_PROFILES := --profile updater
+endif
+
 GOLANGCI_LINT_VERSION ?= v1.64.8
 PROTOC_GEN_GO_VERSION ?= v1.36.11
 PROTOC_GEN_GO_GRPC_VERSION ?= v1.6.1
@@ -23,16 +38,44 @@ PROTO_DIR := internal/tasks/proto
 PROTO_GEN_FILES := $(PROTO_DIR)/tasks.pb.go
 
 .PHONY: poollink-dev poollink-dev-down poollink-dev-reset setup-tools fmt lint check-migrations proto check-proto \
-        up claim doctor cli seed-demo seed seed-plan sandbox sandbox-seed sandbox-simulate reset logs status stop down test-seed \
+        up upgrade claim doctor cli seed-demo seed seed-plan sandbox sandbox-seed sandbox-simulate reset logs status stop down test-seed \
         restart restart-go restart-all infra infra-down app app-down app-logs \
         backend forms forms-web consumer worker run dev tracking realtime web \
-        admin site docs grant-admin revoke-admin gen-key db-reset db-wipe migrate
+        admin site docs grant-admin revoke-admin gen-key installer-sha installer-check installer-demo \
+        db-reset db-wipe migrate warmbly warmbly-dist cli-sha cli-check
 
 setup-tools:
 	@echo "Installing required Go tools into $(GO_BIN)"
 	GOBIN=$(GO_BIN) go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	GOBIN=$(GO_BIN) go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
 	GOBIN=$(GO_BIN) go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
+
+# Build the `warmbly` CLI into ./bin, stamped with this checkout's version so
+# `warmbly version` reports something meaningful. This is the customer CLI; the
+# operator one (warmblyctl) ships in the backend image and runs there.
+warmbly:
+	@mkdir -p bin
+	go build -ldflags="-s -w \
+	  -X github.com/warmbly/warmbly/internal/version.Version=$(WARMBLY_BUILD_VERSION) \
+	  -X github.com/warmbly/warmbly/internal/version.Commit=$(WARMBLY_BUILD_COMMIT) \
+	  -X github.com/warmbly/warmbly/internal/version.BuiltAt=$(WARMBLY_BUILD_TIME)" \
+	  -o bin/warmbly ./cmd/cli
+	@echo "built bin/warmbly ($(WARMBLY_BUILD_VERSION))"
+	@echo "put it on your PATH: sudo install -m 0755 bin/warmbly /usr/local/bin/warmbly"
+
+# Everything a release publishes for the CLI: an archive per platform, the
+# checksums, and the Homebrew and Scoop manifests. Same script the release
+# workflow runs, so an artifact can be reproduced locally.
+warmbly-dist:
+	./scripts/build-cli.sh dist
+
+# The published installer at https://warmbly.com/cli.sh. Regenerate the
+# checksum after any edit to it; CI fails when the two disagree.
+cli-sha:
+	@cd site/public && sha256sum cli.sh > cli.sh.sha256 && cat cli.sh.sha256
+
+cli-check:
+	@./scripts/check-cli-installer.sh
 
 # Format all Go code. CI's golangci-lint enforces gofmt, so this is the
 # formatting signal to run before committing, not `go build`.
@@ -79,7 +122,7 @@ ADMIN_URL = http://$(WEB_HOST):5174
 # everything detached. Dashboard :5173, admin :5174, API :8080.
 up:
 	@command -v docker >/dev/null || { echo "docker is required: https://docs.docker.com/get-docker/"; exit 1; }
-	$(COMPOSE) up -d --build
+	$(COMPOSE) $(UP_PROFILES) up -d --build
 	@echo ""
 	@echo "Warmbly is starting. The first run builds the images once."
 	@echo ""
@@ -87,6 +130,12 @@ up:
 	@echo "  Dashboard: $(DASHBOARD_URL)     Admin: $(ADMIN_URL)"
 	@echo "  Health:    make doctor               Logs:  make logs"
 	@echo "  Demo data: make seed-demo            Guide: https://docs.warmbly.com/development/first-run/"
+
+# The by-hand equivalent of "Update and restart" in the admin panel: move the
+# checkout forward, rebuild, recreate what changed. Migrations apply on boot.
+upgrade:
+	git pull --ff-only
+	@$(MAKE) --no-print-directory up
 
 # Report how to get into this instance, and end on a command that works.
 #
@@ -605,6 +654,7 @@ forms-web:
 consumer:
 	$(GO_DEV_ENV) \
 	$(AI_DEV_ENV) \
+	GEODB_PATH=data/GeoLite2-City.mmdb \
 	go run ./cmd/consumer
 
 # Send/sync worker. No Postgres by design. WORKER_ID is an explicit UUID
@@ -641,6 +691,24 @@ run:
 # makes every stored mailbox credential unrecoverable).
 gen-key:
 	@openssl rand -base64 32
+
+# The one-command installer, served verbatim at https://warmbly.com/install.sh.
+# The published checksum is what makes "download, verify, read, run" a real
+# alternative to piping into a shell, so it is regenerated with the script and
+# CI fails when the two disagree.
+installer-sha:
+	@cd site/public && sha256sum install.sh > install.sh.sha256 && cat install.sh.sha256
+
+# Everything CI runs against the installer: POSIX parse, shellcheck, --help,
+# --print-env, a compose file per answer shape, and the checksum.
+installer-check:
+	@./scripts/check-installer.sh
+
+# Walk the installer's wizard without installing anything: the real questions,
+# the real review, and a played pull and start. Writes no file, pulls no image,
+# needs no Docker. This is the "what does it look like" target.
+installer-demo:
+	@sh site/public/install.sh --demo
 
 # ─── one-command dev stack ───────────────────────────────────────────────
 #

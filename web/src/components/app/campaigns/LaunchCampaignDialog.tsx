@@ -23,9 +23,13 @@ import {
 import type Campaign from "@/lib/api/models/app/campaigns/Campaign";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
+import { useQuery } from "@tanstack/react-query";
 import useCampaign from "@/lib/api/hooks/app/campaigns/useCampaign";
 import usePreflight from "@/lib/api/hooks/app/campaigns/usePreflight";
+import getSequences from "@/lib/api/client/app/campaigns/sequences/getSequences";
 import { preflightFailures } from "@/lib/api/models/app/campaigns/Preflight";
+import { isIdleCampaign } from "@/components/app/campaigns/status";
+import type { StartCampaignResult } from "@/lib/api/client/app/campaigns/startCampaign";
 
 type Phase = "idle" | "launching" | "done";
 
@@ -95,13 +99,23 @@ export default function LaunchCampaignDialog({
     // The backend refused the launch on projected bounce rate. The member can
     // take the risk explicitly (a list verified elsewhere), once they read why.
     const [riskBlocked, setRiskBlocked] = React.useState(false);
+    // The start answered that the campaign is active but waiting for leads.
+    const [waiting, setWaiting] = React.useState(false);
     const timer = React.useRef<number | null>(null);
 
-    // The list passes a campaign whose `sequences` is null (the list endpoint
-    // omits them), so fetch the full record to show an accurate step count and
+    // The list passes a trimmed campaign, so fetch the full record for accurate
     // settings. Falls back to the passed campaign until it resolves.
     const full = useCampaign(campaign?.id ?? "");
     const c = full.data ?? campaign;
+
+    // Steps live on their own endpoint (the campaign record never carries
+    // them), under the same key the sequence editor uses so the cache is shared.
+    const steps = useQuery({
+        queryKey: ["campaigns", campaign?.id ?? "", "sequences"],
+        queryFn: () => getSequences(campaign?.id ?? ""),
+        enabled: !!campaign,
+    });
+    const stepCount = steps.data?.length;
 
     // The platform's own pre-send checks, run fresh each time the dialog opens.
     // Advisory: a failure is shown, never used to disable Launch, because the
@@ -115,6 +129,7 @@ export default function LaunchCampaignDialog({
             setPhase("idle");
             setError(null);
             setRiskBlocked(false);
+            setWaiting(false);
         }
     }, [campaign]);
 
@@ -139,7 +154,10 @@ export default function LaunchCampaignDialog({
         setError(null);
         setPhase("launching");
         try {
-            await onConfirm(campaign.id, acknowledge ? { acknowledge_list_risk: true } : undefined);
+            const res = (await onConfirm(campaign.id, acknowledge ? { acknowledge_list_risk: true } : undefined)) as
+                | StartCampaignResult
+                | undefined;
+            setWaiting(!!res?.waiting_for_leads);
             setPhase("done");
             timer.current = window.setTimeout(onClose, 1200);
         } catch (e) {
@@ -189,10 +207,12 @@ export default function LaunchCampaignDialog({
                                         <CheckIcon className="w-6 h-6" strokeWidth={2.6} />
                                     </motion.div>
                                     <p className="mt-3 text-[14px] font-semibold text-slate-900">
-                                        You're live
+                                        {waiting || isIdleCampaign(c) ? "Running, waiting for leads" : "You're live"}
                                     </p>
                                     <p className="mt-0.5 text-[12px] text-slate-500 truncate max-w-full">
-                                        {c.name} is now sending
+                                        {waiting || isIdleCampaign(c)
+                                            ? `${c.name} sends to leads as they arrive`
+                                            : `${c.name} is now sending`}
                                     </p>
                                 </motion.div>
                             ) : (
@@ -242,11 +262,11 @@ export default function LaunchCampaignDialog({
                                             icon={<ListChecksIcon className="w-4 h-4" />}
                                             label="Steps"
                                             value={
-                                                full.isLoading && !c.sequences
-                                                    ? "…"
-                                                    : c.sequences
-                                                        ? `${c.sequences.length} step${c.sequences.length === 1 ? "" : "s"}`
-                                                        : "0 steps"
+                                                steps.isError
+                                                    ? "Unavailable"
+                                                    : stepCount === undefined
+                                                        ? "…"
+                                                        : `${stepCount} step${stepCount === 1 ? "" : "s"}`
                                             }
                                         />
                                     </div>
@@ -307,6 +327,11 @@ export default function LaunchCampaignDialog({
                                     <p className="px-5 pt-3 text-[11.5px] text-slate-500 leading-relaxed">
                                         Sending begins immediately, paced to the schedule and your
                                         mailbox guardrails. You can pause anytime.
+                                        {c.continuous
+                                            ? " Out of leads, the campaign stays active and waits for new ones."
+                                            : c.status === "completed"
+                                                ? " If every lead has already finished, the campaign stays active and waits for new ones."
+                                                : ""}
                                     </p>
 
                                     {error && (

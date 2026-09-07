@@ -132,12 +132,19 @@ func (s *analyticsService) GetCampaignAnalytics(ctx context.Context, userID, cam
 		return nil, xerr
 	}
 
+	// Where and on what people engaged; best-effort, the totals stand alone.
+	engagement, xerr := s.analyticsRepo.GetCampaignEngagementBreakdown(ctx, campaignID, 8)
+	if xerr != nil {
+		engagement = nil
+	}
+
 	return &models.CampaignAnalytics{
 		CampaignID: campaignID,
 		Name:       campaign.Name,
 		Status:     campaign.Status,
 		Summary:    *summary,
 		Sequences:  sequences,
+		Engagement: engagement,
 	}, nil
 }
 

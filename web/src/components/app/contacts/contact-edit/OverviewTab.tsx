@@ -16,8 +16,15 @@ import {
     MousePointerClickIcon,
     ReplyIcon,
 } from "lucide-react";
+import toast from "react-hot-toast";
 import type ContactDetail from "@/lib/api/models/app/contacts/ContactDetail";
 import type Contact from "@/lib/api/models/app/contacts/Contact";
+import { useConfirm } from "@/hooks/context/confirm";
+import { useWriteGuard } from "@/hooks/usePermission";
+import { useRemoveSuppression } from "@/lib/api/hooks/app/suppressions/useSuppressions";
+import { SOURCE_LABEL } from "@/lib/api/models/app/suppressions/Suppression";
+import type { AppError } from "@/lib/api/client/normalizeError";
+import buildError from "@/lib/helper/buildError";
 import { fmtAbsolute, fmtRelative } from "./format";
 import { sourceLabel } from "./ActivityTab";
 import { ContactSegmentsSection } from "./ContactSegmentsSection";
@@ -35,6 +42,26 @@ export default function OverviewTab({
     const eng = detail?.engagement;
     const supp = detail?.suppression;
     const sent = eng?.total_sent ?? 0;
+    const confirm = useConfirm();
+    const write = useWriteGuard("MANAGE_CONTACTS");
+    const removeSuppression = useRemoveSuppression();
+
+    function askLift() {
+        if (!supp) return;
+        const own = supp.source === "unsubscribe" || supp.source === "complaint" || supp.source === "bounce";
+        const what = supp.kind === "domain" ? `the whole @${supp.value} domain` : contact.email;
+        const text = own
+            ? `${contact.email} ${SOURCE_LABEL[supp.source]?.toLowerCase() ?? "was suppressed"} on their own. Removing the entry lets campaigns email ${what} again, and that is recorded in the audit log. Continue?`
+            : `Remove ${what} from the suppression list? Campaigns can email them again.`;
+        confirm.show(text, async () => {
+            try {
+                await removeSuppression.mutateAsync(supp.id);
+                toast.success("Removed from the suppression list");
+            } catch (err) {
+                toast.error(buildError(err as AppError));
+            }
+        });
+    }
 
     return (
         <div className="space-y-5">
@@ -43,13 +70,22 @@ export default function OverviewTab({
                     <BanIcon className="w-3.5 h-3.5 text-red-600 mt-px shrink-0" />
                     <div className="min-w-0 flex-1">
                         <div className="text-[12px] font-medium text-red-900 leading-tight">
-                            Suppressed ({supp.source})
+                            {SOURCE_LABEL[supp.source] ?? "Suppressed"}
+                            {supp.kind === "domain" ? ` · whole @${supp.value} domain` : ""}
                         </div>
                         <div className="text-[11px] text-red-700/90 mt-0.5">
                             {supp.reason || "No reason given"} · since{" "}
                             {fmtAbsolute(supp.created_at)}
                         </div>
                     </div>
+                    <button
+                        type="button"
+                        onClick={(e) => write.guard(askLift)(e)}
+                        disabled={removeSuppression.isPending}
+                        className="shrink-0 h-6 px-2 rounded-md border border-red-200 bg-white text-[11px] font-medium text-red-700 hover:bg-red-50 transition-colors disabled:opacity-50"
+                    >
+                        Remove
+                    </button>
                 </div>
             )}
 

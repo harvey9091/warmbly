@@ -19,13 +19,16 @@ import (
 	"github.com/warmbly/warmbly/internal/app/advanced"
 	"github.com/warmbly/warmbly/internal/app/cipher"
 	jobs "github.com/warmbly/warmbly/internal/app/consumer"
+	"github.com/warmbly/warmbly/internal/app/contact"
 	"github.com/warmbly/warmbly/internal/app/credits"
 	"github.com/warmbly/warmbly/internal/app/creditwatch"
 	"github.com/warmbly/warmbly/internal/app/feature"
 	"github.com/warmbly/warmbly/internal/app/inboxagent"
+	"github.com/warmbly/warmbly/internal/app/instancesettings"
 	"github.com/warmbly/warmbly/internal/app/integration"
 	"github.com/warmbly/warmbly/internal/app/nativeactions"
 	"github.com/warmbly/warmbly/internal/app/notification"
+	"github.com/warmbly/warmbly/internal/app/opsnotify"
 	"github.com/warmbly/warmbly/internal/app/replyclassify"
 	warmupapp "github.com/warmbly/warmbly/internal/app/warmup"
 	"github.com/warmbly/warmbly/internal/app/webhook"
@@ -47,6 +50,7 @@ import (
 	"github.com/warmbly/warmbly/internal/observability"
 	"github.com/warmbly/warmbly/internal/pkg/encrypt"
 	"github.com/warmbly/warmbly/internal/pkg/generation"
+	"github.com/warmbly/warmbly/internal/pkg/geo"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -313,10 +317,18 @@ func main() {
 	// wiring native actions here a reply-triggered automation's add_tag /
 	// create_deal / label_email node would fail with "native actions are not
 	// available". Mirrors the backend wiring.
+	// The lead-intake actions (create or update contact, add to campaign) write
+	// through a contact service so a reply-triggered flow in this process gets
+	// the same plan check, campaign wake and contact.created as the backend.
+	contactServiceC := contact.NewService(contactRepo, subscriptionRepoConsumer, planRepoConsumer, streamingPublisher)
+	if aware, ok := contactServiceC.(contact.WebhookAware); ok {
+		aware.WireWebhooks(webhookService)
+	}
 	integrationServiceC.SetNativeActions(nativeactions.Adapter{
-		Adv:      advancedService,
-		Contacts: contactRepo,
-		Orgs:     orgRepoConsumer,
+		Adv:        advancedService,
+		Contacts:   contactRepo,
+		Orgs:       orgRepoConsumer,
+		ContactSvc: contactServiceC,
 	})
 	// In-app notifications: the reply/bounce/complaint gate fires in THIS
 	// process (inbox ingest + deliverability ingest run in the consumer), so the
@@ -339,6 +351,22 @@ func main() {
 		log.Printf("Warning: notification email disabled, EMAIL_NAME/EMAIL_ADDRESS not set: %v", ecErr)
 	}
 	notificationService.WireDelivery(notifEmail, integrationServiceC, repository.NewUserRepostory(primaryDB, kmsClient), orgRepoConsumer)
+
+	// Operator alerts. The dead-worker detector runs in this process, and a
+	// stranded fleet is the operator's problem, not a tenant's. Reads the same
+	// channel list the admin panel writes; a mail transport is optional (the
+	// chat and webhook transports do not need one).
+	var opsMailer opsnotify.Mailer
+	if notifEmail != nil {
+		if m, ok := notifEmail.(opsnotify.Mailer); ok {
+			opsMailer = m
+		}
+	}
+	opsNotifierC := opsnotify.NewService(
+		instancesettings.NewService(instancesettings.NewStore(primaryDB.Pool)),
+		opsMailer,
+		config.AppBaseURL(),
+	)
 	// Mobile push (APNs) fires from THIS process too: reply/bounce/complaint
 	// notifications are created here. Redis backs the immediate-then-digest
 	// window shared with the backend. The sender stays a nil interface (not a
@@ -398,6 +426,7 @@ func main() {
 		AdminRepo:                   repository.NewAdminRepository(primaryDB.Pool),
 		AssignmentService:           workerAssignmentSvc,
 		Notifier:                    notificationService,
+		OpsNotifier:                 opsNotifierC,
 		TaskRepo:                    taskRepo,
 		CampaignRepo:                campaignRepo,
 		CampaignProgressRepo:        campaignProgressRepo,
@@ -468,6 +497,14 @@ func main() {
 	// open/click action chains (advancedService), the open/click analog of the
 	// reply path. Decodes with the same codec the Rust tracking service writes
 	// (Avro on Kafka, JSON on NATS).
+	// GeoIP is optional here as on the backend: it only turns an open or
+	// click's source network into a country and city on the logs.
+	geoPath, _ := cfg.LoadGeoDBPath(ctx)
+	geoloc, gerr := geo.New(geoPath)
+	if gerr != nil {
+		log.Printf("GeoIP database not found at %s; engagement locations are disabled.", geoPath)
+		geoloc, _ = geo.New("")
+	}
 	if trackingCfg, terr := cfg.LoadTrackingConsumerConfig(ctx); terr != nil {
 		log.Println("tracking consumer config unavailable; opens/clicks not consumed:", terr)
 	} else if trackingConsumer, terr := jobs.NewTrackingConsumer(
@@ -481,11 +518,18 @@ func main() {
 		contactRepo,
 		streamingPublisher,
 		repository.NewTrackingDedupeRepository(primaryDB.Pool),
+		repository.NewTrackedLinkRepository(primaryDB.Pool),
+		repository.NewLinkClickRepository(primaryDB.Pool),
 		advancedService,
 		verificationEvidence,
+		repository.NewEmailOpenRepository(primaryDB.Pool),
+		geoloc,
 	); terr != nil {
 		log.Println("tracking consumer unavailable; opens/clicks not consumed:", terr)
 	} else {
+		// The engagement prune reads its window from the instance settings on
+		// every pass, so shortening it in the admin panel needs no restart.
+		trackingConsumer.WireRetention(instancesettings.NewService(instancesettings.NewStore(primaryDB.Pool)))
 		defer trackingConsumer.Close()
 		go func() {
 			if err := trackingConsumer.Start(ctx); err != nil {

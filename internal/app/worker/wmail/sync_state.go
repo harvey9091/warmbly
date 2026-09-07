@@ -69,6 +69,17 @@ func (t *syncTracker) setDeferred(n int) {
 	}
 }
 
+// setFoldersSkipped records what the folder listing could not follow. Both
+// are conditions the user can fix, so they are relayed every pass and clear
+// themselves rather than leaving a warning nobody can withdraw.
+func (t *syncTracker) setFoldersSkipped(cap, conflict int) {
+	if t.state.FoldersSkippedCap != cap || t.state.FoldersSkippedConflict != conflict {
+		t.state.FoldersSkippedCap = cap
+		t.state.FoldersSkippedConflict = conflict
+		t.dirty = true
+	}
+}
+
 // touch stamps the tick and relays the state when it changed or the
 // heartbeat is due.
 func (t *syncTracker) touch(now time.Time) {

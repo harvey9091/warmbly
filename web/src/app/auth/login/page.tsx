@@ -27,7 +27,7 @@ import type Session from "@/lib/api/models/auth/Session";
 import beginSSO from "@/lib/api/client/auth/beginSSO";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
-import * as Sentry from "@sentry/react";
+import { captureException } from "@/lib/observability";
 import type Token from "@/lib/api/models/auth/Token";
 import {
     beginPasskeyLogin,
@@ -311,7 +311,7 @@ export default function LoginPage() {
             await completeSession(token);
         } catch (e) {
             // Cancel / no-passkey is expected here; report only real failures.
-            if (!(e instanceof PasskeyCancelled)) Sentry.captureException(e);
+            if (!(e instanceof PasskeyCancelled)) captureException(e);
         }
     }, [completeSession]);
 
@@ -327,7 +327,7 @@ export default function LoginPage() {
             })
             .catch((e) => {
                 setPasskeyStatus("error");
-                Sentry.captureException(e);
+                captureException(e);
             })
             .finally(() => {
                 explicitPasskeyChallengePendingRef.current = false;

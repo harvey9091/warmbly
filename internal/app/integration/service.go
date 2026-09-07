@@ -564,6 +564,9 @@ func (s *service) CreateAutomation(ctx context.Context, orgID uuid.UUID, w model
 		}
 		a.InboundToken = tok
 	}
+	if err := s.keepFedCampaignsRunning(ctx, a); err != nil {
+		return nil, err
+	}
 	if err := s.repo.CreateAutomation(ctx, a); err != nil {
 		return nil, err
 	}
@@ -591,6 +594,9 @@ func (s *service) UpdateAutomation(ctx context.Context, orgID, id uuid.UUID, w m
 			}
 			a.InboundToken = tok
 		}
+	}
+	if err := s.keepFedCampaignsRunning(ctx, a); err != nil {
+		return nil, err
 	}
 	if err := s.repo.UpdateAutomation(ctx, a); err != nil {
 		return nil, err

@@ -2,8 +2,11 @@ package jobs
 
 import (
 	"context"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
 	"github.com/warmbly/warmbly/internal/models"
 )
@@ -27,6 +30,13 @@ func (s *JobsService) HandleSyncState(ctx context.Context, e *models.JobEventSyn
 		CaptureError(e.UserID, e.EmailID, err)
 		return err
 	}
+
+	// A relayed state means a pass completed: the worker reached the server,
+	// listed its folders and finished the tick. That is the only signal we
+	// get that an outage is over, and without it a five-minute blip left a
+	// red "needs attention" on the mailbox for good, because nothing but a
+	// credential reconnect ever resolved an error row.
+	s.resolveTransientMailErrors(ctx, e.EmailID, e.State.LastSyncedAt)
 
 	if s.StreamingPublisher == nil {
 		return nil
@@ -78,4 +88,31 @@ func (s *JobsService) HandleSyncState(ctx context.Context, e *models.JobEventSyn
 		)
 	}
 	return nil
+}
+
+// transientMailErrorCodes are the errors a completed sync pass disproves.
+// Anything that needs the user to act (credentials, domain authentication,
+// fair-use deactivation) is deliberately absent: those stay until the person
+// fixes them or reconnects the mailbox.
+var transientMailErrorCodes = []string{
+	string(errx.MailErrorCodeServerUnreachable),
+	string(errx.MailErrorCodeConnectionLost),
+	string(errx.MailErrorCodeNotFound),
+}
+
+func (s *JobsService) resolveTransientMailErrors(ctx context.Context, emailID uuid.UUID, syncedAt *time.Time) {
+	if s.EmailAccountErrorRepository == nil {
+		return
+	}
+	// Only errors raised before this pass ran. The bus can redeliver an older
+	// event after a newer one, and without the bound a stale success would
+	// clear a failure that happened after it, leaving the mailbox looking
+	// healthy while it was not.
+	if syncedAt == nil {
+		return
+	}
+	if err := s.EmailAccountErrorRepository.ResolveByCodesBefore(ctx, emailID, transientMailErrorCodes, *syncedAt, "sync recovered"); err != nil {
+		log.Warn().Str("error", err.Message).Str("email_id", emailID.String()).
+			Msg("could not clear the mailbox's transient errors after a successful sync")
+	}
 }

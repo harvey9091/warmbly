@@ -72,7 +72,9 @@ URLs are validated before storage under the same policy as customer webhooks: th
 
 Integrations are most useful as the actions at the end of an [automation](/guides/automations/): post to Slack or Discord, upsert into a CRM, or fan out to Zapier, Make, n8n, or any signed webhook.
 
-The most actionable events are available as triggers: reply received (with intent), email bounced, unsubscribed, meeting booked, rescheduled, or canceled, warmup health changed, and deliverability complaint.
+The most actionable events are available as triggers: reply received (with intent), contact created, form submitted, email bounced, unsubscribed, meeting booked, rescheduled, or canceled, warmup health changed, and deliverability complaint.
+
+Data flows in as well as out. An automation's inbound webhook URL plus its **Create or update contact** action turns any push (a lead-form connector in Zapier, Make or n8n, a form tool's webhook, your own code) into a tagged, campaign-enrolled contact. See [Lead intake](/guides/automations/#lead-intake).
 
 Actions run in the background, so a slow third party never blocks the event that triggered it. Failures are recorded against the connection's health and visible in its recent activity rather than retried forever or silently lost.
 

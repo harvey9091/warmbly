@@ -52,11 +52,7 @@ func (r *campaignAudienceRepository) GetCampaignAudience(ctx context.Context, or
 	// not told two different numbers for the same list.
 	// sendable is the same predicate Deliverable counts, reused so every
 	// verification count shares one denominator.
-	const sendable = `ct.subscribed IS NOT FALSE AND NOT EXISTS (
-		SELECT 1 FROM suppressed_recipients sr
-		WHERE sr.organization_id = $1 AND lower(sr.email) = lower(ct.email)
-		  AND (sr.expires_at IS NULL OR sr.expires_at > NOW())
-	)`
+	const sendable = `ct.subscribed IS NOT FALSE AND NOT recipient_suppressed($1, ct.email)`
 	err := r.DB.Pool.QueryRow(ctx, `
 		SELECT
 			COUNT(*),
@@ -66,11 +62,7 @@ func (r *campaignAudienceRepository) GetCampaignAudience(ctx context.Context, or
 			-- has checked. NOT NULL, so no null branch is needed.
 			COUNT(*) FILTER (WHERE `+sendable+` AND ct.verification_status NOT IN ('valid','invalid','risky')),
 			COUNT(*) FILTER (WHERE `+sendable+` AND ct.is_catch_all),
-			COUNT(*) FILTER (WHERE EXISTS (
-				SELECT 1 FROM suppressed_recipients sr
-				WHERE sr.organization_id = $1 AND lower(sr.email) = lower(ct.email)
-				  AND (sr.expires_at IS NULL OR sr.expires_at > NOW())
-			)),
+			COUNT(*) FILTER (WHERE recipient_suppressed($1, ct.email)),
 			COUNT(*) FILTER (WHERE ct.subscribed IS FALSE),
 			COUNT(*) FILTER (WHERE `+sendable+`),
 			COUNT(*) FILTER (WHERE split_part(lower(ct.email), '@', 1) IN (`+rolePrefixesSQL+`)),

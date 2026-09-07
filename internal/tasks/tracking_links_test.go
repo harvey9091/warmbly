@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/models"
 )
 
 func TestAddOpenTrackingPixelUsesTheConfiguredHost(t *testing.T) {
@@ -66,5 +67,128 @@ func TestWrapLinksForTrackingSkipsItsOwnHostAndNonHTTP(t *testing.T) {
 	}
 	if out != html {
 		t.Fatalf("body should be unchanged: %s", out)
+	}
+}
+
+func TestTrackLinksReadsTheAnchorTextAsTheLabel(t *testing.T) {
+	html := `<p>See <a href="https://example.com/pricing"><b>our</b> Pricing &amp; plans</a> or <a href="https://example.com/x"><img src="cid:logo" alt="Logo"></a></p>`
+	_, links := TrackLinks(html, LinkTracking{TaskID: uuid.New(), CampaignID: uuid.New(), TrackingDomain: "t.acme.com", Wrap: true})
+	if len(links) != 2 {
+		t.Fatalf("expected two tickets, got %d", len(links))
+	}
+	if links[0].Label != "our Pricing & plans" {
+		t.Fatalf("label not read from the anchor text: %q", links[0].Label)
+	}
+	if links[1].Label != "Logo" {
+		t.Fatalf("image link should fall back to alt text: %q", links[1].Label)
+	}
+}
+
+func TestTrackLinksTagsUTMAndStoresTheTaggedDestination(t *testing.T) {
+	html := `<a href="https://example.com/pricing?ref=1#top">Pricing page</a>`
+	utm := &UTMParams{Source: "warmbly", Medium: "email", Campaign: "q3_outbound"}
+	out, links := TrackLinks(html, LinkTracking{TaskID: uuid.New(), CampaignID: uuid.New(), TrackingDomain: "t.acme.com", Wrap: true, UTM: utm})
+	if len(links) != 1 {
+		t.Fatalf("expected one ticket, got %d", len(links))
+	}
+	want := "https://example.com/pricing?ref=1&utm_source=warmbly&utm_medium=email&utm_campaign=q3_outbound&utm_content=pricing_page#top"
+	if links[0].Destination != want {
+		t.Fatalf("destination = %q, want %q", links[0].Destination, want)
+	}
+	if strings.Contains(out, "utm_") {
+		t.Fatalf("the email must carry only the ticket, got: %s", out)
+	}
+}
+
+func TestTrackLinksTagsUTMWithoutWrappingWhenLinkTrackingIsOff(t *testing.T) {
+	html := `<a href='https://example.com/a?x=1&amp;y=2'>Go</a>`
+	out, links := TrackLinks(html, LinkTracking{UTM: &UTMParams{Source: "s", Medium: "m", Campaign: "c"}})
+	if links != nil {
+		t.Fatalf("no tickets expected, got %v", links)
+	}
+	want := `<a href="https://example.com/a?x=1&amp;y=2&amp;utm_source=s&amp;utm_medium=m&amp;utm_campaign=c&amp;utm_content=go">Go</a>`
+	if out != want {
+		t.Fatalf("got %s\nwant %s", out, want)
+	}
+}
+
+func TestTrackLinksKeepsHandWrittenUTMValues(t *testing.T) {
+	html := `<a href="https://example.com/?utm_source=newsletter&utm_content=hero">Hero</a>`
+	_, links := TrackLinks(html, LinkTracking{TaskID: uuid.New(), CampaignID: uuid.New(), TrackingDomain: "t.acme.com", Wrap: true, UTM: &UTMParams{Source: "warmbly", Medium: "email", Campaign: "c"}})
+	got := links[0].Destination
+	if strings.Count(got, "utm_source=") != 1 || !strings.Contains(got, "utm_source=newsletter") || !strings.Contains(got, "utm_content=hero") {
+		t.Fatalf("hand-written values must win: %s", got)
+	}
+	if !strings.Contains(got, "utm_medium=email") || !strings.Contains(got, "utm_campaign=c") {
+		t.Fatalf("missing values must still be added: %s", got)
+	}
+}
+
+func TestTrackLinksNumbersLinksWithoutText(t *testing.T) {
+	html := `<a href="https://example.com/1"><img src="x"></a><a href="https://example.com/2"></a>`
+	_, links := TrackLinks(html, LinkTracking{TaskID: uuid.New(), CampaignID: uuid.New(), TrackingDomain: "t.acme.com", Wrap: true, UTM: &UTMParams{Source: "s", Medium: "m", Campaign: "c"}})
+	if !strings.HasSuffix(links[0].Destination, "utm_content=link_1") || !strings.HasSuffix(links[1].Destination, "utm_content=link_2") {
+		t.Fatalf("unlabelled links should be numbered: %s / %s", links[0].Destination, links[1].Destination)
+	}
+}
+
+// A stylesheet or preload href in the head is not a link anyone clicks;
+// redirecting it through a ticket would break it.
+func TestTrackLinksOnlyTouchesAnchors(t *testing.T) {
+	html := `<link rel="stylesheet" href="https://example.com/a.css"><a href="https://example.com/p">p</a>`
+	out, links := WrapLinksForTracking(html, uuid.New(), uuid.New(), "t.acme.com")
+	if len(links) != 1 || links[0].Destination != "https://example.com/p" {
+		t.Fatalf("expected only the anchor wrapped: %v", links)
+	}
+	if !strings.Contains(out, `href="https://example.com/a.css"`) {
+		t.Fatalf("stylesheet href must be untouched: %s", out)
+	}
+}
+
+func TestCampaignUTMDefaults(t *testing.T) {
+	c := &models.Campaign{Name: "Q3 Outbound: Fintech!", UTMTracking: true}
+	p := CampaignUTM(c)
+	if p == nil || p.Source != "warmbly" || p.Medium != "email" || p.Campaign != "q3_outbound_fintech" {
+		t.Fatalf("unexpected defaults: %+v", p)
+	}
+	c.UTMSource, c.UTMCampaign = " acme ", "launch"
+	p = CampaignUTM(c)
+	if p.Source != "acme" || p.Campaign != "launch" {
+		t.Fatalf("overrides not honoured: %+v", p)
+	}
+	if CampaignUTM(&models.Campaign{Name: "x"}) != nil {
+		t.Fatal("utm tagging off must yield nil")
+	}
+}
+
+func TestTrackLinksReadsBareHrefAndIgnoresDataHref(t *testing.T) {
+	html := `<a data-href="https://tracker.example/x" href=https://example.com/bare target="_blank">Bare</a>`
+	out, links := WrapLinksForTracking(html, uuid.New(), uuid.New(), "t.acme.com")
+	if len(links) != 1 || links[0].Destination != "https://example.com/bare" || links[0].Label != "Bare" {
+		t.Fatalf("expected the bare href wrapped: %+v", links)
+	}
+	if !strings.Contains(out, `data-href="https://tracker.example/x"`) || !strings.Contains(out, `target="_blank"`) {
+		t.Fatalf("other attributes must survive: %s", out)
+	}
+}
+
+func TestTrackableURLComparesTheHost(t *testing.T) {
+	if trackableURL("https://t.acme.com/c/abc", "t.acme.com") {
+		t.Fatal("a link already on the tracking host must be left alone")
+	}
+	if !trackableURL("https://example.com/?next=t.acme.com", "t.acme.com") {
+		t.Fatal("a URL merely mentioning the host is a normal link")
+	}
+	if !trackableURL("https://not-t.acme.com/", "t.acme.com") {
+		t.Fatal("a different host that ends with the tracking host is a normal link")
+	}
+}
+
+func TestTagPlainTextLinks(t *testing.T) {
+	body := "See https://example.com/pricing. Docs: https://example.com/docs?x=1\nSkip https://t.acme.com/c/abc"
+	out := TagPlainTextLinks(body, &UTMParams{Source: "s", Medium: "m", Campaign: "c"}, "t.acme.com")
+	want := "See https://example.com/pricing?utm_source=s&utm_medium=m&utm_campaign=c&utm_content=link_1. Docs: https://example.com/docs?x=1&utm_source=s&utm_medium=m&utm_campaign=c&utm_content=link_2\nSkip https://t.acme.com/c/abc"
+	if out != want {
+		t.Fatalf("got  %s\nwant %s", out, want)
 	}
 }

@@ -31,6 +31,17 @@ type AdvancedOutreachRepository interface {
 
 	IsRecipientSuppressed(ctx context.Context, organizationID uuid.UUID, email string) (*models.SuppressedRecipient, error)
 	UpsertSuppressedRecipient(ctx context.Context, entry *models.SuppressedRecipient) error
+	// UpsertSuppressedRecipients writes a batch in one transaction, so a
+	// pasted list lands whole or not at all.
+	UpsertSuppressedRecipients(ctx context.Context, entries []models.SuppressedRecipient) error
+	// ListSuppressedRecipients pages the active list newest first. q filters by
+	// address or domain substring; before is the keyset (created_at, id).
+	ListSuppressedRecipients(ctx context.Context, organizationID uuid.UUID, q string, beforeAt *time.Time, beforeID *uuid.UUID, limit int) ([]models.SuppressedRecipient, error)
+	GetSuppressedRecipient(ctx context.Context, organizationID, id uuid.UUID) (*models.SuppressedRecipient, error)
+	DeleteSuppressedRecipient(ctx context.Context, organizationID, id uuid.UUID) (bool, error)
+	// DeleteSuppressionByEmail removes the address entry with the given source
+	// (the recipient's own resubscribe only undoes a recipient-made entry).
+	DeleteSuppressionByEmail(ctx context.Context, organizationID uuid.UUID, email string, source models.DeliverabilityEventType) (bool, error)
 
 	CreateDeliverabilityEvent(ctx context.Context, event *models.DeliverabilityEvent) error
 	GetDeliverabilityDashboard(ctx context.Context, organizationID uuid.UUID, from, to time.Time) (*models.DeliverabilityDashboard, error)
@@ -364,20 +375,16 @@ func (r *advancedOutreachRepository) MarkVariantEvent(ctx context.Context, campa
 	return err
 }
 
-func (r *advancedOutreachRepository) IsRecipientSuppressed(ctx context.Context, organizationID uuid.UUID, email string) (*models.SuppressedRecipient, error) {
-	query := `
-		SELECT id, organization_id, email, reason, source, campaign_id, expires_at, metadata, created_at, updated_at
-		FROM suppressed_recipients
-		WHERE organization_id = $1
-		  AND LOWER(email) = LOWER($2)
-		  AND (expires_at IS NULL OR expires_at > NOW())
-	`
+const suppressedRecipientColumns = `id, organization_id, email, kind, reason, source, campaign_id, expires_at, metadata, created_at, updated_at`
+
+func scanSuppressedRecipient(row pgx.Row) (*models.SuppressedRecipient, error) {
 	var out models.SuppressedRecipient
 	var metadata []byte
-	if err := r.db.QueryRow(ctx, query, organizationID, email).Scan(
+	if err := row.Scan(
 		&out.ID,
 		&out.OrganizationID,
 		&out.Email,
+		&out.Kind,
 		&out.Reason,
 		&out.Source,
 		&out.CampaignID,
@@ -386,9 +393,6 @@ func (r *advancedOutreachRepository) IsRecipientSuppressed(ctx context.Context, 
 		&out.CreatedAt,
 		&out.UpdatedAt,
 	); err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, nil
-		}
 		return nil, err
 	}
 	if len(metadata) > 0 {
@@ -397,16 +401,50 @@ func (r *advancedOutreachRepository) IsRecipientSuppressed(ctx context.Context, 
 	return &out, nil
 }
 
+// IsRecipientSuppressed returns the entry that blocks email: its own address
+// row first, else a row for its domain. Same predicate as the SQL function
+// recipient_suppressed() the send gates use, spelled out here because the
+// caller wants the row, not a boolean. Stored values are lowercase (every
+// write folds them; migration 000124 folded the rest), so the comparison is
+// an equality the unique index serves.
+func (r *advancedOutreachRepository) IsRecipientSuppressed(ctx context.Context, organizationID uuid.UUID, email string) (*models.SuppressedRecipient, error) {
+	query := `
+		SELECT ` + suppressedRecipientColumns + `
+		FROM suppressed_recipients
+		WHERE organization_id = $1
+		  AND (expires_at IS NULL OR expires_at > NOW())
+		  AND (
+		        (kind = 'email' AND email = LOWER($2))
+		     OR (kind = 'domain' AND email = split_part(LOWER($2), '@', 2))
+		  )
+		ORDER BY (kind = 'email') DESC
+		LIMIT 1
+	`
+	out, err := scanSuppressedRecipient(r.db.QueryRow(ctx, query, organizationID, email))
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return out, nil
+}
+
 func (r *advancedOutreachRepository) UpsertSuppressedRecipient(ctx context.Context, entry *models.SuppressedRecipient) error {
 	metadata, err := marshalJSON(entry.Metadata)
 	if err != nil {
 		return err
 	}
+	kind := entry.Kind
+	if kind == "" {
+		kind = models.SuppressionKindEmail
+	}
 	query := `
-		INSERT INTO suppressed_recipients (organization_id, email, reason, source, campaign_id, expires_at, metadata, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+		INSERT INTO suppressed_recipients (organization_id, email, kind, reason, source, campaign_id, expires_at, metadata, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
 		ON CONFLICT (organization_id, email)
 		DO UPDATE SET
+			kind = EXCLUDED.kind,
 			reason = EXCLUDED.reason,
 			source = EXCLUDED.source,
 			campaign_id = EXCLUDED.campaign_id,
@@ -414,8 +452,111 @@ func (r *advancedOutreachRepository) UpsertSuppressedRecipient(ctx context.Conte
 			metadata = EXCLUDED.metadata,
 			updated_at = NOW()
 	`
-	_, err = r.db.Exec(ctx, query, entry.OrganizationID, strings.ToLower(strings.TrimSpace(entry.Email)), entry.Reason, entry.Source, entry.CampaignID, entry.ExpiresAt, metadata)
+	_, err = r.db.Exec(ctx, query, entry.OrganizationID, strings.ToLower(strings.TrimSpace(entry.Email)), kind, entry.Reason, entry.Source, entry.CampaignID, entry.ExpiresAt, metadata)
 	return err
+}
+
+const upsertSuppressedRecipientSQL = `
+		INSERT INTO suppressed_recipients (organization_id, email, kind, reason, source, campaign_id, expires_at, metadata, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+		ON CONFLICT (organization_id, email)
+		DO UPDATE SET
+			kind = EXCLUDED.kind,
+			reason = EXCLUDED.reason,
+			source = EXCLUDED.source,
+			campaign_id = EXCLUDED.campaign_id,
+			expires_at = EXCLUDED.expires_at,
+			metadata = EXCLUDED.metadata,
+			updated_at = NOW()
+	`
+
+func (r *advancedOutreachRepository) UpsertSuppressedRecipients(ctx context.Context, entries []models.SuppressedRecipient) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	batch := &pgx.Batch{}
+	for i := range entries {
+		e := &entries[i]
+		metadata, err := marshalJSON(e.Metadata)
+		if err != nil {
+			return err
+		}
+		kind := e.Kind
+		if kind == "" {
+			kind = models.SuppressionKindEmail
+		}
+		batch.Queue(upsertSuppressedRecipientSQL, e.OrganizationID, strings.ToLower(strings.TrimSpace(e.Email)), kind, e.Reason, e.Source, e.CampaignID, e.ExpiresAt, metadata)
+	}
+	res := tx.SendBatch(ctx, batch)
+	for range entries {
+		if _, err := res.Exec(); err != nil {
+			_ = res.Close()
+			return err
+		}
+	}
+	if err := res.Close(); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (r *advancedOutreachRepository) ListSuppressedRecipients(ctx context.Context, organizationID uuid.UUID, q string, beforeAt *time.Time, beforeID *uuid.UUID, limit int) ([]models.SuppressedRecipient, error) {
+	args := []any{organizationID, limit}
+	where := `organization_id = $1 AND (expires_at IS NULL OR expires_at > NOW())`
+	if q = strings.ToLower(strings.TrimSpace(q)); q != "" {
+		args = append(args, "%"+q+"%")
+		where += fmt.Sprintf(` AND email ILIKE $%d`, len(args))
+	}
+	if beforeAt != nil && beforeID != nil {
+		args = append(args, *beforeAt, *beforeID)
+		where += fmt.Sprintf(` AND (created_at, id) < ($%d, $%d)`, len(args)-1, len(args))
+	}
+	rows, err := r.db.Query(ctx, `SELECT `+suppressedRecipientColumns+` FROM suppressed_recipients WHERE `+where+` ORDER BY created_at DESC, id DESC LIMIT $2`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]models.SuppressedRecipient, 0, limit)
+	for rows.Next() {
+		entry, err := scanSuppressedRecipient(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *entry)
+	}
+	return out, rows.Err()
+}
+
+func (r *advancedOutreachRepository) GetSuppressedRecipient(ctx context.Context, organizationID, id uuid.UUID) (*models.SuppressedRecipient, error) {
+	out, err := scanSuppressedRecipient(r.db.QueryRow(ctx, `SELECT `+suppressedRecipientColumns+` FROM suppressed_recipients WHERE organization_id = $1 AND id = $2`, organizationID, id))
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *advancedOutreachRepository) DeleteSuppressedRecipient(ctx context.Context, organizationID, id uuid.UUID) (bool, error) {
+	tag, err := r.db.Exec(ctx, `DELETE FROM suppressed_recipients WHERE organization_id = $1 AND id = $2`, organizationID, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (r *advancedOutreachRepository) DeleteSuppressionByEmail(ctx context.Context, organizationID uuid.UUID, email string, source models.DeliverabilityEventType) (bool, error) {
+	tag, err := r.db.Exec(ctx, `DELETE FROM suppressed_recipients WHERE organization_id = $1 AND kind = 'email' AND email = LOWER($2) AND source = $3`, organizationID, strings.TrimSpace(email), source)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 func (r *advancedOutreachRepository) CreateDeliverabilityEvent(ctx context.Context, event *models.DeliverabilityEvent) error {
@@ -523,7 +664,8 @@ func (r *advancedOutreachRepository) GetDeliverabilityDashboard(ctx context.Cont
 		SELECT COUNT(*) FROM tasks t
 		JOIN email_accounts ea ON ea.id = t.email_account_id
 		WHERE ea.organization_id = $1 AND t.task_type = 'campaign' AND t.status = 'completed'
-		  AND t.completed_at >= $2 AND t.completed_at <= $3`
+		  AND t.completed_at >= $2 AND t.completed_at <= $3
+		  AND ` + taskDispatchedEmail
 	_ = r.db.QueryRow(ctx, sentQuery, organizationID, from, to).Scan(&out.EmailsSent)
 	out.BounceRate = models.Rate(out.BounceCount, out.EmailsSent)
 	out.ComplaintRate = models.Rate(out.ComplaintCount, out.EmailsSent)

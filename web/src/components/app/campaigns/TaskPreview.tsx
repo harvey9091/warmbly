@@ -15,6 +15,8 @@ import { DitherMeter } from "@/components/ui/dither";
 interface TaskPreviewProps {
     campaignId: string;
     campaignStatus?: string;
+    // Active with nothing left to send: waiting for leads.
+    idle?: boolean;
 }
 
 // ── Status pill tones ───────────────────────────────────────────────
@@ -23,6 +25,7 @@ const STATUS_TONE: Record<string, string> = {
     paused: "bg-amber-50 text-amber-700 ring-1 ring-amber-200",
     completed: "bg-sky-50 text-sky-700 ring-1 ring-sky-200",
     draft: "bg-slate-100 text-slate-600 ring-1 ring-slate-200",
+    idle: "bg-sky-50 text-sky-700 ring-1 ring-sky-200",
 };
 
 // ── Activity-type icon + tone ───────────────────────────────────────
@@ -73,7 +76,7 @@ function ActivityRow({ activity }: { activity: ActivityItem }) {
     );
 }
 
-export default function TaskPreview({ campaignId, campaignStatus: initialStatus }: TaskPreviewProps) {
+export default function TaskPreview({ campaignId, campaignStatus: initialStatus, idle }: TaskPreviewProps) {
     const { isConnected, channelState, campaignStatus: realtimeStatus, taskProgress, activities } =
         useCampaignChannel(campaignId);
 
@@ -82,6 +85,7 @@ export default function TaskPreview({ campaignId, campaignStatus: initialStatus 
 
     const currentStatus = realtimeStatus?.status || initialStatus || "draft";
     const isActive = currentStatus === "active";
+    const isIdle = isActive && !!idle;
 
     const connectionLabel = isConnected
         ? "Connected"
@@ -130,10 +134,10 @@ export default function TaskPreview({ campaignId, campaignStatus: initialStatus 
                 </span>
                 <span
                     className={`inline-flex items-center px-1.5 h-5 rounded-md text-[10.5px] font-medium ${
-                        STATUS_TONE[currentStatus] ?? STATUS_TONE.draft
+                        isIdle ? STATUS_TONE.idle : (STATUS_TONE[currentStatus] ?? STATUS_TONE.draft)
                     }`}
                 >
-                    {statusLabel(currentStatus)}
+                    {isIdle ? "Waiting for leads" : statusLabel(currentStatus)}
                 </span>
                 <div className="ml-auto flex items-center gap-1.5">
                     <span className="relative flex size-2">
@@ -266,16 +270,20 @@ export default function TaskPreview({ campaignId, campaignStatus: initialStatus 
                                 ? "All caught up — sending complete"
                                 : currentStatus === "paused"
                                   ? "Campaign paused"
-                                  : isActive
-                                    ? "Waiting for the next send…"
-                                    : "Nothing sending yet"}
+                                  : isIdle
+                                    ? "Waiting for new leads"
+                                    : isActive
+                                      ? "Waiting for the next send…"
+                                      : "Nothing sending yet"}
                         </p>
                         <p className="text-[11.5px] text-slate-400 max-w-[34ch] mx-auto leading-relaxed">
                             {currentStatus === "completed"
                                 ? "Every lead has finished the sequence. Replies and clicks still stream in here as they arrive."
                                 : currentStatus === "paused"
                                   ? "Resume the campaign to keep sending. Replies and clicks still stream in here."
-                                  : isActive
+                                  : isIdle
+                                    ? "Every lead has finished the sequence. The campaign stays active and sends to new leads as they arrive."
+                                    : isActive
                                     ? "Opens, clicks, replies and bounces will stream in here live as your campaign sends."
                                     : "Start the campaign to watch it send live."}
                         </p>

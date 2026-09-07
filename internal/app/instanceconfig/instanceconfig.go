@@ -28,6 +28,7 @@ const (
 	GroupTracking      = "tracking"
 	GroupCaptcha       = "captcha"
 	GroupObservability = "observability"
+	GroupUpdates       = "updates"
 )
 
 // Where a resolved value came from.

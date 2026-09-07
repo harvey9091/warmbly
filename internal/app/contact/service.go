@@ -67,7 +67,7 @@ type ContactService interface {
 
 	// ListTimeline returns a merged, reverse-chronological feed of all
 	// engagement + CRM events for the contact.
-	ListTimeline(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, contactID uuid.UUID, limit int, before *time.Time) (*models.ContactTimelineResult, *errx.Error)
+	ListTimeline(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, contactID uuid.UUID, limit int, cursor *models.ContactTimelineKey) (*models.ContactTimelineResult, *errx.Error)
 
 	// SetCampaignWaker wires the campaign service so attaching a lead to a
 	// running campaign wakes that campaign's parked send chain. Optional: with
@@ -109,6 +109,17 @@ type SegmentAware interface {
 	WireSegments(linker SegmentLinker, syncer SegmentCampaignSyncer)
 }
 
+// WebhookDispatcher delivers contact.created to customer webhooks and
+// automations. Satisfied structurally by webhook.Service.
+type WebhookDispatcher interface {
+	Dispatch(ctx context.Context, orgID uuid.UUID, eventType models.WebhookEventType, data any) (uuid.UUID, error)
+}
+
+// WebhookAware is the optional capability the caller uses to attach it.
+type WebhookAware interface {
+	WireWebhooks(w WebhookDispatcher)
+}
+
 type contactService struct {
 	contactRepository  repository.ContactRepository
 	subRepo            repository.SubscriptionRepository
@@ -123,6 +134,8 @@ type contactService struct {
 	orgRisk orgrisk.Service
 	// explainer builds the verification "why" for the contact drawer.
 	explainer VerificationExplainer
+	// webhooks fans contact.created out; nil-safe (no events).
+	webhooks WebhookDispatcher
 }
 
 // VerificationAware is implemented by the contact service so main can hand
@@ -141,6 +154,9 @@ func (s *contactService) WireVerification(e VerificationExplainer) { s.explainer
 
 // WireOrgRisk attaches the organization risk posture.
 func (s *contactService) WireOrgRisk(r orgrisk.Service) { s.orgRisk = r }
+
+// WireWebhooks attaches the event dispatcher behind contact.created.
+func (s *contactService) WireWebhooks(w WebhookDispatcher) { s.webhooks = w }
 
 // OrgRiskAware is the optional capability the caller uses to attach it.
 type OrgRiskAware interface {

@@ -20,6 +20,10 @@ export interface SyncState {
     throttle_reason?: SyncThrottleReason | "";
     // Live messages seen on the server but waiting on budget.
     deferred: number;
+    /** Folders the last listing could not follow because the mailbox has more than the sync covers. */
+    folders_skipped_cap?: number;
+    /** Folders the mail server gave the same internal id as another folder. */
+    folders_skipped_conflict?: number;
     last_synced_at?: string;
 }
 

@@ -16,8 +16,13 @@ export interface ContactEngagement {
 }
 
 export interface ContactSuppression {
+    id: string;
+    // "email" when the contact's own address is listed, "domain" when its
+    // whole domain is; value is the list entry that matched.
+    kind: "email" | "domain";
+    value: string;
     reason: string;
-    source: "bounce" | "complaint" | "unsubscribe" | string;
+    source: "bounce" | "complaint" | "unsubscribe" | "manual" | "import" | string;
     expires_at?: string | null;
     created_at: string;
 }
@@ -32,7 +37,8 @@ export type ContactSource =
     | "sheet_sync"
     | "api"
     | "ai_assistant"
-    | "form";
+    | "form"
+    | "automation";
 
 // One observed fact about the mailbox. Silence is never recorded: a contact
 // who does not open or reply has said nothing about their address.

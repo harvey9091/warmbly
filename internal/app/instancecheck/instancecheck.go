@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/warmbly/warmbly/internal/app/instanceconfig"
+	"github.com/warmbly/warmbly/internal/app/updates"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/infrastructure/cache"
 	"github.com/warmbly/warmbly/internal/notify"
@@ -40,6 +41,7 @@ const (
 	CategoryAccess   = "access"
 	CategoryWorkers  = "workers"
 	CategoryData     = "data"
+	CategoryUpdates  = "updates"
 )
 
 // Finding is one thing that is wrong, plus how to fix it.
@@ -80,6 +82,8 @@ type Deps struct {
 	Policy    *config.AuthPolicy
 	DB        *pgxpool.Pool
 	Cache     *cache.Cache
+	// Updates is the release and updater state; nil skips the update checks.
+	Updates *updates.Service
 }
 
 type check struct {
@@ -101,6 +105,7 @@ func New(deps Deps) *Registry {
 	r.checks = append(r.checks, mailChecks()...)
 	r.checks = append(r.checks, accessChecks()...)
 	r.checks = append(r.checks, infraChecks()...)
+	r.checks = append(r.checks, updateChecks()...)
 	return r
 }
 

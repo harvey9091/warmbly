@@ -21,6 +21,25 @@ export interface PreflightSettings {
     min_content_score: number;
 }
 
+// The in-body opt-out every campaign email carries unless a campaign
+// overrides it. "text" is a reply-to-opt-out sentence, "link" a sentence with
+// a real unsubscribe link, "off" nothing.
+export type UnsubscribeMode = "text" | "link" | "off";
+
+export interface UnsubscribeSettings {
+    mode: UnsubscribeMode;
+    text: string;
+    link_intro: string;
+    link_text: string;
+}
+
+export const DEFAULT_UNSUBSCRIBE: UnsubscribeSettings = {
+    mode: "text",
+    text: "If this isn't relevant, just reply and let me know and I won't email you again.",
+    link_intro: "Not the right person, or not interested?",
+    link_text: "Unsubscribe",
+};
+
 export interface OutreachSettings {
     bounce_pipeline: Record<string, unknown>;
     task_reliability: Record<string, unknown>;
@@ -29,6 +48,7 @@ export interface OutreachSettings {
     send_time_optimization: SendTimeOptimizationSettings;
     preflight: PreflightSettings;
     dashboard: Record<string, unknown>;
+    unsubscribe: UnsubscribeSettings;
     custom?: Record<string, unknown>;
 }
 

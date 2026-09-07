@@ -8,6 +8,8 @@ export interface DashboardOverallStats {
     // Subset of total_opens from automated fetchers (auto-opens).
     machine_opens: number
     total_clicks: number
+    // Steps clicked only by automated fetchers; not part of total_clicks.
+    machine_clicks: number
     total_replies: number
     total_bounces: number
     open_rate: number

@@ -139,7 +139,7 @@ export function AvatarUploader({
                 <div className="text-[11px] text-slate-500 leading-snug">
                     {uploading
                         ? "Uploading…"
-                        : `PNG, JPG, WebP or GIF. We resize to ${AVATAR_OUTPUT_DIMENSION}px before upload.`}
+                        : `PNG or JPG. We resize to ${AVATAR_OUTPUT_DIMENSION}px before upload.`}
                 </div>
                 <div className="flex items-center gap-1 mt-1.5">
                     <button

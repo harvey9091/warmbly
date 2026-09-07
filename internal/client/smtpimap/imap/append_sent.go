@@ -30,7 +30,12 @@ func (c *Client) AppendToSent(ctx context.Context, raw []byte, sentAt time.Time)
 	if len(raw) == 0 {
 		return nil
 	}
+	if merr := c.ensureConnected(); merr != nil {
+		return merr
+	}
 
+	// Resolved before the read lock: sentMailbox takes mu, and mu is ordered
+	// before lifecycle.
 	mailbox, err := c.sentMailbox()
 	if err != nil {
 		return err
@@ -39,6 +44,9 @@ func (c *Client) AppendToSent(ctx context.Context, raw []byte, sentAt time.Time)
 	if sentAt.IsZero() {
 		sentAt = time.Now()
 	}
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	defer c.begin()()
 	cmd := c.client.Append(mailbox, int64(len(raw)), &imap.AppendOptions{
 		// The sender has, by definition, read what they just sent.
 		Flags: []imap.Flag{imap.FlagSeen},
@@ -68,6 +76,9 @@ func (c *Client) sentMailbox() (string, error) {
 	if c.sentMailboxName != "" {
 		return c.sentMailboxName, nil
 	}
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	defer c.begin()()
 
 	// RETURN (SPECIAL-USE) is only legal when the server advertises it; without
 	// the capability the attributes may still arrive on an ordinary LIST.
@@ -87,12 +98,11 @@ func (c *Client) sentMailbox() (string, error) {
 		if byName != "" {
 			continue
 		}
-		for _, candidate := range ImapSent {
-			// Match the leaf too: plenty of servers namespace folders as
-			// "INBOX.Sent" or "INBOX/Sent".
-			if strings.EqualFold(f.Mailbox, candidate) || strings.EqualFold(leaf(f.Mailbox), candidate) {
-				byName = f.Mailbox
-			}
+		// Match the leaf: plenty of servers namespace folders as
+		// "INBOX.Sent" or "INBOX/Sent", and the name is localized wherever
+		// the server does not advertise \Sent.
+		if matchesFolderName(strings.ToLower(leafWithDelim(f.Mailbox, delimString(f.Delim))), ImapSent) {
+			byName = f.Mailbox
 		}
 	}
 	if err := list.Close(); err != nil {
@@ -112,11 +122,26 @@ func (c *Client) sentMailbox() (string, error) {
 	return c.sentMailboxName, nil
 }
 
-// leaf returns the last path component of a mailbox name under either of the
-// two hierarchy delimiters servers use in practice.
+// leaf returns the last path component of a mailbox name. LIST reports the
+// server's real delimiter per folder (see leafWithDelim); this guesses when
+// the caller has only a name, which covers rows stored before the delimiter
+// was carried and the handful of servers that report none.
 func leaf(name string) string {
 	if i := strings.LastIndexAny(name, "./"); i >= 0 && i+1 < len(name) {
 		return name[i+1:]
+	}
+	return name
+}
+
+// leafWithDelim is leaf against the delimiter the server itself reported, so
+// a folder whose name legitimately contains a dot ("Q1.Reports" under a "/"
+// server) is not cut in the middle.
+func leafWithDelim(name, delim string) string {
+	if delim == "" {
+		return leaf(name)
+	}
+	if i := strings.LastIndex(name, delim); i >= 0 && i+len(delim) < len(name) {
+		return name[i+len(delim):]
 	}
 	return name
 }

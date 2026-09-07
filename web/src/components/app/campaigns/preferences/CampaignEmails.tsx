@@ -269,6 +269,17 @@ export function LeadFlowSection({
                 }
             />
             <SettingRow
+                title="Keep running for new leads"
+                description="Out of leads, the campaign stays active and waits instead of finishing, so leads from a linked segment, a form, the API or an automation keep getting the sequence. Linking a segment, a form or an automation to this campaign turns it on, and so does starting the campaign once every lead has finished."
+                control={
+                    <Toggle
+                        id="campaign-pref-continuous"
+                        value={newCampaign.continuous}
+                        onChange={(v) => setNewCampaign((bef) => ({ ...bef, continuous: v }))}
+                    />
+                }
+            />
+            <SettingRow
                 title="Send to risky emails"
                 description="Attempt delivery to addresses flagged risky by verification (may increase bounces)."
                 control={

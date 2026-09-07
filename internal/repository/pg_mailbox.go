@@ -29,32 +29,33 @@ func (r *mailboxRepository) CreateEntry(ctx context.Context, userId, emailId uui
 	mb.UpdatedAt = time.Now()
 
 	query := `
-		INSERT INTO unibox_mailboxes (email_id, uid_validity, mailbox, attributes, highestmodseq, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO unibox_mailboxes (email_id, uid_validity, mailbox, attributes, highestmodseq, uid_next, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (email_id, uid_validity) DO UPDATE SET
 			mailbox = EXCLUDED.mailbox,
 			attributes = EXCLUDED.attributes,
 			highestmodseq = EXCLUDED.highestmodseq,
+			uid_next = EXCLUDED.uid_next,
 			updated_at = EXCLUDED.updated_at
 	`
 
 	// attributes is NOT NULL; a nil slice binds as SQL NULL. See textArray.
 	_, err := r.db.Exec(ctx, query,
-		emailId, mb.UIDValidity, mb.Name, textArray(mb.Attrs), mb.HighestModSeq, mb.UpdatedAt,
+		emailId, mb.UIDValidity, mb.Name, textArray(mb.Attrs), mb.HighestModSeq, mb.UIDNext, mb.UpdatedAt,
 	)
 	return err
 }
 
 func (r *mailboxRepository) GetMailbox(ctx context.Context, userId, emailId uuid.UUID, uidValidity uint32) (*models.Mailbox, error) {
 	query := `
-		SELECT mailbox, attributes, uid_validity, highestmodseq, updated_at
+		SELECT mailbox, attributes, uid_validity, highestmodseq, uid_next, updated_at
 		FROM unibox_mailboxes
 		WHERE email_id = $1 AND uid_validity = $2
 	`
 
 	var mb models.Mailbox
 	err := r.db.QueryRow(ctx, query, emailId, uidValidity).Scan(
-		&mb.Name, &mb.Attrs, &mb.UIDValidity, &mb.HighestModSeq, &mb.UpdatedAt,
+		&mb.Name, &mb.Attrs, &mb.UIDValidity, &mb.HighestModSeq, &mb.UIDNext, &mb.UpdatedAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -68,7 +69,7 @@ func (r *mailboxRepository) GetMailbox(ctx context.Context, userId, emailId uuid
 
 func (r *mailboxRepository) ListMailboxes(ctx context.Context, userId, emailId uuid.UUID) ([]models.Mailbox, error) {
 	query := `
-		SELECT mailbox, attributes, uid_validity, highestmodseq, updated_at
+		SELECT mailbox, attributes, uid_validity, highestmodseq, uid_next, updated_at
 		FROM unibox_mailboxes
 		WHERE email_id = $1
 	`
@@ -82,7 +83,7 @@ func (r *mailboxRepository) ListMailboxes(ctx context.Context, userId, emailId u
 	var mailboxes []models.Mailbox
 	for rows.Next() {
 		var mb models.Mailbox
-		if err := rows.Scan(&mb.Name, &mb.Attrs, &mb.UIDValidity, &mb.HighestModSeq, &mb.UpdatedAt); err != nil {
+		if err := rows.Scan(&mb.Name, &mb.Attrs, &mb.UIDValidity, &mb.HighestModSeq, &mb.UIDNext, &mb.UpdatedAt); err != nil {
 			return nil, err
 		}
 		mailboxes = append(mailboxes, mb)

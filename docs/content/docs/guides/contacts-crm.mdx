@@ -100,16 +100,22 @@ Every contact records its first-touch source: how it entered the workspace, with
 | Import | Created by the file import wizard | The file name |
 | Sheet sync | Created by a Google Sheets sync source | The sheet |
 | API | Created through the API with an API key | The key's name |
+| Form | Submitted a hosted [form](/guides/forms/) | The form |
+| Automation | Written by an automation's **Create or update contact** action | The automation |
 | AI assistant | Created by the assistant on your behalf | |
 | Unknown | Created before Warmbly recorded sources | |
 
 Only new contacts get a source. An import or API call that matches an existing contact updates its fields and leaves the original source in place, so an address that arrived by hand and later turned up in a file still reads as manual.
 
+A new contact is also an event. `contact.created` goes to your [webhooks](/guides/webhooks/) and can start an [automation](/guides/automations/#triggers) with the contact's fields and source, except for bulk arrivals, which stay silent: file imports, sheet syncs, and a single API request adding more than 100 contacts.
+
 ## Activity timeline
 
 The **Activity** tab of a contact is one feed, newest first, of everything Warmbly knows about them: every campaign email sent, opened, clicked, replied to or bounced (with the campaign, step, subject and sending mailbox), replies with their classified intent, deliverability and suppression events, notes, meetings, and the contact's lifecycle: when it was created and how, and each time it joined or left a campaign or a category.
 
-Filter chips narrow the feed (**Emails**, **Replies**, **Deliv.**, **Notes**, **Meetings**, **Campaigns**, **Lifecycle**), the search box matches subjects, campaigns, steps, mailboxes, categories and reasons, and the date picker bounds it. Each row stays to one line until you click it; expanded, it shows every detail the event carries. The feed updates live as teammates and the schedulers write to it.
+Opens appear once per event, not once per email: a second open from another device is its own row. Opens and clicks show the mail client or browser they came from and the city and country when known (see [what is recorded per open and click](/guides/analytics/#what-is-recorded-per-open-and-click)); expanded, the operating system, device and full location. A click names the link: the row reads **Clicked Pricing** and, expanded, shows the link's text, its full URL, the UTM source, medium, campaign and content it carried, and the browser. Every link in an email is tracked on its own, so two links clicked are two rows. Opens and clicks that came from a machine rather than the person (a mail privacy proxy, a security gateway that follows every link at delivery) carry an **auto** badge, and the expanded row says which rule caught them; see [Link tracking and UTM parameters](/guides/campaigns/#link-tracking-and-utm-parameters).
+
+Filter chips narrow the feed (**Emails**, **Replies**, **Deliv.**, **Notes**, **Meetings**, **Campaigns**, **Lifecycle**), the search box matches subjects, campaigns, steps, mailboxes, categories, reasons and, for clicks, the link's text, URL and UTM values, and the date picker bounds it. Each row stays to one line until you click it; expanded, it shows every detail the event carries. The feed updates live as teammates and the schedulers write to it.
 
 At the top of the tab sits the campaign panel: for each campaign the contact is in, its flow with this contact's progress, the lead status, and what the scheduler will do next. See [Campaigns](/guides/campaigns/) for how the next action is worked out and what its states mean.
 
@@ -130,9 +136,9 @@ Campaigns can create and advance deals automatically with **Create deal** and **
 
 A suppressed contact receives no further mail. Unsubscribed contacts are skipped by every campaign automatically; toggle subscription on the Details tab, and filter the list by Subscribed or Unsubscribed.
 
-Suppression also happens automatically on a hard bounce or spam complaint, and a sequence can run an **Unsubscribe** action.
+Suppression also happens automatically when a recipient unsubscribes or replies asking to stop, on a hard bounce or spam complaint, and when a sequence runs an **Unsubscribe** action. The **Suppression list** tab holds every entry, takes addresses and whole domains by hand, and lets you lift an entry; a suppressed contact's Overview tab shows why and offers the same.
 
-This is the safe default response to a bad signal: stop sending rather than keep collecting bounces and complaints. See [Deliverability](/guides/deliverability/) for the signals behind it.
+This is the safe default response to a bad signal: stop sending rather than keep collecting bounces and complaints. See [unsubscribe and suppression](/guides/unsubscribe/) for the full picture and [Deliverability](/guides/deliverability/) for the signals behind it.
 
 ## Where to go next
 

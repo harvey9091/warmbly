@@ -439,9 +439,9 @@ func WebhookEventForAudit(entityType AuditEntityType, action AuditAction) (Webho
 			return WebhookEventCampaignPaused, true
 		}
 	case AuditEntityContact:
+		// contact.created has a dedicated, richer emit in the contact service
+		// (the contact's fields and source), so the audit row is not bridged.
 		switch action {
-		case AuditActionCreate:
-			return WebhookEventContactCreated, true
 		case AuditActionUpdate:
 			return WebhookEventContactUpdated, true
 		case AuditActionDelete:

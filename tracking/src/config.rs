@@ -53,6 +53,10 @@ pub struct Config {
     /// Shared bearer token for the backend internal API (required; same
     /// INTERNAL_API_TOKEN the workers use).
     pub internal_api_token: String,
+    /// Secret the source-address token is keyed with. An unkeyed hash of an
+    /// IPv4 address is reversible by enumeration; a keyed one is only a
+    /// stable name for one source. Defaults to the internal API token.
+    pub ip_hash_key: String,
     /// Per-source request budget for both tracking endpoints (default 300/min).
     pub rate_limit_per_min: u32,
     /// Page-view ingest budget per source per minute. Lower than the pixel
@@ -198,6 +202,11 @@ impl Config {
             trusted_proxies, client_ip_header
         );
 
+        let ip_hash_key = env::var("TRACKING_IP_HASH_KEY")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| internal_api_token.clone());
+
         Ok(Self {
             env: env_name,
             host,
@@ -213,6 +222,7 @@ impl Config {
             schema_registry_key,
             schema_registry_secret,
             backend_internal_url,
+            ip_hash_key,
             internal_api_token,
             rate_limit_per_min,
             pagehit_rate_limit_per_min,
@@ -290,6 +300,10 @@ impl Config {
             schema_registry_key,
             schema_registry_secret,
             backend_internal_url,
+            ip_hash_key: env::var("TRACKING_IP_HASH_KEY")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or_else(|| internal_api_token.clone()),
             internal_api_token,
             rate_limit_per_min: 300,
             pagehit_rate_limit_per_min: 60,

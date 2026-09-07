@@ -96,11 +96,11 @@ If a campaign has already been paused because every one of its mailboxes was gat
 
 ## Built-in protections
 
-**One-click unsubscribe** (RFC 8058) puts a native Unsubscribe control in the recipient's mail client. It drives complaint rate down, because someone who can opt out cleanly rarely hits "mark as spam" instead, and Google's bulk-sender guidance effectively requires it at volume. Unsubscribes are suppressed automatically.
+**An opt-out in every email.** Each campaign email ends with a way to stop hearing from you: by default a plain "just reply and let me know" sentence, whose replies are detected and honoured automatically, or an unsubscribe link if you prefer one. Campaigns can also attach the RFC 8058 `List-Unsubscribe` headers, which put a native Unsubscribe control in mail clients that show one. Either way, someone who can opt out cleanly rarely hits "mark as spam" instead, and every opt-out is suppressed automatically. See [unsubscribe and suppression](/guides/unsubscribe/).
 
 **Pre-send verification** checks every address before a campaign sends to it and skips the undeliverable ones, keeping bad addresses from becoming the hard bounces that drive the `5%` and `10%` thresholds above. There is nothing to run: new contacts are checked in the background within a minute of being added, each contact carries its verdict (a small mark next to the email), and Settings > Sending shows the whole workspace at a glance. See [address verification](#address-verification) below for how verdicts are produced and what to do when one is wrong.
 
-**Suppression** is the safety net: a suppressed recipient is never emailed again by any campaign. Warmbly suppresses automatically on a bounce, a spam complaint, or an unsubscribe, because once someone has bounced or complained the safest response is to stop, not to keep collecting negative signals.
+**Suppression** is the safety net: a suppressed recipient is never emailed again by any campaign. Warmbly suppresses automatically on a bounce, a spam complaint, or an unsubscribe, because once someone has bounced or complained the safest response is to stop, not to keep collecting negative signals. The list, with anything you add by hand (addresses or whole domains), is under **Contacts > Suppression list**.
 
 The list is held per workspace, and the check runs against the sending campaign's workspace before every send. If a campaign somehow has no workspace, that check cannot be applied, so the campaign is paused with the reason in its activity feed instead of sending unchecked.
 

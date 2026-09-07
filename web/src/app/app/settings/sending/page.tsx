@@ -21,10 +21,21 @@ import {
 import VerificationSettings from "@/components/app/contacts/VerificationSettings";
 import {
     DEFAULT_PREFERRED_HOURS,
+    DEFAULT_UNSUBSCRIBE,
     describeHours,
     formatHour,
     type OutreachSettings,
+    type UnsubscribeMode,
+    type UnsubscribeSettings,
 } from "@/lib/api/models/app/outreach/OutreachSettings";
+import { TextInput } from "@/components/ui/field";
+import { Link } from "react-router-dom";
+
+const UNSUB_MODES: SelectOption[] = [
+    { value: "text", label: "Reply to opt out (text line)" },
+    { value: "link", label: "Unsubscribe link" },
+    { value: "off", label: "Nothing" },
+];
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 
@@ -61,6 +72,22 @@ function SendingSettings() {
     }, [data]);
 
     const sto = draft?.send_time_optimization;
+
+    const patchUnsubscribe = React.useCallback(
+        (next: Partial<UnsubscribeSettings>) => {
+            setDraft((prev) =>
+                prev ? { ...prev, unsubscribe: { ...(prev.unsubscribe ?? DEFAULT_UNSUBSCRIBE), ...next } } : prev,
+            );
+        },
+        [],
+    );
+
+    const patchReplyIntent = React.useCallback(
+        (next: Record<string, unknown>) => {
+            setDraft((prev) => (prev ? { ...prev, reply_intent: { ...prev.reply_intent, ...next } } : prev));
+        },
+        [],
+    );
 
     const patchPreflight = React.useCallback(
         (next: Partial<OutreachSettings["preflight"]>) => {
@@ -166,7 +193,7 @@ function SendingSettings() {
 
                                 <Row label="Delivery hours" align="start">
                                     <div className="w-full sm:w-[320px]">
-                                        <div className="grid grid-cols-6 gap-1">
+                                        <div className="grid grid-cols-4 sm:grid-cols-6 gap-1">
                                             {HOURS.map((h) => {
                                                 const on = hours.includes(h);
                                                 return (
@@ -197,6 +224,28 @@ function SendingSettings() {
                                 </Row>
                             </>
                         )}
+                    </>
+                )}
+            </Section>
+
+            <Section
+                eyebrow="Unsubscribe"
+                description="The opt-out every campaign email carries, added after the signature. A reply that asks to stop, a click on the link, and the mail client's own unsubscribe button all put the recipient on the suppression list, and no campaign emails them again. A campaign can override this in its preferences."
+            >
+                {isLoading || !draft ? (
+                    <div className="h-7 w-40 rounded bg-slate-100 animate-pulse" />
+                ) : (
+                    <>
+                        <UnsubscribeRows value={draft.unsubscribe ?? DEFAULT_UNSUBSCRIBE} onChange={patchUnsubscribe} />
+                        <Row
+                            label="Honour replies that ask to stop"
+                            description="A reply saying unsubscribe, remove me, stop emailing me and the like puts the sender on the suppression list at once. This is what makes the reply-to-opt-out line a real mechanism."
+                        >
+                            <Toggle
+                                on={draft.reply_intent?.auto_suppress_on_unsubscribe_keyword !== false}
+                                onChange={(on) => patchReplyIntent({ auto_suppress_on_unsubscribe_keyword: on })}
+                            />
+                        </Row>
                     </>
                 )}
             </Section>
@@ -240,5 +289,92 @@ function SendingSettings() {
                 )}
             </Section>
         </SectionShell>
+    );
+}
+
+function UnsubscribeRows({
+    value,
+    onChange,
+}: {
+    value: UnsubscribeSettings;
+    onChange: (next: Partial<UnsubscribeSettings>) => void;
+}) {
+    const mode = (value.mode || "text") as UnsubscribeMode;
+    const text = value.text || DEFAULT_UNSUBSCRIBE.text;
+    const intro = value.link_intro || DEFAULT_UNSUBSCRIBE.link_intro;
+    const linkText = value.link_text || DEFAULT_UNSUBSCRIBE.link_text;
+    return (
+        <>
+            <Row
+                label="Opt-out line"
+                description={
+                    mode === "text"
+                        ? "A plain sentence inviting a reply. Reads like a personal email; the reply is detected and honoured automatically."
+                        : mode === "link"
+                          ? "A sentence with a real unsubscribe link. One click on a confirmation page; the mail client may also show its own Unsubscribe button."
+                          : "No opt-out in the body. Keep the unsubscribe header on in each campaign, or you are relying on recipients replying."
+                }
+            >
+                <SelectMenu
+                    value={mode}
+                    onChange={(v) => onChange({ mode: v as UnsubscribeMode })}
+                    options={UNSUB_MODES}
+                    aria-label="Opt-out line"
+                    minWidth={240}
+                    align="end"
+                />
+            </Row>
+            {mode === "text" && (
+                <Row label="Wording" description="One sentence, appended after the signature." align="start">
+                    <TextInput
+                        value={value.text}
+                        onChange={(v) => onChange({ text: v })}
+                        placeholder={DEFAULT_UNSUBSCRIBE.text}
+                        className="w-full sm:w-[420px]"
+                    />
+                </Row>
+            )}
+            {mode === "link" && (
+                <>
+                    <Row label="Wording" description="The sentence before the link." align="start">
+                        <TextInput
+                            value={value.link_intro}
+                            onChange={(v) => onChange({ link_intro: v })}
+                            placeholder={DEFAULT_UNSUBSCRIBE.link_intro}
+                            className="w-full sm:w-[420px]"
+                        />
+                    </Row>
+                    <Row label="Link text" description="What the link itself says.">
+                        <TextInput
+                            value={value.link_text}
+                            onChange={(v) => onChange({ link_text: v })}
+                            placeholder={DEFAULT_UNSUBSCRIBE.link_text}
+                            className="w-full sm:w-[240px]"
+                        />
+                    </Row>
+                </>
+            )}
+            {mode !== "off" && (
+                <Row label="Preview" align="start">
+                    <p className="w-full sm:w-[420px] rounded-md border border-slate-200 bg-slate-50/60 px-3 py-2 text-[12px] text-slate-500">
+                        {mode === "text" ? (
+                            text
+                        ) : (
+                            <>
+                                {intro} <span className="underline text-slate-600">{linkText}</span>
+                            </>
+                        )}
+                    </p>
+                </Row>
+            )}
+            <Row
+                label="Suppression list"
+                description="Everyone who opted out, bounced or complained, plus anything added by hand. No campaign emails an entry on it."
+            >
+                <Link to="/app/contacts/suppressions" className="text-[12px] text-sky-700 hover:text-sky-800 font-medium">
+                    Open the list
+                </Link>
+            </Row>
+        </>
     );
 }

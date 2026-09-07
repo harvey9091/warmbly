@@ -1,0 +1,37 @@
+---
+title: n8n
+description: Connect Warmbly to n8n workflows, self-hosted or cloud, with the REST API and webhooks in both directions.
+---
+
+n8n has no Warmbly node yet, and it does not need one: its HTTP Request and Webhook nodes cover both directions, and every Warmbly endpoint is documented in the [API reference](/api/endpoints/).
+
+## Connecting
+
+Create a scoped [API key](/api/authentication/) in Settings > API keys with only the scopes the workflow needs (contacts and campaigns for lead intake; add inbox for replies). In n8n, add a **Header Auth** credential with the name `Authorization` and the value `Bearer <your key>`, and attach it to every HTTP Request node that calls Warmbly.
+
+## Warmbly to n8n
+
+To start a workflow from a Warmbly event, add a **Webhook** node, copy its production URL, and either:
+
+- register it as a [webhook endpoint](/guides/webhooks/) subscribed to the events you want (signed with HMAC so the workflow can verify the sender), or
+- add an n8n connection on the Integrations page and use it as a **Send a webhook** action inside an [automation](/guides/automations/), which lets you filter and branch before the request leaves Warmbly.
+
+Both deliver the same JSON body: a delivery id, the event type and the full event data.
+
+## n8n to Warmbly
+
+Two routes, depending on where you want the field mapping to live.
+
+**Mapping in n8n.** An HTTP Request node calling `POST /api/v1/contacts` with the contact's fields, `categories` and `campaigns`. The write is an upsert by email, so re-running a workflow updates the contact instead of duplicating it.
+
+**Mapping in Warmbly.** Create an automation with the **Inbound webhook** trigger, copy its URL, and POST the raw payload to it from an HTTP Request node. The automation's **Create or update contact** action maps the JSON keys onto contact fields with templates (`{{.email}}`, `{{.answers.company}}`), tags the contact and enrols it in a campaign, and the same flow can notify Slack or open a task. See [Lead intake](/guides/automations/#lead-intake). This route needs no API key: the URL is the credential.
+
+## Lead forms and other lead sources
+
+n8n's *Facebook Lead Ads Trigger* node fires on a new Facebook or Instagram submission. LinkedIn Lead Gen Forms and TikTok Lead Generation have no dedicated node; point their lead notification webhooks at an n8n *Webhook* node instead. Connect either to one of the routes above and the ad's answers become a tagged, campaign-enrolled contact that your mailbox follows up with. The follow-up still runs under each mailbox's daily cap and spacing, so a burst of leads queues rather than going out at once.
+
+## Good to know
+
+- **Sending respects your limits.** Sends and replies made through the API honor each mailbox's daily cap and spacing.
+- **Rate limits** apply per API key; a large backfill should go through the [import endpoints](/api/reference/contacts/#commit-an-import) rather than one request per row.
+- For the lowest latency without hosting a URL, subscribe to the [developer websocket](/api/realtime/) instead of a webhook.

@@ -17,6 +17,9 @@ export interface CampaignSummary {
     // Subset of unique_opens from automated fetchers (Apple MPP prefetch
     // and UA-less clients). Human opens = unique_opens - machine_opens.
     machine_opens: number
+    // Steps whose only clicks came from automated fetchers (security
+    // gateways walking the links). Not part of unique_clicks.
+    machine_clicks: number
     unique_clicks: number
     replies: number
     bounces: number
@@ -38,6 +41,21 @@ export interface SequenceStats {
     bounces: number
 }
 
+// One slice of the engagement breakdown: distinct contacts who opened and
+// clicked from that country (ISO code), client or browser, or device type.
+// An empty key is "unknown".
+export interface EngagementBucket {
+    key: string
+    opens: number
+    clicks: number
+}
+
+export interface CampaignEngagementBreakdown {
+    countries: EngagementBucket[]
+    clients: EngagementBucket[]
+    devices: EngagementBucket[]
+}
+
 export default interface CampaignAnalytics {
     campaign_id: string
     name: string
@@ -46,4 +64,6 @@ export default interface CampaignAnalytics {
     summary: CampaignSummary
     steps: SequenceStats[]
     daily_stats?: DailyStats[]
+    // Where and on what people opened and clicked; human events only.
+    engagement?: CampaignEngagementBreakdown | null
 }

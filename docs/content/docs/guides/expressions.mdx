@@ -42,6 +42,8 @@ New reply from {{.contact_email}} on campaign {{.campaign_id}} ({{.intent}})
 | Trigger | Variables |
 | --- | --- |
 | Reply received | `contact_email`, `contact_id`, `campaign_id`, `intent`, `confidence`, `subject`, `snippet` |
+| Contact created | `contact_email`, `contact_id`, `first_name`, `last_name`, `company`, `phone`, `subscribed`, `source`, `source_detail`, `custom_fields` (a map: `{{.custom_fields.industry}}`), `campaign_ids`, `category_ids` |
+| Form submitted | `contact_email`, `contact_id`, `first_name`, `last_name`, `company`, `phone`, `form_id`, `form_name`, `submission_id`, `source_url`, `campaign_id`, `data` (every answer by its key: `{{.data.team_size}}`) |
 | Meeting booked / rescheduled | `invitee_name`, `invitee_email`, `event_name`, `scheduled_for`, `join_url`, `source`, `contact_id` |
 | Meeting canceled | Same, without `join_url` |
 | Email bounced, Deliverability complaint | `contact_email`, `campaign_id`, `contact_id`, `event_type`, `provider`, `reason` |

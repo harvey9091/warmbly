@@ -470,7 +470,7 @@ Auth: Session only (not available to API keys).
 
 `DELETE /auth/me/avatar`
 
-Clears the profile image. Returns `204 No Content`.
+Clears the profile image and deletes the stored file on a best-effort basis. Returns `204 No Content`.
 
 Auth: Session only (not available to API keys).
 
@@ -1456,7 +1456,7 @@ Auth: Session only (not available to API keys). Requires a selected organization
 
 `DELETE /organization/avatar`
 
-Clears the workspace image. Owner only. Returns `204 No Content`.
+Clears the workspace image and deletes the stored file on a best-effort basis. Owner only. Returns `204 No Content`.
 
 Auth: Session only (not available to API keys). Requires a selected organization (owner only).
 

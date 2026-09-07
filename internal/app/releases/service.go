@@ -20,10 +20,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -110,13 +108,13 @@ func (s *Service) CheckGitHub(ctx context.Context) (changed []ProfileUpdate, err
 		return nil, errors.New("releases not enabled")
 	}
 
-	releases, err := s.fetchReleases(ctx)
+	releases, err := FetchReleases(ctx, s.http, s.cfg.GithubRepo, s.cfg.GithubToken)
 	if err != nil {
 		s.recordError(err.Error())
 		return nil, err
 	}
 
-	stable, dev := pickChannelHeads(releases)
+	stable, dev := PickChannelHeads(releases)
 
 	now := time.Now()
 	s.stateMu.Lock()
@@ -132,7 +130,7 @@ func (s *Service) CheckGitHub(ctx context.Context) (changed []ProfileUpdate, err
 	s.stateMu.Unlock()
 
 	for _, channel := range []models.ReleaseChannel{models.ReleaseChannelStable, models.ReleaseChannelDev} {
-		var target *githubRelease
+		var target *Release
 		switch channel {
 		case models.ReleaseChannelStable:
 			target = stable
@@ -292,7 +290,7 @@ func (s *Service) imageFor(tag string) string {
 	return repo + ":" + tag
 }
 
-func (s *Service) channelView(name string, r *githubRelease) ChannelView {
+func (s *Service) channelView(name string, r *Release) ChannelView {
 	return ChannelView{
 		Channel:     name,
 		Tag:         r.TagName,
@@ -300,72 +298,6 @@ func (s *Service) channelView(name string, r *githubRelease) ChannelView {
 		PublishedAt: r.PublishedAt,
 		HTMLURL:     r.HTMLURL,
 	}
-}
-
-// GitHub API
-
-type githubRelease struct {
-	TagName     string    `json:"tag_name"`
-	Name        string    `json:"name"`
-	Prerelease  bool      `json:"prerelease"`
-	Draft       bool      `json:"draft"`
-	PublishedAt time.Time `json:"published_at"`
-	HTMLURL     string    `json:"html_url"`
-}
-
-func (s *Service) fetchReleases(ctx context.Context) ([]githubRelease, error) {
-	if s.cfg.GithubRepo == "" {
-		return nil, errors.New("RELEASES_GITHUB_REPO not set")
-	}
-	url := "https://api.github.com/repos/" + s.cfg.GithubRepo + "/releases?per_page=30"
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if s.cfg.GithubToken != "" {
-		req.Header.Set("Authorization", "Bearer "+s.cfg.GithubToken)
-	}
-	resp, err := s.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("github %d: %s", resp.StatusCode, truncate(string(body), 200))
-	}
-	var releases []githubRelease
-	if err := json.Unmarshal(body, &releases); err != nil {
-		return nil, fmt.Errorf("decode: %w", err)
-	}
-	return releases, nil
-}
-
-// pickChannelHeads returns the most recent published release for each channel:
-//   - stable: latest non-prerelease, non-draft
-//   - dev:    latest published (including prereleases)
-func pickChannelHeads(releases []githubRelease) (stable, dev *githubRelease) {
-	sort.Slice(releases, func(i, j int) bool {
-		return releases[i].PublishedAt.After(releases[j].PublishedAt)
-	})
-	for i := range releases {
-		r := &releases[i]
-		if r.Draft {
-			continue
-		}
-		if dev == nil {
-			dev = r
-		}
-		if !r.Prerelease && stable == nil {
-			stable = r
-		}
-		if dev != nil && stable != nil {
-			break
-		}
-	}
-	return
 }
 
 // HMAC verification
@@ -381,11 +313,4 @@ func verifySignature(secret string, body []byte, header string) bool {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)
 	return hmac.Equal(got, mac.Sum(nil))
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }

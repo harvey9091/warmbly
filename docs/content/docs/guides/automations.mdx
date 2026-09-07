@@ -34,6 +34,8 @@ Triggers, conditions, and actions only take effect after **Save** (card position
 | Trigger | Fires when |
 | --- | --- |
 | Reply received | A contact replies to a campaign email |
+| Contact created | A new contact is added by hand, through the API, by a form or by an automation (bulk file imports and sheet syncs stay quiet, see below) |
+| Form submitted | A hosted [form](/guides/forms/) receives a submission |
 | Meeting booked / rescheduled / canceled | A Calendly or Cal.com meeting changes |
 | Email bounced | A campaign email bounces |
 | Unsubscribed | A contact unsubscribes |
@@ -45,6 +47,8 @@ Triggers, conditions, and actions only take effect after **Save** (card position
 Each trigger carries its own event data (a reply carries contact email, reply intent, classifier confidence). Those are the values your conditions test and your action text inserts. Full per-trigger variable list: [Personalization & expressions](/guides/expressions/).
 
 **Campaign action** never fires by itself; it runs only from a campaign step, still evaluating your conditions.
+
+**Contact created** fires once per new contact, with the contact's fields and its first-touch source, so a condition can branch on `source` (a form, the API, an automation) or on any field. A contact that already existed and was only updated does not fire it. Bulk arrivals are deliberately silent: a file import or a Google Sheets sync of ten thousand rows would otherwise run ten thousand flows and flood every webhook, so those paths never raise it, and neither does a single API request adding more than 100 contacts.
 
 ### Inbound webhook
 
@@ -93,6 +97,10 @@ Slack, Discord, and webhook actions take an optional message template. Slack and
 
 | Built-in action | What it does |
 | --- | --- |
+| Create or update contact | Makes a contact from the event's fields, or enriches the one with that email, then tags it and enrols it in a campaign. See [Lead intake](#lead-intake) |
+| Add to campaign | Enrols the event's contact in a campaign; a finished campaign restarts through the usual launch checks (a refusal is noted in its activity log and the lead waits), one waiting for leads picks up straight away |
+
+Saving an automation with either of these actions turns on the picked campaign's **Keep running for new leads** setting, so the campaign waits for the next run instead of finishing between them.
 | Add / remove a tag | Adds or removes a contact category |
 | Label the email | Applies inbox labels to the replied-on conversation |
 | Create a task | Assigned to the workspace owner |
@@ -104,6 +112,26 @@ Slack, Discord, and webhook actions take an optional message template. Slack and
 | AI step / AI switch | An agent or single-shot AI node, and AI-decided routing. See [AI steps](/guides/ai-steps-in-automations/) |
 
 Three constraints worth knowing: **Move the deal stage** does nothing if the contact has no open deal in that pipeline, **Unsubscribe** needs an event carrying a campaign, and **Label the email** works only on a Reply received automation, since it needs a thread to label.
+
+**Add to campaign** and every other contact action need a contact to act on: the event must carry `contact_id` or `contact_email`, which every Warmbly trigger does. On an inbound webhook, put **Create or update contact** first and the contact it writes becomes the event's contact for the steps after it.
+
+### Lead intake
+
+Any system that can send an HTTP request can create contacts in Warmbly without an API client: an **Inbound webhook** trigger followed by a **Create or update contact** action.
+
+1. Pick the Inbound webhook trigger, save, and copy the URL.
+2. Add **Create or update contact**. Each field is a template over the JSON the caller sends: an email of `{{.email}}`, a first name of `{{.first_name}}`, a custom field `team_size` set to `{{.answers.team_size}}`. Pick the tags and the campaign the lead lands in.
+3. Point the sender at the URL. Zapier's *Webhooks by Zapier*, Make's *HTTP* module, n8n's *HTTP Request* node, a Typeform or Tally webhook, or your own code.
+
+The action matches an existing contact by email, so re-sending the same lead updates it instead of duplicating it. A blank rendered value never erases a field the contact already has. **If the contact already exists** decides whether an existing contact is enriched and enrolled (the default) or left alone. New contacts carry `automation` as their first-touch source, with the automation's name as the detail.
+
+<Callout type="info" title="Facebook, Instagram, LinkedIn and TikTok lead forms">
+Meta, LinkedIn and TikTok deliver lead-form submissions to Zapier, Make and n8n in real time. Either route them through the Warmbly app there with its **Create or Update Contact** and **Add to Campaign** actions, or send them to an inbound webhook automation as above. Both end the same way: a contact with the ad's answers as custom fields, tagged and enrolled in the campaign that follows up from your mailbox. See [Zapier](/guides/zapier/#lead-forms-and-other-lead-sources), [Make](/guides/make/#lead-forms-and-other-lead-sources) and [n8n](/guides/n8n/).
+</Callout>
+
+Lead-form campaigns produce leads in bursts, and the follow-up still goes out from your mailboxes under their daily caps and spacing. A day of two hundred leads on one mailbox capped at fifty is a four-day send; the campaign's recipients-versus-capacity estimate shows it. Add mailboxes rather than raising caps.
+
+A flow that creates a contact can be the reason a **Contact created** flow runs. That is allowed, and bounded: an event raised by an automation's own action carries how many hops led to it, and after five hops no further automation runs, so two flows cannot feed each other forever.
 
 **Fire event** is the inverse of the inbound webhook: your app subscribes over the websocket with an API key holding `REALTIME_SUBSCRIBE` and receives `{ name, payload }`, so you get events without hosting a public URL. See [Realtime events](/api/realtime/).
 

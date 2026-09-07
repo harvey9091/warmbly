@@ -25,5 +25,15 @@ func (c *Client) handleError(err error) *errx.MailError {
 		}
 	}
 
-	return nil
+	if err == nil {
+		return nil
+	}
+
+	// Anything that is not a tagged IMAP response is the transport: a server
+	// that dropped the session (net.ErrClosed once go-imap parks the client in
+	// Logout), an EOF, a timeout. These used to map to nil, which turned a dead
+	// connection into a "clean pass with no folders" — no log, no error record,
+	// no new mail, forever. Retry-level, so the loop reconnects at the next
+	// pass instead of deactivating the mailbox.
+	return errx.ErrMailServerUnreachable
 }

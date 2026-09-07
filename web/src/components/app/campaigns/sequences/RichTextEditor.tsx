@@ -71,12 +71,15 @@ export default function RichTextEditor({
     html,
     onChange,
     variables,
+    links = [],
     placeholder,
     minimal = false,
 }: {
     html: string;
     onChange: (html: string) => void;
     variables: string[];
+    // Per-send link tokens offered in the variable menu (body editors only).
+    links?: string[];
     placeholder?: string;
     // Compact mode for embedding in a small surface (e.g. the AI-block prompt):
     // an insert-only toolbar (variables + condition + spintax), no text
@@ -144,14 +147,14 @@ export default function RichTextEditor({
                     )}
                 </div>
                 {/* Type `{{` → variable type-ahead at the caret. */}
-                <EditorSuggest editor={editor} />
+                <EditorSuggest editor={editor} links={links} />
             </div>
         );
     }
 
     return (
         <div className="rounded-md border border-slate-200 bg-white focus-within:border-sky-400 focus-within:ring-2 focus-within:ring-sky-100 transition-colors">
-            <Toolbar editor={editor} variables={variables} />
+            <Toolbar editor={editor} variables={variables} links={links} />
             <div className="relative">
                 <EditorContent editor={editor} />
                 {placeholder && editor.isEmpty && (
@@ -165,12 +168,12 @@ export default function RichTextEditor({
             {/* Collapsed caret → sparkle companion + ⌘J to write with AI. */}
             <RichTextAICaret editor={editor} />
             {/* Type `{{` → variable type-ahead at the caret. */}
-            <EditorSuggest editor={editor} />
+            <EditorSuggest editor={editor} links={links} />
         </div>
     );
 }
 
-function Toolbar({ editor, variables }: { editor: Editor; variables: string[] }) {
+function Toolbar({ editor, variables, links = [] }: { editor: Editor; variables: string[]; links?: string[] }) {
     const [linkOpen, setLinkOpen] = React.useState(false);
     const [linkUrl, setLinkUrl] = React.useState("");
 
@@ -224,7 +227,7 @@ function Toolbar({ editor, variables }: { editor: Editor; variables: string[] })
                 <Link2Icon className="w-3.5 h-3.5" />
             </Btn>
             <Divider />
-            <VariableMenu onPick={(v) => insertToken(editor, v)} variables={variables} />
+            <VariableMenu onPick={(v) => insertToken(editor, v)} variables={variables} links={links} />
             <button
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
@@ -330,7 +333,16 @@ function Divider() {
 // Shared variable inserter — a personalization menu that explains each field,
 // suggests the org's real custom fields, and can insert a custom field by name.
 // Flips horizontally so it never overflows the editor edge.
-export function VariableMenu({ onPick, variables }: { onPick: (token: string) => void; variables: string[] }) {
+export function VariableMenu({
+    onPick,
+    variables,
+    links = [],
+}: {
+    onPick: (token: string) => void;
+    variables: string[];
+    // Per-send link tokens (the recipient's unsubscribe link); body editors only.
+    links?: string[];
+}) {
     const [open, setOpen] = React.useState(false);
     const [custom, setCustom] = React.useState("");
     const ref = React.useRef<HTMLDivElement>(null);
@@ -426,6 +438,39 @@ export function VariableMenu({ onPick, variables }: { onPick: (token: string) =>
                                 })}
                             </div>
                         </div>
+
+                        {links.length > 0 && (
+                            <div className="px-2 pt-2">
+                                <div className="px-1 pb-1 text-[10px] uppercase tracking-[0.14em] text-slate-400">
+                                    Links
+                                </div>
+                                <div className="grid grid-cols-2 gap-1">
+                                    {links.map((v) => {
+                                        const meta = TOKEN_META[v];
+                                        return (
+                                            <button
+                                                key={v}
+                                                type="button"
+                                                title={meta?.desc}
+                                                onMouseDown={(e) => e.preventDefault()}
+                                                onClick={() => {
+                                                    onPick(v);
+                                                    setOpen(false);
+                                                }}
+                                                className="flex min-w-0 flex-col items-start rounded-md border border-slate-200 px-2 py-1 text-left transition-colors hover:border-sky-300 hover:bg-sky-50/50"
+                                            >
+                                                <span className="w-full truncate text-[11.5px] text-slate-700">
+                                                    {meta?.label ?? v}
+                                                </span>
+                                                <code className="w-full truncate font-mono text-[9.5px] text-slate-400">
+                                                    {v}
+                                                </code>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
 
                         <div className="px-3 pt-2.5 pb-2">
                             <div className="px-0 pb-1 text-[10px] uppercase tracking-[0.14em] text-slate-400">

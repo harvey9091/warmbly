@@ -15,6 +15,8 @@ FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 
 ARG GO_TAGS=""
 ARG TARGETOS TARGETARCH
+# Build identity shown in the admin panel; see internal/version.
+ARG VERSION="" COMMIT="" BUILT_AT=""
 RUN apk add --no-cache git ca-certificates && \
     if echo "$GO_TAGS" | grep -qw kafka; then apk add --no-cache gcc musl-dev librdkafka-dev; fi
 
@@ -27,16 +29,20 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     set -eux; \
     if echo "$GO_TAGS" | grep -qw kafka; then CGO=1; TAGS="musl kafka"; else CGO=0; TAGS=""; fi; \
-    CGO_ENABLED=$CGO GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags "$TAGS" -ldflags="-s -w" -o /out/backend ./cmd/backend; \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/seed ./cmd/seed; \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/migrate ./cmd/migrate; \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/warmblyctl ./cmd/warmblyctl
+    CGO_ENABLED=$CGO GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags "$TAGS" -ldflags="-s -w -X github.com/warmbly/warmbly/internal/version.Version=$VERSION -X github.com/warmbly/warmbly/internal/version.Commit=$COMMIT -X github.com/warmbly/warmbly/internal/version.BuiltAt=$BUILT_AT" -o /out/backend ./cmd/backend; \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w -X github.com/warmbly/warmbly/internal/version.Version=$VERSION -X github.com/warmbly/warmbly/internal/version.Commit=$COMMIT -X github.com/warmbly/warmbly/internal/version.BuiltAt=$BUILT_AT" -o /out/seed ./cmd/seed; \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w -X github.com/warmbly/warmbly/internal/version.Version=$VERSION -X github.com/warmbly/warmbly/internal/version.Commit=$COMMIT -X github.com/warmbly/warmbly/internal/version.BuiltAt=$BUILT_AT" -o /out/migrate ./cmd/migrate; \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w -X github.com/warmbly/warmbly/internal/version.Version=$VERSION -X github.com/warmbly/warmbly/internal/version.Commit=$COMMIT -X github.com/warmbly/warmbly/internal/version.BuiltAt=$BUILT_AT" -o /out/warmblyctl ./cmd/warmblyctl; \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w -X github.com/warmbly/warmbly/internal/version.Version=$VERSION -X github.com/warmbly/warmbly/internal/version.Commit=$COMMIT -X github.com/warmbly/warmbly/internal/version.BuiltAt=$BUILT_AT" -o /out/warmbly ./cmd/cli
 
 # Runtime stage
 FROM alpine:3.23
 
 ARG GO_TAGS=""
-RUN apk add --no-cache ca-certificates tzdata && \
+# postgresql-client is here for `warmblyctl backup` and `warmblyctl restore`:
+# the instance bundle is a pg_dump and the restore replays it with psql, and the
+# backend container is where the CLI already has PRIMARY_DB and the blob root.
+RUN apk add --no-cache ca-certificates tzdata postgresql-client && \
     if echo "$GO_TAGS" | grep -qw kafka; then apk add --no-cache librdkafka; fi && \
     adduser -D -u 1000 warmbly
 
@@ -54,6 +60,10 @@ COPY --from=builder /out/migrate /app/migrate
 # The operator CLI goes on PATH, not /app, so the documented recovery command is
 # `docker compose exec backend warmblyctl status` and not a path.
 COPY --from=builder /out/warmblyctl /usr/local/bin/warmblyctl
+
+# The customer CLI ships alongside it, so an operator who has exec on the box
+# can drive the product as well as recover it without installing anything.
+COPY --from=builder /out/warmbly /usr/local/bin/warmbly
 
 # Installer script the worker orchestrator uploads + runs over SSH, and serves
 # at GET /worker-install.sh. The mode is explicit because COPY otherwise keeps

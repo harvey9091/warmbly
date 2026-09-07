@@ -70,6 +70,7 @@ func (r *advisorRepository) loadMailboxes(ctx context.Context, orgID uuid.UUID) 
 			WHERE t.email_account_id = ea.id
 			  AND t.task_type = 'campaign' AND t.status = 'completed'
 			  AND t.completed_at > NOW() - INTERVAL '30 days'
+			  AND ` + taskDispatchedEmail + `
 		) sent ON true
 		LEFT JOIN LATERAL (
 			SELECT
@@ -320,11 +321,7 @@ func (r *advisorRepository) loadListStats(ctx context.Context, orgID uuid.UUID) 
 			COUNT(*) AS total,
 			COUNT(*) FILTER (WHERE split_part(lower(ct.email), '@', 1) IN (` + rolePrefixesSQL + `)) AS role_addresses,
 			COUNT(*) FILTER (WHERE split_part(lower(ct.email), '@', 2) IN (` + freeMailDomainsSQL + `)) AS free_mail,
-			COUNT(*) FILTER (WHERE EXISTS (
-				SELECT 1 FROM suppressed_recipients sr
-				WHERE sr.organization_id = $1 AND lower(sr.email) = lower(ct.email)
-				  AND (sr.expires_at IS NULL OR sr.expires_at > NOW())
-			)) AS suppressed,
+			COUNT(*) FILTER (WHERE recipient_suppressed($1, ct.email)) AS suppressed,
 			COUNT(*) FILTER (WHERE ct.subscribed IS FALSE) AS unsubscribed,
 			COUNT(*) FILTER (WHERE btrim(ct.first_name) = '') AS missing_first_name
 		FROM campaign_leads cl

@@ -1,0 +1,195 @@
+---
+title: Updates
+description: How a self-hosted instance learns about a new Warmbly version, what the indicator in the admin panel means, and how Update and restart pulls, rebuilds and restarts the stack for you.
+---
+
+A self-hosted Warmbly checks for a newer version on its own and shows it in the admin panel. Applying it is one button when the updater runs next to the stack: the new version is fetched, the services that changed are recreated, and the panel reconnects once the backend answers again. Nothing in flight is lost: sending and syncing pause for the restart and resume from the database on the other side.
+
+How "fetched" happens depends on how the instance was installed, and the updater has a mode for each:
+
+| Mode | For | What an update is |
+|---|---|---|
+| `image` | An install from [`install.sh`](/development/install/) | Pin the new tag in `.env`, `docker compose pull`, recreate. Nothing is built |
+| `compose` | A git clone | `git pull`, `docker compose build`, recreate |
+| `command` | Anything else | `git pull`, then a build-and-restart script of your own |
+
+## The indicator
+
+The top bar of the **admin panel** (`:5174`) carries a version pill next to the environment label. It reads the running backend's build identity, so it shows exactly what is deployed, not what the checkout says.
+
+| Pill | Means |
+|---|---|
+| `v1.4.0` (grey) | Up to date. Click it for the details and a manual check |
+| `Update to v1.5.0` (amber) | A newer release exists on the configured channel |
+| `Update available` (amber) | The checkout is behind its branch (an install that tracks `main`) |
+| `Updating` (blue, spinning) | An update job is running; the pill follows it from any tab |
+| `Restarting` (blue, spinning) | The backend is coming back after an update |
+
+The same facts sit at the top of **Instance > Setup and health**, and an available update is also a finding there (`update_available`, info severity), so a page that only lists findings still tells you.
+
+## In the dashboard
+
+Every member of a self-hosted workspace sees the same version pill in the **dashboard** header, next to the plan badge: the running version in grey, or "Update to vX.Y.Z" in amber with a pulsing dot once a newer release exists. It is there so nobody has to ask which version the server runs, and so the people who cannot update still know one is waiting.
+
+Who can act on it follows platform admin access, not workspace roles:
+
+- **Members** see a badge. Its tooltip names the version and says to ask a platform admin.
+- **Platform admins** click it and get the update dialog: the running and available versions with the release notes, the checkout and updater state, a "Check now" button, and **Update and restart**. That button leads to a confirmation pane that spells out what the update does (pull, rebuild and restart, sending pauses and resumes, migrations apply, the tab reconnects) before anything runs.
+
+While the update runs the dialog shows a progress bar, the step list with the live step highlighted, and the log behind a toggle. When the backend goes away for the restart the dialog says it is reconnecting and keeps polling; the pill in the header turns into a spinner so the job stays visible with the dialog closed, and a reload picks it back up. When the new backend answers, the dialog shows the result and reloads the dashboard after a short countdown, or, if the dialog was closed, a toast reports the new version and every list refreshes.
+
+The dashboard reads `GET /auth/instance` for the version (any member) and the admin endpoints below for the rest (platform admins only, the same permission gates as the admin panel).
+
+## What counts as newer
+
+Two signals, and either one lights the pill:
+
+- **A release.** The newest release of `RELEASES_GITHUB_REPO` on `UPDATE_CHANNEL` (`stable`, or `dev` to include prereleases) is compared with the running build's version. A build stamped `v1.4.0-3-gabc1234` (three commits past the `v1.4.0` tag) is treated as newer than `v1.4.0` and older than `v1.4.1`, so an instance built from `main` is not nagged about the release it already contains.
+- **Commits.** When the updater runs, it fetches the remote on `UPDATER_FETCH_INTERVAL` and reports how far the checkout is behind its branch. Any distance counts as an update on an install that tracks a branch.
+
+A build that carries no version (an image built without the build arguments, reported as `dev`) cannot be compared with a release, and only the commit distance applies.
+
+The version comes from the binary itself: the Dockerfiles and `make up` stamp the tag, commit and build time in (`internal/version`), CI does the same for published images, and `warmblyctl status` prints it as the first line.
+
+## Update and restart
+
+The button appears when the updater is reachable and something newer exists. It needs the `manage_settings` admin permission, and every press is an audit row (`upgrade` on `instance`).
+
+On an install from `install.sh`, in image mode:
+
+1. **Pin release.** The chosen tag is written into `WARMBLY_TAG` in the install's `.env`, so the pull, the recreate, and every later `docker compose up` you run by hand all resolve the same images. A pull that fails puts the old tag back rather than leaving `.env` pointing at images that do not exist.
+2. **Pull images.** `docker compose pull`.
+3. **Restart.** `docker compose up -d --no-build` for every service, minus the updater itself.
+4. **Clean up.** `docker image prune -f`, unless `UPDATER_PRUNE=false`.
+5. **Wait for backend.** The updater polls `/health` until it answers, for up to six minutes.
+
+On a git checkout, in compose mode:
+
+1. **Fetch.** `git fetch --tags --prune` on the checkout.
+2. **Pull.** On a branch, a fast-forward merge of the remote branch. On a checkout pinned to a tag, a checkout of the newest release. A checkout with local modifications is refused rather than merged over; commit or stash them, or set `UPDATER_ALLOW_DIRTY=true`.
+3. **Build.** `docker compose build` for every service, with the version stamped in.
+4. **Restart.** `docker compose up -d --no-build` for every service the checkout defines plus everything running, minus the updater itself. Compose recreates only the containers whose image or configuration changed, so Postgres, Redis and NATS stay up, and the backend applies migrations as it boots.
+5. **Clean up.** `docker image prune -f`, unless `UPDATER_PRUNE=false`.
+6. **Wait for backend.** The updater polls `/health` until it answers, for up to six minutes, and marks the job as succeeded or failed.
+
+If the updater's own image changed, it recreates itself last, after the outcome is already on disk, so the new updater reports the finished job.
+
+The dialog streams the log. Close it and the pill keeps following the job; reload the page and the pill picks the job up again. When the backend answers with a new build, a toast says which version is now running and every list refreshes.
+
+Migrations are forward-only, so an update never needs to be rolled back to be safe with data in place. Read [backing up](/development/deployment-guide/#backing-up) anyway: a backup before an update is the one you are glad to have.
+
+<Callout type="warn" title="The updater holds the docker socket">
+The updater mounts `/var/run/docker.sock`, which is root on the host. That is why on a clone it lives behind the `updater` compose profile, and why in every install it answers only to a bearer token the backend holds, on the compose network, with no published port. The backend gates the button on an admin permission and audits it. If any of that is more trust than the host should extend, leave the profile off and update by hand.
+</Callout>
+
+## Enabling the updater
+
+### An install from install.sh
+
+Already done. The installer writes the updater into the generated compose file in image mode, pointed at the install directory, sharing `INTERNAL_API_TOKEN` with the backend. Nothing to configure.
+
+To update by hand instead, from the install directory:
+
+```bash
+docker compose -p warmbly pull && docker compose -p warmbly up -d
+```
+
+To leave the button out entirely, delete the `updater` service from `docker-compose.yml` and set `UPDATER_URL=none` in `.env`.
+
+### Docker Compose from a clone
+
+`make up` starts the stack with the `updater` profile, so a stock install already has the button. For a plain `docker compose up`, put this in `.env`:
+
+```bash
+COMPOSE_PROFILES=updater
+```
+
+The service mounts the checkout at its own host path (`WARMBLY_REPO_DIR`, `$PWD` by default) so the compose file's relative paths resolve the same way inside the container, and shares `INTERNAL_API_TOKEN` with the backend as `UPDATER_TOKEN`. Nothing else to configure.
+
+Files git writes as root are given back to the checkout's owner after each pull, so your own `git pull` on the host keeps working.
+
+To update by hand instead: `make upgrade` (a fast-forward pull, then `make up`). To leave the button out entirely, start with `make up UPDATER=false` and set `UPDATER_URL=none` in `.env`; the panel then only reports.
+
+### Without Docker
+
+On a [bare-metal install](/development/bare-metal/) the updater is a systemd unit that runs `scripts/upgrade-bare-metal.sh` after pulling. The script builds every artifact this host runs as the checkout's owner, then hands off to one privileged installer, `warmbly-install-release`, which copies the artifacts into `/opt/warmbly`, keeps each frontend's `config.js`, restarts the backend first and the rest once it answers.
+
+```bash
+cd /opt/warmbly/src
+go build -o out/updater ./cmd/updater && sudo install -m 0755 out/updater /opt/warmbly/bin/
+sudo install -o root -g root -m 0755 deploy/systemd/warmbly-install-release.sh /usr/local/sbin/warmbly-install-release
+sudo install -m 0644 deploy/systemd/warmbly-updater.service /etc/systemd/system/
+printf 'UPDATER_TOKEN=%s\n' "$(grep ^INTERNAL_API_TOKEN= /etc/warmbly/warmbly.env | cut -d= -f2-)" | sudo tee /etc/warmbly/updater.env >/dev/null
+sudo chmod 0600 /etc/warmbly/updater.env
+sudo systemctl daemon-reload && sudo systemctl enable --now warmbly-updater
+```
+
+The unit runs as the user who owns the checkout (`deploy` as shipped; edit it). The only root step is the installer, so that user needs exactly one sudoers line, and nothing broader:
+
+```bash
+echo "deploy ALL=(root) NOPASSWD: /usr/local/sbin/warmbly-install-release" | sudo tee /etc/sudoers.d/warmbly-upgrade >/dev/null
+sudo chmod 0440 /etc/sudoers.d/warmbly-upgrade
+```
+
+The installer is root-owned and not writable by that user, takes no arguments, reads only from fixed paths under the checkout and refuses symlinks there, so owning the checkout does not become owning the host. The binaries it installs run as the unprivileged `warmbly` user either way.
+
+Then point the backend at the updater in `warmbly.env` and restart it:
+
+```bash
+UPDATER_URL=http://127.0.0.1:8095
+```
+
+The same script works by hand: `scripts/upgrade-bare-metal.sh --pull`.
+
+## Configuration
+
+Backend:
+
+| Variable | What it does | Default |
+|---|---|---|
+| `UPDATE_CHECK_ENABLED` | Polls GitHub Releases and shows a newer version in the panel | `true` |
+| `UPDATE_CHECK_INTERVAL` | How often the release check runs; minimum `5m` | `30m` |
+| `UPDATE_CHANNEL` | `stable` follows releases; `dev` also offers prereleases | `stable` |
+| `RELEASES_GITHUB_REPO` | The `owner/repo` whose releases are Warmbly versions. Point a fork's instance at the fork | `warmbly/warmbly` |
+| `RELEASES_GITHUB_TOKEN` | Optional; only raises the GitHub API rate limit | unset |
+| `UPDATER_URL` | The updater. Unset, or `none`, leaves the panel report-only | `http://updater:8095` under compose |
+| `UPDATER_TOKEN` | Bearer token presented to the updater | `INTERNAL_API_TOKEN` |
+
+Updater:
+
+| Variable | What it does | Default |
+|---|---|---|
+| `UPDATER_TOKEN` | The token it accepts; falls back to `INTERNAL_API_TOKEN`. Refuses to start without one | unset |
+| `UPDATER_MODE` | `image` pins a release tag and pulls; `compose` rebuilds a checkout; `command` runs `UPDATER_COMMAND` | `compose` |
+| `UPDATER_COMMAND` | The build-and-restart command for `command` mode | unset |
+| `UPDATER_REPO_DIR` | The checkout, or in image mode the install directory holding the compose file and `.env` | working directory |
+| `UPDATER_REMOTE` | The git remote to fetch and pull from | `origin` |
+| `UPDATER_COMPOSE_PROJECT` | The `-p` the stack was started with | `warmbly` |
+| `UPDATER_COMPOSE_PROFILES` | Extra profiles on every compose call, so its own image is rebuilt | `updater` |
+| `UPDATER_BACKEND_HEALTH_URL` | Polled after the restart until it answers | `http://backend:8080/health` |
+| `UPDATER_FETCH_INTERVAL` | How often it fetches for the commits-behind count | `30m` |
+| `UPDATER_PRUNE` | `docker image prune -f` after a successful update | `true` |
+| `UPDATER_ALLOW_DIRTY` | Update over local modifications in the checkout | `false` |
+| `UPDATER_STATE_DIR` | Where the last job is kept across restarts | `/var/lib/warmbly-updater` |
+| `UPDATER_ADDR` | Listen address | `:8095` |
+
+## Endpoints
+
+| Endpoint | Auth | Returns |
+|---|---|---|
+| `GET /admin/instance/update` | platform admin, `view_analytics` | Running build, latest release, whether an update is available, updater and job state. `?log=1` includes the job log |
+| `POST /admin/instance/update/check` | platform admin, `manage_settings` | Runs both checks now and returns the state |
+| `POST /admin/instance/update/apply` | platform admin, `manage_settings` | Starts an update job (`{"target": "latest"}` or a release tag) and returns it. The backend restarts as part of it |
+
+The updater's own API (`GET /status`, `POST /check`, `POST /update`) is bearer-authenticated and meant for the backend only.
+
+## Findings
+
+Two [instance health](/development/instance-health/) checks belong to this page:
+
+- `update_available` (info): a newer version exists, with the version and how to apply it.
+- `updater_unreachable` (warning): `UPDATER_URL` is set but nothing answers there, so the button cannot work. Start the updater, fix the address, or remove the variable to update by hand.
+
+## Workers on other machines
+
+This page is about the control plane. Remote workers installed from the panel keep their own daily self-update timer and the **Pull latest and restart** action on the worker's page; see [day-2 operations](/development/deployment-guide/#day-2-operations).

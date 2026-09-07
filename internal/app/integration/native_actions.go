@@ -48,6 +48,12 @@ func validateNativeActionConfig(action models.IntegrationAction, raw json.RawMes
 		if strings.TrimSpace(cfg.EventName) == "" {
 			return fmt.Errorf("a fire-event action needs an event name")
 		}
+	case models.IntegrationActionUpsertContact:
+		return validateUpsertContactConfig(cfg)
+	case models.IntegrationActionAddToCampaign:
+		if _, err := uuid.Parse(strings.TrimSpace(cfg.CampaignID)); err != nil {
+			return fmt.Errorf("an add-to-campaign action needs a campaign")
+		}
 	case models.IntegrationActionAIStep:
 		return validateAIStepConfig(raw)
 	case models.IntegrationActionAISwitch:
@@ -169,6 +175,15 @@ type NativeActions interface {
 	// "label_email" action; userID + threadID come from the reply event data.
 	LabelThread(ctx context.Context, userID uuid.UUID, threadID string, categoryIDs []uuid.UUID) error
 
+	// UpsertContact creates the contact or enriches the one already holding
+	// its email (the same write the contacts API does), owned by actorID.
+	UpsertContact(ctx context.Context, orgID, actorID uuid.UUID, in models.AddContact) (*models.Contact, error)
+	// AddToCampaign enrols an existing contact in a campaign and wakes it.
+	AddToCampaign(ctx context.Context, orgID, actorID, contactID, campaignID uuid.UUID) error
+	// KeepCampaignRunning turns on a campaign's "Keep running for new leads"
+	// setting because an automation now feeds it leads.
+	KeepCampaignRunning(ctx context.Context, orgID, campaignID uuid.UUID, reason string) error
+
 	// ListCategories / CreateCategory / ListPipelines back the AI agent step's
 	// argument-based tools: the model picks a tag/label/pipeline by name and the
 	// executor resolves it live (empty pool = any of the owner's tags). Keyed by
@@ -205,6 +220,139 @@ type nativeActionConfig struct {
 	// gateway. EventName + each field value are Go-templated against the event data.
 	EventName   string   `json:"event_name"`
 	EventFields []setVar `json:"event_fields"`
+	// upsert_contact: templated contact fields, the tags and campaign the
+	// contact lands in, and what to do when the email already exists.
+	Email        string   `json:"email"`
+	FirstName    string   `json:"first_name"`
+	LastName     string   `json:"last_name"`
+	Company      string   `json:"company"`
+	Phone        string   `json:"phone"`
+	CustomFields []setVar `json:"custom_fields"`
+	CategoryIDs  []string `json:"category_ids"`
+	SegmentIDs   []string `json:"segment_ids"`
+	IfExists     string   `json:"if_exists"`
+	// campaign_id is shared by upsert_contact (optional) and add_to_campaign
+	// (required).
+	CampaignID string `json:"campaign_id"`
+}
+
+// Values of nativeActionConfig.IfExists for upsert_contact.
+const (
+	upsertIfExistsUpdate = "update"
+	upsertIfExistsSkip   = "skip"
+)
+
+// validateUpsertContactConfig checks the lead-intake action at write time: an
+// email template is the one thing it cannot do without, and every id it
+// references must at least parse.
+func validateUpsertContactConfig(cfg nativeActionConfig) error {
+	if strings.TrimSpace(cfg.Email) == "" {
+		return fmt.Errorf("a create-or-update-contact action needs an email")
+	}
+	switch strings.TrimSpace(cfg.IfExists) {
+	case "", upsertIfExistsUpdate, upsertIfExistsSkip:
+	default:
+		return fmt.Errorf("unknown if_exists value %q", cfg.IfExists)
+	}
+	if id := strings.TrimSpace(cfg.CampaignID); id != "" {
+		if _, err := uuid.Parse(id); err != nil {
+			return fmt.Errorf("the campaign id is not valid")
+		}
+	}
+	for _, raw := range append(append([]string{}, cfg.CategoryIDs...), cfg.SegmentIDs...) {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		if _, err := uuid.Parse(strings.TrimSpace(raw)); err != nil {
+			return fmt.Errorf("a tag or segment id is not valid")
+		}
+	}
+	return nil
+}
+
+// buildUpsertContact renders the action's templates against the event data
+// into the contact to write. A blank rendered field is left empty so the
+// upsert's enrich-never-erase rule keeps whatever the contact already has.
+func buildUpsertContact(a models.Automation, cfg nativeActionConfig, data map[string]any) (models.AddContact, error) {
+	email := strings.ToLower(strings.TrimSpace(renderTemplate(cfg.Email, data)))
+	if email == "" || !strings.Contains(email, "@") {
+		return models.AddContact{}, fmt.Errorf("the email rendered empty or invalid (%q)", truncate(email, 80))
+	}
+	custom := map[string]string{}
+	for _, f := range cfg.CustomFields {
+		key := strings.TrimSpace(f.Key)
+		if key == "" {
+			continue
+		}
+		if v := strings.TrimSpace(renderTemplate(f.Value, data)); v != "" {
+			custom[key] = v
+		}
+	}
+	in := models.AddContact{
+		Email:        email,
+		FirstName:    strings.TrimSpace(renderTemplate(cfg.FirstName, data)),
+		LastName:     strings.TrimSpace(renderTemplate(cfg.LastName, data)),
+		Company:      strings.TrimSpace(renderTemplate(cfg.Company, data)),
+		Phone:        strings.TrimSpace(renderTemplate(cfg.Phone, data)),
+		CustomFields: custom,
+		Categories:   uuidStrings(cfg.CategoryIDs),
+		Segments:     uuidStrings(cfg.SegmentIDs),
+		Source:       models.ContactSourceAutomation,
+		SourceDetail: a.Name,
+	}
+	if id := strings.TrimSpace(cfg.CampaignID); id != "" {
+		in.Campaigns = []string{id}
+	}
+	return in, nil
+}
+
+// fedCampaignIDs lists the campaigns an automation enrols leads in: every
+// add-to-campaign node and every create-or-update-contact node with a campaign.
+func fedCampaignIDs(a *models.Automation) []uuid.UUID {
+	seen := map[uuid.UUID]bool{}
+	out := []uuid.UUID{}
+	for _, n := range a.Graph.Nodes {
+		if n.Type != "action" {
+			continue
+		}
+		if n.Action != models.IntegrationActionAddToCampaign && n.Action != models.IntegrationActionUpsertContact {
+			continue
+		}
+		id, err := uuid.Parse(strings.TrimSpace(parseNativeConfig(n.Config).CampaignID))
+		if err != nil || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+// keepFedCampaignsRunning precedes an automation save: a campaign an
+// automation feeds must wait for leads instead of finishing between runs,
+// exactly as a linked segment or a form does. A failure fails the save, so a
+// campaign that is not this organization's, or a flip that did not land, is
+// never hidden behind a successful response.
+func (s *service) keepFedCampaignsRunning(ctx context.Context, a *models.Automation) error {
+	if s.native == nil || a == nil {
+		return nil
+	}
+	for _, id := range fedCampaignIDs(a) {
+		reason := "the automation \"" + a.Name + "\" adds its leads to this campaign"
+		if err := s.native.KeepCampaignRunning(ctx, a.OrganizationID, id, reason); err != nil {
+			return fmt.Errorf("the campaign this automation adds leads to could not be kept running: %w", err)
+		}
+	}
+	return nil
+}
+
+// uuidStrings keeps the entries of a saved id list that parse, trimmed.
+func uuidStrings(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range parseUUIDList(ids) {
+		out = append(out, id.String())
+	}
+	return out
 }
 
 type setVar struct {
@@ -295,12 +443,63 @@ func (s *service) execNativeAction(ctx context.Context, a models.Automation, n m
 	contactID := stringFromMap(data, "contact_id")
 	email := stringFromMap(data, "contact_email", "invitee_email", "email")
 
+	// upsert_contact is the one action that may run with no contact yet: it
+	// makes one from the event. The written contact becomes the event's
+	// contact so the nodes after it (tag, task, deal) find it.
+	if n.Action == models.IntegrationActionUpsertContact {
+		in, berr := buildUpsertContact(a, cfg, data)
+		if berr != nil {
+			return berr
+		}
+		if strings.TrimSpace(cfg.IfExists) == upsertIfExistsSkip {
+			existing, rerr := s.native.ResolveContact(ctx, a.OrganizationID, "", in.Email)
+			if rerr != nil {
+				return fmt.Errorf("look up the existing contact: %w", rerr)
+			}
+			if existing != nil {
+				data["contact_id"] = existing.ID.String()
+				data["contact_email"] = existing.Email
+				data["contact_created"] = false
+				return nil
+			}
+		}
+		owner, oerr := s.native.OrgOwner(ctx, a.OrganizationID)
+		if oerr != nil {
+			return oerr
+		}
+		written, werr := s.native.UpsertContact(ctx, a.OrganizationID, owner, in)
+		if werr != nil {
+			return werr
+		}
+		if written == nil {
+			return fmt.Errorf("the contact write returned nothing")
+		}
+		data["contact_id"] = written.ID.String()
+		data["contact_email"] = written.Email
+		data["contact_created"] = written.IsNew
+		return nil
+	}
+
 	c, err := s.native.ResolveContact(ctx, a.OrganizationID, contactID, email)
-	if err != nil || c == nil {
+	if err != nil {
+		return fmt.Errorf("look up the event's contact: %w", err)
+	}
+	if c == nil {
 		return fmt.Errorf("no contact matched the event (need contact_id or contact_email)")
 	}
 
 	switch n.Action {
+	case models.IntegrationActionAddToCampaign:
+		campID, perr := uuid.Parse(strings.TrimSpace(cfg.CampaignID))
+		if perr != nil {
+			return fmt.Errorf("an add-to-campaign action needs a campaign")
+		}
+		owner, oerr := s.native.OrgOwner(ctx, a.OrganizationID)
+		if oerr != nil {
+			return oerr
+		}
+		return s.native.AddToCampaign(ctx, a.OrganizationID, owner, c.ID, campID)
+
 	case models.IntegrationActionUnsubscribe:
 		campID, perr := uuid.Parse(stringFromMap(data, "campaign_id"))
 		if perr != nil {

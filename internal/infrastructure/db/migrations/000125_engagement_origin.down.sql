@@ -1,0 +1,12 @@
+DROP TABLE email_opens;
+ALTER TABLE email_link_clicks
+    DROP COLUMN announce_claimed_at,
+    DROP COLUMN announce_pending,
+    DROP COLUMN client,
+    DROP COLUMN device_type,
+    DROP COLUMN os,
+    DROP COLUMN browser,
+    DROP COLUMN browser_version,
+    DROP COLUMN country_code,
+    DROP COLUMN region,
+    DROP COLUMN city;

@@ -1,8 +1,9 @@
 package config
 
+import "time"
+
 const (
 	DefaultColor = "#c4c8cf"
-	Domain       = "warmbly.com"
 	// LimitMin/LimitMax bound every per-mailbox and per-campaign daily send
 	// cap the API will store. 5000 covers real provider ceilings (Google
 	// Workspace 2000/day, M365 10000 recipients/day); the safe cold band
@@ -33,7 +34,11 @@ const (
 	// HTML newsletters mid-document; 512 KB clears the overwhelming majority
 	// of them while still bounding what one message can cost.
 	MaxEmailBodySize = 512 * 1024 // 512 KB
-	MaxEmailFolders  = 30
+	// MaxEmailFolders bounds how many folders one mailbox's sync follows.
+	// INBOX and the special folders are always kept; past the cap the rest
+	// are taken in the server's order and the overflow is relayed once as a
+	// warning rather than failing the mailbox.
+	MaxEmailFolders = 100
 
 	// MaxSearchBodyText bounds the plain-text copy of a message body kept in
 	// Postgres for full-text search. The body itself lives in object storage;
@@ -43,6 +48,21 @@ const (
 	// ImapFetchBatchSize bounds how many messages one IMAP sync window holds in
 	// memory, so a large folder is never buffered whole before any body is read.
 	ImapFetchBatchSize = 200
+
+	// ImapCommandIdleTimeout is how long an IMAP command may wait for the
+	// server to say anything before the session is declared dead and
+	// re-dialed on the next pass. go-imap bounds the bytes of a response but
+	// not the wait for its first byte, which is where a peer that vanished
+	// without a FIN parks a command forever.
+	ImapCommandIdleTimeout = 2 * time.Minute
+
+	// Servers without CONDSTORE (Outlook.com, Microsoft 365 over IMAP,
+	// Yahoo, many hosted servers) cannot say which messages changed, so read
+	// state and flags are mirrored by re-reading the flags of a folder's
+	// newest window every ImapFlagScanInterval and diffing against the
+	// previous scan. New mail still lands within one pass through UIDNEXT.
+	ImapFlagScanInterval = 10 * time.Minute
+	ImapFlagScanWindow   = 5_000 // newest UIDs per folder the scan covers
 
 	// Mailbox sync fair use. Connecting a mailbox imports its recent history
 	// (the backfill), then follows new mail (live). Every number below is a
@@ -69,9 +89,9 @@ const (
 	SyncFloodPerHour                = 5_000 // new live messages observed in one hour that mark a mailbox as flooding
 	SyncThrottleEscalationDays      = 3     // throttled UTC days out of the last 7 that deactivate a mailbox
 
-	// Forms. Funnel events feed analytics ranges up to 90 days; the fixed
-	// retention window keeps double coverage without a per-org setting.
-	FormEventsRetentionDays = 180
+	// Forms. Funnel events feed analytics ranges up to 90 days, so the default
+	// window keeps double coverage. Operator-editable under Instance settings.
+	FormEventsRetentionDaysDefault = 180
 
 	// Sequences. Empty by default so the editor shows a smart, position-based
 	// label (e.g. "Email 1") until the user names the step themselves.
@@ -132,6 +152,38 @@ const (
 	// only ever fires when the worker died mid-send or the result was lost, and
 	// it must stay well clear of a slow provider handshake.
 	CampaignSendReclaimAfterMinutes = 30
+
+	// TrackingMachineWindowSeconds is how soon after a step was dispatched an
+	// open or click is treated as automated rather than a person. The clock
+	// starts when the send is handed to the worker, before the provider has
+	// even accepted the message, so a person cannot plausibly have read and
+	// acted on it inside this window; security gateways that detonate every
+	// link at delivery time routinely do.
+	TrackingMachineWindowSeconds = 10
+
+	// TrackingClickBurstSeconds is the window inside which clicks on two
+	// different links of the same email from the same source are treated as
+	// a scanner walking the message. A person follows one link at a time.
+	TrackingClickBurstSeconds = 5
+
+	// EngagementEventRetentionDaysDefault is how long the per-event open and
+	// click logs (client, device, location) are kept. The summary on the
+	// progress row outlives them, so counts and routing never change.
+	// Operator-editable under Instance settings.
+	EngagementEventRetentionDaysDefault = 365
+
+	// AuditLogRetentionDaysDefault is how long the audit trail is kept. The
+	// trail carries IP addresses, user agents and change payloads, so this
+	// window is also how long that PII is held; a privacy-conscious operator
+	// shortens it under Instance settings.
+	AuditLogRetentionDaysDefault = 90
+
+	// Ten years is the ceiling every retention window shares. It is not a
+	// recommendation: it is the point past which "keep it" and "keep it
+	// forever" stop differing, and it bounds a typo. One day is the floor, so
+	// there is always a window in which an event can be read.
+	RetentionDaysMin = 1
+	RetentionDaysMax = 3650
 
 	// CampaignSendStampAttempts is how many times the control plane retries the
 	// sent_at stamp after a send is already on the bus. The reservation is what
@@ -207,10 +259,9 @@ const (
 	WarmupVerifyHeader = "X-Mailtrace-Verify"
 
 	// Product-level hard caps. These are the backstop for plans that
-	// advertise "unlimited" — marketing can keep saying unlimited, but
-	// the runtime never grants truly unbounded usage. Each cap is the
-	// floor that GetEffectiveLimits falls back to when both the
-	// per-org override and the plan column are unset.
+	// advertise "unlimited" on campaigns, seats, contacts and daily sends.
+	// Each cap is the floor that GetEffectiveLimits falls back to when both
+	// the per-org override and the plan column are unset.
 	//
 	// Admins can grant strictly larger caps per-org through the
 	// override flow when there is a legitimate business reason. Growth
@@ -219,14 +270,30 @@ const (
 	// acknowledging the new ceiling.
 	//
 	// These numbers are deliberately generous enough that ordinary use
-	// never trips them, and conservative enough that "I want to spin up
-	// 5,000 mailboxes overnight" can't happen without explicit approval.
-	HardCapMailboxes          = 200       // total connected mailboxes per org
+	// never trips them. Mailboxes are not in this list: see
+	// FairUseSendsPerMailbox below.
 	HardCapCampaignsTotal     = 500       // total campaigns ever created
 	HardCapCampaignsActive    = 50        // simultaneously active campaigns
 	HardCapTeamMembers        = 100       // seats per org
 	HardCapContacts           = 1_000_000 // contacts per org
 	HardCapDailyCampaignSends = 1000      // campaign emails per org per day
+
+	// Mailboxes have no hard cap. A paid workspace's allowance is fair use
+	// derived from the daily sends its plan includes: one mailbox for every
+	// FairUseSendsPerMailbox sends a day. At 1 a 15,000/day plan holds 15,000
+	// mailboxes, one per daily send, which is deliberately far more than safe
+	// sending ever needs: the allowance must never be the reason a customer
+	// runs a mailbox hotter. A plan with no daily send cap holds unlimited
+	// mailboxes, and an approved limit-increase request raises the allowance
+	// for one workspace.
+	FairUseSendsPerMailbox = 1
+
+	// Bulk connect: how many SMTP/IMAP rows one request may carry, and how
+	// many of them are validated against a worker at the same time. The
+	// dashboard streams a CSV through batches of this size so a 3,000 row
+	// file shows live progress instead of one request that times out.
+	MailboxBulkBatchMax    = 50
+	MailboxBulkConcurrency = 8
 
 	// Daily creation throttles. The total caps above stop "you have
 	// 5000 campaigns on this org" — the throttles below stop "you
@@ -239,7 +306,6 @@ const (
 	// because the per-day shape protects abuse posture rather than
 	// product utility.
 	DailyThrottleNewCampaigns = 20 // new campaigns per org per day
-	DailyThrottleNewMailboxes = 5  // newly connected mailboxes per org per day
 
 	// Pool link: mailboxes a self-hosted instance may enroll in the hosted
 	// warmup pool without a paid pool plan, and the handshake lifetimes.
@@ -250,6 +316,11 @@ const (
 	WarmupPoolTierFallbackFloor  = 25 // below this many same-tier recipients, healthy other-tier mailboxes fill in
 	WarmupPoolFallbackMinAgeDays = 3  // other-tier mailboxes must be this old before they fill in
 	DailyThrottleNewOrgs         = 3  // new workspaces per owner per day
+
+	// CLI sign-in handshake (`warmbly auth login`). Shorter-lived than the pool
+	// link handshake because a person is watching the terminal while it runs.
+	CLIAuthCodeTTLMinutes      = 10
+	CLIAuthPollIntervalSeconds = 3
 
 	// DailyThrottleNewScheduledSends caps how many NEW scheduled-send
 	// schedules a single user can create in a rolling 24h window. The

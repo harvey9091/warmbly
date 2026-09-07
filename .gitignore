@@ -11,6 +11,12 @@
 /worker
 /backend
 /seed
+/forms
+/migrate
+/updater
+/warmblyctl
+/warmbly
+/cli
 
 # Test binary, built with `go test -c`
 *.test
@@ -23,6 +29,10 @@ profile.cov
 
 # Dependency directories (remove the comment below to include it)
 vendor/
+
+# Local CLI builds (make warmbly / make warmbly-dist)
+/bin/
+/dist/
 
 # Go workspace file
 go.work
@@ -100,3 +110,4 @@ build-errors.log
 # Xcode per-user state (ios/)
 xcuserdata/
 .DS_Store
+/.worktrees/

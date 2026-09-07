@@ -61,6 +61,7 @@ Two neighbouring endpoints round out the surface, both under **Instance** in the
 |---|---|---|
 | `GET /admin/instance/config` | `manage_settings` | Every configuration entry with its resolved value, source and restart requirement. Sensitive keys return a fingerprint, never a value |
 | `GET /admin/instance/limits` | `view_analytics` | The effective sending, warmup and rate limits this build compiles in |
+| `GET /admin/instance/update` | `view_analytics` | The running build, the newest release, and the updater's state. Backs the version pill in the top bar; see [Updates](/development/updates/) |
 
 ## Security and secrets
 
@@ -164,6 +165,16 @@ Platform mail is sent from a domain that differs from the dashboard's. Mailbox p
 
 `AUTH_LOGIN_CODE=always` was demoted to `new_device` at boot because the transport does not deliver. Otherwise nobody could ever complete a login. See [login codes](/development/accounts-and-access/#login-codes).
 
+## Updates
+
+### update_available
+
+A newer Warmbly exists: a release on the configured channel is newer than the running build, or the checkout is behind its branch. The message names both versions and how to apply it. With the updater running, the version pill in the top bar has an **Update and restart** button; without it, `git pull && make up`. See [Updates](/development/updates/).
+
+### updater_unreachable
+
+`UPDATER_URL` is set but nothing answers there, so the update button cannot work. Start the updater (the `updater` compose profile, or the systemd unit on a bare-metal host), fix the address, or remove the variable to update by hand. See [enabling the updater](/development/updates/#enabling-the-updater).
+
 ## Accounts and access
 
 ### registration_mode
@@ -241,7 +252,7 @@ A reachable realtime service that still leaves the dashboard dead has a differen
 | Service | Needs |
 |---|---|
 | backend | The five secrets, `PRIMARY_DB`, `REDIS`, the provider switches, the public URLs, `EMAIL_ADDRESS`, `EMAIL_NAME` and `GEODB_PATH` |
-| consumer | The same shared block. It writes to Postgres, so it needs `PRIMARY_DB` and both encryption keys, and it needs the mail identity or it silently sends nothing |
+| consumer | The same shared block. It writes to Postgres, so it needs `PRIMARY_DB` and both encryption keys, and it needs the mail identity or it silently sends nothing. `GEODB_PATH` is optional and only adds a location to opens and clicks |
 | worker | No database. The event bus, `REDIS`, both encryption keys, `ENCRYPTED_KEYS_BACKEND_URL` plus the worker token, and the `BOX_*` OAuth clients |
 | tracking | The event bus, plus `BACKEND_INTERNAL_URL` and `INTERNAL_API_TOKEN`. It exits at boot without either of those two |
 | realtime | `JWT_SECRET` equal to the backend's `AUTH_SECRET`, plus `SECRET_KEY_BASE` and `DATABASE_URL`. It refuses to boot without all three. `REDIS_URL`, `PHX_HOST` and the connection limits have defaults |

@@ -105,7 +105,7 @@ export default function SettingsPanel({
                     />
                     <p className="text-[11px] text-slate-500 mt-1">
                         New contacts join this campaign as leads. Sending still follows the campaign's own schedule and
-                        limits.
+                        limits. The campaign keeps running for new leads instead of finishing between submissions.
                     </p>
                 </div>
             </Section>

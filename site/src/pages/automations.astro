@@ -19,6 +19,8 @@ import AutomationsDemo from '../components/AutomationsDemo.astro';
 // --- Trigger events ----------------------------------------------------------
 const triggers = [
   { icon: 'reply',         label: 'Prospect replies',           key: 'campaign.reply_received', desc: 'The classifier labels intent and confidence before the trigger fires, so you can branch on both.' },
+  { icon: 'userPlus',      label: 'Contact created',            key: 'contact.created',         desc: 'A new contact, with its fields and where it came from: a form, the API, an automation.' },
+  { icon: 'fileText',      label: 'Form submitted',             key: 'form.submitted',          desc: 'A hosted form lands with every answer by its key, and the contact it created.' },
   { icon: 'calendarCheck', label: 'Meeting booked',             key: 'meeting.booked',          desc: 'Calendly and Cal.com invitees, matched back to the contact that booked.' },
   { icon: 'calendarClock', label: 'Meeting rescheduled',        key: 'meeting.rescheduled',     desc: 'Same payload, new time, so downstream reminders stay honest.' },
   { icon: 'calendarX',     label: 'Meeting canceled',           key: 'meeting.canceled',        desc: 'Catch the cancellation and put the contact back to work.' },
@@ -26,11 +28,14 @@ const triggers = [
   { icon: 'userMinus',     label: 'Contact unsubscribes',       key: 'campaign.unsubscribed',   desc: 'Suppression already happened. This is your cue to sync it everywhere else.' },
   { icon: 'activity',      label: 'Warmup health changes',      key: 'warmup.health_changed',   desc: 'A mailbox moves bands: healthy, watch, quarantined. React before placement slips.' },
   { icon: 'shieldAlert',   label: 'Spam complaint',             key: 'deliverability.complaint', desc: 'The signal worth reacting to fastest. Page the channel, pause the risk.' },
+  { icon: 'webhook',       label: 'Inbound webhook',            key: 'inbound.webhook',         desc: 'Any system POSTs JSON to the flow\'s own URL. Zapier, Make, n8n, a form tool, your code.' },
   { icon: 'workflow',      label: 'Launched by a campaign step', key: 'campaign.action',        desc: 'A sequence action node can fire any automation, per contact, mid-flow.' },
 ];
 
 const tIcons: Record<string, string> = {
   reply:         '<polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>',
+  userPlus:      '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" x2="19" y1="8" y2="14"/><line x1="22" x2="16" y1="11" y2="11"/>',
+  fileText:      '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
   calendarCheck: '<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="m9 16 2 2 4-4"/>',
   calendarClock: '<path d="M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h5"/><path d="M17.5 17.5 16 16.3V14"/><circle cx="16" cy="16" r="6"/>',
   calendarX:     '<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="m14 14-4 4"/><path d="m10 14 4 4"/>',
@@ -39,9 +44,12 @@ const tIcons: Record<string, string> = {
   activity:      '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
   shieldAlert:   '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
   workflow:      '<rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="15" width="6" height="6" rx="1"/><path d="M6 9v4a2 2 0 0 0 2 2h7"/>',
+  webhook:       '<path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2"/><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06"/><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8"/>',
 };
 
 const aIcons: Record<string, string> = {
+  userPlus:    '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" x2="19" y1="8" y2="14"/><line x1="22" x2="16" y1="11" y2="11"/>',
+  megaphone:   '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
   tag:         '<path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/>',
   checkSquare: '<polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
   briefcase:   '<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/>',
@@ -55,6 +63,8 @@ const aIcons: Record<string, string> = {
 
 // --- Actions: built in -------------------------------------------------------
 const nativeActions = [
+  { icon: 'userPlus',    tint: 'bg-emerald-50 text-emerald-600 ring-emerald-200', name: 'Create or update contact', key: 'warmbly.upsert_contact', desc: 'Turn an inbound webhook or form into a tagged, campaign-enrolled contact.' },
+  { icon: 'megaphone',   tint: 'bg-sky-50 text-sky-600 ring-sky-200',             name: 'Add to campaign',          key: 'warmbly.add_to_campaign', desc: 'Enrol the contact; sending still follows the mailbox caps and spacing.' },
   { icon: 'tag',         tint: 'bg-emerald-50 text-emerald-600 ring-emerald-200', name: 'Add a tag',                key: 'warmbly.add_tag',        desc: 'Label the contact for the next segment or suppression list.' },
   { icon: 'tag',         tint: 'bg-amber-50 text-amber-600 ring-amber-200',       name: 'Remove a tag',             key: 'warmbly.remove_tag',     desc: 'Pull them out of a segment the moment the reason expires.' },
   { icon: 'checkSquare', tint: 'bg-violet-50 text-violet-600 ring-violet-200',    name: 'Create a task',            key: 'warmbly.create_task',    desc: 'Typed, owned, with a due date: call back, review, follow up.' },
@@ -109,7 +119,7 @@ const trust = [
 // --- FAQ -----------------------------------------------------------------------
 const faq = [
   ['What can start an automation?',
-   'Nine triggers: a classified reply, a booked, rescheduled or canceled meeting, a bounce, an unsubscribe, a warmup health change, a spam complaint, and a campaign step that launches the automation per contact mid-sequence.'],
+   'Twelve triggers: a classified reply, a new contact, a form submission, a booked, rescheduled or canceled meeting, a bounce, an unsubscribe, a warmup health change, a spam complaint, an inbound webhook from any system, and a campaign step that launches the automation per contact mid-sequence.'],
   ['Do I still need Zapier?',
    'For the common paths, no: Slack, Discord, HubSpot, Salesforce, Pipedrive, Close and the built-in CRM actions are direct. Zapier, Make and n8n still connect with a scoped key when you want them, and the signed webhook action reaches anything else.'],
   ['What happens when a step fails?',
@@ -241,14 +251,14 @@ const faq = [
   </section>
 
   <!-- ============================================================
-       TRIGGERS · nine moments it can fire
+       TRIGGERS · twelve moments it can fire
   ============================================================ -->
   <section class="border-b border-[color:var(--border)] py-20 md:py-28">
     <div class="container-page">
       <div class="max-w-2xl mb-12">
         <div class="text-[11px] uppercase tracking-[0.18em] text-muted-foreground font-mono mb-3">Triggers</div>
         <h2 class="text-[28px] md:text-[40px] font-semibold tracking-[-0.025em] leading-[1.06] text-heading">
-          Nine moments it can fire.
+          Twelve moments it can fire.
         </h2>
         <p class="mt-4 text-[15px] text-foreground/70 leading-relaxed">
           Every automation starts from one event. Replies arrive already classified, meetings arrive matched to the contact, and a campaign step can launch an automation for each contact that reaches it.

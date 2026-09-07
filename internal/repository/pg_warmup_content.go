@@ -69,6 +69,10 @@ type WarmupContentRepository interface {
 	// ListActiveBatchJobs returns batch-mode jobs still in flight (running with a
 	// non-terminal OpenAI batch status), for the poller to reconcile.
 	ListActiveBatchJobs(ctx context.Context) ([]models.WarmupGenerationJob, error)
+	// MarkBatchCancelling records an admin cancel on a job only while it is still
+	// in flight, so it never overwrites a job the poller finished meanwhile.
+	// It reports whether the job was claimed.
+	MarkBatchCancelling(ctx context.Context, id uuid.UUID, reason string) (bool, error)
 	GeneratedCountSince(ctx context.Context, since time.Time) (int, error)
 	ExpireStaleScheduledJobs(ctx context.Context, before time.Time) (int64, error)
 	WarmupSendsSince(ctx context.Context, since time.Time) (int, error)
@@ -376,6 +380,22 @@ func (r *warmupContentRepository) UpdateGenerationJob(ctx context.Context, j *mo
 		j.BatchID, j.BatchInputFileID, j.BatchOutputFileID, j.BatchStatus, j.CompletionWindow,
 	)
 	return err
+}
+
+func (r *warmupContentRepository) MarkBatchCancelling(ctx context.Context, id uuid.UUID, reason string) (bool, error) {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE warmup_generation_jobs
+		SET batch_status = 'cancelling',
+			error = CASE WHEN error = '' THEN $2 ELSE error END,
+			updated_at = NOW()
+		WHERE id = $1
+		  AND status = 'running'
+		  AND batch_status NOT IN ('completed', 'failed', 'expired', 'cancelled', 'cancelling')
+	`, id, reason)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // ExpireStaleScheduledJobs releases reservations left behind if a backend dies

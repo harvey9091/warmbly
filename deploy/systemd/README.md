@@ -12,6 +12,7 @@ them is [Deploying without Docker](https://docs.warmbly.com/development/bare-met
 | `warmbly-tracking.service` | `/opt/warmbly/bin/tracking` | `/etc/warmbly/warmbly.env` |
 | `warmbly-realtime.service` | `/opt/warmbly/realtime/bin/realtime start` | `/etc/warmbly/warmbly.env` |
 | `warmbly-worker.service` | `/opt/warmbly/bin/worker` | `/etc/warmbly/worker.env` |
+| `warmbly-updater.service` | `/opt/warmbly/bin/updater` | `/etc/warmbly/updater.env` |
 
 Every unit runs as the unprivileged `warmbly` user, may write only under
 `/var/lib/warmbly` (blob storage), and restarts on failure. Copy them to
@@ -21,3 +22,13 @@ Every unit runs as the unprivileged `warmbly` user, may write only under
 
 `deploy/config/env.example` is the template for `warmbly.env`; the worker env
 file is what `POST /api/v1/workers/enroll` returns for an enrollment token.
+
+`warmbly-updater.service` is the exception to the unprivileged rule: it runs as
+the user who owns the checkout (`deploy` in the unit; change it) and drives
+`scripts/upgrade-bare-metal.sh`, which builds unprivileged and then runs
+`warmbly-install-release.sh` (installed root-owned at
+`/usr/local/sbin/warmbly-install-release`) through sudo. That installer takes no
+arguments, touches only fixed paths and refuses symlinks, and is the single
+command to allow in sudoers. `updater.env` holds only `UPDATER_TOKEN` (the
+backend's `INTERNAL_API_TOKEN`). See
+[Updates](https://docs.warmbly.com/development/updates/).

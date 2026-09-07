@@ -13,6 +13,7 @@ interface RawMembership {
         name: string;
         slug?: string;
         avatar?: string;
+        avatar_url?: string | null;
         plan?: string;
         created_at: string;
     };
@@ -36,6 +37,7 @@ export default async function getOrganizations(): Promise<Organization[]> {
             id: r.organization!.id,
             name: r.organization!.name,
             avatar: r.organization!.avatar,
+            avatar_url: r.organization!.avatar_url ?? null,
             plan: r.organization!.plan,
             role: r.role,
             permissions: r.permissions,

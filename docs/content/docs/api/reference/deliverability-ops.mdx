@@ -1,6 +1,6 @@
 ---
 title: Deliverability and ops
-description: Ingest deliverability events, replay dead-lettered tasks, manage warmup routing rules, reply templates, and org-level outreach settings.
+description: Ingest deliverability events, manage the suppression list, replay dead-lettered tasks, manage warmup routing rules, reply templates, and org-level outreach settings.
 ---
 
 This group covers the operational control surface for sending: posting deliverability signals (bounces, complaints, unsubscribes) back into the platform, listing and replaying dead-lettered tasks, defining premium-pool warmup routing preferences, managing reply templates, and reading or updating organization-wide advanced outreach settings. All routes are organization-scoped, so the caller must have an active organization selected (API keys are always bound to one organization).
@@ -75,9 +75,17 @@ Returns the `AdvancedOutreachSettings` object directly (not wrapped in an envelo
     "show_intent_summary": true,
     "show_dlq_stats": true
   },
+  "unsubscribe": {
+    "mode": "text",
+    "text": "If this isn't relevant, just reply and let me know and I won't email you again.",
+    "link_intro": "Not the right person, or not interested?",
+    "link_text": "Unsubscribe"
+  },
   "custom": {}
 }
 ```
+
+The `unsubscribe` block is the workspace default for the opt-out appended after the signature of every campaign email: `mode` is `text` (a reply-to-opt-out sentence, the default), `link` (a sentence with the recipient's signed unsubscribe link) or `off`; a campaign's own `unsubscribe_mode` (`inherit` by default) overrides it. Copy fields are single lines of at most 300 characters and fall back to the defaults when blank. See the [unsubscribe guide](/guides/unsubscribe/).
 
 <Callout type="info" title="Content score floor is clamped">
 `preflight.min_content_score` is stored clamped to `1`-`100`. A value outside that range is corrected on write rather than rejected, so a floor above `100` cannot flag every campaign permanently. Set `preflight.check_content_score` to `false` to turn the check off; the score never blocks or delays a send either way. See [Content checks](/guides/campaigns/).
@@ -170,6 +178,94 @@ Auth: **Scope** `WRITE_CAMPAIGNS` · **Org permission** `send_campaigns`
 ### Response
 
 `202 Accepted` with no body. The event is queued for processing.
+
+## List the suppression list
+
+`GET /suppressions`
+
+Pages the workspace suppression list, newest first: every address and domain no campaign will email, whatever put it there. Entries whose `expires_at` has passed are not returned.
+
+Auth: **Scope** `READ_CONTACTS` · **Org permission** `view_contacts`
+
+| Parameter | In | Type | Description |
+| --- | --- | --- | --- |
+| `q` | query | string | Substring filter on the address or domain. |
+| `limit` | query | integer | Page size, 1 to 200. Default 50. |
+| `cursor` | query | string | Opaque cursor from the previous page's `pagination.next_cursor`. |
+
+### Response
+
+```json
+{
+  "data": [
+    {
+      "id": "5a0c...",
+      "organization_id": "9b1e...",
+      "email": "dana@acme.com",
+      "kind": "email",
+      "reason": "clicked the unsubscribe link",
+      "source": "unsubscribe",
+      "campaign_id": "c1...",
+      "metadata": { "via": "link" },
+      "created_at": "2026-09-01T10:12:00Z",
+      "updated_at": "2026-09-01T10:12:00Z"
+    },
+    {
+      "id": "7d2f...",
+      "organization_id": "9b1e...",
+      "email": "competitor.io",
+      "kind": "domain",
+      "reason": "Competitor",
+      "source": "manual",
+      "metadata": { "added_by": "4e5f..." },
+      "created_at": "2026-08-20T09:00:00Z",
+      "updated_at": "2026-08-20T09:00:00Z"
+    }
+  ],
+  "pagination": { "next_cursor": null, "has_more": false }
+}
+```
+
+`kind` is `email` or `domain`; a domain entry keeps the bare host in `email` and matches every address at it. `source` is `bounce`, `complaint`, `unsubscribe`, `manual` (added one at a time) or `import` (added as a batch). An invalid `limit` or `cursor` returns `400`.
+
+## Add to the suppression list
+
+`POST /suppressions`
+
+Adds addresses and domains. A value containing `@` is an address; a bare host, with or without a leading `@`, is a domain. Values that are neither are reported in `skipped` rather than failing the request, and a value already on the list is updated in place, so the call is safe to repeat. At most 5000 entries per request.
+
+Auth: **Scope** `WRITE_CONTACTS` · **Org permission** `manage_contacts`
+
+### Request
+
+```json
+{
+  "entries": [
+    { "value": "dana@acme.com", "reason": "Asked us by phone" },
+    { "value": "acme.com" },
+    { "value": "@partner.io" }
+  ],
+  "reason": "Existing customers"
+}
+```
+
+`reason` on the request applies to every entry without its own. Adding an address also switches off the matching contact's `subscribed` flag.
+
+### Response
+
+```json
+{ "added": 3, "skipped": [] }
+```
+
+## Remove from the suppression list
+
+`DELETE /suppressions/:id`
+
+Lifts one entry, so campaigns can email the address (or every address at the domain) again. Removing an address entry also restores the matching contact's `subscribed` flag. The removal is written to the audit log with the entry's value, kind and source, since lifting an opt-out the recipient made themselves is the action a compliance review looks for.
+
+Auth: **Scope** `WRITE_CONTACTS` · **Org permission** `manage_contacts`
+
+Returns `204` on success and `404` when the entry does not exist in this organization.
 
 ## List task dead letters
 

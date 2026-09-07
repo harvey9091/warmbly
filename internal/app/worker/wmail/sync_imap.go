@@ -5,7 +5,6 @@ import (
 	"slices"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	goimap "github.com/emersion/go-imap/v2"
@@ -40,13 +39,23 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 	if err != nil {
 		return err
 	}
+	w.reportFolderOverflow()
+	// Folders() already drops Gmail's label views. Dropping them here too
+	// costs nothing and keeps the pass correct against any listing: a view
+	// that reached it would re-file known mail as archive under a second UID.
+	folders = slices.DeleteFunc(folders, func(b models.Mailbox) bool { return imapVirtualFolder(&b) })
+
+	// condStore decides the incremental strategy for the whole account:
+	// mod-sequences where the server has CONDSTORE, UIDNEXT where it does not
+	// (Outlook.com, Microsoft 365 over IMAP, Yahoo, many hosted servers).
+	condStore := client.HasCondStore()
 
 	for i := range folders {
 		box := &folders[i]
 		befBox := w.SmtpImapData.FindPair(box)
 		if befBox == nil {
-			// First sight: baseline. Live sync starts from this mod-sequence;
-			// the backfill owns everything before it.
+			// First sight: baseline. Live sync starts from this cursor; the
+			// backfill owns everything before it.
 			saved := *box
 			if err := w.mboxEvent(&saved); err != nil {
 				return nil
@@ -55,26 +64,28 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 			continue
 		}
 
+		changed := imapFolderChanged(befBox, box, condStore)
 		fullyProcessed := true
-		if befBox.HighestModSeq != box.HighestModSeq && !stats.aborted {
+		if changed && !stats.aborted {
 			w.SmtpImapData.mailbox = box.UIDValidity
 			w.SmtpImapData.folder = imapCanonicalFolder(box)
-			done, err := w.imapIncremental(ctx, box, befBox.HighestModSeq, stats)
+			done, err := w.imapIncremental(ctx, box, befBox, condStore, stats)
 			if err != nil {
 				return err
 			}
 			fullyProcessed = done
-		} else if befBox.HighestModSeq != box.HighestModSeq {
+		} else if changed {
 			// The pass was aborted before this folder; hold its cursor too.
 			fullyProcessed = false
 		}
 
-		if befBox.HighestModSeq != box.HighestModSeq || befBox.Name != box.Name || !slices.Equal(befBox.Attrs, box.Attrs) {
-			// The stored mod-sequence only moves once every change up to it
-			// was stored; a deferred message keeps the folder re-asked.
+		if changed || befBox.Name != box.Name || !slices.Equal(befBox.Attrs, box.Attrs) {
+			// The stored cursor only moves once every change up to it was
+			// stored; a deferred message keeps the folder re-asked.
 			next := *box
 			if !fullyProcessed {
 				next.HighestModSeq = befBox.HighestModSeq
+				next.UIDNext = befBox.UIDNext
 			}
 			if err := w.mboxEvent(&next); err != nil {
 				return nil
@@ -82,9 +93,24 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 			for _, ibox := range w.SmtpImapData.Mailboxes {
 				if ibox.UIDValidity == box.UIDValidity {
 					ibox.HighestModSeq = next.HighestModSeq
+					ibox.UIDNext = next.UIDNext
 					ibox.Name = next.Name
 					ibox.Attrs = next.Attrs
 				}
+			}
+		}
+
+		// Without CONDSTORE a message marked read elsewhere moves no cursor,
+		// so read state is mirrored by a periodic scan instead. It runs after
+		// the arrivals above so a message stored this pass is already known.
+		if !condStore && !stats.aborted {
+			w.SmtpImapData.mailbox = box.UIDValidity
+			w.SmtpImapData.folder = imapCanonicalFolder(box)
+			if _, err := w.SmtpImapData.ImapClient.SelectForSync(box.Name); err != nil {
+				return err
+			}
+			if err := w.imapScanFlags(ctx, box, stats); err != nil {
+				return err
 			}
 		}
 	}
@@ -110,6 +136,9 @@ outer:
 	}
 
 	if len(deleted) > 0 {
+		for _, uidv := range deleted {
+			delete(w.flagScan, uidv)
+		}
 		filtered := w.SmtpImapData.Mailboxes[:0]
 		for _, b := range w.SmtpImapData.Mailboxes {
 			if !slices.Contains(deleted, b.UIDValidity) {
@@ -129,11 +158,22 @@ outer:
 	return nil
 }
 
-// imapIncremental stores what changed in one folder since modSeq. Known
-// messages relay their flags unbudgeted; new ones are admitted newest first.
-// It reports whether every change was stored, which is what lets the folder's
-// mod-sequence advance.
-func (w *WMail) imapIncremental(ctx context.Context, box *models.Mailbox, modSeq uint64, stats *tickStats) (bool, *errx.MailError) {
+// imapFolderChanged reports whether a folder has anything new since the
+// cursor we hold for it. With CONDSTORE the mod-sequence answers for new mail
+// AND flag changes; without it only arrivals are visible here, and flag
+// changes are picked up by the periodic scan in imapIncremental.
+func imapFolderChanged(before, now *models.Mailbox, condStore bool) bool {
+	if condStore {
+		return before.HighestModSeq != now.HighestModSeq
+	}
+	return before.UIDNext != now.UIDNext
+}
+
+// imapIncremental stores what changed in one folder since the held cursor.
+// Known messages relay their flags unbudgeted; new ones are admitted newest
+// first. It reports whether every change was stored, which is what lets the
+// folder's cursor advance.
+func (w *WMail) imapIncremental(ctx context.Context, box, before *models.Mailbox, condStore bool, stats *tickStats) (bool, *errx.MailError) {
 	client := w.SmtpImapData.ImapClient
 	count, err := client.SelectForSync(box.Name)
 	if err != nil {
@@ -142,7 +182,12 @@ func (w *WMail) imapIncremental(ctx context.Context, box *models.Mailbox, modSeq
 	if count == 0 {
 		return true, nil
 	}
-	uids, err := client.SearchChangedSince(modSeq)
+	var uids []goimap.UID
+	if condStore {
+		uids, err = client.SearchChangedSince(before.HighestModSeq)
+	} else {
+		uids, err = client.SearchNewSince(before.UIDNext)
+	}
 	if err != nil {
 		return false, err
 	}
@@ -405,70 +450,20 @@ func (w *WMail) imapBackfill(ctx context.Context, folders []models.Mailbox, stat
 	return nil
 }
 
-// imapBackfillEligible excludes folders whose history is not worth importing:
-// trash, spam and Gmail's virtual "All Mail" (a duplicate of every other
-// folder). Live sync still follows them for placement signals and to file new
-// mail into the Spam and Trash scopes; only the bounded initial import skips
-// them, because their history would consume the message budget that belongs to
-// real conversations. Drafts IS imported: it is small and a Drafts scope with
-// none of the mailbox's existing drafts in it reads as broken.
-//
-// Special-use attributes are authoritative, with a name fallback for servers
-// that do not advertise them.
-func imapBackfillEligible(box *models.Mailbox) bool {
-	for _, a := range box.Attrs {
-		switch strings.ToLower(a) {
-		case "\\noselect", "\\nonexistent", "\\trash", "\\junk", "\\all":
-			return false
-		}
-	}
-	name := strings.ToLower(box.Name)
-	if i := strings.LastIndexAny(name, "/."); i >= 0 {
-		name = name[i+1:]
-	}
-	switch name {
-	case "trash", "junk", "spam", "deleted items", "deleted messages", "junk e-mail", "junk email", "bulk mail":
-		return false
-	}
-	return true
+// imapVirtualFolder, imapBackfillEligible and imapCanonicalFolder classify a
+// folder. The rules live in the imap client package, next to the LIST that
+// produces the attributes, so the sync loop and the Sent-folder resolver
+// cannot drift apart.
+func imapVirtualFolder(box *models.Mailbox) bool {
+	return imap.IsVirtualFolder(*box)
 }
 
-// imapCanonicalFolder maps an IMAP folder to the canonical unibox folder.
-// Special-use attributes are authoritative, with a name fallback for servers
-// that do not advertise them; unrecognized user folders file as inbox so
-// their mail stays visible.
+func imapBackfillEligible(box *models.Mailbox) bool {
+	return imap.BackfillEligible(*box)
+}
+
 func imapCanonicalFolder(box *models.Mailbox) string {
-	for _, a := range box.Attrs {
-		switch strings.ToLower(a) {
-		case "\\sent":
-			return models.FolderSent
-		case "\\drafts":
-			return models.FolderDrafts
-		case "\\junk":
-			return models.FolderSpam
-		case "\\trash":
-			return models.FolderTrash
-		case "\\archive", "\\all":
-			return models.FolderArchive
-		}
-	}
-	name := strings.ToLower(box.Name)
-	if i := strings.LastIndexAny(name, "/."); i >= 0 {
-		name = name[i+1:]
-	}
-	switch name {
-	case "sent", "sent mail", "sent items", "sent messages":
-		return models.FolderSent
-	case "drafts", "draft":
-		return models.FolderDrafts
-	case "junk", "spam", "junk e-mail", "junk email", "bulk mail":
-		return models.FolderSpam
-	case "trash", "deleted", "deleted items", "deleted messages":
-		return models.FolderTrash
-	case "archive", "archives", "all mail":
-		return models.FolderArchive
-	}
-	return models.FolderInbox
+	return imap.CanonicalFolder(*box)
 }
 
 // controlPlaneError handles a failed map lookup, body store or event publish

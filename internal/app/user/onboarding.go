@@ -41,3 +41,16 @@ func (s *userService) UpdateUndoSendSeconds(ctx context.Context, userID uuid.UUI
 
 	return nil
 }
+
+// UpdateAvatar sets (or clears, with nil) the user's avatar URL. It must go
+// through the service so the cached /auth/me copy is dropped; writing the
+// repository directly leaves the old avatar served until UserTTL expires.
+func (s *userService) UpdateAvatar(ctx context.Context, userID uuid.UUID, avatarURL *string) *errx.Error {
+	if err := s.userRepository.UpdateAvatar(ctx, userID, avatarURL); err != nil {
+		return errx.InternalError()
+	}
+
+	s.cache.Del(ctx, getUserKey(userID))
+
+	return nil
+}

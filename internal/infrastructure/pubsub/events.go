@@ -35,6 +35,9 @@ const (
 	EventCampaignStarted   EventType = "CAMPAIGN_STARTED"
 	EventCampaignPaused    EventType = "CAMPAIGN_PAUSED"
 	EventCampaignCompleted EventType = "CAMPAIGN_COMPLETED"
+	// EventCampaignIdle: a continuous campaign ran out of leads and stays
+	// active waiting for more (Status stays "active").
+	EventCampaignIdle EventType = "CAMPAIGN_IDLE"
 
 	// Email account events
 	EventAccountConnected     EventType = "ACCOUNT_CONNECTED"
@@ -217,9 +220,19 @@ type TrackingEventPayload struct {
 	ContactEmail string `json:"contact_email,omitempty"`
 	SequenceID   string `json:"step_id,omitempty"`
 	OriginalURL  string `json:"original_url,omitempty"` // For click events
-	// Machine marks an automated open (Apple MPP prefetch, UA-less fetcher)
-	// so live views can badge it instead of presenting it as a human open.
+	LinkLabel    string `json:"link_label,omitempty"`   // Anchor text of the clicked link
+	// Machine marks an automated open or click (Apple MPP prefetch, UA-less
+	// fetcher, a security gateway walking the links) so live views can badge
+	// it instead of presenting it as a person's.
 	Machine bool `json:"machine,omitempty"`
+	// OccurredAt is when the tracking service saw the open or click; the
+	// base timestamp is when this event was published.
+	OccurredAt time.Time `json:"occurred_at,omitempty"`
+	// Where and on what, from the engagement logs, for live feeds.
+	Client      string `json:"client,omitempty"`
+	DeviceType  string `json:"device_type,omitempty"`
+	CountryCode string `json:"country_code,omitempty"`
+	City        string `json:"city,omitempty"`
 }
 
 // PageHitEvent is a website page view tied to a contact.

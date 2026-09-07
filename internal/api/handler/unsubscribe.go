@@ -1,39 +1,96 @@
 package handler
 
 import (
+	"html/template"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/warmbly/warmbly/internal/app/unsublink"
 	"github.com/warmbly/warmbly/internal/errx"
 )
 
-// Unsubscribe handles the List-Unsubscribe link and the RFC 8058 one-click POST.
-// It is PUBLIC + unauthenticated — mailbox providers and recipients hit it
-// directly. Both GET (a recipient clicking the link) and POST (the provider's
-// one-click, body "List-Unsubscribe=One-Click") suppress the recipient org-wide.
-// The link shape is /unsubscribe?cid=<campaign>&rid=<contact>.
-func (h *Handler) Unsubscribe(c *gin.Context) {
-	isPost := c.Request.Method == http.MethodPost
+// The recipient-facing unsubscribe endpoints. PUBLIC and unauthenticated by
+// design: the only credential is the signed token in the path, minted per
+// recipient when the email was sent.
+//
+//   GET  /unsubscribe/:token              a click on the link: a confirm page
+//   POST /unsubscribe/:token              the confirm button, or the mail
+//                                         client's RFC 8058 one-click POST
+//                                         (body List-Unsubscribe=One-Click),
+//                                         which suppresses with no page
+//   POST /unsubscribe/:token/resubscribe  the "unsubscribed by mistake" button
+//
+// A GET never changes anything, because link scanners and preview fetchers
+// follow every link in an email; only a POST suppresses.
 
-	cid, err1 := uuid.Parse(c.Query("cid"))
-	rid, err2 := uuid.Parse(c.Query("rid"))
-	if err1 != nil || err2 != nil {
-		if isPost {
-			c.Status(http.StatusBadRequest)
+func (h *Handler) UnsubscribePage(c *gin.Context) {
+	claims, ok := h.unsubscribeClaims(c)
+	if !ok {
+		return
+	}
+	if claims.ContactID == uuid.Nil {
+		renderUnsubPage(c, http.StatusOK, unsubView{Title: "This was a test email", Body: "Test sends carry a link that is not tied to anyone, so there is nothing to unsubscribe."})
+		return
+	}
+	renderUnsubPage(c, http.StatusOK, unsubView{
+		Title:   "Unsubscribe from these emails?",
+		Body:    "Confirm and you will not receive further emails from this sender.",
+		Confirm: c.Request.URL.Path,
+	})
+}
+
+// unsubscribeBodyLimit caps the public POST bodies. The engine-wide limit is
+// registered after these routes, so it does not cover them; a one-click or
+// confirm body is a few bytes.
+const unsubscribeBodyLimit = 16 << 10
+
+func (h *Handler) UnsubscribeSubmit(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, unsubscribeBodyLimit)
+	oneClick := strings.EqualFold(strings.TrimSpace(c.PostForm("List-Unsubscribe")), "One-Click")
+	confirmed := c.PostForm("confirm") == "1"
+
+	claims, err := h.verifyUnsubscribeToken(c.Param("token"))
+	if err != nil {
+		if oneClick {
+			// RFC 8058: a bad or expired link is terminal, so 200 stops the
+			// provider retrying; only a genuine server failure gets a 5xx.
+			c.Status(http.StatusOK)
 			return
 		}
-		c.Data(http.StatusBadRequest, "text/html; charset=utf-8", unsubPage("This unsubscribe link is invalid."))
+		renderUnsubPage(c, http.StatusBadRequest, unsubInvalid(err))
+		return
+	}
+	if claims.ContactID == uuid.Nil {
+		if oneClick {
+			c.Status(http.StatusOK)
+			return
+		}
+		renderUnsubPage(c, http.StatusOK, unsubView{Title: "This was a test email", Body: "Test sends carry a link that is not tied to anyone, so there is nothing to unsubscribe."})
 		return
 	}
 
-	xerr := h.AdvancedService.Unsubscribe(c.Request.Context(), cid, rid)
+	// A browser POST without the confirm field is not the button: show the
+	// confirm page again rather than act on it.
+	if !oneClick && !confirmed {
+		renderUnsubPage(c, http.StatusOK, unsubView{
+			Title:   "Unsubscribe from these emails?",
+			Body:    "Confirm and you will not receive further emails from this sender.",
+			Confirm: c.Request.URL.Path,
+		})
+		return
+	}
 
-	if isPost {
-		// RFC 8058: acknowledge one-click. Return 5xx only on a genuine
-		// server-side failure so the provider can retry; a bad/expired link
-		// (BadRequest) is terminal, so 200 to stop pointless retries.
+	via := "link"
+	if oneClick {
+		via = "one_click"
+	}
+	xerr := h.AdvancedService.UnsubscribeFromLink(c.Request.Context(), claims.OrgID, claims.CampaignID, claims.ContactID, via)
+
+	if oneClick {
 		if xerr != nil && xerr.Code != errx.BadRequest {
 			c.Status(http.StatusBadGateway)
 			return
@@ -41,18 +98,81 @@ func (h *Handler) Unsubscribe(c *gin.Context) {
 		c.Status(http.StatusOK)
 		return
 	}
-
-	msg := "You've been unsubscribed."
 	if xerr != nil {
-		msg = "We couldn't process that unsubscribe link."
+		renderUnsubPage(c, http.StatusOK, unsubView{Title: "We couldn't process that link", Body: "The link is no longer valid. Reply to the email instead and the sender will stop."})
+		return
 	}
-	c.Data(http.StatusOK, "text/html; charset=utf-8", unsubPage(msg))
+	renderUnsubPage(c, http.StatusOK, unsubView{
+		Title:       "You've been unsubscribed",
+		Body:        "You will not receive further emails from this sender.",
+		Resubscribe: c.Request.URL.Path + "/resubscribe",
+	})
 }
 
-func unsubPage(msg string) []byte {
-	return []byte(`<!doctype html><html lang="en"><head><meta charset="utf-8">` +
-		`<meta name="viewport" content="width=device-width,initial-scale=1"><title>Unsubscribe</title></head>` +
-		`<body style="font-family:system-ui,-apple-system,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;color:#0f172a">` +
-		`<h1 style="font-size:1.25rem;margin:0 0 .5rem">` + msg + `</h1>` +
-		`<p style="color:#64748b;margin:0">You will no longer receive emails from this sender.</p></body></html>`)
+func (h *Handler) UnsubscribeUndo(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, unsubscribeBodyLimit)
+	claims, ok := h.unsubscribeClaims(c)
+	if !ok {
+		return
+	}
+	if claims.ContactID == uuid.Nil {
+		renderUnsubPage(c, http.StatusBadRequest, unsubInvalid(unsublink.ErrInvalid))
+		return
+	}
+	if xerr := h.AdvancedService.Resubscribe(c.Request.Context(), claims.OrgID, claims.ContactID); xerr != nil {
+		renderUnsubPage(c, http.StatusOK, unsubView{Title: "We couldn't process that link", Body: "The link is no longer valid. Reply to the email and the sender can add you back."})
+		return
+	}
+	renderUnsubPage(c, http.StatusOK, unsubView{Title: "You're subscribed again", Body: "The sender can email you as before. You can unsubscribe from any later email."})
+}
+
+func (h *Handler) verifyUnsubscribeToken(token string) (unsublink.Claims, error) {
+	if h.UnsubscribeLinks == nil {
+		return unsublink.Claims{}, unsublink.ErrInvalid
+	}
+	return h.UnsubscribeLinks.Verify(token, time.Now())
+}
+
+func (h *Handler) unsubscribeClaims(c *gin.Context) (unsublink.Claims, bool) {
+	claims, err := h.verifyUnsubscribeToken(c.Param("token"))
+	if err != nil {
+		renderUnsubPage(c, http.StatusBadRequest, unsubInvalid(err))
+		return claims, false
+	}
+	return claims, true
+}
+
+func unsubInvalid(err error) unsubView {
+	if err == unsublink.ErrExpired {
+		return unsubView{Title: "This link has expired", Body: "Reply to the email instead and the sender will stop."}
+	}
+	return unsubView{Title: "This unsubscribe link is invalid", Body: "Reply to the email instead and the sender will stop."}
+}
+
+type unsubView struct {
+	Title       string
+	Body        string
+	Confirm     string // POST target of the confirm button, when shown
+	Resubscribe string // POST target of the resubscribe button, when shown
+}
+
+// A neutral page: the email came from the customer's mailbox, so the page
+// names no brand and carries no scripts or external assets.
+var unsubTemplate = template.Must(template.New("unsubscribe").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>{{.Title}}</title>
+<style>body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;max-width:32rem;margin:4rem auto;padding:0 1.25rem;color:#0f172a;line-height:1.5}
+h1{font-size:1.25rem;margin:0 0 .5rem}p{color:#475569;margin:0 0 1.25rem}
+button{font:inherit;padding:.55rem 1rem;border-radius:.375rem;border:1px solid #0284c7;background:#0284c7;color:#fff;cursor:pointer}
+button.secondary{background:#fff;color:#0f172a;border-color:#cbd5e1}</style></head>
+<body><h1>{{.Title}}</h1><p>{{.Body}}</p>
+{{if .Confirm}}<form method="post" action="{{.Confirm}}"><input type="hidden" name="confirm" value="1"><button type="submit">Unsubscribe</button></form>{{end}}
+{{if .Resubscribe}}<form method="post" action="{{.Resubscribe}}"><button type="submit" class="secondary">Unsubscribed by mistake? Resubscribe</button></form>{{end}}
+</body></html>`))
+
+func renderUnsubPage(c *gin.Context, status int, v unsubView) {
+	c.Header("Cache-Control", "no-store")
+	c.Header("X-Robots-Tag", "noindex")
+	c.Status(status)
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	_ = unsubTemplate.Execute(c.Writer, v)
 }

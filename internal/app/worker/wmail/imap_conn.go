@@ -17,9 +17,18 @@ import (
 type ImapConn interface {
 	// Sync pass.
 	Folders() ([]models.Mailbox, *errx.MailError)
+	// FolderOverflow is how many folders the last listing left out for the
+	// cap, FolderConflicts how many it left out for a duplicate UIDVALIDITY.
+	FolderOverflow() int
+	FolderConflicts() int
+	// HasCondStore picks the incremental strategy: mod-sequences when the
+	// server has CONDSTORE, UIDNEXT plus a periodic flag scan when it does not.
+	HasCondStore() bool
 	ReleaseMailbox()
 	SelectForSync(mailbox string) (uint32, *errx.MailError)
 	SearchChangedSince(modSeq uint64) ([]goimap.UID, *errx.MailError)
+	SearchNewSince(uidNext uint32) ([]goimap.UID, *errx.MailError)
+	FetchFlags(ctx context.Context, uidFrom uint32) (map[uint32]imap.FlagState, *errx.MailError)
 	SearchSince(since time.Time) ([]goimap.UID, *errx.MailError)
 	FetchEnvelopes(ctx context.Context, uids []goimap.UID) ([]*imap.Fetched, *errx.MailError)
 	FetchBody(f *imap.Fetched)

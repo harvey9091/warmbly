@@ -53,9 +53,49 @@ export interface ContactPageHit {
     city: string;
 }
 
+// The exact link behind an email_clicked event: where it went, the anchor
+// text it was minted from, and the UTM parameters the destination carried.
+export interface ContactLinkClick {
+    id: string;
+    url: string;
+    label?: string;
+    utm_source?: string;
+    utm_medium?: string;
+    utm_campaign?: string;
+    utm_term?: string;
+    utm_content?: string;
+    user_agent?: string;
+}
+
+// Where an open or click came from, when it was logged per event: the mail
+// client or image proxy when the user agent names one, otherwise browser,
+// OS and device; the location resolved from the source network.
+export interface EngagementOrigin {
+    client?: string;
+    device_type?: string;
+    os?: string;
+    browser?: string;
+    browser_version?: string;
+    country_code?: string;
+    region?: string;
+    city?: string;
+}
+
 export default interface ContactTimelineEvent {
     type: ContactTimelineEventType;
     at: string;
+
+    // Engagement classification (email_opened / email_clicked): true when an
+    // automated fetcher (mail privacy proxy, security gateway) did it rather
+    // than a person; machine_reason names the rule (prefetch / instant / burst).
+    machine?: boolean;
+    machine_reason?: string | null;
+
+    // Per-link detail behind an email_clicked event.
+    link?: ContactLinkClick | null;
+
+    // Where an email_opened / email_clicked event came from.
+    origin?: EngagementOrigin | null;
 
     email_account_id?: string | null;
     email_account_email?: string | null;
@@ -95,5 +135,12 @@ export default interface ContactTimelineEvent {
 
 export interface ContactTimelineResult {
     data: ContactTimelineEvent[];
+    // Mirrors pagination.has_more; kept on the wire for older clients.
     has_more: boolean;
+    pagination: {
+        total: number | null;
+        // Opaque (at, source, id) position; pass back as `cursor`.
+        next_cursor: string | null;
+        has_more: boolean;
+    };
 }

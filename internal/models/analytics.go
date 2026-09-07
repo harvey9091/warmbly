@@ -47,6 +47,27 @@ type CampaignAnalytics struct {
 	Summary    CampaignSummary      `json:"summary"`
 	Sequences  []SequenceStats      `json:"steps"`
 	DailyStats []CampaignDailyStats `json:"daily_stats,omitempty"`
+	// Engagement is where and on what people opened and clicked, from the
+	// per-event logs. Human events only.
+	Engagement *CampaignEngagementBreakdown `json:"engagement,omitempty"`
+}
+
+// EngagementBucket is one slice of a breakdown: how many distinct contacts
+// opened and clicked from that country, client, or device.
+type EngagementBucket struct {
+	Key    string `json:"key"`
+	Opens  int    `json:"opens"`
+	Clicks int    `json:"clicks"`
+}
+
+// CampaignEngagementBreakdown is the "where from, on what" view of a
+// campaign's human opens and clicks. Buckets are ordered by activity, capped,
+// and keyed by ISO country code, client or browser name, and device type.
+// Unknown is the empty key.
+type CampaignEngagementBreakdown struct {
+	Countries []EngagementBucket `json:"countries"`
+	Clients   []EngagementBucket `json:"clients"`
+	Devices   []EngagementBucket `json:"devices"`
 }
 
 type CampaignSummary struct {
@@ -58,9 +79,13 @@ type CampaignSummary struct {
 	// (Apple MPP prefetch, UA-less clients). Human opens = unique - machine.
 	MachineOpens int `json:"machine_opens"`
 	UniqueClicks int `json:"unique_clicks"`
-	Replies      int `json:"replies"`
-	Bounces      int `json:"bounces"`
-	Unsubscribes int `json:"unsubscribes"`
+	// MachineClicks counts steps whose only clicks came from automated
+	// fetchers (security gateways walking the links). They are not part of
+	// UniqueClicks, which only ever counts a person's click.
+	MachineClicks int `json:"machine_clicks"`
+	Replies       int `json:"replies"`
+	Bounces       int `json:"bounces"`
+	Unsubscribes  int `json:"unsubscribes"`
 
 	OpenRate   float64 `json:"open_rate"`   // percentage
 	ClickRate  float64 `json:"click_rate"`  // percentage
@@ -249,8 +274,11 @@ type DashboardOverallStats struct {
 	TotalEmailsSent int `json:"total_emails_sent"`
 	TotalOpens      int `json:"total_opens"`
 	// MachineOpens is the subset of TotalOpens from automated fetchers.
-	MachineOpens    int     `json:"machine_opens"`
-	TotalClicks     int     `json:"total_clicks"`
+	MachineOpens int `json:"machine_opens"`
+	TotalClicks  int `json:"total_clicks"`
+	// MachineClicks counts steps clicked only by automated fetchers; they are
+	// not part of TotalClicks.
+	MachineClicks   int     `json:"machine_clicks"`
 	TotalReplies    int     `json:"total_replies"`
 	TotalBounces    int     `json:"total_bounces"`
 	OpenRate        float64 `json:"open_rate"`

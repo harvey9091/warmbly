@@ -151,12 +151,16 @@ export function isJobActive(job: WarmupGenerationJob): boolean {
     return !TERMINAL_JOB_STATUS.has(job.status);
 }
 
-/** Only batch jobs that are still in flight can be cancelled. */
+/**
+ * Only batch jobs that are still in flight can be cancelled. A batch already
+ * cancelling stays active until the poller ingests what it finished, but a
+ * second cancel has nothing left to ask for.
+ */
 export function isJobCancellable(job: WarmupGenerationJob): boolean {
     if (job.mode !== "batch") return false;
     const bs = job.batch_status ?? "";
     if (!bs) return !TERMINAL_JOB_STATUS.has(job.status);
-    return !TERMINAL_BATCH_STATUS.has(bs);
+    return bs !== "cancelling" && !TERMINAL_BATCH_STATUS.has(bs);
 }
 
 export interface WarmupAbRow {

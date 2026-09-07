@@ -15,6 +15,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/app/dailythrottle"
 	"github.com/warmbly/warmbly/internal/app/listgate"
+	"github.com/warmbly/warmbly/internal/app/tz"
+	"github.com/warmbly/warmbly/internal/bitmask"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
@@ -86,7 +88,7 @@ func (s *campaignService) Get(ctx context.Context, orgID, id string) (*models.Ca
 	return resp, nil
 }
 
-func (s *campaignService) Search(ctx context.Context, orgID, query, cursor, folder, status, limit string) (*models.CampaignsResult, *errx.Error) {
+func (s *campaignService) Search(ctx context.Context, orgID, query, cursor, folder, status, kind, limit string) (*models.CampaignsResult, *errx.Error) {
 	cursorId, err := paging.DecodeCursor(cursor)
 	if err != nil {
 		return nil, err
@@ -104,8 +106,11 @@ func (s *campaignService) Search(ctx context.Context, orgID, query, cursor, fold
 	default:
 		return nil, errx.New(errx.BadRequest, "invalid status filter: must be draft, active, paused, or completed")
 	}
+	if kind != "" && !models.ValidCampaignKind(kind) {
+		return nil, errx.New(errx.BadRequest, "invalid kind filter: must be sequence or one_time")
+	}
 
-	resp, xerr := s.campaignRepository.Search(ctx, orgID, query, cursorId, folderId, status, limitN)
+	resp, xerr := s.campaignRepository.Search(ctx, orgID, query, cursorId, folderId, status, kind, limitN)
 	if xerr != nil {
 		return nil, errx.InternalError()
 	}
@@ -147,7 +152,7 @@ func (s *campaignService) rescheduleCampaignWakeup(ctx context.Context, campaign
 			}
 		}
 	}
-	_ = s.enqueueCampaignWakeup(ctx, campaignID)
+	_ = s.enqueueCampaignWakeup(ctx, campaignID, false)
 }
 
 func (s *campaignService) Delete(ctx context.Context, orgID uuid.UUID, campaignID string) (*models.Campaign, *errx.Error) {
@@ -218,22 +223,36 @@ func (s *campaignService) Duplicate(ctx context.Context, orgID, userID uuid.UUID
 	}
 
 	newID := uuid.New()
-	copied, cleanup, xerr := s.copyAttachments(ctx, orgID, cID, newID)
+	copied, storageLimit, cleanup, xerr := s.copyAttachments(ctx, orgID, cID, newID)
 	if xerr != nil {
 		return nil, xerr
 	}
 
 	campaign, err := s.campaignRepository.Duplicate(ctx, repository.DuplicateCampaignInput{
-		SourceID:    cID,
-		NewID:       newID,
-		UserID:      userID,
-		Name:        name,
-		Attachments: copied,
+		SourceID:       cID,
+		NewID:          newID,
+		UserID:         userID,
+		Name:           name,
+		Attachments:    copied,
+		OrganizationID: orgID,
+		StorageLimit:   storageLimit,
 	})
 	if err != nil {
 		cleanup()
 		if errors.Is(err, errx.ErrResourceNotFound) {
 			return nil, errx.ErrNotFound
+		}
+		if errors.Is(err, repository.ErrStorageQuotaExceeded) {
+			var adding int64
+			for _, att := range copied {
+				adding += att.Size
+			}
+			used, _ := s.attachmentRepo.SumStorageUsedByOrg(ctx, orgID)
+			var limit int64
+			if storageLimit != nil {
+				limit, _ = storageLimit(ctx)
+			}
+			return nil, errx.StorageLimitReached(used, limit, adding)
 		}
 		return nil, errx.InternalError()
 	}
@@ -264,41 +283,49 @@ func (s *campaignService) Duplicate(ctx context.Context, orgID, userID uuid.UUID
 }
 
 // copyAttachments writes a copy of every attachment object of src under dst
-// and returns the rows to insert plus a best-effort undo for when the copy
-// transaction fails. The copies count against the organization's storage
-// quota exactly like an upload would. An attachment whose bytes cannot be
-// read is reported and skipped rather than failing the whole duplicate.
-func (s *campaignService) copyAttachments(ctx context.Context, orgID, src, dst uuid.UUID) ([]models.CampaignAttachment, func(), *errx.Error) {
+// and returns the rows to insert, the storage limit the insert must respect,
+// and a best-effort undo for when the copy transaction fails. The copies
+// count against the organization's storage quota exactly like an upload
+// would: the read here only refuses a hopeless copy before any bytes move,
+// and the insert re-checks under the quota lock. An attachment whose bytes
+// cannot be read is reported and skipped rather than failing the whole
+// duplicate.
+func (s *campaignService) copyAttachments(ctx context.Context, orgID, src, dst uuid.UUID) ([]models.CampaignAttachment, repository.StorageLimitFunc, func(), *errx.Error) {
 	noop := func() {}
 	if s.attachmentRepo == nil || s.storage == nil {
-		return nil, noop, nil
+		return nil, nil, noop, nil
 	}
 	sources, err := s.attachmentRepo.ListByCampaign(ctx, src)
 	if err != nil {
-		return nil, noop, errx.InternalError()
+		return nil, nil, noop, errx.InternalError()
 	}
 	if len(sources) == 0 {
-		return nil, noop, nil
+		return nil, nil, noop, nil
 	}
 
+	var limit repository.StorageLimitFunc
 	if s.featureGate != nil {
-		limit, xerr := s.featureGate.GetStorageLimitBytes(ctx, orgID)
+		l, xerr := s.featureGate.GetStorageLimitBytes(ctx, orgID)
 		if xerr != nil {
-			return nil, noop, xerr
+			return nil, nil, noop, xerr
+		}
+		limit = func(ctx context.Context) (int64, error) {
+			v, xerr := s.featureGate.GetStorageLimitBytes(ctx, orgID)
+			if xerr != nil {
+				return 0, xerr
+			}
+			return v, nil
 		}
 		used, err := s.attachmentRepo.SumStorageUsedByOrg(ctx, orgID)
 		if err != nil {
-			return nil, noop, errx.InternalError()
+			return nil, nil, noop, errx.InternalError()
 		}
 		var adding int64
 		for _, att := range sources {
 			adding += att.Size
 		}
-		if used+adding > limit {
-			const mb = 1024 * 1024
-			return nil, noop, errx.New(errx.BadRequest, fmt.Sprintf(
-				"duplicating would exceed your storage limit (%d MB of %d MB used, %d MB of attachments to copy): remove attachments or upgrade your plan",
-				used/mb, limit/mb, adding/mb))
+		if used+adding > l {
+			return nil, nil, noop, errx.StorageLimitReached(used, l, adding)
 		}
 	}
 
@@ -319,9 +346,13 @@ func (s *campaignService) copyAttachments(ctx context.Context, orgID, src, dst u
 		att.S3Key = key
 		copied = append(copied, att)
 	}
-	return copied, func() {
+	return copied, limit, func() {
+		// The undo must outlive a cancelled request, or the copies are left in
+		// storage with no row counting them.
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
 		for _, att := range copied {
-			if err := s.storage.Delete(ctx, att.S3Key); err != nil {
+			if err := s.storage.Delete(cleanup, att.S3Key); err != nil {
 				sentry.CaptureException(fmt.Errorf("campaign %s duplicate undo: object %s: %w", src, att.S3Key, err))
 			}
 		}
@@ -483,7 +514,11 @@ func (s *campaignService) StartCampaign(ctx context.Context, orgID uuid.UUID, ca
 		return errx.InternalError()
 	}
 
-	if xerr := s.enqueueCampaignWakeup(ctx, cID); xerr != nil {
+	// A member pressing play on a campaign with nothing left to send means
+	// "run it for the leads to come", never "finish it again": the campaign
+	// goes active and waits (issue #340). A platform-initiated restart keeps
+	// the campaign's own setting.
+	if xerr := s.enqueueCampaignWakeup(ctx, cID, !opts.Automatic); xerr != nil {
 		return xerr
 	}
 
@@ -535,10 +570,20 @@ func (s *campaignService) WakeCampaigns(ctx context.Context, orgID uuid.UUID, ca
 		seen[id] = true
 
 		campaign, err := s.campaignRepository.GetByID(ctx, id)
-		if err != nil || campaign == nil || campaign.Status != "active" {
+		if err != nil || campaign == nil {
 			continue
 		}
 		if campaign.OrganizationID == nil || *campaign.OrganizationID != orgID {
+			continue
+		}
+		// Finished only means it ran out of leads, and a lead just arrived by
+		// whichever path (a linked segment, the API, an automation): restart
+		// it through the full launch checks, never a raw status flip.
+		if campaign.Status == "completed" {
+			s.restartForNewLeads(ctx, orgID, campaign)
+			continue
+		}
+		if campaign.Status != "active" {
 			continue
 		}
 
@@ -572,11 +617,110 @@ func (s *campaignService) WakeCampaigns(ctx context.Context, orgID uuid.UUID, ca
 		for i := range pending {
 			_ = s.taskRepo.DeleteTask(ctx, pending[i].ID)
 		}
-		_ = s.enqueueCampaignWakeup(ctx, id)
+		_ = s.enqueueCampaignWakeup(ctx, id, false)
 	}
 }
 
-func (s *campaignService) enqueueCampaignWakeup(ctx context.Context, campaignID uuid.UUID) *errx.Error {
+// restartForNewLeads starts a finished campaign again because leads were added
+// to it. A refusal is written to the campaign's activity log (once an hour per
+// reason) so the owner can see why the new leads are waiting, instead of a
+// finished campaign quietly ignoring them.
+func (s *campaignService) restartForNewLeads(ctx context.Context, orgID uuid.UUID, campaign *models.Campaign) {
+	xerr := s.StartCampaign(ctx, orgID, campaign.ID.String(), models.StartCampaignOptions{Automatic: true})
+	if xerr == nil {
+		return
+	}
+	log.Info().Str("campaign_id", campaign.ID.String()).Str("reason", xerr.Message).Msg("finished campaign not restarted for new leads")
+	if s.campaignLogRepo == nil {
+		return
+	}
+	entry := &repository.CampaignLogEntry{
+		CampaignID: campaign.ID,
+		EventType:  "restart_refused",
+		Message:    "New leads arrived but the campaign could not restart: " + xerr.Message + " Fix the cause, then press play.",
+		Metadata:   map[string]interface{}{"reason": xerr.Message},
+	}
+	written, lerr := s.campaignLogRepo.CreateLogOnce(ctx, entry, "reason", xerr.Message, time.Now().Add(-time.Hour))
+	if lerr != nil || !written || s.streamingPublisher == nil {
+		return
+	}
+	// An update with no status refreshes the activity feed without moving
+	// the campaign's badge.
+	s.streamingPublisher.PublishCampaignEvent(ctx, &pubsub.CampaignEvent{
+		BaseEvent:  pubsub.BaseEvent{EventType: pubsub.EventCampaignUpdated, UserID: campaign.UserID},
+		OrgID:      modelOrgID(campaign.OrganizationID),
+		CampaignID: campaign.ID.String(),
+	})
+}
+
+// ContinuousOnEventType is the activity log entry written when "Keep running
+// for new leads" is turned on by a lead source rather than by hand.
+const ContinuousOnEventType = "continuous_on"
+
+// KeepRunning implements the interface comment on CampaignService.
+func (s *campaignService) KeepRunning(ctx context.Context, orgID, campaignID uuid.UUID, reason string) *errx.Error {
+	transitioned, err := s.campaignRepository.KeepRunning(ctx, orgID, campaignID)
+	if err != nil {
+		if errors.Is(err, errx.ErrResourceNotFound) {
+			return errx.ErrNotFound
+		}
+		sentry.CaptureException(err)
+		return errx.InternalError()
+	}
+	if !transitioned {
+		return nil
+	}
+	if s.campaignLogRepo != nil {
+		s.campaignLogRepo.CreateLog(ctx, &repository.CampaignLogEntry{
+			CampaignID: campaignID,
+			EventType:  ContinuousOnEventType,
+			Message:    "Keep running for new leads turned on: " + reason + ". Out of leads, the campaign waits instead of finishing; turn it off in the campaign's preferences.",
+			Metadata:   map[string]interface{}{"reason": reason},
+		})
+	}
+	if s.streamingPublisher != nil {
+		campaign, gerr := s.campaignRepository.GetByID(ctx, campaignID)
+		if gerr == nil && campaign != nil {
+			s.streamingPublisher.PublishCampaignEvent(ctx, &pubsub.CampaignEvent{
+				BaseEvent:  pubsub.BaseEvent{EventType: pubsub.EventCampaignUpdated, UserID: campaign.UserID},
+				OrgID:      modelOrgID(campaign.OrganizationID),
+				CampaignID: campaignID.String(),
+				Name:       campaign.Name,
+			})
+		}
+	}
+	return nil
+}
+
+// idleContinuousCampaign keeps a continuous campaign active with nothing to
+// send: it waits for leads. Logged and broadcast on the transition only.
+func (s *campaignService) idleContinuousCampaign(ctx context.Context, campaign *models.Campaign) {
+	transitioned, err := s.campaignRepository.MarkIdle(ctx, campaign.ID)
+	if err != nil || !transitioned {
+		return
+	}
+	if s.campaignLogRepo != nil {
+		s.campaignLogRepo.CreateLog(ctx, &repository.CampaignLogEntry{
+			CampaignID: campaign.ID,
+			EventType:  tasks.CampaignIdleEventType,
+			Message:    tasks.CampaignIdleMessage,
+		})
+	}
+	if s.streamingPublisher != nil {
+		s.streamingPublisher.PublishCampaignEvent(ctx, &pubsub.CampaignEvent{
+			BaseEvent:  pubsub.BaseEvent{EventType: pubsub.EventCampaignIdle, UserID: campaign.UserID},
+			OrgID:      modelOrgID(campaign.OrganizationID),
+			CampaignID: campaign.ID.String(),
+			Name:       campaign.Name,
+			Status:     "active",
+		})
+	}
+}
+
+// enqueueCampaignWakeup seeds the campaign's send chain. keepRunningIfEmpty
+// turns on "Keep running for new leads" instead of finishing the campaign
+// when there is nothing to send, for a start a member asked for.
+func (s *campaignService) enqueueCampaignWakeup(ctx context.Context, campaignID uuid.UUID, keepRunningIfEmpty bool) *errx.Error {
 	if s.scheduler == nil || s.tasksClient == nil || s.taskRepo == nil {
 		return nil
 	}
@@ -599,8 +743,8 @@ func (s *campaignService) enqueueCampaignWakeup(ctx context.Context, campaignID 
 		case errors.Is(err, scheduler.ErrNoEligibleMailbox):
 			_ = s.campaignRepository.UpdateStatusWithLock(ctx, campaignID, "paused_no_accounts")
 			return errx.New(errx.BadRequest,
-				"this campaign's mailboxes are all outside their sending window or over their daily limit right now; "+
-					"check each mailbox's timezone, sending behaviour and daily cap")
+				"no mailbox on this campaign can send under its current sending settings; "+
+					"check each mailbox's sending behaviour profile (working days) and timezone")
 		case errors.Is(err, scheduler.ErrNoEmailAccounts):
 			_ = s.campaignRepository.UpdateStatusWithLock(ctx, campaignID, "paused_no_accounts")
 			return errx.New(errx.BadRequest, "no active email accounts found for campaign's email tags")
@@ -612,8 +756,21 @@ func (s *campaignService) enqueueCampaignWakeup(ctx context.Context, campaignID 
 						fmt.Sprintf("%d remaining lead(s) were refused by address verification; re-verify them or mark them deliverable to continue", n))
 				}
 			}
+			// A continuous campaign starts with nothing to send and waits.
+			c, gerr := s.campaignRepository.GetByID(ctx, campaignID)
+			if gerr == nil && c != nil && !c.Continuous && keepRunningIfEmpty && c.OrganizationID != nil {
+				if xerr := s.KeepRunning(ctx, *c.OrganizationID, c.ID,
+					"the campaign was started with every lead finished, so it waits for new ones instead of finishing again"); xerr == nil {
+					c.Continuous = true
+				}
+			}
+			if gerr == nil && c != nil && c.Continuous {
+				s.idleContinuousCampaign(ctx, c)
+				return nil
+			}
 			_ = s.campaignRepository.UpdateStatusWithLock(ctx, campaignID, "completed")
-			return errx.New(errx.BadRequest, "campaign has no remaining contacts to send")
+			return errx.NewWithIdentifier(errx.BadRequest, "no_remaining_leads",
+				"campaign has no remaining contacts to send; turn on Keep running for new leads to keep it active for leads that arrive later")
 		case errors.Is(err, scheduler.ErrCampaignEnded):
 			_ = s.campaignRepository.UpdateStatusWithLock(ctx, campaignID, "completed")
 			return errx.New(errx.BadRequest, "campaign is past its end date; extend or clear the end date to keep sending")
@@ -644,6 +801,7 @@ func (s *campaignService) enqueueCampaignWakeup(ctx context.Context, campaignID 
 	if !created {
 		return nil
 	}
+	_ = s.campaignRepository.ClearIdle(ctx, campaignID)
 
 	cloudTaskName, err := s.tasksClient.CreateTask(ctx, &proto.ProcessTask{TaskId: taskID.String()}, nextTime)
 	if err != nil {
@@ -856,4 +1014,131 @@ func modelOrgID(orgID *uuid.UUID) string {
 		return ""
 	}
 	return orgID.String()
+}
+
+// estimateHorizonDays bounds the finish-date walk; an audience that needs
+// longer than this reports no finish date rather than a meaningless one.
+const estimateHorizonDays = 2 * 366
+
+// Estimate projects an audience against a sender pool. It applies the same
+// cap rule as the scheduler (the smaller of the mailbox cap and the campaign
+// limit, per mailbox, per day) but none of its pacing, so the result is the
+// earliest the last send can land, not a promise.
+func (s *campaignService) Estimate(ctx context.Context, orgID uuid.UUID, in *models.CampaignEstimate) (*models.CampaignEstimateResult, *errx.Error) {
+	out := &models.CampaignEstimateResult{}
+
+	if len(in.SegmentIDs) > models.CampaignSegmentsMax {
+		return nil, errx.New(errx.BadRequest, fmt.Sprintf("a campaign can link at most %d segments", models.CampaignSegmentsMax))
+	}
+	seen := map[string]bool{}
+	segmentIDs := make([]string, 0, len(in.SegmentIDs))
+	for _, raw := range in.SegmentIDs {
+		if _, err := uuid.Parse(raw); err != nil {
+			return nil, errx.New(errx.BadRequest, "invalid segment id")
+		}
+		if seen[raw] {
+			continue
+		}
+		seen[raw] = true
+		segmentIDs = append(segmentIDs, raw)
+	}
+	// One preview over "in any of these segments" counts each contact once
+	// however many of the segments they belong to.
+	if len(segmentIDs) > 0 && s.segments != nil {
+		n, xerr := s.segments.Preview(ctx, orgID, &models.SegmentPreview{
+			Match:      models.SegmentMatchAny,
+			Conditions: []models.SegmentCondition{{Field: "segment", Operator: models.SegOpIn, Values: segmentIDs}},
+		})
+		if xerr != nil {
+			return nil, xerr
+		}
+		out.Recipients = n
+	}
+
+	dailyLimit := config.CampaignLimitDefault
+	if in.DailyLimit != nil {
+		if xerr := validate.CampaignDailyLimit(*in.DailyLimit); xerr != nil {
+			return nil, xerr
+		}
+		dailyLimit = *in.DailyLimit
+	}
+
+	// Same pool resolution as the scheduler: tags when given, otherwise
+	// every active mailbox in the workspace.
+	scope := repository.NewAccountScope(&orgID)
+	var accounts []models.Email
+	var xerr *errx.Error
+	if len(in.EmailTagIDs) > 0 {
+		accounts, xerr = s.emailRepo.GetByTags(ctx, scope, in.EmailTagIDs)
+	} else {
+		accounts, xerr = s.emailRepo.GetAllActiveInScope(ctx, scope)
+	}
+	if xerr != nil {
+		return nil, xerr
+	}
+	out.Mailboxes = len(accounts)
+	for _, acct := range accounts {
+		lim := min(acct.CampaignLimit, dailyLimit)
+		if lim < 0 {
+			lim = 0
+		}
+		out.DailyCapacity += lim
+		sent, err := s.taskRepo.CountCampaignEmailsSentToday(ctx, acct.ID)
+		if err != nil {
+			// A counter blip must not blank the whole estimate, but it must
+			// not flatter it either: a mailbox whose sends today are unknown
+			// contributes nothing to today and only counts from tomorrow.
+			continue
+		}
+		out.RemainingToday += max(0, lim-sent)
+	}
+	if out.Recipients == 0 || out.DailyCapacity == 0 {
+		return out, nil
+	}
+
+	// Walk calendar days from the start, spending each sending day's
+	// capacity, until the audience is covered. Today only has what the pool
+	// has not already sent.
+	days := bitmask.DefaultDays()
+	if in.Days != nil && *in.Days != 0 {
+		days = *in.Days
+	}
+	loc := time.UTC
+	if in.Timezone != nil && tz.Valid(*in.Timezone) {
+		if l, err := time.LoadLocation(*in.Timezone); err == nil {
+			loc = l
+		}
+	}
+	now := time.Now().In(loc)
+	start := now
+	if in.StartDate != nil && in.StartDate.After(now) {
+		start = in.StartDate.In(loc)
+	}
+	startDay := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc)
+	startsToday := startDay.Equal(time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc))
+	remaining := out.Recipients
+	sendingDays := 0
+	for i := 0; i < estimateHorizonDays; i++ {
+		d := startDay.AddDate(0, 0, i)
+		// Mask bit 0 is Monday; time.Weekday starts at Sunday.
+		if days&(1<<((int(d.Weekday())+6)%7)) == 0 {
+			continue
+		}
+		capacity := out.DailyCapacity
+		if i == 0 && startsToday {
+			capacity = out.RemainingToday
+		}
+		if capacity <= 0 {
+			continue
+		}
+		sendingDays++
+		remaining -= capacity
+		if remaining <= 0 {
+			finish := d
+			out.SendingDays = &sendingDays
+			out.EstimatedFinishAt = &finish
+			break
+		}
+	}
+	return out, nil
 }

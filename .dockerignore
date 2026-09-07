@@ -11,14 +11,17 @@
 .vscode
 .agentd
 
-# Frontend bits — the web service bind-mounts ./web directly, so we
-# never want the heavyweight frontend tree to land in the Go build
-# context.
-web/node_modules
-web/.vite
+# Frontend trees: the Go images never need them, and a host node_modules
+# copied over the forms image's own install makes pnpm abort the build (#292).
+**/node_modules
+**/.vite
 web/dist
 web/build
 web/coverage
+forms/dist
+admin/dist
+site/dist
+site/.astro
 
 # Compiled host binaries that would shadow / inflate the context.
 bin

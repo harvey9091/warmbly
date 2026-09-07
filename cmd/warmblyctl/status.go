@@ -11,6 +11,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/instancecheck"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/version"
 )
 
 // errChecksFailed is how `make doctor` fails a script. The findings are already
@@ -41,6 +42,9 @@ type instanceStatus struct {
 
 	Checks  []instancecheck.Finding `json:"checks"`
 	Summary instancecheck.Summary   `json:"summary"`
+
+	Version string `json:"version"`
+	Commit  string `json:"commit,omitempty"`
 }
 
 func runStatus(ctx context.Context, args []string) error {
@@ -120,6 +124,9 @@ func collectStatus(ctx context.Context, c *conn) (*instanceStatus, error) {
 
 		AppURL:       config.AppBaseURL(),
 		AppURLSource: appURLSource(),
+
+		Version: version.String(),
+		Commit:  version.ShortCommit(),
 	}
 	state.NextSteps = nextSteps(state)
 	state.Checks, state.Summary = runChecks(ctx, c)
@@ -133,7 +140,13 @@ func printStatus(s *instanceStatus) {
 	}
 	mail := fmt.Sprintf("%s (%s; %s)", s.MailTransport, mailEffect(s.MailTransport, s.MailDelivers), s.MailTransportSource)
 
+	build := s.Version
+	if s.Commit != "" {
+		build += " (" + s.Commit + ")"
+	}
+
 	fmt.Println("Instance")
+	fmt.Printf("  Version           %s\n", build)
 	fmt.Printf("  Accounts          %d\n", s.Accounts)
 	fmt.Printf("  Claimed           %s\n", claimed)
 	fmt.Printf("  Platform admins   %d\n", s.AdminCount)

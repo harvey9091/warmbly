@@ -458,11 +458,11 @@ The full catalog is available at `GET /webhooks/event-types`. Below is the compl
 | `campaign.deleted` | A campaign is deleted. | |
 | `campaign.email_sent` | A campaign email is dispatched by a worker. | yes |
 | `campaign.email_delivered` | A campaign email is accepted by the recipient's mail server. | yes |
-| `campaign.email_opened` | A tracked open is recorded. | yes |
-| `campaign.email_clicked` | A tracked link click is recorded. | yes |
+| `campaign.email_opened` | A person opens a tracked email. Automated opens (mail privacy proxies, fetches inside seconds of the send) do not fire it. | yes |
+| `campaign.email_clicked` | A person clicks a tracked link. The payload carries the `url` and the link's `link_label`. Automated clicks (security gateways walking the links) do not fire it. | yes |
 | `campaign.email_bounced` | A campaign email bounces. | |
 | `campaign.reply_received` | A human reply lands for a campaign thread. | |
-| `campaign.unsubscribed` | A recipient clicks the unsubscribe link or requests removal. | |
+| `campaign.unsubscribed` | A recipient opts out. `source` is `one_click` (the mail client's button), `link` (the link in the email), `reply` (a reply asking to stop) or `action` (a sequence's unsubscribe step). | |
 | `campaign.deliverability_warning` | The campaign's rolling bounce or complaint rate enters the early-warning band. | |
 | `campaign.action` | A sequence flow `notify` action node fires. | |
 
@@ -507,10 +507,10 @@ The full catalog is available at `GET /webhooks/event-types`. Below is the compl
 
 | Event | Description | Firehose |
 | --- | --- | --- |
-| `contact.created` | A contact is created. | |
+| `contact.created` | A contact is created. Carries `contact_id`, `contact_email`, `first_name`, `last_name`, `company`, `phone`, `subscribed`, `custom_fields`, `source`, `source_detail`, `campaign_ids`, `category_ids` and `created_at`. Fires for contacts added by hand, through the API, by a form or by an automation; file imports, sheet syncs and a single API request adding more than 100 contacts are bulk arrivals and do not raise it. | |
 | `contact.updated` | A contact's fields change. | |
 | `contact.deleted` | A contact is deleted. | |
-| `form.submitted` | A hosted form received a submission. Carries the form id and name, the submission id, the answers, and the contact id when one was created or matched. | |
+| `form.submitted` | A hosted form received a submission. Carries the form id and name, the submission id, the answers under `data`, the mapped contact columns (`contact_email`, `first_name`, `last_name`, `company`, `phone`), `source_url`, and the contact id when one was created or matched. | |
 
 ### CRM
 

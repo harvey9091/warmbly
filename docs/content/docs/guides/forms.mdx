@@ -58,7 +58,7 @@ The **Settings** tab controls what a submission does:
 
 - **Success message** is shown after submitting, or set a **redirect URL** to send the visitor to your own thank-you page instead.
 - **Add to categories** files every submitted contact under the categories you pick, for example "Website leads".
-- **Add to campaign** enrolls new contacts as leads in the campaign you pick. Sending still follows the campaign's own schedule, limits and windows; a form never causes immediate mail.
+- **Add to campaign** enrolls new contacts as leads in the campaign you pick. Sending still follows the campaign's own schedule, limits and windows; a form never causes immediate mail. Picking a campaign turns on its **Keep running for new leads** setting, so it waits between submissions instead of finishing; a campaign that had already finished restarts when a lead arrives, through the usual launch checks, and a refused restart is noted in its activity log while the lead waits.
 - **Spam protection** and **allowed embed domains** are covered below.
 
 ## Publishing and sharing
@@ -108,6 +108,8 @@ Because each recipient's link is unique, those numbers are per contact rather th
 The **Submissions** tab is a table of everyone who engaged, newest activity first and live: a new submission appears for everyone with the form open, without a refresh. Alongside completed responses it lists people who opened a personalized link but have not finished, marked **In progress** with the page they reached, so a stalled lead is visible instead of invisible. Search and the status filter narrow the list; click a response for every answer; the trash button deletes it (the contact it created is kept), and selecting rows offers a bulk delete.
 
 Each submitted contact carries `form` as its first-touch source, gets a "Submitted a form" entry on its activity timeline, and can be filtered in segments by source. The form's page views, submission count and conversion rate show on the Forms list.
+
+A submission is also the **Form submitted** [automation trigger](/guides/automations/#triggers) and the `form.submitted` webhook event, carrying the form, the contact and every answer by its key, so a flow can tag the contact, open a task or post to Slack the moment it lands.
 
 Submissions also fire the `form.submitted` [webhook](/guides/webhooks/), carrying the answers and the contact id, so you can forward leads to any external system.
 

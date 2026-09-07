@@ -125,6 +125,14 @@ type CampaignProgressRepository interface {
 	HasSentSteps(ctx context.Context, campaignID, contactID uuid.UUID) (bool, error)
 	RecordEmailOpened(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID, machine bool) error
 	RecordEmailClicked(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID) error
+	// UnrecordEmailClicked clears clicked_at when every logged click on the
+	// step turned out to be automated (a burst recognised after the first
+	// click already stamped it). clicked_at keeps meaning "a person clicked".
+	UnrecordEmailClicked(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID) error
+	// GetStepSentAt returns when the step was dispatched (nil when it was not),
+	// the reference point for telling an instant machine open or click from a
+	// person's.
+	GetStepSentAt(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID) (*time.Time, error)
 	RecordEmailReplied(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID) error
 	RecordEmailBounced(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID) error
 	RecordEmailComplained(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID) error
@@ -427,10 +435,17 @@ func (r *campaignProgressRepository) RecordEmailOpened(ctx context.Context, camp
 }
 
 // RecordEmailClicked records that an email link was clicked
+// RecordEmailClicked stamps a person's click. It also counts as an open:
+// the person had the email in front of them whatever the pixel saw, so a
+// client that blocks images no longer reads "clicked, not opened". The
+// implied open shares the click's timestamp, which is how UnrecordEmailClicked
+// tells it from a pixel open.
 func (r *campaignProgressRepository) RecordEmailClicked(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID) error {
 	query := `
 		UPDATE campaign_contact_progress
-		SET clicked_at = NOW()
+		SET clicked_at = NOW(),
+		    opened_at = COALESCE(opened_at, NOW()),
+		    opened_machine = false
 		WHERE campaign_id = $1
 		  AND contact_id = $2
 		  AND sequence_id = $3
@@ -439,6 +454,59 @@ func (r *campaignProgressRepository) RecordEmailClicked(ctx context.Context, cam
 
 	_, err := r.db.Exec(ctx, query, campaignID, contactID, sequenceID)
 	return err
+}
+
+// UnrecordEmailClicked walks a click stamp back once no human click remains
+// on the step. Guarded by the click log so a concurrent human click is never
+// erased, and only a stamp written alongside a logged click is touched: a
+// stamp older than the step's earliest logged click predates per-link
+// logging, so it came from a person the log never saw.
+func (r *campaignProgressRepository) UnrecordEmailClicked(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID) error {
+	query := `
+		UPDATE campaign_contact_progress ccp
+		SET clicked_at = NULL,
+		    opened_at = CASE
+		        WHEN ccp.opened_at = ccp.clicked_at AND NOT EXISTS (
+		            SELECT 1 FROM email_opens o
+		            WHERE o.campaign_id = $1 AND o.contact_id = $2 AND o.sequence_id = $3 AND o.machine = false
+		        ) THEN NULL
+		        ELSE ccp.opened_at
+		    END
+		WHERE ccp.campaign_id = $1
+		  AND ccp.contact_id = $2
+		  AND ccp.sequence_id = $3
+		  AND ccp.clicked_at IS NOT NULL
+		  AND ccp.clicked_at >= (
+			SELECT MIN(lc.clicked_at) - INTERVAL '1 minute' FROM email_link_clicks lc
+			WHERE lc.campaign_id = $1 AND lc.contact_id = $2 AND lc.sequence_id = $3
+		  )
+		  AND NOT EXISTS (
+			SELECT 1 FROM email_link_clicks lc
+			WHERE lc.campaign_id = $1 AND lc.contact_id = $2 AND lc.sequence_id = $3 AND lc.machine = false
+		  )
+	`
+
+	_, err := r.db.Exec(ctx, query, campaignID, contactID, sequenceID)
+	return err
+}
+
+// GetStepSentAt returns the step's dispatch time, or nil when unsent/unknown.
+func (r *campaignProgressRepository) GetStepSentAt(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID) (*time.Time, error) {
+	query := `
+		SELECT LEAST(dispatched_at, sent_at)
+		FROM campaign_contact_progress
+		WHERE campaign_id = $1 AND contact_id = $2 AND sequence_id = $3
+	`
+
+	var sentAt *time.Time
+	err := r.db.QueryRow(ctx, query, campaignID, contactID, sequenceID).Scan(&sentAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return sentAt, nil
 }
 
 // RecordEmailReplied records that a contact replied
@@ -672,10 +740,14 @@ func (r *campaignProgressRepository) GetCampaignRollingRates(ctx context.Context
 	return out, err
 }
 
-// GetContactProgress retrieves progress for a specific contact in a campaign
+// GetContactProgress retrieves progress for a specific contact in a campaign.
+// A machine open comes back as NULL: this feeds routing and instant actions,
+// and an automated fetch is not intent (machine clicks never stamp at all).
 func (r *campaignProgressRepository) GetContactProgress(ctx context.Context, campaignID, contactID uuid.UUID) ([]CampaignContactProgress, error) {
 	query := `
-		SELECT campaign_id, contact_id, sequence_id, sent_at, opened_at, clicked_at, replied_at, bounced_at, complained_at, COALESCE(reply_class, ''), COALESCE(ai_label, '')
+		SELECT campaign_id, contact_id, sequence_id, sent_at,
+		       CASE WHEN opened_machine THEN NULL ELSE opened_at END,
+		       clicked_at, replied_at, bounced_at, complained_at, COALESCE(reply_class, ''), COALESCE(ai_label, '')
 		FROM campaign_contact_progress
 		WHERE campaign_id = $1 AND contact_id = $2
 		ORDER BY sent_at ASC
@@ -747,12 +819,15 @@ func (r *campaignProgressRepository) CheckContactHasReplied(ctx context.Context,
 	return hasReplied, err
 }
 
-// CountEmailsSentTodayByOrganization returns how many campaign emails were sent today by an organization.
+// CountEmailsSentTodayByOrganization returns how many campaign emails were sent
+// today by an organization. Action and wait steps stamp sent_at too, for
+// routing, but send nothing, so only email steps count.
 func (r *campaignProgressRepository) CountEmailsSentTodayByOrganization(ctx context.Context, organizationID uuid.UUID) (int, error) {
 	query := `
 		SELECT COUNT(*)
 		FROM campaign_contact_progress ccp
 		JOIN campaigns c ON c.id = ccp.campaign_id
+		JOIN sequences s ON s.id = ccp.sequence_id AND s.kind = 'email'
 		WHERE c.organization_id = $1
 		  AND ccp.sent_at IS NOT NULL
 		  AND DATE(ccp.sent_at) = CURRENT_DATE
@@ -884,7 +959,9 @@ func (r *campaignProgressRepository) FindNextRoutedPair(ctx context.Context, cam
 		FROM campaign_leads cl
 		JOIN contacts c ON c.id = cl.contact_id
 		LEFT JOIN LATERAL (
-			SELECT sequence_id, sent_at, opened_at, clicked_at, replied_at, reply_class, ai_label
+			SELECT sequence_id, sent_at,
+			       CASE WHEN p.opened_machine THEN NULL ELSE p.opened_at END AS opened_at,
+			       clicked_at, replied_at, reply_class, ai_label
 			FROM campaign_contact_progress p
 			WHERE p.campaign_id = $1 AND p.contact_id = cl.contact_id AND p.sent_at IS NOT NULL
 			ORDER BY p.sent_at DESC LIMIT 1
@@ -906,13 +983,11 @@ func (r *campaignProgressRepository) FindNextRoutedPair(ctx context.Context, cam
 		      AND f.sent_at IS NULL AND f.failed_at IS NOT NULL
 		      AND f.send_attempts >= $2
 		  )
-		  AND NOT EXISTS (
-		    SELECT 1 FROM suppressed_recipients sr
-		    JOIN campaigns camp ON camp.organization_id = sr.organization_id
-		    WHERE camp.id = $1
-		      AND LOWER(sr.email) = LOWER(c.email)
-		      AND (sr.expires_at IS NULL OR sr.expires_at > NOW())
-		  )
+		  -- The workspace suppression list (addresses and domains) and the
+		  -- contact's own subscription flag are both send gates; the audience
+		  -- count applies the same two, so the number shown is the number sent.
+		  AND NOT recipient_suppressed((SELECT organization_id FROM campaigns WHERE id = $1), c.email)
+		  AND c.subscribed IS NOT FALSE
 		  -- Addresses the pre-send gates in the campaign task would refuse.
 		  -- Without this the finder keeps handing back the same undeliverable
 		  -- contact, the task skips it, and the campaign never reaches the
@@ -1019,18 +1094,15 @@ func (r *campaignProgressRepository) RouteContact(ctx context.Context, campaignI
 		           AND f.sent_at IS NULL AND f.failed_at IS NOT NULL
 		           AND f.send_attempts >= $2
 		       ) AS failed,
-		       EXISTS (
-		         SELECT 1 FROM suppressed_recipients sr
-		         JOIN campaigns camp ON camp.organization_id = sr.organization_id
-		         WHERE camp.id = $1
-		           AND LOWER(sr.email) = LOWER(c.email)
-		           AND (sr.expires_at IS NULL OR sr.expires_at > NOW())
-		       ) AS suppressed,
+		       (recipient_suppressed((SELECT organization_id FROM campaigns WHERE id = $1), c.email)
+		        OR c.subscribed IS FALSE) AS suppressed,
 		       ` + undeliverableClause("$1") + ` AS undeliverable
 		FROM campaign_leads cl
 		JOIN contacts c ON c.id = cl.contact_id
 		LEFT JOIN LATERAL (
-			SELECT sequence_id, sent_at, opened_at, clicked_at, replied_at, reply_class, ai_label
+			SELECT sequence_id, sent_at,
+			       CASE WHEN p.opened_machine THEN NULL ELSE p.opened_at END AS opened_at,
+			       clicked_at, replied_at, reply_class, ai_label
 			FROM campaign_contact_progress p
 			WHERE p.campaign_id = $1 AND p.contact_id = cl.contact_id AND p.sent_at IS NOT NULL
 			ORDER BY p.sent_at DESC LIMIT 1
@@ -1393,7 +1465,9 @@ func (r *campaignProgressRepository) CountUndeliverableLeads(ctx context.Context
 		FROM campaign_leads cl
 		JOIN contacts c ON c.id = cl.contact_id
 		LEFT JOIN LATERAL (
-			SELECT sequence_id, sent_at, opened_at, clicked_at, replied_at, reply_class, ai_label
+			SELECT sequence_id, sent_at,
+			       CASE WHEN p.opened_machine THEN NULL ELSE p.opened_at END AS opened_at,
+			       clicked_at, replied_at, reply_class, ai_label
 			FROM campaign_contact_progress p
 			WHERE p.campaign_id = $1 AND p.contact_id = cl.contact_id AND p.sent_at IS NOT NULL
 			ORDER BY p.sent_at DESC LIMIT 1
@@ -1415,13 +1489,11 @@ func (r *campaignProgressRepository) CountUndeliverableLeads(ctx context.Context
 		      AND f.sent_at IS NULL AND f.failed_at IS NOT NULL
 		      AND f.send_attempts >= $2
 		  )
-		  AND NOT EXISTS (
-		    SELECT 1 FROM suppressed_recipients sr
-		    JOIN campaigns camp ON camp.organization_id = sr.organization_id
-		    WHERE camp.id = $1
-		      AND LOWER(sr.email) = LOWER(c.email)
-		      AND (sr.expires_at IS NULL OR sr.expires_at > NOW())
-		  )
+		  -- The workspace suppression list (addresses and domains) and the
+		  -- contact's own subscription flag are both send gates; the audience
+		  -- count applies the same two, so the number shown is the number sent.
+		  AND NOT recipient_suppressed((SELECT organization_id FROM campaigns WHERE id = $1), c.email)
+		  AND c.subscribed IS NOT FALSE
 		  AND ` + undeliverableClause("$1") + `
 	`
 	rows, err := r.db.Query(ctx, query, campaignID, config.CampaignSendMaxAttempts)

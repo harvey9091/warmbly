@@ -46,6 +46,8 @@ pub struct AppState {
     /// Proxies whose forwarded-IP header is believed, and which header
     pub trusted_proxies: Arc<Vec<ipnet::IpNet>>,
     pub client_ip_header: Arc<String>,
+    /// Key for the source-address token (see `hash_ip`)
+    pub ip_hash_key: Arc<String>,
 }
 
 impl AppState {
@@ -75,6 +77,7 @@ impl AppState {
             hit_rate_limiter: Arc::new(RateLimiter::new(config.pagehit_rate_limit_per_min)),
             trusted_proxies: Arc::new(config.trusted_proxies.clone()),
             client_ip_header: Arc::new(config.client_ip_header.clone()),
+            ip_hash_key: Arc::new(config.ip_hash_key.clone()),
         }
     }
 
@@ -124,13 +127,15 @@ pub async fn track_open(
         return pixel_response();
     }
 
-    // Extract IP hash for deduplication + rate limiting
-    let ip_hash = Some(hash_ip(&client_ip(
+    // The address is hashed for deduplication + rate limiting; only its
+    // network travels with the event, for the location lookup downstream.
+    let ip = client_ip(
         peer,
         &headers,
         &state.trusted_proxies,
         &state.client_ip_header,
-    )));
+    );
+    let ip_hash = Some(hash_ip(&state.ip_hash_key, &ip));
 
     // Anti-flood: over-budget sources still get the pixel (real mail clients
     // must never see a broken image), but nothing is published.
@@ -164,9 +169,11 @@ pub async fn track_open(
                 event_type: "EMAIL_OPENED".to_string(),
                 task_id,
                 original_url: None,
+                link_id: None,
                 timestamp: Utc::now().to_rfc3339(),
                 user_agent,
                 ip_hash,
+                client_ip: Some(anonymize_ip(&ip)).filter(|n| !n.is_empty()),
             })
             .await;
     });
@@ -191,13 +198,15 @@ pub async fn track_click(
         return (StatusCode::NOT_FOUND, "Unknown link").into_response();
     }
 
-    // Anti-flood: cap total request rate per source
-    let ip_hash = Some(hash_ip(&client_ip(
+    // Anti-flood: cap total request rate per source. Only the address's
+    // network rides along, for the location lookup downstream.
+    let ip = client_ip(
         peer,
         &headers,
         &state.trusted_proxies,
         &state.client_ip_header,
-    )));
+    );
+    let ip_hash = Some(hash_ip(&state.ip_hash_key, &ip));
     let source = ip_hash.clone().unwrap_or_else(|| "unknown".to_string());
     if !state.rate_limiter.allow(&source).await {
         return (StatusCode::TOO_MANY_REQUESTS, "Slow down").into_response();
@@ -245,15 +254,18 @@ pub async fn track_click(
     // Publish event asynchronously (fire and forget)
     let producer = state.producer.clone();
     let destination = link.destination.clone();
+    let ticket = link_id.clone();
     tokio::spawn(async move {
         producer
             .publish(TrackingEvent {
                 event_type: "EMAIL_CLICKED".to_string(),
                 task_id: link.task_id,
                 original_url: Some(destination),
+                link_id: Some(ticket),
                 timestamp: Utc::now().to_rfc3339(),
                 user_agent,
                 ip_hash,
+                client_ip: Some(anonymize_ip(&ip)).filter(|n| !n.is_empty()),
             })
             .await;
     });
@@ -317,7 +329,7 @@ pub async fn track_page_hit(
         &state.trusted_proxies,
         &state.client_ip_header,
     );
-    let source = hash_ip(&ip);
+    let source = hash_ip(&state.ip_hash_key, &ip);
 
     // Anti-flood: page views have their own, tighter budget on top of the
     // shared one, and the shared one counts too so a flood here also
@@ -464,9 +476,32 @@ fn client_ip(
     }
 }
 
-fn hash_ip(ip: &str) -> String {
-    // Hash the IP for privacy
+/// The network an address belongs to, for the location lookup downstream:
+/// the last IPv4 octet zeroed, an IPv6 address cut to its first 48 bits.
+/// City-level resolution survives; a single host is no longer named, so the
+/// bus can retain the event without retaining the address.
+fn anonymize_ip(ip: &str) -> String {
+    match ip.parse::<IpAddr>() {
+        Ok(IpAddr::V4(v4)) => {
+            let o = v4.octets();
+            format!("{}.{}.{}.0", o[0], o[1], o[2])
+        }
+        Ok(IpAddr::V6(v6)) => {
+            let s = v6.segments();
+            std::net::Ipv6Addr::new(s[0], s[1], s[2], 0, 0, 0, 0, 0).to_string()
+        }
+        Err(_) => String::new(),
+    }
+}
+
+/// A stable, keyed token for a source address: the same source gets the same
+/// token (dedupe, rate limits, the burst rule), and nobody holding the token
+/// can enumerate IPv4 space to get the address back, because the key is
+/// secret. The key goes in first so the digest is not one of a public value.
+fn hash_ip(key: &str, ip: &str) -> String {
     let mut hasher = Sha256::new();
+    hasher.update(key.as_bytes());
+    hasher.update([0u8]);
     hasher.update(ip.as_bytes());
     let result = hasher.finalize();
     format!("{:x}", result)[..16].to_string() // Take first 16 chars
@@ -531,6 +566,23 @@ mod tests {
             client_ip(peer, &hdr(&[]), &trusted, "x-forwarded-for"),
             "10.1.2.3"
         );
+    }
+
+    #[test]
+    fn hash_ip_is_keyed_and_stable() {
+        assert_eq!(hash_ip("k", "203.0.113.9"), hash_ip("k", "203.0.113.9"));
+        assert_ne!(hash_ip("k", "203.0.113.9"), hash_ip("other", "203.0.113.9"));
+        assert_eq!(hash_ip("k", "203.0.113.9").len(), 16);
+    }
+
+    #[test]
+    fn anonymize_ip_keeps_only_the_network() {
+        assert_eq!(anonymize_ip("203.0.113.9"), "203.0.113.0");
+        assert_eq!(
+            anonymize_ip("2001:db8:abcd:1234:5678::1"),
+            "2001:db8:abcd::"
+        );
+        assert_eq!(anonymize_ip("not an ip"), "");
     }
 
     #[test]

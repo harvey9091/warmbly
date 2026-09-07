@@ -5,6 +5,8 @@
 # the heavy pnpm build runs only once.
 FROM --platform=$BUILDPLATFORM node:22-alpine AS build
 WORKDIR /app
+# No TTY in a build: CI=true makes pnpm reinstall instead of prompting.
+ENV CI=true
 RUN corepack enable && corepack prepare pnpm@11.9.0 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile

@@ -44,6 +44,7 @@ func (s *WorkerService) recordSendOutcome(result *wmail.SendResult) {
 		errx.MailErrorCodeQuotaExceeded:
 		s.RecordRateLimitError()
 	case errx.MailErrorCodeRecipientRejected,
+		errx.MailErrorCodeSendRejected,
 		errx.MailErrorCodeAccountSuspended,
 		// Refused on the sending domain's authentication: a hard rejection
 		// that stays hard until DNS is fixed, so it must not be counted as a

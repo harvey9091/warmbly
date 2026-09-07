@@ -1,0 +1,28 @@
+[Unit]
+Description=Warmbly updater (one-click update from the admin panel)
+Documentation=https://docs.warmbly.com/development/updates/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Runs as the user who owns the checkout, so git writes stay theirs. The
+# upgrade script builds unprivileged and then runs the fixed-path installer
+# (/usr/local/sbin/warmbly-install-release, root-owned) through sudo; that
+# installer is the only command to allow in sudoers. See the docs.
+User=deploy
+Group=deploy
+EnvironmentFile=/etc/warmbly/updater.env
+WorkingDirectory=/opt/warmbly/src
+Environment=UPDATER_MODE=command
+Environment=UPDATER_REPO_DIR=/opt/warmbly/src
+Environment=UPDATER_COMMAND=/opt/warmbly/src/scripts/upgrade-bare-metal.sh
+Environment=UPDATER_BACKEND_HEALTH_URL=http://127.0.0.1:8080/health
+Environment=UPDATER_STATE_DIR=/var/lib/warmbly-updater
+Environment=UPDATER_ADDR=127.0.0.1:8095
+ExecStart=/opt/warmbly/bin/updater
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

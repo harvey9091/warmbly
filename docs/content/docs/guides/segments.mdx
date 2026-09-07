@@ -51,7 +51,9 @@ Sequences can pin too: the **Add to segment** and **Remove from segment** action
 - **Browse**: a segment page lists its current members with the same table, filters, detail drawer and bulk actions as the contacts page.
 - **Add to campaign**: enrols every current member as a lead of the campaign you pick, from the segment page or with **From segment** on a campaign's Leads tab. Contacts already in that campaign are skipped, and a running campaign wakes up to schedule the new leads. This is a snapshot: contacts who join the segment later are not added until you run it again. To keep a campaign fed automatically, [link the segment](#linking-a-segment-to-a-campaign) instead.
 - **Link to campaign**: attaches the segment to a campaign as a live audience, so contacts who join the segment later become leads on their own. See [below](#linking-a-segment-to-a-campaign).
+- **One-time email**: send one message to the segment without building a sequence. **Campaigns** > **New campaign** > **One-time email** picks the segments, shows how many contacts they resolve to and how long the mailbox pool needs, and sends now or on a date. See [one-time emails](/guides/campaigns/#one-time-emails).
 - **Filter**: the contact list's filter bar has a **Segment** pill, and the same scope carries into an export.
+- **Export**: **Export** on a segment page downloads its members as CSV, XLSX or JSON, either every member, the ones matching the page's filters, or the selected rows.
 - **Duplicate**: the segment menu copies a definition to start a variation from.
 - **Search and export**: the contact search and export accept `segment_ids`, so anything that takes a contact filter can be scoped to a segment.
 
@@ -59,14 +61,16 @@ Sequences can pin too: the **Add to segment** and **Remove from segment** action
 
 Where **Add to campaign** copies today's members once, a linked segment is a live audience: the campaign keeps enrolling whoever the segment says belongs. Manage the links from the **Segments** button on a campaign's Leads tab; a campaign can link up to 20 segments.
 
-Linking enrols every current member as a lead immediately. From then on, any contact who enters the segment, a new contact, an import, a condition edit, a manual pin-in, or simply drifting into a date or engagement condition, is enrolled automatically; a background check picks up drift about every 2 minutes.
+Linking enrols every current member as a lead immediately and turns on the campaign's **Keep running for new leads** setting, so the campaign waits for members instead of finishing when it runs out (turn it off in the campaign's preferences if you want it to finish). From then on, any contact who enters the segment, a new contact, an import, a condition edit, a manual pin-in, or simply drifting into a date or engagement condition, is enrolled automatically; a background check picks up drift about every 2 minutes.
+
+The Leads tab shows every linked segment in a **Linked segments** strip: the segment's name, how many of its members are leads (`120/120`), a **no contacts** mark when it currently matches nobody, and a **held out** count when members were removed from the campaign by hand. Clicking a chip filters the list to that segment's leads; **Add back** re-enrols held-out members.
 
 Enrolment is additive. A contact who later falls out of the segment keeps their lead row and their progress; the link only ever adds. Detaching a segment stops future enrolment but leaves the leads it already added in place. Removing a lead from the campaign by hand is respected too: automatic enrolment will not re-add that contact, even while they still match a linked segment, until you add them back yourself.
 
 The campaign reacts to growth by status:
 
-- **Active**: woken up to schedule the new leads straight away.
-- **Finished**: restarted automatically, through the same launch checks as pressing play.
+- **Active**, including one **waiting for leads**: woken up to schedule the new leads straight away.
+- **Finished**: restarted automatically, through the same launch checks as pressing play. A refused restart is noted in the campaign's activity log.
 - **Paused** (or draft): the leads accumulate and send when the campaign runs.
 
 A segment linked to a campaign cannot be deleted; detach it from the campaign first.

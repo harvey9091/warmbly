@@ -69,6 +69,7 @@ func (d Deps) registerCampaignTools(r *Registry) {
 		InputSchema: objectSchema(map[string]any{
 			"name":        strProp("Campaign name (required)."),
 			"description": strProp("Optional description."),
+			"kind":        strProp("Optional: 'sequence' (default, follow-ups allowed) or 'one_time' (a single message, at most one step)."),
 			"steps": arrProp("Optional email steps to seed the sequence.", objectSchema(map[string]any{
 				"subject":   strProp("Email subject (may contain {{merge}} vars)."),
 				"body":      strProp("Email body text (may contain {{merge}} vars)."),
@@ -104,8 +105,13 @@ func (d Deps) registerCampaignTools(r *Registry) {
 			"stop_on_reply":      boolProp("Stop sequencing a lead once they reply."),
 			"open_tracking":      boolProp("Track opens."),
 			"link_tracking":      boolProp("Track link clicks."),
+			"utm_tracking":       boolProp("Tag every link with UTM parameters automatically."),
+			"utm_source":         strProp("utm_source override (empty means the default, warmbly)."),
+			"utm_medium":         strProp("utm_medium override (empty means the default, email)."),
+			"utm_campaign":       strProp("utm_campaign override (empty means the campaign name as a slug)."),
 			"text_only":          boolProp("Send plain text only."),
 			"unsubscribe_header": boolProp("Send the List-Unsubscribe header (one-click unsubscribe)."),
+			"unsubscribe_mode":   strProp("In-body opt-out: inherit (workspace default), text (reply-to-opt-out line), link (unsubscribe link), off."),
 			"ramp_enabled":       boolProp("Gradually ramp daily volume."),
 			"ramp_start":         intProp("Ramp starting volume."),
 			"ramp_increment":     intProp("Ramp daily increment."),
@@ -211,8 +217,13 @@ func (d Deps) updateCampaign(ctx context.Context, inv Invocation, args json.RawM
 		StopOnReply       *bool   `json:"stop_on_reply"`
 		OpenTracking      *bool   `json:"open_tracking"`
 		LinkTracking      *bool   `json:"link_tracking"`
+		UTMTracking       *bool   `json:"utm_tracking"`
+		UTMSource         *string `json:"utm_source"`
+		UTMMedium         *string `json:"utm_medium"`
+		UTMCampaign       *string `json:"utm_campaign"`
 		TextOnly          *bool   `json:"text_only"`
 		UnsubscribeHeader *bool   `json:"unsubscribe_header"`
+		UnsubscribeMode   *string `json:"unsubscribe_mode"`
 		RampEnabled       *bool   `json:"ramp_enabled"`
 		RampStart         *int    `json:"ramp_start"`
 		RampIncrement     *int    `json:"ramp_increment"`
@@ -232,8 +243,13 @@ func (d Deps) updateCampaign(ctx context.Context, inv Invocation, args json.RawM
 		StopOnReply:       in.StopOnReply,
 		OpenTracking:      in.OpenTracking,
 		LinkTracking:      in.LinkTracking,
+		UTMTracking:       in.UTMTracking,
+		UTMSource:         in.UTMSource,
+		UTMMedium:         in.UTMMedium,
+		UTMCampaign:       in.UTMCampaign,
 		TextOnly:          in.TextOnly,
 		UnsubscribeHeader: in.UnsubscribeHeader,
+		UnsubscribeMode:   in.UnsubscribeMode,
 		RampEnabled:       in.RampEnabled,
 		RampStart:         in.RampStart,
 		RampIncrement:     in.RampIncrement,
@@ -368,7 +384,7 @@ func (d Deps) listCampaigns(ctx context.Context, inv Invocation, args json.RawMe
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
-	res, xerr := d.Campaigns.Search(ctx, inv.OrgID.String(), in.Query, "", "", in.Status, fmt.Sprintf("%d", limit))
+	res, xerr := d.Campaigns.Search(ctx, inv.OrgID.String(), in.Query, "", "", in.Status, "", fmt.Sprintf("%d", limit))
 	if xerr != nil {
 		return "", fromErrx(xerr)
 	}
@@ -413,8 +429,9 @@ func (d Deps) getCampaignStats(ctx context.Context, inv Invocation, args json.Ra
 
 func (d Deps) createCampaignDraft(ctx context.Context, inv Invocation, args json.RawMessage) (string, error) {
 	in, err := decodeArgs[struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
+		Name        string  `json:"name"`
+		Description string  `json:"description"`
+		Kind        *string `json:"kind"`
 		Steps       []struct {
 			Subject  string `json:"subject"`
 			Body     string `json:"body"`
@@ -425,6 +442,9 @@ func (d Deps) createCampaignDraft(ctx context.Context, inv Invocation, args json
 		return "", err
 	}
 	if in.Name == "" {
+		return "", ErrInvalidArgs
+	}
+	if in.Kind != nil && *in.Kind != "" && !models.ValidCampaignKind(*in.Kind) {
 		return "", ErrInvalidArgs
 	}
 
@@ -442,6 +462,7 @@ func (d Deps) createCampaignDraft(ctx context.Context, inv Invocation, args json
 	camp, xerr := d.Campaigns.Create(ctx, inv.UserID.String(), &orgID, &models.CreateCampaign{
 		Name:        in.Name,
 		Description: in.Description,
+		Kind:        in.Kind,
 		Sequences:   seqs,
 	})
 	if xerr != nil {

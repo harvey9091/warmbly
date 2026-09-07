@@ -229,7 +229,7 @@ func (s *service) Dispatch(ctx context.Context, orgID uuid.UUID, eventType model
 	// Fan the event to non-webhook subscribers (integration actions) first,
 	// independently of whether any webhook endpoint is configured.
 	if s.sink != nil {
-		s.sink(ctx, orgID, eventType, data)
+		s.sink(ctx, orgID, eventType, stampAutomationDepth(ctx, data))
 	}
 
 	endpoints, err := s.repo.MatchingEndpoints(ctx, orgID, eventType)

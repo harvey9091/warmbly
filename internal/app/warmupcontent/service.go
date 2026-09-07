@@ -84,9 +84,11 @@ type Service interface {
 	// returns the job ID immediately. Results are ingested later by PollBatches.
 	GenerateBatch(ctx context.Context, req GenerateRequest) (uuid.UUID, error)
 	// PollBatches reconciles in-flight batch jobs against OpenAI: it ingests
-	// completed batches and marks failed/expired/cancelled ones.
+	// what a finished, expired or cancelled batch produced and marks the
+	// job failed only when it produced nothing.
 	PollBatches(ctx context.Context) error
-	// CancelBatch cancels an in-flight batch job (OpenAI + local job row).
+	// CancelBatch asks OpenAI to cancel an in-flight batch; the job stays
+	// running until PollBatches ingests what finished before the cancel.
 	CancelBatch(ctx context.Context, jobID uuid.UUID) error
 	// RunScheduled tops every enabled pool/segment up toward its target.
 	RunScheduled(ctx context.Context) error

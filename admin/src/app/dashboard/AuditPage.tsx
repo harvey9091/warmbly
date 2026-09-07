@@ -27,7 +27,7 @@ const KNOWN_ACTIONS = [
 ];
 
 const KNOWN_TARGETS = [
-    "worker", "aws_credentials", "worker_profile", "release",
+    "worker", "aws_credentials", "worker_profile", "release", "instance",
     "user", "email_account", "campaign", "plan",
 ];
 

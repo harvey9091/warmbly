@@ -16,7 +16,10 @@ type TrackedLink struct {
 	TaskID      uuid.UUID
 	CampaignID  uuid.UUID
 	Destination string
-	CreatedAt   time.Time
+	// Label is the anchor text the link was minted from ("Pricing"), so a
+	// click can be named without re-parsing the email. Empty for image links.
+	Label     string
+	CreatedAt time.Time
 }
 
 // TrackedLinkRepository is the server-side click-link store. Only the send
@@ -47,12 +50,12 @@ func (r *trackedLinkRepository) CreateBatch(ctx context.Context, links []Tracked
 
 	rows := make([][]any, 0, len(links))
 	for _, l := range links {
-		rows = append(rows, []any{l.ID, l.TaskID, l.CampaignID, l.Destination})
+		rows = append(rows, []any{l.ID, l.TaskID, l.CampaignID, l.Destination, l.Label})
 	}
 
 	_, err := r.db.CopyFrom(ctx,
 		pgx.Identifier{"tracked_links"},
-		[]string{"id", "task_id", "campaign_id", "destination"},
+		[]string{"id", "task_id", "campaign_id", "destination", "label"},
 		pgx.CopyFromRows(rows),
 	)
 	return err
@@ -61,13 +64,13 @@ func (r *trackedLinkRepository) CreateBatch(ctx context.Context, links []Tracked
 // GetByID resolves a ticket to its destination. nil, nil when unknown.
 func (r *trackedLinkRepository) GetByID(ctx context.Context, id uuid.UUID) (*TrackedLink, error) {
 	query := `
-		SELECT id, task_id, campaign_id, destination, created_at
+		SELECT id, task_id, campaign_id, destination, label, created_at
 		FROM tracked_links
 		WHERE id = $1
 	`
 
 	var l TrackedLink
-	err := r.db.QueryRow(ctx, query, id).Scan(&l.ID, &l.TaskID, &l.CampaignID, &l.Destination, &l.CreatedAt)
+	err := r.db.QueryRow(ctx, query, id).Scan(&l.ID, &l.TaskID, &l.CampaignID, &l.Destination, &l.Label, &l.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

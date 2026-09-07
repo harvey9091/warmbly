@@ -10,9 +10,11 @@ import {
     Loader2Icon,
     PauseIcon,
     PlayIcon,
+    SendIcon,
     Settings2Icon,
     UsersIcon,
 } from "lucide-react";
+import { campaignDisplayLabel, isIdleCampaign, isOneTimeCampaign } from "@/components/app/campaigns/status";
 import useCampaign from "@/lib/api/hooks/app/campaigns/useCampaign";
 import useStartCampaign from "@/lib/api/hooks/app/campaigns/useStartCampaign";
 import useStopCampaign from "@/lib/api/hooks/app/campaigns/useStopCampaign";
@@ -41,6 +43,7 @@ const STATUS_PILL: Record<string, string> = {
     paused_undeliverable: "bg-amber-50 text-amber-700 border-amber-200",
     draft: "bg-slate-100 text-slate-600 border-slate-200",
     completed: "bg-slate-100 text-slate-600 border-slate-200",
+    idle: "bg-sky-50 text-sky-700 border-sky-200",
 };
 
 export default function CampaignLayout() {
@@ -73,7 +76,7 @@ export default function CampaignLayout() {
 
     if (campaignData.isLoading) {
         return (
-            <div className="px-5 pt-5 space-y-4">
+            <div className="px-3 sm:px-5 pt-4 sm:pt-5 space-y-4">
                 <div className="space-y-2">
                     <div className="h-6 w-56 bg-slate-100 rounded-md animate-pulse" />
                     <div className="h-3 w-40 bg-slate-100 rounded animate-pulse" />
@@ -106,7 +109,7 @@ export default function CampaignLayout() {
 
     const campaign = campaignData.data;
     const status = campaign.status;
-    const pill = STATUS_PILL[status] ?? STATUS_PILL.draft;
+    const pill = isIdleCampaign(campaign) ? STATUS_PILL.idle : (STATUS_PILL[status] ?? STATUS_PILL.draft);
 
     const isActive = status === "active";
     const canStart = canStartCampaign(status);
@@ -126,7 +129,7 @@ export default function CampaignLayout() {
     return (
         <CampaignContext.Provider value={campaign}>
             <div className="flex flex-col min-h-full bg-white">
-                <div className="px-5 pt-4 pb-3 flex items-start gap-3">
+                <div className="px-3 sm:px-5 pt-3 sm:pt-4 pb-3 flex items-start gap-3">
                     <div className="min-w-0">
                         <Link
                             to="/app/campaigns"
@@ -135,13 +138,24 @@ export default function CampaignLayout() {
                             <ArrowLeftIcon className="w-3 h-3" />
                             Campaigns
                         </Link>
-                        <div className="flex items-center gap-2">
-                            <h1 className="text-[18px] font-semibold text-slate-900 truncate">{campaign.name}</h1>
+                        {/* min-w-0 lets the name truncate instead of pushing the
+                            pills off a narrow screen; the pills wrap under it. */}
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <h1 className="min-w-0 max-w-full text-[18px] font-semibold text-slate-900 truncate">{campaign.name}</h1>
                             <span
                                 className={`shrink-0 inline-flex items-center h-5 px-2 rounded-md border text-[10px] uppercase tracking-[0.12em] font-medium ${pill}`}
                             >
-                                {status === "paused_undeliverable" ? "needs verification" : status}
+                                {campaignDisplayLabel(campaign)}
                             </span>
+                            {isOneTimeCampaign(campaign) && (
+                                <span
+                                    title="One-time email: a single message, no follow-ups"
+                                    className="shrink-0 inline-flex items-center gap-1 h-5 px-2 rounded-md bg-sky-50 text-sky-700 text-[10px] uppercase tracking-[0.12em] font-medium"
+                                >
+                                    <SendIcon className="w-2.5 h-2.5" />
+                                    One-time
+                                </span>
+                            )}
                             <ResourceViewers resource={`campaign:${campaign.id}`} className="shrink-0" />
                         </div>
                         <p className="text-[11px] text-slate-400 font-mono mt-1 truncate">{campaign.id}</p>
@@ -205,7 +219,10 @@ export default function CampaignLayout() {
                     })}
                 </div>
 
-                <div className="p-5">
+                {/* Leads renders a full-bleed Page (its own topbar, stat strip
+                    and table gutters), so padding it again wastes a fifth of a
+                    phone screen and stops its hairlines short of the edge. */}
+                <div className={pathname.replace(/\/$/, "").endsWith("/leads") ? "" : "p-3 sm:p-5"}>
                     <Outlet />
                 </div>
             </div>

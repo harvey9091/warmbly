@@ -18,6 +18,7 @@ Search and page through the organization's campaigns. **Scope** `READ_CAMPAIGNS`
 | `q` | query | string | Free-text filter on campaign name. Optional. |
 | `folder` | query | string | Restrict to a single folder id. Optional. |
 | `status` | query | string | Status bucket filter: `draft`, `active`, `paused` (matches every paused variant), or `completed`. Any other value returns `400`. Optional. |
+| `kind` | query | string | `sequence` or `one_time`. Any other value returns `400`. Optional. |
 | `cursor` | query | string | Opaque cursor from the previous page's `pagination.next_cursor`. Optional. |
 | `limit` | query | string | Page size. Optional. |
 
@@ -35,6 +36,7 @@ A `data` plus `pagination` envelope. `next_cursor` is the campaign id to resume 
       "name": "Q3 outbound",
       "description": "",
       "status": "active",
+      "kind": "sequence",
       "stop_on_reply": true,
       "open_tracking": true,
       "link_tracking": true,
@@ -65,8 +67,14 @@ A `data` plus `pagination` envelope. `next_cursor` is the campaign id to resume 
       "esp_match_mode": "off",
       "max_new_leads_per_day": 0,
       "prioritize_new_leads": false,
+      "continuous": false,
+      "idle_since": null,
       "tracking_domain": "",
       "tracking_domain_verified": false,
+      "utm_tracking": true,
+      "utm_source": "",
+      "utm_medium": "",
+      "utm_campaign": "",
       "updated_at": "2026-06-10T12:00:00Z",
       "created_at": "2026-06-01T09:00:00Z"
     }
@@ -83,7 +91,7 @@ A `data` plus `pagination` envelope. `next_cursor` is the campaign id to resume 
 
 `GET /campaigns-overview`
 
-Status-bucket counts plus per-folder totals for the organization, used to drive campaign browsing UIs. `paused` sums every paused variant (`paused`, `paused_no_accounts`, `paused_trial_expired`). The path has no campaign id, so it lives beside `/campaigns` rather than under it. **Scope** `READ_CAMPAIGNS` · **Org permission** `view_campaigns`.
+Status-bucket counts plus per-folder totals for the organization, used to drive campaign browsing UIs. `paused` sums every paused variant (`paused`, `paused_no_accounts`, `paused_trial_expired`); `one_time` counts campaigns of that kind whatever their status. The path has no campaign id, so it lives beside `/campaigns` rather than under it. **Scope** `READ_CAMPAIGNS` · **Org permission** `view_campaigns`.
 
 ### Response
 
@@ -94,9 +102,42 @@ Status-bucket counts plus per-folder totals for the organization, used to drive 
   "paused": 2,
   "draft": 4,
   "completed": 3,
+  "one_time": 2,
   "folders": [
     { "folder_id": "6b9c1c8e-1f2a-4d3b-8c7e-9a0b1c2d3e4f", "total": 5 }
   ]
+}
+```
+
+## Estimate a send
+
+`POST /campaigns-estimate`
+
+Project an audience against a sender pool before a campaign exists: how many contacts the segments resolve to, how many mailboxes would send, the pool's daily ceiling under the campaign limit, and the day the last send is expected to land. Nothing is written, so it needs no `Idempotency-Key`. The dashboard's one-time email wizard shows this on its last step. **Scope** `READ_CAMPAIGNS` · **Org permission** `view_campaigns`.
+
+### Request body
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `segment_ids` | string[] | yes | Segments making up the audience (at most 20). A contact in several of them is counted once. |
+| `email_tag_ids` | string[] | no | Mailbox tags that resolve the pool. Omit or send `[]` for every active mailbox in the workspace. |
+| `daily_limit` | integer | no | Per-mailbox campaign cap to apply (defaults to `50`). Each mailbox counts the smaller of this and its own cap. |
+| `days` | integer (0-127) | no | Weekday bitmask of sending days, bit 0 = Monday. Defaults to weekdays. |
+| `timezone` | string | no | IANA timezone the days are counted in. Defaults to UTC. |
+| `start_date` | string (RFC 3339) | no | When sending begins. Omit for now. |
+
+### Response
+
+`sending_days` and `estimated_finish_at` are `null` when the audience is empty, the pool has no capacity, or the send would take longer than two years. Today only contributes what the pool has not already sent (`remaining_today`).
+
+```json
+{
+  "recipients": 1000,
+  "mailboxes": 4,
+  "daily_capacity": 200,
+  "remaining_today": 140,
+  "sending_days": 5,
+  "estimated_finish_at": "2026-09-09T00:00:00+02:00"
 }
 ```
 
@@ -112,10 +153,15 @@ Create a campaign. Only `name` is required, every other field is optional and ap
 | --- | --- | --- | --- |
 | `name` | string | yes | Campaign name. |
 | `description` | string | no | Free-text description. |
+| `kind` | string | no | `sequence` (default) or `one_time`. A one-time email accepts at most one entry in `steps` here and refuses further email steps later; it is otherwise a normal campaign. Fixed at creation. |
 | `stop_on_reply` | boolean | no | Stop sending to a contact once they reply. |
 | `open_tracking` | boolean | no | Insert the open pixel. |
-| `link_tracking` | boolean | no | Rewrite links through the tracking ticket service. |
-| `text_only` | boolean | no | Send plain text only. |
+| `link_tracking` | boolean | no | Rewrite links through the tracking ticket service. Each link gets its own ticket, so clicks are attributed per link. |
+| `utm_tracking` | boolean | no | Tag every link with `utm_source`, `utm_medium`, `utm_campaign` and a per-link `utm_content` at send time. Default `false`. Values already on a link are kept. |
+| `utm_source` | string | no | Overrides the default `warmbly`. Empty means the default. Up to 128 characters. |
+| `utm_medium` | string | no | Overrides the default `email`. Empty means the default. |
+| `utm_campaign` | string | no | Overrides the default, the campaign name as a slug. Empty means the default. |
+| `text_only` | boolean | no | Send plain text only: no HTML part, and open and click tracking are off regardless of their flags. |
 | `daily_limit` | integer | no | Per-campaign daily send cap. |
 | `unsubscribe_header` | boolean | no | Add the RFC 8058 one-click unsubscribe header. |
 | `risky_emails` | boolean | no | Allow sending to risky/unverified addresses. |
@@ -127,6 +173,7 @@ Create a campaign. Only `name` is required, every other field is optional and ap
 | `days` | integer (0-127) | no | Legacy weekday bitmask (superseded by `schedule_windows`). |
 | `start_time` | string | no | Legacy daily start (`HH:MM`). |
 | `end_time` | string | no | Legacy daily end (`HH:MM`). |
+| `schedule_windows` | array | no | Per-day sending windows, 7 arrays indexed by weekday (Sunday = 0) of `{start, end}` minute-of-day intervals. When non-empty it supersedes `days`, `start_time` and `end_time`. |
 | `email_tag_ids` | string[] | no | Mailbox tag ids that resolve the sender pool (tags strategy). |
 | `folder_ids` | string[] | no | Folder ids to file the campaign under. |
 | `sender_strategy` | string | no | `tags` (default) or `explicit`. |
@@ -139,6 +186,7 @@ Create a campaign. Only `name` is required, every other field is optional and ap
 | `esp_match_mode` | string | no | `off`, `prefer`, or `strict`. |
 | `max_new_leads_per_day` | integer | no | New-lead throttle, `0` is unlimited. |
 | `prioritize_new_leads` | boolean | no | Prefer new leads in each send window. |
+| `continuous` | boolean | no | Keep running for new leads: out of leads, the campaign stays `active` and waits instead of finishing. Linking a segment, a form or an automation that enrols leads turns it on, and so does starting a campaign whose every lead has finished. Default `false`. |
 | `tracking_domain` | string | no | Campaign-scoped tracking domain (honored only once verified). |
 | `steps` | object[] | no | Initial sequence steps in order (see create sequence input below). They are connected in order: each step routes unconditionally to the next, waiting that step's `wait_after` days. The first step's `wait_after` defaults to `0`, follow-ups to `3`. |
 | `variants` | object[] | no | A/B variants for the first step (same shape as create A/B variant). |
@@ -200,7 +248,9 @@ Patch any subset of campaign fields. Omitted fields are left unchanged. The expl
 
 ### Request body
 
-Every field is optional. Scalar fields use nullable pointers, so any field you send is applied. `start_date` and `end_date` additionally accept an explicit `null` to clear the stored date: a null `start_date` means "start now" and a null `end_date` means "run open-ended". Changing any schedule field (`start_date`, `end_date`, `timezone`, `days`, `start_time`, `end_time`, `schedule_windows`) on an active campaign reschedules its next send immediately, so clearing a future start date takes effect right away. Notable fields: `name`, `description`, `status`, `stop_on_reply`, `open_tracking`, `link_tracking`, `text_only`, `daily_limit`, `unsubscribe_header`, `risky_emails`, `cc`, `bcc`, `start_date`, `end_date`, `timezone`, `days`, `start_time`, `end_time`, `schedule_windows`, `email_tags`, `folders`, `contact_order_by`, `contact_order_dir`, `contact_order_field`, `sender_strategy`, `rotation_mode`, `ramp_enabled`, `ramp_start`, `ramp_increment`, `ramp_ceiling`, `esp_match_mode`, `max_new_leads_per_day`, `prioritize_new_leads`, `tracking_domain`.
+Every field is optional. Scalar fields use nullable pointers, so any field you send is applied. `start_date` and `end_date` additionally accept an explicit `null` to clear the stored date: a null `start_date` means "start now" and a null `end_date` means "run open-ended". Changing any schedule field (`start_date`, `end_date`, `timezone`, `days`, `start_time`, `end_time`, `schedule_windows`) on an active campaign reschedules its next send immediately, so clearing a future start date takes effect right away. Notable fields: `name`, `description`, `status`, `stop_on_reply`, `open_tracking`, `link_tracking`, `text_only`, `daily_limit`, `unsubscribe_header`, `risky_emails`, `cc`, `bcc`, `start_date`, `end_date`, `timezone`, `days`, `start_time`, `end_time`, `schedule_windows`, `email_tags`, `folders`, `contact_order_by`, `contact_order_dir`, `contact_order_field`, `sender_strategy`, `rotation_mode`, `ramp_enabled`, `ramp_start`, `ramp_increment`, `ramp_ceiling`, `esp_match_mode`, `max_new_leads_per_day`, `prioritize_new_leads`, `continuous`, `tracking_domain`, `utm_tracking`, `utm_source`, `utm_medium`, `utm_campaign`.
+
+A campaign with `continuous` set stays `active` when it runs out of leads and carries `idle_since` while it waits; the timestamp clears once it has something to send. A continuous campaign can be started with no leads at all; starting one that is not continuous and has never had a lead answers `400` `no_leads`. Starting a campaign that has at least one lead and nothing left to send, because every lead has finished the sequence, turns `continuous` on and waits for leads (see [start a campaign](#start-a-campaign)). Adding a lead to a `completed` campaign by any path (this API, a linked segment, an automation) restarts it through the same launch checks as starting it by hand; a refused restart is written to the campaign's activity log.
 
 ```json
 {
@@ -519,7 +569,7 @@ An `ABWinnerAnalysis` object.
 
 `GET /campaigns/:id/attachments`
 
-List the campaign's attachments. Each entry carries a short-lived presigned download `url`. **Scope** `READ_CAMPAIGNS` · **Org permission** `view_campaigns`.
+List every attachment of the campaign. Each entry carries a short-lived presigned download `url` and its `step_id`: a file scoped to a step is sent by that step alone, and a `null` `step_id` means every step of the campaign sends it. **Scope** `READ_CAMPAIGNS` · **Org permission** `view_campaigns`.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
@@ -550,13 +600,13 @@ A `data` array of attachment objects (no pagination wrapper).
 
 `POST /campaigns/:id/attachments`
 
-Upload a file to attach to the campaign (or one step). Sent as `multipart/form-data`, not JSON. **Scope** `WRITE_CAMPAIGNS` · **Org permission** `manage_campaigns`.
+Upload a file to attach to the campaign, or to one of its steps. Sent as `multipart/form-data`, not JSON. **Scope** `WRITE_CAMPAIGNS` · **Org permission** `manage_campaigns`.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
 | `id` | path | uuid | Campaign id. |
 | `file` | form (multipart) | file | Required. The file to upload (max 15 MB). Executable and script types are rejected. |
-| `step_id` | form (multipart) | uuid | Optional. Scope the attachment to one sequence step. |
+| `step_id` | form (multipart) | uuid | Optional. Scope the attachment to one sequence step of this campaign, which is then the only step that sends it. Omit it to attach the file to every step. A step of another campaign returns `404`. |
 
 ### Response
 
@@ -616,7 +666,9 @@ A `PreflightReport` object.
 
 `POST /campaigns/:id/test-email`
 
-Send a one-off preview of a sequence step to a chosen recipient through a chosen mailbox. Defaults to the first step when `step_id` is omitted. **Scope** `SEND_CAMPAIGNS` · **Org permission** `send_campaigns`.
+Send a one-off test of a sequence step to a chosen recipient through a chosen mailbox. The message is assembled the way a real send is: merge fields and spintax resolve for the contact, the files that step sends are attached (the campaign's unscoped attachments plus that step's own), the mailbox signature and the campaign's opt-out footer are appended, and a plain-text campaign ships without an HTML part. The subject is prefixed with `[TEST]`. Opens and clicks on a test are never tracked, and its opt-out link names no contact, so clicking it suppresses nobody. Defaults to the first step when `step_id` is omitted. **Scope** `SEND_CAMPAIGNS` · **Org permission** `send_campaigns`.
+
+The mailbox may be any mailbox of the organization, not only one the caller connected, and it does not have to be in the campaign's sender pool. An API key with an `allowed_email_accounts` list can only test from those mailboxes. Passing `contact_id` additionally requires `READ_CONTACTS` (org permission `view_contacts`), since the rendered copy reads that contact's fields.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
@@ -629,31 +681,45 @@ Send a one-off preview of a sequence step to a chosen recipient through a chosen
 | `account_id` | uuid | yes | Sending mailbox id. |
 | `recipient` | string (email) | yes | Where to send the test. |
 | `step_id` | uuid | no | Step to render and send, defaults to the first step. |
+| `contact_id` | uuid | no | Contact of the organization to render the copy for, including its custom fields. Omitted renders for a placeholder contact (`Test Recipient` at `Test Company`, with the recipient's address and no custom fields). |
 
 ```json
 {
   "account_id": "5c7d...",
   "recipient": "me@example.com",
-  "step_id": "7e3b..."
+  "step_id": "7e3b...",
+  "contact_id": "9a2c..."
 }
 ```
 
 ### Response
 
+`contact_id` is present only when one was given.
+
 ```json
 {
   "message": "test email sent",
   "recipient": "me@example.com",
-  "subject": "Quick question, Alex",
-  "account_id": "5c7d..."
+  "subject": "Quick question, {{.FirstName}}",
+  "account_id": "5c7d...",
+  "step_id": "7e3b...",
+  "contact_id": "9a2c..."
 }
 ```
+
+### Errors
+
+| Status | Code | When |
+| --- | --- | --- |
+| `404` | `not_found` | The campaign, step, mailbox or contact does not belong to the caller's organization. |
+| `403` | `forbidden` | `contact_id` given without contact read permission, or `account_id` outside the API key's allowed mailboxes. |
+| `400` | `bad_request` | The campaign has no steps. |
 
 ## Start a campaign
 
 `POST /campaigns/:id/start`
 
-Start (activate) the campaign so it begins sending real mail. Works from `draft`, any paused status, or `completed` (a campaign closed by a passed end date resumes once the date is extended or cleared; one with nothing left to send re-completes with a `400` explaining why). **Scope** `SEND_CAMPAIGNS` · **Org permission** `send_campaigns`.
+Start (activate) the campaign so it begins sending real mail. Works from `draft`, any paused status, or `completed` (a campaign closed by a passed end date resumes once the date is extended or cleared). A campaign with nothing left to send does not finish again: the start turns `continuous` on if it was off, and the campaign goes `active` and waits for leads with `idle_since` set; the switch is written to its activity log. **Scope** `SEND_CAMPAIGNS` · **Org permission** `send_campaigns`.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
@@ -665,8 +731,10 @@ A start refused because every remaining lead was refused by address verification
 ### Response
 
 ```json
-{ "status": "started" }
+{ "status": "started", "waiting_for_leads": false }
 ```
+
+`waiting_for_leads` is `true` when the campaign started with nothing left to send and is now `active` with `idle_since` set.
 
 ## Stop a campaign
 
@@ -787,7 +855,7 @@ Return the segments linked to the campaign as live audience sources. **Scope** `
 
 ### Response
 
-A `data` array of link objects (no pagination wrapper).
+A `data` array of link objects (no pagination wrapper). The counts are evaluated when you ask: `contact_count` is how many contacts the segment matches now, `lead_count` how many of them are leads of this campaign, and `held_out_count` how many are not leads because they were removed from the campaign by hand (see [replace linked segments](#replace-linked-segments)).
 
 ```json
 {
@@ -798,6 +866,8 @@ A `data` array of link objects (no pagination wrapper).
       "color": "#0ea5e9",
       "description": "Replied or clicked in the last 30 days",
       "contact_count": 412,
+      "lead_count": 409,
+      "held_out_count": 3,
       "linked_at": "2026-06-10T12:00:00Z"
     }
   ]
@@ -828,7 +898,7 @@ Atomically replace the campaign's linked segments with the supplied set (up to 2
 
 ### Response
 
-The resulting links plus how many leads the call enrolled.
+The resulting links plus how many leads the call enrolled. `added` is `0` when every member was already a lead, when the segments match no contacts yet, or when the only members are held out; the per-link counts tell these apart. The links and the enrolment are written in one transaction, so a failed enrolment returns an error and changes nothing rather than `200` with `added: 0`.
 
 ```json
 {
@@ -839,6 +909,8 @@ The resulting links plus how many leads the call enrolled.
       "color": "#0ea5e9",
       "description": "Replied or clicked in the last 30 days",
       "contact_count": 412,
+      "lead_count": 412,
+      "held_out_count": 0,
       "linked_at": "2026-06-10T12:00:00Z"
     }
   ],
@@ -993,7 +1065,7 @@ Delete a sequence step. **Scope** `WRITE_CAMPAIGNS` · **Org permission** `manag
 
 `POST /campaign-template-preview`
 
-Render subject and body templates against a sample (or supplied) contact exactly as the send path would, and report parse errors plus any unresolved `{{...}}` tokens. No side effects, no campaign id. **Scope** `READ_CAMPAIGNS` · **Org permission** `view_campaigns`.
+Render subject and body templates for a contact exactly as the send path would, and report parse errors plus any unresolved `{{...}}` tokens. With `campaign_id` and `account_id` the preview also goes through the rest of the send assembly: the plain-text rule, the mailbox signature and the campaign's opt-out footer are applied in send order, and the response names the sender and lists the attachments the send carries. Tracking pixels and link rewriting are left out. No side effects. **Scope** `READ_CAMPAIGNS` · **Org permission** `view_campaigns`. Passing `contact_id` additionally requires `READ_CONTACTS` (org permission `view_contacts`), and an API key with an `allowed_email_accounts` list can only name those mailboxes in `account_id`.
 
 ### Request body
 
@@ -1002,28 +1074,45 @@ Render subject and body templates against a sample (or supplied) contact exactly
 | `subject` | string | no | Subject template. |
 | `body_html` | string | no | HTML body template. |
 | `body_plain` | string | no | Plain-text body template. |
-| `contact` | object | no | Override fields on the built-in sample contact: `first_name`, `last_name`, `email`, `company`, `phone`, and a `custom_fields` map of string to string. |
+| `contact_id` | uuid | no | A contact of the organization to render for, with its custom fields. Omitted uses the built-in sample contact. |
+| `contact` | object | no | Override fields on the contact being rendered for (the sample or the one from `contact_id`): `first_name`, `last_name`, `email`, `company`, `phone`, and a `custom_fields` map of string to string. |
+| `campaign_id` | uuid | no | Campaign of the organization whose opt-out footer, plain-text setting and attachments apply. The opt-out link in the preview names no contact. |
+| `step_id` | uuid | no | The step being previewed, so `attachments` lists what that step sends. Without it only the campaign-wide files are listed. |
+| `account_id` | uuid | no | Mailbox of the organization whose signature is appended (when signature sync is on) and which is reported as `from`. |
 
 ```json
 {
   "subject": "Hi {{first_name}} at {{company}}",
-  "body_plain": "Hey {{first_name}}, I saw {{company}} is hiring. {{unknown_token}}",
-  "contact": { "first_name": "Sam", "company": "Globex" }
+  "body_html": "<p>Hey {{first_name}}, I saw {{company}} is hiring. {{unknown_token}}</p>",
+  "contact_id": "9a2c...",
+  "campaign_id": "8f1d...",
+  "account_id": "5c7d..."
 }
 ```
 
 ### Response
 
-A `TemplatePreview` object. `errors` lists template parse errors that would block sending, `unresolved` lists literal tokens left after render. Both are omitted when empty.
+A `TemplatePreview` object. `errors` lists template parse errors that would block sending, `unresolved` lists literal tokens left after render. `from` is present when `account_id` was given, `attachments` when `campaign_id` was given and there are files on the send (the campaign-wide ones plus `step_id`'s own). All four are omitted when empty.
 
 ```json
 {
   "subject": "Hi Sam at Globex",
-  "body_html": "",
-  "body_plain": "Hey Sam, I saw Globex is hiring. {{unknown_token}}",
-  "unresolved": ["{{unknown_token}}"]
+  "body_html": "<p>Hey Sam, I saw Globex is hiring. {{unknown_token}}</p><br><br><p>Best, Ana</p><p style=\"font-size:12px;color:#64748b\">Don't want these emails? <a href=\"https://app.example.com/u/...\">Unsubscribe</a></p>",
+  "body_plain": "Hey Sam, I saw Globex is hiring. {{unknown_token}}\n\nBest, Ana\n\nDon't want these emails? https://app.example.com/u/...",
+  "unresolved": ["{{unknown_token}}"],
+  "from": { "name": "Ana Silva", "email": "ana@globex.com" },
+  "attachments": [
+    { "id": "3b0e...", "filename": "deck.pdf", "size": 482113, "mime_type": "application/pdf" }
+  ]
 }
 ```
+
+### Errors
+
+| Status | Code | When |
+| --- | --- | --- |
+| `404` | `not_found` | `contact_id`, `campaign_id` or `account_id` does not belong to the caller's organization. |
+| `403` | `forbidden` | `contact_id` given without contact read permission, or `account_id` outside the API key's allowed mailboxes. |
 
 ## Generate copy with the writing assistant
 

@@ -7,6 +7,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/warmbly/warmbly/internal/app/advanced"
+	"github.com/warmbly/warmbly/internal/app/contact"
+	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/repository"
 )
@@ -21,20 +23,37 @@ type Adapter struct {
 	Adv      advanced.Service
 	Contacts repository.ContactRepository
 	Orgs     repository.OrganizationRepository
+	// ContactSvc is the contact service behind the lead-intake actions: its
+	// upsert runs the plan check, wakes campaigns and fires contact.created,
+	// which a bare repository write would not.
+	ContactSvc contact.ContactService
+	// Campaigns flips "Keep running for new leads" on a campaign an
+	// automation feeds, so it waits for leads instead of finishing.
+	Campaigns CampaignKeeper
 }
 
 func (a Adapter) ResolveContact(ctx context.Context, orgID uuid.UUID, contactID, email string) (*models.Contact, error) {
 	// Both lookups are ORG-SCOPED — never resolve a contact id from another org,
-	// even if a stale/crafted id reaches the event data.
+	// even if a stale/crafted id reaches the event data. A failed lookup is an
+	// error, not a miss: "skip if it exists" must not write over a contact it
+	// could not see.
 	if contactID != "" {
 		if id, perr := uuid.Parse(contactID); perr == nil {
-			if cs, e := a.Contacts.GetByIDsAndOrganization(ctx, orgID, []uuid.UUID{id}); e == nil && len(cs) > 0 {
+			cs, e := a.Contacts.GetByIDsAndOrganization(ctx, orgID, []uuid.UUID{id})
+			if e != nil {
+				return nil, e
+			}
+			if len(cs) > 0 {
 				return &cs[0], nil
 			}
 		}
 	}
 	if email != "" {
-		if c, e := a.Contacts.GetByEmailAndOrganization(ctx, orgID, email); e == nil && c != nil {
+		c, e := a.Contacts.GetByEmailAndOrganization(ctx, orgID, email)
+		if e != nil {
+			return nil, e
+		}
+		if c != nil {
 			return c, nil
 		}
 	}
@@ -94,6 +113,58 @@ func (a Adapter) MoveDealStage(ctx context.Context, orgID, contactID, pipelineID
 func (a Adapter) Unsubscribe(ctx context.Context, campaignID, contactID uuid.UUID) error {
 	if e := a.Adv.Unsubscribe(ctx, campaignID, contactID); e != nil {
 		return e
+	}
+	return nil
+}
+
+// UpsertContact writes one contact through the contact service (upsert by
+// email, tags, campaign and segment links, contact.created for a new row).
+func (a Adapter) UpsertContact(ctx context.Context, orgID, actorID uuid.UUID, in models.AddContact) (*models.Contact, error) {
+	if a.ContactSvc == nil {
+		return nil, fmt.Errorf("contact writes are not available")
+	}
+	created, xerr := a.ContactSvc.Add(ctx, actorID.String(), orgID, []models.AddContact{in})
+	if xerr != nil {
+		return nil, xerr
+	}
+	if len(created) == 0 {
+		return nil, fmt.Errorf("the contact write returned nothing")
+	}
+	return &created[0], nil
+}
+
+// CampaignKeeper is the campaign service's "Keep running for new leads" switch.
+type CampaignKeeper interface {
+	KeepRunning(ctx context.Context, orgID, campaignID uuid.UUID, reason string) *errx.Error
+}
+
+// KeepCampaignRunning turns on "Keep running for new leads" on a campaign an
+// automation feeds. A campaign that is not the organization's is reported,
+// never touched.
+func (a Adapter) KeepCampaignRunning(ctx context.Context, orgID, campaignID uuid.UUID, reason string) error {
+	if a.Campaigns == nil {
+		return fmt.Errorf("campaign settings are not available")
+	}
+	if xerr := a.Campaigns.KeepRunning(ctx, orgID, campaignID, reason); xerr != nil {
+		if xerr.Code == errx.ErrNotFound.Code {
+			return fmt.Errorf("campaign %s was not found in this workspace", campaignID)
+		}
+		return xerr
+	}
+	return nil
+}
+
+// AddToCampaign enrols an existing contact in a campaign through the bulk
+// edit path, which also wakes the campaign's parked send chain.
+func (a Adapter) AddToCampaign(ctx context.Context, orgID, actorID, contactID, campaignID uuid.UUID) error {
+	if a.ContactSvc == nil {
+		return fmt.Errorf("contact writes are not available")
+	}
+	if _, xerr := a.ContactSvc.BulkUpdate(ctx, actorID.String(), orgID, &models.BulkEditContactsData{
+		Contacts:     []string{contactID.String()},
+		AddCampaigns: []string{campaignID.String()},
+	}); xerr != nil {
+		return xerr
 	}
 	return nil
 }

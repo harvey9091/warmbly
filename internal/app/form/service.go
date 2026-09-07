@@ -74,6 +74,7 @@ type Service interface {
 	SetLinks(r repository.FormLinkRepository)
 	SetEvents(r repository.FormEventRepository)
 	SetDomains(d OrgStore)
+	SetCampaigns(k CampaignKeeper)
 }
 
 // ContactReader is the slice of the contact repository the link paths need.
@@ -123,8 +124,15 @@ type SubmitResult struct {
 	RedirectURL string `json:"redirect_url,omitempty"`
 }
 
+// CampaignKeeper turns on a campaign's "Keep running for new leads" setting
+// when a form starts feeding it. Implemented by the campaign service.
+type CampaignKeeper interface {
+	KeepRunning(ctx context.Context, orgID, campaignID uuid.UUID, reason string) *errx.Error
+}
+
 type service struct {
 	repo          repository.FormRepository
+	campaigns     CampaignKeeper
 	links         repository.FormLinkRepository
 	events        repository.FormEventRepository
 	domains       OrgStore
@@ -149,6 +157,7 @@ func (s *service) SetGeo(g *geo.Client)                       { s.geo = g }
 func (s *service) SetLinks(r repository.FormLinkRepository)   { s.links = r }
 func (s *service) SetEvents(r repository.FormEventRepository) { s.events = r }
 func (s *service) SetDomains(d OrgStore)                      { s.domains = d }
+func (s *service) SetCampaigns(k CampaignKeeper)              { s.campaigns = k }
 
 // formTrendDays is the sparkline window on the forms list.
 const formTrendDays = 14
@@ -275,6 +284,19 @@ func (s *service) Update(ctx context.Context, orgID, id uuid.UUID, in *models.Fo
 			f.PublishedAt = &now
 		}
 		f.Status = *in.Status
+	}
+	// A form is a live lead source, so the campaign it feeds must wait for
+	// leads instead of finishing between submissions (issue #340), exactly as
+	// a linked segment does. After every validation so a rejected write never
+	// changes the campaign, and before the write so it proves the campaign is
+	// this organization's; a failure here fails the save visibly.
+	if in.CampaignID.Set && in.CampaignID.Value != nil && s.campaigns != nil {
+		if xerr := s.campaigns.KeepRunning(ctx, orgID, *in.CampaignID.Value, "the form \""+f.Name+"\" adds its leads to this campaign"); xerr != nil {
+			if xerr.Code == errx.ErrNotFound.Code {
+				return nil, errx.New(errx.BadRequest, "campaign not found")
+			}
+			return nil, xerr
+		}
 	}
 	return s.repo.Update(ctx, orgID, f)
 }
@@ -442,6 +464,15 @@ func (s *service) Submit(ctx context.Context, publicID string, answers map[strin
 		}
 		if contactID != "" {
 			payload["contact_id"] = contactID
+		}
+		// The mapped contact columns ride along flat so an automation can read
+		// {{.contact_email}} or {{.first_name}} without digging into data.
+		if lead != nil {
+			payload["contact_email"] = lead.Email
+			payload["first_name"] = lead.FirstName
+			payload["last_name"] = lead.LastName
+			payload["company"] = lead.Company
+			payload["phone"] = lead.Phone
 		}
 		if sub.CampaignID != nil {
 			payload["campaign_id"] = sub.CampaignID.String()

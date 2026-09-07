@@ -1,4 +1,4 @@
-import type Sequence from "./sequences/Sequence";
+export type CampaignKind = "sequence" | "one_time";
 
 export default interface Campaign {
     id: string;
@@ -6,6 +6,9 @@ export default interface Campaign {
     name: string;
     description: string;
     status: string;
+    // "sequence" (multi-step, the default) or "one_time" (a single message
+    // to an audience, no follow-ups). Fixed at creation.
+    kind: CampaignKind;
 
     stop_on_reply: boolean;
     open_tracking: boolean;
@@ -14,6 +17,8 @@ export default interface Campaign {
     daily_limit: number;
     unsubscribe_header: boolean;
     risky_emails: boolean;
+    // In-body opt-out: "inherit" follows Settings > Sending.
+    unsubscribe_mode: 'inherit' | 'text' | 'link' | 'off';
 
     cc: string[];
     bcc: string[];
@@ -62,6 +67,11 @@ export default interface Campaign {
     max_new_leads_per_day: number;
     prioritize_new_leads: boolean;
 
+    // Keep running for new leads: out of leads, the campaign waits (idle_since
+    // set) instead of finishing. Linking a segment turns it on.
+    continuous: boolean;
+    idle_since?: string | null;
+
     // Auto-pause guardrails. Bounce and complaint rates are ceilings (pause at
     // or above); the reply rate is a floor (pause below). A rate of 0 turns its
     // rule off. guardrail_tripped_at/reason are server-owned.
@@ -79,12 +89,19 @@ export default interface Campaign {
     tracking_domain_verified: boolean;
     tracking_domain_verified_at?: string | null;
 
+    // Automatic UTM tagging of every link. Empty source/medium/campaign keep
+    // the defaults (warmbly / email / the campaign name); utm_content is
+    // always the link's own text.
+    utm_tracking: boolean;
+    utm_source: string;
+    utm_medium: string;
+    utm_campaign: string;
+
     updated_at: Date;
     created_at: Date;
 
     // Extra
     analytics: null;
-    sequences: Sequence[] | null;
 }
 
 // One sending window within a day, in minutes since local midnight (end > start).
