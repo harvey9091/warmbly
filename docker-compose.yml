@@ -312,13 +312,13 @@ services:
     build:
       context: .
       dockerfile: deploy/docker/backend.Dockerfile
+      args:
+        VERSION: ${WARMBLY_BUILD_VERSION:-}
+        COMMIT: ${WARMBLY_BUILD_COMMIT:-}
+        BUILT_AT: ${WARMBLY_BUILD_TIME:-}
     expose:
       - "8080"
     ports: ["8080:8080"]
-    args:
-      VERSION: ${WARMBLY_BUILD_VERSION:-}
-      COMMIT: ${WARMBLY_BUILD_COMMIT:-}
-      BUILT_AT: ${WARMBLY_BUILD_TIME:-}
     environment:
       <<: *selfhost-env
       API_HOST: "0.0.0.0:8080"
@@ -626,7 +626,7 @@ services:
     working_dir: ${WARMBLY_REPO_DIR:-${PWD}}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${WARMBLY_REPO_DIR:-${PWD}}:${WARMBLY_REPO_DIR:-${PWD}}
+      - ${WARMBLY_REPO_DIR:-.}:${WARMBLY_REPO_DIR:-${PWD}}
       - ${WARMBLY_UPDATER_STATE:-updater_state}:/var/lib/warmbly-updater
     profiles: ["updater"]
 
