@@ -67,6 +67,7 @@ import { Toaster } from '@/components/ui/toaster';
 
 import { initErrorReporting } from "@/lib/observability";
 
+// Before the first render, so a boot failure is reported too.
 initErrorReporting();
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"

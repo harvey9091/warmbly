@@ -11,7 +11,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/app/dailythrottle"
 	"github.com/warmbly/warmbly/internal/app/listgate"
@@ -21,6 +20,7 @@ import (
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/trackdns"
 	"github.com/warmbly/warmbly/internal/repository"
 	"github.com/warmbly/warmbly/internal/scheduler"
@@ -167,7 +167,7 @@ func (s *campaignService) Delete(ctx context.Context, orgID uuid.UUID, campaignI
 	if s.attachmentRepo != nil {
 		var err error
 		if attachments, err = s.attachmentRepo.ListByCampaign(ctx, cID); err != nil {
-			sentry.CaptureException(fmt.Errorf("campaign %s delete: list attachments: %w", cID, err))
+			errs.CaptureException(fmt.Errorf("campaign %s delete: list attachments: %w", cID, err))
 		}
 	}
 
@@ -181,7 +181,7 @@ func (s *campaignService) Delete(ctx context.Context, orgID uuid.UUID, campaignI
 	if s.storage != nil {
 		for _, att := range attachments {
 			if err := s.storage.Delete(ctx, att.S3Key); err != nil {
-				sentry.CaptureException(fmt.Errorf("campaign %s delete: object %s: %w", cID, att.S3Key, err))
+				errs.CaptureException(fmt.Errorf("campaign %s delete: object %s: %w", cID, att.S3Key, err))
 			}
 		}
 	}
@@ -333,14 +333,14 @@ func (s *campaignService) copyAttachments(ctx context.Context, orgID, src, dst u
 	for _, att := range sources {
 		body, err := s.storage.Get(ctx, att.S3Key)
 		if err != nil {
-			sentry.CaptureException(fmt.Errorf("campaign %s duplicate: read %s: %w", src, att.S3Key, err))
+			errs.CaptureException(fmt.Errorf("campaign %s duplicate: read %s: %w", src, att.S3Key, err))
 			continue
 		}
 		key := models.AttachmentObjectKey(dst, att.Filename)
 		err = s.storage.Put(ctx, key, body, att.MimeType)
 		body.Close()
 		if err != nil {
-			sentry.CaptureException(fmt.Errorf("campaign %s duplicate: write %s: %w", src, key, err))
+			errs.CaptureException(fmt.Errorf("campaign %s duplicate: write %s: %w", src, key, err))
 			continue
 		}
 		att.S3Key = key
@@ -353,7 +353,7 @@ func (s *campaignService) copyAttachments(ctx context.Context, orgID, src, dst u
 		defer cancel()
 		for _, att := range copied {
 			if err := s.storage.Delete(cleanup, att.S3Key); err != nil {
-				sentry.CaptureException(fmt.Errorf("campaign %s duplicate undo: object %s: %w", src, att.S3Key, err))
+				errs.CaptureException(fmt.Errorf("campaign %s duplicate undo: object %s: %w", src, att.S3Key, err))
 			}
 		}
 	}, nil
@@ -664,7 +664,7 @@ func (s *campaignService) KeepRunning(ctx context.Context, orgID, campaignID uui
 		if errors.Is(err, errx.ErrResourceNotFound) {
 			return errx.ErrNotFound
 		}
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 	if !transitioned {
@@ -775,7 +775,7 @@ func (s *campaignService) enqueueCampaignWakeup(ctx context.Context, campaignID 
 			_ = s.campaignRepository.UpdateStatusWithLock(ctx, campaignID, "completed")
 			return errx.New(errx.BadRequest, "campaign is past its end date; extend or clear the end date to keep sending")
 		default:
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return errx.InternalError()
 		}
 	}
@@ -795,7 +795,7 @@ func (s *campaignService) enqueueCampaignWakeup(ctx context.Context, campaignID 
 
 	created, err := s.taskRepo.CreateTaskWithLock(ctx, task, campaignTask)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 	if !created {
@@ -807,11 +807,11 @@ func (s *campaignService) enqueueCampaignWakeup(ctx context.Context, campaignID 
 	if err != nil {
 		_ = s.taskRepo.DeleteTask(ctx, taskID)
 		_ = s.campaignRepository.StopCampaign(ctx, campaignID)
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.ServiceUnavailable, "could not schedule campaign right now")
 	}
 	if err := s.taskRepo.UpdateTaskScheduledAt(ctx, taskID, nextTime, cloudTaskName); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 

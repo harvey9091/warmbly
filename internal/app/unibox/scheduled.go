@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -35,7 +35,7 @@ const snippetMaxLen = 240
 func (s *uniboxService) ListScheduled(ctx context.Context, userID uuid.UUID) ([]models.UniboxScheduledItem, *errx.Error) {
 	rows, err := s.taskRepo.ListScheduledForUser(ctx, userID, ScheduledListMax)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
@@ -68,7 +68,7 @@ func (s *uniboxService) ListScheduledByThread(ctx context.Context, userID uuid.U
 	}
 	rows, err := s.taskRepo.ListScheduledForUserByThread(ctx, userID, threadID, ScheduledThreadListMax)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
@@ -113,7 +113,7 @@ func (s *uniboxService) ListScheduledByThread(ctx context.Context, userID uuid.U
 func (s *uniboxService) CancelScheduled(ctx context.Context, userID, taskID uuid.UUID) *errx.Error {
 	cloudTaskName, cancelled, err := s.taskRepo.CancelScheduledByUser(ctx, taskID, userID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 	if !cancelled {
@@ -137,7 +137,7 @@ func (s *uniboxService) CancelScheduled(ctx context.Context, userID, taskID uuid
 			// but doesn't change the response — the DB is the source
 			// of truth and the handler safety-net catches stragglers.
 			if st, ok := status.FromError(derr); !ok || st.Code() != codes.NotFound {
-				sentry.CaptureException(derr)
+				errs.CaptureException(derr)
 				log.Warn().
 					Err(derr).
 					Str("task_id", taskID.String()).

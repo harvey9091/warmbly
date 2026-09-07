@@ -5,13 +5,13 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/mileusna/useragent"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/crypt"
 )
 
@@ -80,13 +80,13 @@ func (s *tokenService) GenerateSessionWithOrg(ctx context.Context, userID uuid.U
 
 	ip, err := netip.ParseAddr(ipaddr)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
 	ipinfo, err := s.geo.Lookup(ip)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
@@ -140,14 +140,14 @@ func (s *tokenService) GenerateSessionWithOrg(ctx context.Context, userID uuid.U
 	accessTokenExpiresAt := issuedAt.Add(AccessTokenLifeTime)
 	accessNonce, err := crypt.Nonce()
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	session.AccessNonce = accessNonce
 
 	accessToken, err := s.GenerateToken(userID, session.ID, email, accessNonce, issuedAt, accessTokenExpiresAt)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
@@ -155,14 +155,14 @@ func (s *tokenService) GenerateSessionWithOrg(ctx context.Context, userID uuid.U
 	session.ExpiresAt = &refreshTokenExpiresAt
 	refreshNonce, err := crypt.Nonce()
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	session.RefreshNonce = refreshNonce
 
 	refreshToken, err := s.GenerateToken(userID, session.ID, email, refreshNonce, issuedAt, refreshTokenExpiresAt)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 

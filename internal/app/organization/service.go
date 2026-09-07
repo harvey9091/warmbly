@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/app/dailythrottle"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/crypt"
 	"github.com/warmbly/warmbly/internal/repository"
 )
@@ -246,7 +246,7 @@ func (s *organizationService) Create(ctx context.Context, userID uuid.UUID, name
 	// Check organization limit
 	user, userErr := s.userRepo.GetUser(ctx, userID)
 	if userErr != nil {
-		sentry.CaptureException(userErr)
+		errs.CaptureException(userErr)
 		return nil, errx.New(errx.Internal, "failed to get user")
 	}
 	if user == nil {
@@ -255,7 +255,7 @@ func (s *organizationService) Create(ctx context.Context, userID uuid.UUID, name
 
 	ownedCount, countErr := s.orgRepo.GetUserOwnedOrganizationCount(ctx, userID)
 	if countErr != nil {
-		sentry.CaptureException(countErr)
+		errs.CaptureException(countErr)
 		return nil, errx.New(errx.Internal, "failed to get organization count")
 	}
 	if ownedCount >= user.MaxOrganizations {
@@ -275,7 +275,7 @@ func (s *organizationService) Create(ctx context.Context, userID uuid.UUID, name
 	org.Slug = &slug
 
 	if err := s.orgRepo.Create(ctx, org); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to create organization")
 	}
 
@@ -292,7 +292,7 @@ func (s *organizationService) Create(ctx context.Context, userID uuid.UUID, name
 	}
 
 	if err := s.orgRepo.AddMember(ctx, member); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		// Rollback org creation
 		_ = s.orgRepo.Delete(ctx, org.ID)
 		return nil, errx.New(errx.Internal, "failed to add owner member")
@@ -310,7 +310,7 @@ func (s *organizationService) Create(ctx context.Context, userID uuid.UUID, name
 			Color:          seed.Color,
 			Permissions:    seed.Permissions,
 		}); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 		}
 	}
 
@@ -331,7 +331,7 @@ func (s *organizationService) Create(ctx context.Context, userID uuid.UUID, name
 func (s *organizationService) Get(ctx context.Context, orgID uuid.UUID) (*models.Organization, *errx.Error) {
 	org, err := s.orgRepo.GetByID(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get organization")
 	}
 	if org == nil {
@@ -344,7 +344,7 @@ func (s *organizationService) Get(ctx context.Context, orgID uuid.UUID) (*models
 func (s *organizationService) GetBySlug(ctx context.Context, slug string) (*models.Organization, *errx.Error) {
 	org, err := s.orgRepo.GetBySlug(ctx, slug)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get organization")
 	}
 	if org == nil {
@@ -357,7 +357,7 @@ func (s *organizationService) GetBySlug(ctx context.Context, slug string) (*mode
 func (s *organizationService) Update(ctx context.Context, orgID uuid.UUID, req *models.UpdateOrganizationRequest) (*models.Organization, *errx.Error) {
 	org, err := s.orgRepo.GetByID(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get organization")
 	}
 	if org == nil {
@@ -400,7 +400,7 @@ func (s *organizationService) Update(ctx context.Context, orgID uuid.UUID, req *
 	org.UpdatedAt = time.Now()
 
 	if err := s.orgRepo.Update(ctx, org); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to update organization")
 	}
 
@@ -410,7 +410,7 @@ func (s *organizationService) Update(ctx context.Context, orgID uuid.UUID, req *
 // Delete deletes an organization
 func (s *organizationService) Delete(ctx context.Context, orgID uuid.UUID) *errx.Error {
 	if err := s.orgRepo.Delete(ctx, orgID); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to delete organization")
 	}
 	return nil
@@ -420,7 +420,7 @@ func (s *organizationService) Delete(ctx context.Context, orgID uuid.UUID) *errx
 func (s *organizationService) GetUserOrganizations(ctx context.Context, userID uuid.UUID) ([]models.OrganizationMember, *errx.Error) {
 	members, err := s.orgRepo.GetUserOrganizations(ctx, userID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get user organizations")
 	}
 	return members, nil
@@ -430,7 +430,7 @@ func (s *organizationService) GetUserOrganizations(ctx context.Context, userID u
 func (s *organizationService) GetUserDefaultOrganization(ctx context.Context, userID uuid.UUID) (*models.Organization, *errx.Error) {
 	org, err := s.orgRepo.GetUserDefaultOrganization(ctx, userID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get default organization")
 	}
 	return org, nil
@@ -440,11 +440,11 @@ func (s *organizationService) GetUserDefaultOrganization(ctx context.Context, us
 func (s *organizationService) GetMembers(ctx context.Context, orgID uuid.UUID) ([]models.OrganizationMember, *errx.Error) {
 	members, err := s.orgRepo.GetMembers(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get members")
 	}
 	if err := s.orgRepo.HydrateMemberRoles(ctx, orgID, members); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 	}
 	return members, nil
 }
@@ -453,7 +453,7 @@ func (s *organizationService) GetMembers(ctx context.Context, orgID uuid.UUID) (
 func (s *organizationService) GetMembership(ctx context.Context, orgID, userID uuid.UUID) (*models.OrganizationMember, *errx.Error) {
 	member, err := s.orgRepo.GetMember(ctx, orgID, userID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get membership")
 	}
 	return member, nil
@@ -499,7 +499,7 @@ func (s *organizationService) InviteMember(ctx context.Context, orgID uuid.UUID,
 	// Generate invitation token
 	token, tokErr := generateInvitationToken()
 	if tokErr != nil {
-		sentry.CaptureException(tokErr)
+		errs.CaptureException(tokErr)
 		return nil, errx.New(errx.Internal, "failed to generate invitation token")
 	}
 
@@ -517,11 +517,11 @@ func (s *organizationService) InviteMember(ctx context.Context, orgID uuid.UUID,
 	}
 
 	if err := s.orgRepo.CreateInvitation(ctx, inv); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to create invitation")
 	}
 	if err := s.orgRepo.SetInvitationRoles(ctx, inv.ID, roleIDs); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to attach roles")
 	}
 	inv.Roles = toMemberRoles(roles)
@@ -541,7 +541,7 @@ func (s *organizationService) resolveRoleSet(ctx context.Context, orgID uuid.UUI
 	for _, id := range ids {
 		role, err := s.orgRepo.GetRoleByID(ctx, orgID, id)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return nil, nil, 0, errx.New(errx.Internal, "failed to load role")
 		}
 		if role == nil {
@@ -565,7 +565,7 @@ func toMemberRoles(roles []models.OrganizationRole) []models.MemberRole {
 func (s *organizationService) AcceptInvitation(ctx context.Context, token string, userID uuid.UUID, email string) (*models.OrganizationMember, *errx.Error) {
 	inv, err := s.orgRepo.GetInvitationByToken(ctx, token)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get invitation")
 	}
 	if inv == nil {
@@ -579,7 +579,7 @@ func (s *organizationService) AcceptInvitation(ctx context.Context, token string
 func (s *organizationService) AcceptInvitationByID(ctx context.Context, invitationID, userID uuid.UUID, email string) (*models.OrganizationMember, *errx.Error) {
 	inv, err := s.orgRepo.GetInvitationByID(ctx, invitationID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get invitation")
 	}
 	if inv == nil {
@@ -592,7 +592,7 @@ func (s *organizationService) AcceptInvitationByID(ctx context.Context, invitati
 func (s *organizationService) PreviewInvitation(ctx context.Context, token string) (*models.InvitationPreview, *errx.Error) {
 	inv, err := s.orgRepo.GetInvitationByToken(ctx, token)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get invitation")
 	}
 	if inv == nil {
@@ -629,7 +629,7 @@ func (s *organizationService) GetInvitationToken(ctx context.Context, orgID, inv
 
 	inv, err := s.orgRepo.GetInvitationByID(ctx, invitationID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", errx.New(errx.Internal, "failed to get invitation")
 	}
 	if inv == nil || inv.OrganizationID != orgID {
@@ -665,7 +665,7 @@ func (s *organizationService) acceptResolved(ctx context.Context, inv *models.Or
 	// deleted in the meantime are dropped; at least one must survive.
 	invRoleIDs, ierr := s.orgRepo.GetInvitationRoles(ctx, inv.ID)
 	if ierr != nil {
-		sentry.CaptureException(ierr)
+		errs.CaptureException(ierr)
 		return nil, errx.New(errx.Internal, "failed to load invitation roles")
 	}
 	var liveRoleIDs []uuid.UUID
@@ -673,7 +673,7 @@ func (s *organizationService) acceptResolved(ctx context.Context, inv *models.Or
 	for _, id := range invRoleIDs {
 		role, rerr := s.orgRepo.GetRoleByID(ctx, inv.OrganizationID, id)
 		if rerr != nil {
-			sentry.CaptureException(rerr)
+			errs.CaptureException(rerr)
 			return nil, errx.New(errx.Internal, "failed to load role")
 		}
 		if role == nil {
@@ -704,7 +704,7 @@ func (s *organizationService) acceptResolved(ctx context.Context, inv *models.Or
 		AcceptedAt:     &now,
 	}
 	if err := s.orgRepo.AddMemberWithRoles(ctx, member, liveRoleIDs); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to add member")
 	}
 
@@ -721,7 +721,7 @@ func (s *organizationService) acceptResolved(ctx context.Context, inv *models.Or
 func (s *organizationService) UpdateMemberRole(ctx context.Context, orgID, actorID, memberUserID uuid.UUID, req *models.UpdateMemberRequest) (*models.OrganizationMember, *errx.Error) {
 	member, err := s.orgRepo.GetMember(ctx, orgID, memberUserID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get member")
 	}
 	if member == nil {
@@ -747,13 +747,13 @@ func (s *organizationService) UpdateMemberRole(ctx context.Context, orgID, actor
 	}
 
 	if err := s.orgRepo.SetMemberRoles(ctx, orgID, memberUserID, roleIDs); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to update roles")
 	}
 
 	updated, gerr := s.orgRepo.GetMember(ctx, orgID, memberUserID)
 	if gerr != nil {
-		sentry.CaptureException(gerr)
+		errs.CaptureException(gerr)
 		return nil, errx.New(errx.Internal, "failed to load member")
 	}
 	if updated != nil {
@@ -766,7 +766,7 @@ func (s *organizationService) UpdateMemberRole(ctx context.Context, orgID, actor
 func (s *organizationService) RemoveMember(ctx context.Context, orgID, memberUserID uuid.UUID) *errx.Error {
 	member, err := s.orgRepo.GetMember(ctx, orgID, memberUserID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to get member")
 	}
 	if member == nil {
@@ -779,7 +779,7 @@ func (s *organizationService) RemoveMember(ctx context.Context, orgID, memberUse
 	}
 
 	if err := s.orgRepo.RemoveMember(ctx, orgID, memberUserID); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to remove member")
 	}
 
@@ -790,11 +790,11 @@ func (s *organizationService) RemoveMember(ctx context.Context, orgID, memberUse
 func (s *organizationService) GetPendingInvitations(ctx context.Context, orgID uuid.UUID) ([]models.OrganizationInvitation, *errx.Error) {
 	invitations, err := s.orgRepo.GetPendingInvitations(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get invitations")
 	}
 	if err := s.orgRepo.HydrateInvitationRoles(ctx, invitations); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 	}
 	return invitations, nil
 }
@@ -803,7 +803,7 @@ func (s *organizationService) GetPendingInvitations(ctx context.Context, orgID u
 func (s *organizationService) GetUserPendingInvitations(ctx context.Context, email string) ([]models.OrganizationInvitation, *errx.Error) {
 	invitations, err := s.orgRepo.GetUserPendingInvitations(ctx, email)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get invitations")
 	}
 	return invitations, nil
@@ -812,7 +812,7 @@ func (s *organizationService) GetUserPendingInvitations(ctx context.Context, ema
 // CancelInvitation cancels a pending invitation
 func (s *organizationService) CancelInvitation(ctx context.Context, invitationID uuid.UUID) *errx.Error {
 	if err := s.orgRepo.DeleteInvitation(ctx, invitationID); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to cancel invitation")
 	}
 	return nil
@@ -823,7 +823,7 @@ func (s *organizationService) TransferOwnership(ctx context.Context, orgID, newO
 	// Verify new owner is a member
 	member, err := s.orgRepo.GetMember(ctx, orgID, newOwnerUserID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to verify membership")
 	}
 	if member == nil {
@@ -831,7 +831,7 @@ func (s *organizationService) TransferOwnership(ctx context.Context, orgID, newO
 	}
 
 	if err := s.orgRepo.TransferOwnership(ctx, orgID, newOwnerUserID); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to transfer ownership")
 	}
 
@@ -842,7 +842,7 @@ func (s *organizationService) TransferOwnership(ctx context.Context, orgID, newO
 func (s *organizationService) HasPermission(ctx context.Context, orgID, userID uuid.UUID, perm models.OrganizationPermission) (bool, *errx.Error) {
 	member, err := s.orgRepo.GetMember(ctx, orgID, userID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return false, errx.New(errx.Internal, "failed to check permission")
 	}
 	if member == nil {
@@ -877,7 +877,7 @@ func (s *organizationService) CanAddMember(ctx context.Context, orgID uuid.UUID)
 
 	count, xerr := s.orgRepo.GetMemberCount(ctx, orgID)
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return false, errx.New(errx.Internal, "failed to get member count")
 	}
 
@@ -923,7 +923,7 @@ func (s *organizationService) CanAddCampaign(ctx context.Context, orgID uuid.UUI
 func (s *organizationService) MailboxAllowance(ctx context.Context, orgID uuid.UUID) (*models.MailboxAllowance, *errx.Error) {
 	count, err := s.orgRepo.GetEmailAccountCount(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get email account count")
 	}
 	a := &models.MailboxAllowance{Used: count, SendsPerMailbox: config.FairUseSendsPerMailbox}
@@ -936,7 +936,7 @@ func (s *organizationService) MailboxAllowance(ctx context.Context, orgID uuid.U
 
 	sub, serr := s.subRepo.GetByOrganizationID(ctx, orgID)
 	if serr != nil {
-		sentry.CaptureException(serr)
+		errs.CaptureException(serr)
 		return nil, errx.New(errx.Internal, "failed to get subscription")
 	}
 	a.Paid = sub != nil && sub.HasPaidSubscription()
@@ -983,7 +983,7 @@ func (s *organizationService) MailboxAllowance(ctx context.Context, orgID uuid.U
 	if a.Allowance != nil {
 		rows, rerr := s.orgRepo.ListLimitRequestsForOrg(ctx, orgID)
 		if rerr != nil {
-			sentry.CaptureException(rerr)
+			errs.CaptureException(rerr)
 		}
 		for i := range rows {
 			if rows[i].Field == "max_email_accounts" && rows[i].Status == models.LimitRequestStatusPending {
@@ -999,7 +999,7 @@ func (s *organizationService) MailboxAllowance(ctx context.Context, orgID uuid.U
 func (s *organizationService) GetCampaignCounts(ctx context.Context, orgID uuid.UUID) (total int, active int, err *errx.Error) {
 	t, a, xerr := s.orgRepo.GetCampaignCounts(ctx, orgID)
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return 0, 0, errx.New(errx.Internal, "failed to get campaign counts")
 	}
 	return t, a, nil
@@ -1009,7 +1009,7 @@ func (s *organizationService) GetCampaignCounts(ctx context.Context, orgID uuid.
 func (s *organizationService) GetOrganizationLimits(ctx context.Context, orgID uuid.UUID) (*models.OrganizationLimits, *errx.Error) {
 	sub, err := s.subRepo.GetByOrganizationID(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get subscription")
 	}
 	if sub == nil || sub.Plan == nil {
@@ -1029,25 +1029,25 @@ func (s *organizationService) GetOrganizationLimits(ctx context.Context, orgID u
 func (s *organizationService) GetOrganizationCounts(ctx context.Context, orgID uuid.UUID) (*models.OrganizationCounts, *errx.Error) {
 	total, active, err := s.orgRepo.GetCampaignCounts(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get campaign counts")
 	}
 
 	members, err := s.orgRepo.GetMemberCount(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get member count")
 	}
 
 	emails, err := s.orgRepo.GetEmailAccountCount(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get email account count")
 	}
 
 	contacts, err := s.orgRepo.GetContactCount(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get contact count")
 	}
 
@@ -1070,7 +1070,7 @@ func (s *organizationService) CreateEnterpriseInquiry(ctx context.Context, inqui
 	inquiry.CreatedAt = time.Now()
 
 	if err := s.orgRepo.CreateEnterpriseInquiry(ctx, inquiry); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to create enterprise inquiry")
 	}
 
@@ -1125,7 +1125,7 @@ func (s *organizationService) GetUserAdminPermissions(ctx context.Context, userI
 func (s *organizationService) SearchOrganizationsForAdmin(ctx context.Context, search *models.AdminOrgSearch) (*models.AdminOrgsResult, *errx.Error) {
 	result, err := s.orgRepo.SearchOrganizationsForAdmin(ctx, search)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to search organizations")
 	}
 	return result, nil
@@ -1138,7 +1138,7 @@ func (s *organizationService) SearchOrganizationsForAdmin(ctx context.Context, s
 func (s *organizationService) GetOrganizationAdminDetail(ctx context.Context, orgID uuid.UUID) (*models.AdminOrgDetail, *errx.Error) {
 	detail, err := s.orgRepo.GetOrganizationAdminDetail(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to load organization")
 	}
 	if detail == nil {
@@ -1166,7 +1166,7 @@ func (s *organizationService) GetOrganizationAdminDetail(ctx context.Context, or
 func (s *organizationService) GetOrganizationMembersForAdmin(ctx context.Context, orgID uuid.UUID) ([]models.AdminOrgMember, *errx.Error) {
 	members, err := s.orgRepo.GetOrganizationMembersForAdmin(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to load members")
 	}
 	return members, nil
@@ -1177,7 +1177,7 @@ func (s *organizationService) GetOrganizationMembersForAdmin(ctx context.Context
 func (s *organizationService) GetLimitOverrides(ctx context.Context, orgID uuid.UUID) (*models.OrganizationLimitOverrides, *errx.Error) {
 	o, err := s.orgRepo.GetOrganizationLimitOverrides(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to load limit overrides")
 	}
 	return o, nil
@@ -1190,7 +1190,7 @@ func (s *organizationService) GetLimitOverrides(ctx context.Context, orgID uuid.
 func (s *organizationService) SetLimitOverrides(ctx context.Context, orgID uuid.UUID, req *models.UpdateOrgOverridesRequest, grantedBy uuid.UUID) (*models.OrganizationLimitOverrides, *errx.Error) {
 	o, err := s.orgRepo.UpsertOrganizationLimitOverrides(ctx, orgID, req, grantedBy)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to write limit overrides")
 	}
 	return o, nil
@@ -1374,7 +1374,7 @@ func (s *organizationService) SubmitLimitIncreaseRequest(ctx context.Context, or
 		if strings.Contains(err.Error(), "uq_limit_requests_one_pending_per_field") {
 			return nil, errx.New(errx.Conflict, "a pending request already exists for this field")
 		}
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to submit request")
 	}
 
@@ -1397,7 +1397,7 @@ func (s *organizationService) SubmitLimitIncreaseRequest(ctx context.Context, or
 func (s *organizationService) ListLimitRequestsForOrg(ctx context.Context, orgID uuid.UUID) ([]models.LimitIncreaseRequest, *errx.Error) {
 	rows, err := s.orgRepo.ListLimitRequestsForOrg(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to load requests")
 	}
 	return rows, nil
@@ -1409,7 +1409,7 @@ func (s *organizationService) ListLimitRequestsForOrg(ctx context.Context, orgID
 func (s *organizationService) CancelLimitRequest(ctx context.Context, id, userID uuid.UUID) *errx.Error {
 	lr, err := s.orgRepo.GetLimitRequest(ctx, id)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to load request")
 	}
 	if lr == nil {
@@ -1422,7 +1422,7 @@ func (s *organizationService) CancelLimitRequest(ctx context.Context, id, userID
 		return errx.New(errx.BadRequest, "only pending requests can be cancelled")
 	}
 	if err := s.orgRepo.UpdateLimitRequestStatus(ctx, id, models.LimitRequestStatusCancelled, userID, ""); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to cancel request")
 	}
 	return nil
@@ -1448,7 +1448,7 @@ func (s *organizationService) AdminListLimitRequests(ctx context.Context, search
 
 	result, err := s.orgRepo.ListLimitRequestsForAdmin(ctx, search)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to load limit requests")
 	}
 	return result, nil
@@ -1460,7 +1460,7 @@ func (s *organizationService) AdminListLimitRequests(ctx context.Context, search
 func (s *organizationService) ApproveLimitRequest(ctx context.Context, id, reviewerID uuid.UUID, notes string) (*models.LimitIncreaseRequest, *errx.Error) {
 	lr, err := s.orgRepo.GetLimitRequest(ctx, id)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to load request")
 	}
 	if lr == nil {
@@ -1486,7 +1486,7 @@ func (s *organizationService) ApproveLimitRequest(ctx context.Context, id, revie
 	}
 
 	if err := s.orgRepo.UpdateLimitRequestStatus(ctx, id, models.LimitRequestStatusApproved, reviewerID, notes); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to mark request approved")
 	}
 	lr.Status = models.LimitRequestStatusApproved
@@ -1498,7 +1498,7 @@ func (s *organizationService) ApproveLimitRequest(ctx context.Context, id, revie
 func (s *organizationService) RejectLimitRequest(ctx context.Context, id, reviewerID uuid.UUID, notes string) (*models.LimitIncreaseRequest, *errx.Error) {
 	lr, err := s.orgRepo.GetLimitRequest(ctx, id)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to load request")
 	}
 	if lr == nil {
@@ -1508,7 +1508,7 @@ func (s *organizationService) RejectLimitRequest(ctx context.Context, id, review
 		return nil, errx.New(errx.BadRequest, "only pending requests can be rejected")
 	}
 	if err := s.orgRepo.UpdateLimitRequestStatus(ctx, id, models.LimitRequestStatusRejected, reviewerID, notes); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to mark request rejected")
 	}
 	lr.Status = models.LimitRequestStatusRejected
@@ -1536,7 +1536,7 @@ func (s *organizationService) validateRolePermissions(ctx context.Context, orgID
 func (s *organizationService) validateActorHoldsPermissions(ctx context.Context, orgID, actorID uuid.UUID, perms models.OrganizationPermission) *errx.Error {
 	actor, err := s.orgRepo.GetMember(ctx, orgID, actorID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to load member")
 	}
 	if actor == nil {
@@ -1562,7 +1562,7 @@ func validateRoleName(name string) (string, *errx.Error) {
 func (s *organizationService) ListRoles(ctx context.Context, orgID uuid.UUID) ([]models.OrganizationRole, *errx.Error) {
 	roles, err := s.orgRepo.ListRoles(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to list roles")
 	}
 	if roles == nil {
@@ -1583,7 +1583,7 @@ func (s *organizationService) CreateRole(ctx context.Context, orgID, actorID uui
 
 	count, err := s.orgRepo.CountRoles(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to count roles")
 	}
 	if count >= MaxCustomRolesPerOrg {
@@ -1613,7 +1613,7 @@ func (s *organizationService) CreateRole(ctx context.Context, orgID, actorID uui
 func (s *organizationService) UpdateRole(ctx context.Context, orgID, actorID, roleID uuid.UUID, req *models.UpdateOrganizationRoleRequest) (*models.OrganizationRole, *errx.Error) {
 	role, err := s.orgRepo.GetRoleByID(ctx, orgID, roleID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to load role")
 	}
 	if role == nil {
@@ -1648,7 +1648,7 @@ func (s *organizationService) UpdateRole(ctx context.Context, orgID, actorID, ro
 	// Write-through: assigned members pick up the new name + permissions
 	// atomically (their effective access changes live via the audit spine).
 	if err := s.orgRepo.UpdateRole(ctx, role); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to update role")
 	}
 	return role, nil
@@ -1661,7 +1661,7 @@ func (s *organizationService) DeleteRole(ctx context.Context, orgID, actorID, ro
 	// the Admin role).
 	role, rerr := s.orgRepo.GetRoleByID(ctx, orgID, roleID)
 	if rerr != nil {
-		sentry.CaptureException(rerr)
+		errs.CaptureException(rerr)
 		return errx.New(errx.Internal, "failed to load role")
 	}
 	if role == nil {
@@ -1671,7 +1671,7 @@ func (s *organizationService) DeleteRole(ctx context.Context, orgID, actorID, ro
 		return xerr
 	}
 	if err := s.orgRepo.DeleteRole(ctx, orgID, roleID); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to delete role")
 	}
 	return nil

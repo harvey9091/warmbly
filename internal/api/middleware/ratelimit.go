@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 // RateLimitMiddleware checks rate limits for a given category
@@ -35,7 +35,7 @@ func (h *Handler) RateLimitMiddleware(category models.RateLimitCategory) gin.Han
 		status, err := h.RateLimitService.CheckAndRecord(c.Request.Context(), userID, category)
 		if err != nil {
 			// Log error but allow request (fail open)
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			c.Next()
 			return
 		}

@@ -17,7 +17,6 @@ import (
 	"github.com/MicahParks/keyfunc/v3"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconf "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/meszmate/apple-go"
 	"github.com/warmbly/warmbly/internal/api"
@@ -27,6 +26,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/adminoutreach"
 	"github.com/warmbly/warmbly/internal/app/advanced"
 	"github.com/warmbly/warmbly/internal/app/unsublink"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/warmbly/warmbly/internal/app/advisor"
@@ -328,7 +328,7 @@ func main() {
 		if config.TasksProvider() == "gcloud" {
 			serviceAccount, err = cfg.LoadGoogleServiceAccount(ctx)
 			if err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureFatal(err)
 				log.Fatal(err)
 			}
 
@@ -337,7 +337,7 @@ func main() {
 				if cfg.Env == "dev" {
 					log.Printf("Warning: Failed to fetch Google OIDC keys: %v", err)
 				} else {
-					sentry.CaptureException(err)
+					errs.CaptureFatal(err)
 					log.Fatal(err)
 				}
 			}
@@ -345,7 +345,7 @@ func main() {
 
 		apiCfg, err := cfg.LoadApiConfig(ctx)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
 
@@ -357,7 +357,7 @@ func main() {
 		if config.AWSNeeded() {
 			awscfg, err = awsconf.LoadDefaultConfig(ctx)
 			if err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureFatal(err)
 				log.Fatal(err)
 			}
 		}
@@ -369,13 +369,13 @@ func main() {
 
 		kms, err := kms.FromEnv(ctx, awscfg, masterKey)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
 
 		geoPath, err := cfg.LoadGeoDBPath(ctx)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
 
@@ -394,40 +394,40 @@ func main() {
 
 		s3, err := storage.NewFromEnv(ctx, awscfg, "main")
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
 		s3ForHandler = s3
 
 		primaryDBEndpoint, err := cfg.LoadPrimaryDBEndpoint(ctx)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
 
 		primaryDB, err := db.New(ctx, primaryDBEndpoint)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
 
 		// Run database migrations
 		log.Println("Running database migrations...")
 		if err := db.RunMigrations(primaryDBEndpoint); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureFatal(err)
 			log.Fatal("Failed to run migrations: ", err)
 		}
 		log.Println("Database migrations completed")
 
 		primaryRedis, err := cfg.LoadPrimaryRedisEndpoint(ctx)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
 
 		cache, err := cache.New(primaryRedis)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
 
@@ -444,13 +444,13 @@ func main() {
 			}
 			pubsubClient, err := pubsub.NewClient(ctx, gcpProjectID)
 			if err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureFatal(err)
 				log.Fatal("Failed to initialize Pub/Sub client: ", err)
 			}
 			// Create the realtime topics + "<topic>-sub" subscriptions if missing,
 			// so the Elixir Broadway consumers always have a subscription to read.
 			if err := pubsubClient.EnsureRealtimeTopology(ctx); err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureFatal(err)
 				log.Fatal("Failed to provision Pub/Sub topics/subscriptions: ", err)
 			}
 			streamingPublisher = pubsub.NewStreamingPublisher(pubsubClient)
@@ -463,7 +463,7 @@ func main() {
 
 		emailCfg, err := cfg.LoadEmailConfig(ctx)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
 
@@ -478,7 +478,7 @@ func main() {
 
 		mailTransport, err = notify.NewTransport(ctx, cfg, emailCfg.EmailName, emailCfg.EmailAddress)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
 		emailNotificationService = mailTransport
@@ -497,7 +497,7 @@ func main() {
 
 		authCfg, err := cfg.LoadAuthConfig(ctx)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
 
@@ -529,25 +529,25 @@ func main() {
 		if config.EventBusProvider() == "kafka" {
 			kafkaBootstrapServers, err = cfg.LoadKafkaBootstrapServers(ctx)
 			if err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureFatal(err)
 				log.Fatal(err)
 			}
 			kafkaSaslConfig, err = cfg.LoadKafkaConfigSasl(ctx)
 			if err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureFatal(err)
 				log.Fatal(err)
 			}
 		}
 
 		codecImpl, err := codec.FromEnv()
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
 
 		bus, err := eventbus.FromEnv(kafkaBootstrapServers, kafkaSaslConfig)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
 
@@ -580,7 +580,7 @@ func main() {
 		webauthnRepository := repository.NewWebAuthnRepository(primaryDB)
 		credEncrypter, cerr := encrypt.FromEnv()
 		if cerr != nil {
-			sentry.CaptureException(cerr)
+			errs.CaptureFatal(cerr)
 			log.Fatal("Invalid CREDENTIALS_ENCRYPTION_KEY: ", cerr)
 		}
 		emailRepostory := repository.NewEmailRepostory(primaryDB, credEncrypter)
@@ -599,7 +599,7 @@ func main() {
 		instanceSettings = instancesettings.NewService(instancesettings.NewStore(primaryDB.Pool))
 		bootstrapInstanceSettings(ctx, instanceSettings)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
 
@@ -754,7 +754,7 @@ func main() {
 		if config.BillingProvider() == "stripe" {
 			stripeCfg, err := cfg.LoadStripeConfig(ctx)
 			if err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureFatal(err)
 				log.Fatal(err)
 			}
 			stripeService = stripe.NewService(stripeCfg, subscriptionRepository, planRepository, workerAssignmentService, discountService)
@@ -961,7 +961,7 @@ func main() {
 			RPOrigins:     authCfg.WebAuthnRPOrigins,
 		})
 		if passkeyErr != nil {
-			sentry.CaptureException(passkeyErr)
+			errs.CaptureFatal(passkeyErr)
 			log.Fatal(passkeyErr)
 		}
 		passkeysUsable = passkeysUsableFor(os.Getenv("APP_URL"))
@@ -979,7 +979,7 @@ func main() {
 			cache,
 		)
 		if berr := bootstrapService.Run(ctx); berr != nil {
-			sentry.CaptureException(berr)
+			errs.CaptureException(berr)
 			log.Printf("Warning: bootstrap failed: %v", berr)
 		}
 
@@ -1008,7 +1008,7 @@ func main() {
 			{Kind: "blob", Provider: s3.Name(), Display: s3.Name(), ReadOnly: true},
 			{Kind: "eventbus", Provider: "kafka", Display: "kafka", ReadOnly: true},
 		}); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			log.Printf("storage_backends registrar: %v", err)
 		}
 
@@ -1313,12 +1313,12 @@ func main() {
 		if config.TasksProvider() == "gcloud" {
 			cloudTasksCfg, err := cfg.LoadCloudTasksConfig(ctx)
 			if err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureFatal(err)
 				log.Fatal(err)
 			}
 			gclient, err := gtasks.NewClient(ctx, cloudTasksCfg.QueueName, cloudTasksCfg.WebhookURL, serviceAccount, cloudTasksCfg.EmulatorHost)
 			if err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureFatal(err)
 				log.Fatal(err)
 			}
 			tasksClient = gclient
@@ -2111,7 +2111,7 @@ func main() {
 		AppEnv:         os.Getenv("APP_ENV"),
 	}
 
-	sentry.CaptureMessage("Starting the backend on " + addr)
+	errs.CaptureMessage("Starting the backend on " + addr)
 
 	router := api.Run(h, m, oidcH, addr, ginMode, allowedOrigins)
 

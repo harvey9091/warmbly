@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/app/cipher"
 	"github.com/warmbly/warmbly/internal/infrastructure/codec"
@@ -15,6 +14,7 @@ import (
 	"github.com/warmbly/warmbly/internal/infrastructure/kafka"
 	"github.com/warmbly/warmbly/internal/infrastructure/storage"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/emsg"
 	"github.com/warmbly/warmbly/internal/repository"
 )
@@ -328,22 +328,22 @@ func (p *publisher) publish(topic, key string, event interface{}) error {
 	}
 
 	if p.codec == nil {
-		sentry.CaptureException(fmt.Errorf("codec not configured, topic: %s", topic))
+		errs.CaptureException(fmt.Errorf("codec not configured, topic: %s", topic))
 		return fmt.Errorf("codec not configured")
 	}
 	if p.bus == nil {
-		sentry.CaptureException(fmt.Errorf("event bus not configured, topic: %s", topic))
+		errs.CaptureException(fmt.Errorf("event bus not configured, topic: %s", topic))
 		return fmt.Errorf("event bus not configured")
 	}
 
 	ctx := context.Background()
 	data, err := p.codec.Serialize(ctx, topic, event)
 	if err != nil {
-		sentry.CaptureException(fmt.Errorf("failed to serialize event: %w", err))
+		errs.CaptureException(fmt.Errorf("failed to serialize event: %w", err))
 		return err
 	}
 	if err := p.bus.Publish(ctx, topic, key, data); err != nil {
-		sentry.CaptureException(fmt.Errorf("failed to publish event: %w", err))
+		errs.CaptureException(fmt.Errorf("failed to publish event: %w", err))
 		return err
 	}
 	return nil

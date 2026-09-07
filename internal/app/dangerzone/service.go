@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
@@ -90,7 +90,7 @@ func (s *service) ScheduleOrganizationDeletion(ctx context.Context, orgID, reque
 
 	org, err := s.orgRepo.GetByID(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to load organization")
 	}
 	if org == nil {
@@ -127,7 +127,7 @@ func (s *service) ScheduleOrganizationDeletion(ctx context.Context, orgID, reque
 		if errors.Is(err, repository.ErrPendingDeletionExists) {
 			return nil, errx.New(errx.Conflict, "organization is already scheduled for deletion")
 		}
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to schedule organization deletion")
 	}
 
@@ -140,7 +140,7 @@ func (s *service) ScheduleOrganizationDeletion(ctx context.Context, orgID, reque
 func (s *service) CancelOrganizationDeletion(ctx context.Context, orgID, requesterUserID uuid.UUID, req *models.CancelDeletionRequest) *errx.Error {
 	org, err := s.orgRepo.GetByID(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to load organization")
 	}
 	if org == nil {
@@ -152,7 +152,7 @@ func (s *service) CancelOrganizationDeletion(ctx context.Context, orgID, request
 
 	d, err := s.repo.GetActive(ctx, models.DeletionResourceOrganization, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to load pending deletion")
 	}
 	if d == nil {
@@ -165,7 +165,7 @@ func (s *service) CancelOrganizationDeletion(ctx context.Context, orgID, request
 	}
 
 	if err := s.repo.Cancel(ctx, d.ID, requesterUserID, reason); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to cancel deletion")
 	}
 
@@ -176,7 +176,7 @@ func (s *service) CancelOrganizationDeletion(ctx context.Context, orgID, request
 func (s *service) GetOrganizationStatus(ctx context.Context, orgID uuid.UUID) (*models.DangerZoneStatus, *errx.Error) {
 	org, err := s.orgRepo.GetByID(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to load organization")
 	}
 	if org == nil {
@@ -193,7 +193,7 @@ func (s *service) GetOrganizationStatus(ctx context.Context, orgID uuid.UUID) (*
 
 	d, err := s.repo.GetActive(ctx, models.DeletionResourceOrganization, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to load pending deletion")
 	}
 	status.PendingDeletion = d
@@ -209,7 +209,7 @@ func (s *service) ScheduleUserDeletion(ctx context.Context, userID uuid.UUID, re
 
 	user, err := s.userRepo.GetUser(ctx, userID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to load user")
 	}
 	if user == nil {
@@ -241,7 +241,7 @@ func (s *service) ScheduleUserDeletion(ctx context.Context, userID uuid.UUID, re
 		if errors.Is(err, repository.ErrPendingDeletionExists) {
 			return nil, errx.New(errx.Conflict, "account is already scheduled for deletion")
 		}
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to schedule account deletion")
 	}
 
@@ -254,7 +254,7 @@ func (s *service) ScheduleUserDeletion(ctx context.Context, userID uuid.UUID, re
 func (s *service) CancelUserDeletion(ctx context.Context, userID uuid.UUID, req *models.CancelDeletionRequest) *errx.Error {
 	user, err := s.userRepo.GetUser(ctx, userID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to load user")
 	}
 	if user == nil {
@@ -263,7 +263,7 @@ func (s *service) CancelUserDeletion(ctx context.Context, userID uuid.UUID, req 
 
 	d, err := s.repo.GetActive(ctx, models.DeletionResourceUser, userID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to load pending deletion")
 	}
 	if d == nil {
@@ -276,7 +276,7 @@ func (s *service) CancelUserDeletion(ctx context.Context, userID uuid.UUID, req 
 	}
 
 	if err := s.repo.Cancel(ctx, d.ID, userID, reason); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to cancel deletion")
 	}
 
@@ -287,7 +287,7 @@ func (s *service) CancelUserDeletion(ctx context.Context, userID uuid.UUID, req 
 func (s *service) GetUserStatus(ctx context.Context, userID uuid.UUID) (*models.DangerZoneStatus, *errx.Error) {
 	user, err := s.userRepo.GetUser(ctx, userID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to load user")
 	}
 	if user == nil {
@@ -304,7 +304,7 @@ func (s *service) GetUserStatus(ctx context.Context, userID uuid.UUID) (*models.
 
 	d, err := s.repo.GetActive(ctx, models.DeletionResourceUser, userID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to load pending deletion")
 	}
 	status.PendingDeletion = d
@@ -334,7 +334,7 @@ func (s *service) ExecuteDuePendingDeletions(ctx context.Context) (int, int, err
 		// one transitions pending -> executing.
 		claimed, err := s.repo.MarkExecuting(ctx, d.ID)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			failed++
 			continue
 		}
@@ -343,14 +343,14 @@ func (s *service) ExecuteDuePendingDeletions(ctx context.Context) (int, int, err
 		}
 
 		if err := s.runHardDelete(ctx, &d); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			_ = s.repo.MarkFailed(ctx, d.ID, err.Error())
 			failed++
 			continue
 		}
 
 		if err := s.repo.MarkCompleted(ctx, d.ID); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			failed++
 			continue
 		}
@@ -396,7 +396,7 @@ func (s *service) DispatchReminders(ctx context.Context) error {
 			d := batch[i]
 			s.sendReminderEmail(ctx, &d, t.bit)
 			if err := s.repo.SetNotifBit(ctx, d.ID, t.bit); err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureException(err)
 			}
 		}
 	}
@@ -447,7 +447,7 @@ func (s *service) sendUserScheduledEmail(ctx context.Context, user *models.User,
 		return
 	}
 	if err := s.notifier.Send(ctx, []string{user.Email}, nil, nil, subject, body); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 	}
 }
 
@@ -461,7 +461,7 @@ func (s *service) sendUserCancelledEmail(ctx context.Context, user *models.User,
 		return
 	}
 	if err := s.notifier.Send(ctx, []string{user.Email}, nil, nil, subject, body); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 	}
 }
 
@@ -550,7 +550,7 @@ func (s *service) sendCompletionEmail(ctx context.Context, d *models.ScheduledDe
 		return
 	}
 	if err := s.notifier.Send(ctx, []string{requester.Email}, nil, nil, subject, body); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 	}
 }
 
@@ -600,7 +600,7 @@ func (s *service) orgRecipients(ctx context.Context, org *models.Organization) [
 
 	members, err := s.orgRepo.GetMembers(ctx, org.ID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return out
 	}
 	for i := range members {
@@ -624,7 +624,7 @@ func (s *service) orgRecipients(ctx context.Context, org *models.Organization) [
 func (s *service) sendToEach(ctx context.Context, recipients []string, subject, body string) {
 	for _, to := range recipients {
 		if err := s.notifier.Send(ctx, []string{to}, nil, nil, subject, body); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 		}
 	}
 }

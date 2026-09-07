@@ -19,10 +19,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -144,7 +144,7 @@ func genCode() string {
 func (s *service) EnsureCode(ctx context.Context, ownerUserID, ownerOrgID uuid.UUID) (*models.ReferralCode, *errx.Error) {
 	existing, err := s.repo.GetCodeByOwner(ctx, ownerUserID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to load referral code")
 	}
 	if existing != nil {
@@ -159,7 +159,7 @@ func (s *service) EnsureCode(ctx context.Context, ownerUserID, ownerOrgID uuid.U
 
 		taken, err := s.repo.GetCodeByCode(ctx, code)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return nil, errx.New(errx.Internal, "failed to mint referral code")
 		}
 		if taken != nil {
@@ -167,7 +167,7 @@ func (s *service) EnsureCode(ctx context.Context, ownerUserID, ownerOrgID uuid.U
 		}
 		clash, err := s.discountRepo.GetByCode(ctx, code)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return nil, errx.New(errx.Internal, "failed to mint referral code")
 		}
 		if clash != nil {
@@ -203,7 +203,7 @@ func (s *service) EnsureCode(ctx context.Context, ownerUserID, ownerOrgID uuid.U
 			if again, gerr := s.repo.GetCodeByOwner(ctx, ownerUserID); gerr == nil && again != nil {
 				return again, nil
 			}
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return nil, errx.New(errx.Internal, "failed to mint referral code")
 		}
 		return rc, nil
@@ -223,12 +223,12 @@ func (s *service) Summary(ctx context.Context, ownerUserID, ownerOrgID uuid.UUID
 
 	ledger, err := s.repo.GetLedger(ctx, ownerOrgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to load referral earnings")
 	}
 	total, pending, qualified, rewarded, err := s.repo.AttributionStats(ctx, ownerOrgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to load referral stats")
 	}
 
@@ -254,7 +254,7 @@ func (s *service) Summary(ctx context.Context, ownerUserID, ownerOrgID uuid.UUID
 func (s *service) ListAttributions(ctx context.Context, referrerOrgID uuid.UUID, limit, offset int) ([]models.ReferralAttribution, *errx.Error) {
 	rows, err := s.repo.ListAttributionsByReferrer(ctx, referrerOrgID, limit, offset)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to list referrals")
 	}
 	return rows, nil
@@ -263,7 +263,7 @@ func (s *service) ListAttributions(ctx context.Context, referrerOrgID uuid.UUID,
 func (s *service) ListEarnings(ctx context.Context, orgID uuid.UUID, limit, offset int) ([]models.ReferralEarningsTransaction, *errx.Error) {
 	rows, err := s.repo.ListEarnings(ctx, orgID, limit, offset)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to list referral earnings")
 	}
 	return rows, nil
@@ -278,7 +278,7 @@ func (s *service) AttributeSignup(ctx context.Context, code string, inviteeOrgID
 	}
 	rc, err := s.repo.GetCodeByCode(ctx, code)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil // never block signup on a lookup failure
 	}
 	if rc == nil {
@@ -331,14 +331,14 @@ func (s *service) QualifyOnConversion(ctx context.Context, inviteeOrgID uuid.UUI
 		return
 	}
 	if err := s.repo.MarkAttributionQualified(ctx, attr.ID); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 	}
 }
 
 func (s *service) RewardOnFirstInvoice(ctx context.Context, inviteeOrgID, planID uuid.UUID, eventID string) *errx.Error {
 	attr, err := s.repo.GetAttributionByInviteeOrg(ctx, inviteeOrgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to load referral attribution")
 	}
 	if attr == nil {
@@ -358,7 +358,7 @@ func (s *service) RewardOnFirstInvoice(ctx context.Context, inviteeOrgID, planID
 	// surfaced (not silently treated as under-cap) but doesn't block the reward.
 	since := time.Now().Add(-clawbackWindow)
 	if n, cerr := s.repo.CountRewardedByReferrerSince(ctx, attr.ReferrerOrgID, since); cerr != nil {
-		sentry.CaptureException(cerr)
+		errs.CaptureException(cerr)
 	} else if n >= MonthlyRewardCap {
 		_ = s.repo.MarkAttributionVoid(ctx, attr.ID, "monthly_cap")
 		return nil
@@ -379,7 +379,7 @@ func (s *service) RewardOnFirstInvoice(ctx context.Context, inviteeOrgID, planID
 	// replayed event, so nothing moved.
 	applied, err := s.repo.ApplyReferralReward(ctx, attr, reward, DefaultCurrency, eventID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to record referral reward")
 	}
 	if !applied {
@@ -412,7 +412,7 @@ func (s *service) ClawbackForInvitee(ctx context.Context, inviteeOrgID uuid.UUID
 	// reverse the same reward.
 	applied, err := s.repo.ApplyReferralClawback(ctx, attr, attr.RewardCents, attr.RewardCurrency, eventID+":clawback", reason)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return
 	}
 	if !applied {
@@ -449,11 +449,11 @@ func (s *service) SyncStripeBalance(ctx context.Context, orgID uuid.UUID) {
 	// so a balance that returns to a prior value still yields a distinct key.
 	key := fmt.Sprintf("refbal:%s:%d:%d", orgID, ledger.LifetimeEarnedCents, ledger.BalanceCents)
 	if _, xerr := s.balancer.ApplyCustomerCredit(ctx, sub.StripeCustomerID, delta, ledger.Currency, key); xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return
 	}
 	if err := s.repo.SetStripePushed(ctx, orgID, ledger.BalanceCents); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 	}
 }
 

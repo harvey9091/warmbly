@@ -15,7 +15,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconf "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/getsentry/sentry-go"
 	"github.com/warmbly/warmbly/internal/app/advanced"
 	"github.com/warmbly/warmbly/internal/app/cipher"
 	jobs "github.com/warmbly/warmbly/internal/app/consumer"
@@ -48,6 +47,7 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/notify"
 	"github.com/warmbly/warmbly/internal/observability"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/encrypt"
 	"github.com/warmbly/warmbly/internal/pkg/generation"
 	"github.com/warmbly/warmbly/internal/pkg/geo"
@@ -167,14 +167,14 @@ func main() {
 		}
 		pubsubClient, err := pubsub.NewClient(ctx, gcpProjectID)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
 		defer pubsubClient.Close()
 		// Idempotently ensure the realtime topics + subscriptions exist (safe to
 		// run from both backend and consumer; AlreadyExists is treated as success).
 		if err := pubsubClient.EnsureRealtimeTopology(ctx); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureFatal(err)
 			log.Fatal("Failed to provision Pub/Sub topics/subscriptions: ", err)
 		}
 		streamingPublisher = pubsub.NewStreamingPublisher(pubsubClient)
@@ -187,7 +187,7 @@ func main() {
 	// Repositories
 	credEncrypter, err := encrypt.FromEnv()
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureFatal(err)
 		log.Fatal("Invalid CREDENTIALS_ENCRYPTION_KEY: ", err)
 	}
 	emailRepo := repository.NewEmailRepostory(primaryDB, credEncrypter)

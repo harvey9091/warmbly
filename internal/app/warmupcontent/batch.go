@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/pkg/generation"
@@ -159,7 +159,7 @@ func (s *service) PollBatches(ctx context.Context) error {
 	for i := range jobs {
 		job := &jobs[i]
 		if err := s.pollBatchJob(ctx, job); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			log.Warn().Err(err).Str("job_id", job.ID.String()).Str("batch_id", job.BatchID).
 				Msg("warmup batch generation: poll failed")
 		}
@@ -307,7 +307,7 @@ func (s *service) ingestBatch(ctx context.Context, job *models.WarmupGenerationJ
 		}
 		if err := s.repo.InsertConversation(ctx, record); err != nil {
 			job.FailedCount++
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			continue
 		}
 		job.GeneratedCount++

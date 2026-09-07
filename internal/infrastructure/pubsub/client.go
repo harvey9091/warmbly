@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"cloud.google.com/go/pubsub"
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -197,7 +197,7 @@ func (p *StreamingPublisher) PublishTaskStatus(ctx context.Context, userID strin
 	}
 
 	if err := p.client.Publish(ctx, TopicTaskStatus, event, attrs); err != nil {
-		sentry.CaptureException(fmt.Errorf("failed to publish task status: %w", err))
+		errs.CaptureException(fmt.Errorf("failed to publish task status: %w", err))
 	}
 }
 
@@ -227,7 +227,7 @@ func (p *StreamingPublisher) PublishEmailError(ctx context.Context, userID strin
 	}
 
 	if err := p.client.Publish(ctx, TopicEmailError, event, attrs); err != nil {
-		sentry.CaptureException(fmt.Errorf("failed to publish email error: %w", err))
+		errs.CaptureException(fmt.Errorf("failed to publish email error: %w", err))
 	}
 }
 
@@ -256,7 +256,7 @@ func (p *StreamingPublisher) PublishEmailWarning(ctx context.Context, userID str
 	}
 
 	if err := p.client.Publish(ctx, TopicEmailWarning, event, attrs); err != nil {
-		sentry.CaptureException(fmt.Errorf("failed to publish email warning: %w", err))
+		errs.CaptureException(fmt.Errorf("failed to publish email warning: %w", err))
 	}
 }
 
@@ -281,7 +281,7 @@ func (p *StreamingPublisher) PublishCampaignProgress(ctx context.Context, userID
 	}
 
 	if err := p.client.Publish(ctx, TopicCampaignUpdate, event, attrs); err != nil {
-		sentry.CaptureException(fmt.Errorf("failed to publish campaign progress: %w", err))
+		errs.CaptureException(fmt.Errorf("failed to publish campaign progress: %w", err))
 	}
 }
 
@@ -307,6 +307,6 @@ func (p *StreamingPublisher) PublishWarmupStats(ctx context.Context, userID stri
 	}
 
 	if err := p.client.Publish(ctx, TopicWarmupUpdate, event, attrs); err != nil {
-		sentry.CaptureException(fmt.Errorf("failed to publish warmup stats: %w", err))
+		errs.CaptureException(fmt.Errorf("failed to publish warmup stats: %w", err))
 	}
 }

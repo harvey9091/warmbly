@@ -3,11 +3,11 @@ package unibox
 import (
 	"context"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 // Overview rolls up the counts the dashboard's scope rail and top
@@ -16,7 +16,7 @@ import (
 func (s *uniboxService) Overview(ctx context.Context, orgID, userID uuid.UUID) (*models.UniboxOverview, *errx.Error) {
 	o, err := s.uniboxRepository.Overview(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	if len(o.Mailboxes) > OverviewMaxMailboxes {
@@ -34,7 +34,7 @@ func (s *uniboxService) Overview(ctx context.Context, orgID, userID uuid.UUID) (
 		if n, err := s.taskRepo.CountScheduledForUser(ctx, userID); err == nil {
 			o.ScheduledPending = n
 		} else {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 		}
 	}
 	// Static-for-now cap. Surfacing it in the overview lets the

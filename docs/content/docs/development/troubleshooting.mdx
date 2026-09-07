@@ -109,6 +109,27 @@ The volumes hold the per-organization data keys. Every sealed mailbox credential
 `redis-cli FLUSHDB` also destroys `bootstrap:setup_token`, every pending auth session and every login attempt counter. On an unclaimed instance that throws away the only way in. Delete the specific key, or wait out the window.
 </Callout>
 
+## Collecting errors somewhere you can read them
+
+`make logs` shows you what a service printed. It does not tell you that a handler threw at 3am, in which build, for which organization. Every runtime in Warmbly can send that to Sentry instead, and none of them do until you set a DSN.
+
+Point each service at a project by setting one variable on it:
+
+```bash
+# backend, consumer, worker, forms, tracking, realtime
+SENTRY_DSN=https://<key>@<host>/<project>
+# the dashboard, the admin panel, and public form pages (browser errors)
+WARMBLY_SENTRY_DSN=https://<key>@<host>/<project>
+```
+
+Under the installer's compose file both go in `.env`: every service inherits it through `env_file`, so one line and a `docker compose up -d` covers the whole instance.
+
+Every event is tagged with the service that raised it, the environment and the build, so one project can hold the whole instance and still be filterable. Server-side services take the environment from `APP_ENV`. The dashboard and admin panel take theirs from `WARMBLY_SENTRY_ENVIRONMENT`, since the container serving the bundle is not the process reporting the error. Hosted form pages are the exception among the browser apps: their environment is stamped into the page by the forms service, so it comes from that service's `APP_ENV`. The frontends are separate projects' worth of events in practice; give the browser ones their own project if you want the noise apart.
+
+The server behind the DSN is your choice. Sentry Cloud's free Developer plan covers 5k errors a month, and Warmbly assumes nothing about the host, so a self-hosted Sentry or a Sentry-compatible server such as GlitchTip works with the same variable.
+
+Leaving every DSN unset is a supported configuration, not a degraded one: no host is contacted and errors go to the log as before. See [data control](/development/data-control/#error-reporting).
+
 ## Still stuck
 
 ```bash

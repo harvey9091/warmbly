@@ -106,6 +106,16 @@ jobs:
           context: ./${{ matrix.service }}
           file: ./${{ matrix.service }}/Dockerfile
           push: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+            SENTRY_ORG=${{ vars.SENTRY_ORG }}
+            SENTRY_PROJECT=${{ matrix.service == 'admin' && vars.SENTRY_PROJECT_ADMIN || vars.SENTRY_PROJECT_WEB }}
+          # Source maps are uploaded only when all three are configured on this
+          # repository. A fork has none of them, the plugin is not in the build,
+          # and the image is byte-identical to one built with no Sentry account.
+          secrets: |
+            sentry_auth_token=${{ secrets.SENTRY_AUTH_TOKEN }}
           tags: |
             ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ github.ref_name }}
             ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:v${{ needs.validate-tag.outputs.minor }}
@@ -157,6 +167,9 @@ jobs:
           context: ${{ matrix.service == 'tracking' && './tracking' || '.' }}
           file: ${{ matrix.service == 'tracking' && './tracking/Dockerfile' || format('deploy/docker/{0}.Dockerfile', matrix.service) }}
           platforms: ${{ matrix.platform }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.service }}-${{ steps.prep.outputs.pair }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}-${{ steps.prep.outputs.pair }}
           outputs: type=image,name=${{ env.IMAGE_PREFIX }}/${{ matrix.service }},push-by-digest=true,name-canonical=true,push=true

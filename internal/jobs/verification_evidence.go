@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 
 	emailverifyapp "github.com/warmbly/warmbly/internal/app/emailverify"
 )
@@ -39,7 +39,7 @@ func (j *DeliveryEvidenceJob) Start(ctx context.Context) {
 		for {
 			n, err := j.evidence.CreditCleanDeliveries(ctx, j.batch)
 			if err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureException(err)
 				break
 			}
 			if n < j.batch || ctx.Err() != nil {

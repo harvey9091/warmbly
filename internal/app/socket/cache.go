@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 func getTokenKey(id uuid.UUID) string {
@@ -15,7 +15,7 @@ func getTokenKey(id uuid.UUID) string {
 
 func (s *socketService) saveToken(ctx context.Context, id uuid.UUID, nonce string, expiresAt time.Time) *errx.Error {
 	if err := s.cache.SetEx(ctx, getTokenKey(id), nonce, time.Until(expiresAt)).Err(); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 	return nil

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/warmbly/warmbly/internal/config"
@@ -18,6 +17,7 @@ import (
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/emailverify"
 	"github.com/warmbly/warmbly/internal/pkg/encrypt"
 	"github.com/warmbly/warmbly/internal/utils"
@@ -1384,7 +1384,7 @@ func (r *contactRepository) Search(
 				Undeliverable bool `json:"undeliverable"`
 			}
 			if err := json.Unmarshal(leadProgressJSON, &lp); err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureException(err)
 				return nil, errx.InternalError()
 			}
 			status := models.LeadStatusPending
@@ -1436,7 +1436,7 @@ func (r *contactRepository) Search(
 				Name string `json:"name"`
 			}
 			if err := json.Unmarshal(campaignsJSON, &campaigns); err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureException(err)
 				return nil, errx.InternalError()
 			}
 			c.Campaigns = make([]models.MiniCampaign, len(campaigns))
@@ -1449,7 +1449,7 @@ func (r *contactRepository) Search(
 
 		if len(categoriesJSON) > 0 {
 			if err := json.Unmarshal(categoriesJSON, &c.Categories); err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureException(err)
 				return nil, errx.InternalError()
 			}
 		}
@@ -1780,7 +1780,7 @@ func (r *contactRepository) Update(ctx context.Context, userID, contactID string
 			Name string `json:"name"`
 		}
 		if err := json.Unmarshal(campaignsJSON, &campaigns); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return nil, errx.InternalError()
 		}
 		c.Campaigns = make([]models.MiniCampaign, len(campaigns))
@@ -1994,7 +1994,7 @@ func (r *contactRepository) Update(ctx context.Context, userID, contactID string
 			Name string `json:"name"`
 		}
 		if err := json.Unmarshal(newCampaignsJSON, &campaigns); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return nil, errx.InternalError()
 		}
 		for _, c := range campaigns {
@@ -2125,7 +2125,7 @@ func (r *contactRepository) Update(ctx context.Context, userID, contactID string
 		updatedContact.Categories = make([]models.MiniCategory, 0)
 		if len(catJSON) > 0 {
 			if err := json.Unmarshal(catJSON, &updatedContact.Categories); err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureException(err)
 				return nil, errx.InternalError()
 			}
 		}
@@ -2404,7 +2404,7 @@ func (r *contactRepository) BulkUpdate(ctx context.Context, userID string, orgID
 				Name string `json:"name"`
 			}
 			if err := json.Unmarshal(campaignsJSON, &campaigns); err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureException(err)
 				return nil, errx.InternalError()
 			}
 			c.Campaigns = make([]models.MiniCampaign, len(campaigns))
@@ -2421,7 +2421,7 @@ func (r *contactRepository) BulkUpdate(ctx context.Context, userID string, orgID
 		c.Categories = make([]models.MiniCategory, 0)
 		if len(categoriesJSON) > 0 {
 			if err := json.Unmarshal(categoriesJSON, &c.Categories); err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureException(err)
 				return nil, errx.InternalError()
 			}
 		}
@@ -2785,7 +2785,7 @@ func (r *contactRepository) GetDetail(ctx context.Context, userID uuid.UUID, org
 			Name string `json:"name"`
 		}
 		if err := json.Unmarshal(campaignsJSON, &raw); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return nil, errx.InternalError()
 		}
 		detail.Campaigns = make([]models.MiniCampaign, len(raw))
@@ -2796,7 +2796,7 @@ func (r *contactRepository) GetDetail(ctx context.Context, userID uuid.UUID, org
 	detail.Categories = []models.MiniCategory{}
 	if len(categoriesJSON) > 0 {
 		if err := json.Unmarshal(categoriesJSON, &detail.Categories); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return nil, errx.InternalError()
 		}
 	}

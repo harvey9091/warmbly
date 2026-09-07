@@ -3,8 +3,8 @@ package cipher
 import (
 	"context"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 type Cipher struct {
@@ -44,7 +44,7 @@ func (s *cipherService) Cipher(ctx context.Context, orgID uuid.UUID) (*Cipher, e
 	}
 
 	if err := s.saveDecryptedKey(ctx, orgID, key); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 	}
 
 	return &Cipher{

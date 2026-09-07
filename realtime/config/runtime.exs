@@ -79,9 +79,31 @@ if config_env() == :prod do
   # unset: compose passes every optional variable through as "" so a single
   # .env can drive the whole stack, and Sentry rejects "" as an invalid DSN
   # hard enough to take the whole node down at boot.
+  # A variable that is present but blank counts as unset here too, for the same
+  # reason the DSN does: compose passes every optional variable through as "",
+  # and System.get_env/2 only applies its default when the name is absent.
+  env_or = fn name, fallback ->
+    case System.get_env(name) do
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> fallback
+          trimmed -> trimmed
+        end
+
+      _ ->
+        fallback
+    end
+  end
+
   case System.get_env("SENTRY_DSN") do
     dsn when is_binary(dsn) and dsn != "" ->
-      config :sentry, dsn: dsn, environment_name: :prod
+      # release ties a stack trace to a build, the same value every other
+      # service tags with. The image sets it from the release tag; an
+      # unstamped build reports "dev".
+      config :sentry,
+        dsn: dsn,
+        environment_name: env_or.("APP_ENV", "prod"),
+        release: env_or.("WARMBLY_RELEASE", "dev")
 
     _ ->
       :ok

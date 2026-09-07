@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"html/template"
 
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 const resetPasswordContent = `
@@ -42,7 +42,7 @@ func GenerateResetPasswordHTML(firstName, url string) (string, error) {
 	data := struct{ ResetURL string }{ResetURL: url}
 	var buf bytes.Buffer
 	if err := resetPasswordTmpl.Execute(&buf, data); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", err
 	}
 	return renderEmail("Reset Your Password", buf.String())

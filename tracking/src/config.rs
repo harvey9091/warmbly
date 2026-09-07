@@ -69,6 +69,12 @@ pub struct Config {
     /// header is read, so a client-supplied CF-Connecting-IP behind a generic
     /// proxy is ignored. For x-forwarded-for the proxy-appended last entry wins.
     pub client_ip_header: String,
+    /// Where errors and panics are reported. Empty, the default, means nowhere:
+    /// the SDK is never initialised and no host is contacted.
+    pub sentry_dsn: String,
+    /// The build events are tagged with, so a stack trace names a commit. The
+    /// image sets it from the same VERSION the Go services are stamped with.
+    pub release: String,
 }
 
 impl Config {
@@ -207,6 +213,18 @@ impl Config {
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| internal_api_token.clone());
 
+        // Error reporting. Read from the environment only: a DSN in SSM would
+        // make a self-host that never sets one still pay an AWS lookup.
+        let sentry_dsn = env::var("SENTRY_DSN")
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let release = env::var("WARMBLY_RELEASE")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "dev".to_string());
+
         Ok(Self {
             env: env_name,
             host,
@@ -228,6 +246,8 @@ impl Config {
             pagehit_rate_limit_per_min,
             trusted_proxies,
             client_ip_header,
+            sentry_dsn,
+            release,
         })
     }
 
@@ -313,6 +333,15 @@ impl Config {
             client_ip_header: env::var("TRACKING_CLIENT_IP_HEADER")
                 .unwrap_or_else(|_| "x-forwarded-for".to_string())
                 .to_ascii_lowercase(),
+            sentry_dsn: env::var("SENTRY_DSN")
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
+            release: env::var("WARMBLY_RELEASE")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| "dev".to_string()),
         })
     }
 

@@ -4,11 +4,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/notify/templates"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/argon2"
 	"github.com/warmbly/warmbly/internal/pkg/crypt"
 )
@@ -24,7 +24,7 @@ func (s *authService) RegistrationStart(ctx context.Context, data *AuthData, ori
 	}
 
 	if xerr := s.captcha.Verify(ctx, data.Turnstile, ipaddr); xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, xerr
 	}
 
@@ -34,7 +34,7 @@ func (s *authService) RegistrationStart(ctx context.Context, data *AuthData, ori
 
 	passwordHash, xerr := argon2.Hash(data.Password)
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 
@@ -58,30 +58,30 @@ func (s *authService) RegistrationStart(ctx context.Context, data *AuthData, ori
 	sessionID := uuid.New()
 	nonce, xerr := crypt.Nonce()
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 
 	code, xerr := crypt.VerificationCode()
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 
 	text, xerr := templates.GenerateRegistrationCodeHTML(code)
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 
 	if xerr := s.sendAuthEmail(ctx, data.Email, "Your Verification Code", text); xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.ErrMailUndeliverable
 	}
 
 	codeHash, xerr := argon2.Hash(code)
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 
@@ -99,7 +99,7 @@ func (s *authService) RegistrationStart(ctx context.Context, data *AuthData, ori
 
 	sessionToken, xerr := s.tokenService.GenerateToken(uuid.Nil, sessionID, data.Email, nonce, issuedAt, expiresAt)
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 
@@ -131,7 +131,7 @@ func (s *authService) RegistrationConfirm(ctx context.Context, data *ConfirmData
 
 	v, xerr := argon2.Verify(data.Code, sess.CodeHash)
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 

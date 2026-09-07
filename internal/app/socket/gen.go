@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/crypt"
 )
 
@@ -16,13 +16,13 @@ func (s *socketService) GenerateWebsocketToken(ctx context.Context, userID uuid.
 	id := uuid.New()
 	nonce, err := crypt.Nonce()
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", errx.InternalError()
 	}
 
 	wsToken, err := s.tokenService.GenerateToken(userID, id, "", nonce, issuedAt, expiresAt)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", errx.InternalError()
 	}
 

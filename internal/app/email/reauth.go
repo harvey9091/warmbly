@@ -10,11 +10,11 @@ import (
 	"context"
 	"strings"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/crypt"
 	"golang.org/x/oauth2"
 )
@@ -54,7 +54,7 @@ func (s *emailService) OAuthReauth(ctx context.Context, userID string, orgID *uu
 
 	state, err := crypt.Nonce()
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 

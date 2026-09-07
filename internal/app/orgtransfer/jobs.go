@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
@@ -63,7 +63,7 @@ func (s *service) RequestExport(
 
 	active, err := s.repo.HasActiveExport(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	if active {
@@ -77,7 +77,7 @@ func (s *service) RequestExport(
 		IncludeSecrets: req.IncludeSecrets,
 	}
 	if err := s.repo.CreateExportJob(ctx, job); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
@@ -87,7 +87,7 @@ func (s *service) RequestExport(
 		runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), staleTransferDeadline)
 		defer cancel()
 		if err := s.runExport(runCtx, job, passphrase); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			_ = s.repo.FailExportJob(context.WithoutCancel(ctx), job.ID, err.Error())
 		}
 	}()
@@ -145,7 +145,7 @@ func (s *service) runExport(ctx context.Context, job *models.OrgExportJob, passp
 func (s *service) GetExport(ctx context.Context, orgID, id uuid.UUID) (*models.OrgExportJob, *errx.Error) {
 	job, err := s.repo.GetExportJob(ctx, orgID, id)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	if job == nil {
@@ -157,7 +157,7 @@ func (s *service) GetExport(ctx context.Context, orgID, id uuid.UUID) (*models.O
 func (s *service) ListExports(ctx context.Context, orgID uuid.UUID) ([]models.OrgExportJob, *errx.Error) {
 	jobs, err := s.repo.ListExportJobs(ctx, orgID, jobHistoryLimit)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	return jobs, nil
@@ -181,7 +181,7 @@ func (s *service) OpenExport(ctx context.Context, orgID, id uuid.UUID) (io.ReadC
 
 	body, err := s.blobs.Get(ctx, *job.ArchiveKey)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, nil, errx.New(errx.NotFound, "This archive could not be read from storage.")
 	}
 	return body, job, nil
@@ -190,12 +190,12 @@ func (s *service) OpenExport(ctx context.Context, orgID, id uuid.UUID) (io.ReadC
 func (s *service) DeleteExport(ctx context.Context, orgID, id uuid.UUID) *errx.Error {
 	key, err := s.repo.DeleteExportJob(ctx, orgID, id)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 	if key != "" && s.blobs != nil {
 		if err := s.blobs.Delete(ctx, key); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 		}
 	}
 	return nil
@@ -254,7 +254,7 @@ func (s *service) Preflight(
 	}
 	known, rerr := s.repo.ResolveUsersByEmail(ctx, emails)
 	if rerr != nil {
-		sentry.CaptureException(rerr)
+		errs.CaptureException(rerr)
 		return nil, errx.InternalError()
 	}
 	for _, m := range manifest.Members {
@@ -271,7 +271,7 @@ func (s *service) Preflight(
 		}
 		destCols, err := s.repo.TableColumns(ctx, mt.Name)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return nil, errx.InternalError()
 		}
 		if len(destCols) == 0 {
@@ -346,7 +346,7 @@ func (s *service) RequestImport(
 
 	active, err := s.repo.HasActiveImport(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	if active {
@@ -386,14 +386,14 @@ func (s *service) RequestImport(
 	if s.blobs != nil {
 		key := uploadObjectKey(orgID, uuid.New())
 		if err := s.blobs.Put(ctx, key, io.NewSectionReader(archive, 0, size), "application/zip"); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return nil, errx.New(errx.Internal, "The archive could not be stored for import.")
 		}
 		job.ArchiveKey = &key
 	}
 
 	if err := s.repo.CreateImportJob(ctx, job); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
@@ -425,7 +425,7 @@ func (s *service) RequestImport(
 			_ = s.repo.UpdateImportProgress(runCtx, job.ID, percent, stage)
 		})
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			_ = s.repo.FailImportJob(runCtx, job.ID, err.Error())
 			return
 		}
@@ -435,7 +435,7 @@ func (s *service) RequestImport(
 		// not linger past the point it could still be useful.
 		if job.ArchiveKey != nil && s.blobs != nil {
 			if derr := s.blobs.Delete(runCtx, *job.ArchiveKey); derr != nil {
-				sentry.CaptureException(derr)
+				errs.CaptureException(derr)
 			}
 		}
 	}()
@@ -446,7 +446,7 @@ func (s *service) RequestImport(
 func (s *service) GetImport(ctx context.Context, orgID, id uuid.UUID) (*models.OrgImportJob, *errx.Error) {
 	job, err := s.repo.GetImportJob(ctx, orgID, id)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	if job == nil {
@@ -458,7 +458,7 @@ func (s *service) GetImport(ctx context.Context, orgID, id uuid.UUID) (*models.O
 func (s *service) ListImports(ctx context.Context, orgID uuid.UUID) ([]models.OrgImportJob, *errx.Error) {
 	jobs, err := s.repo.ListImportJobs(ctx, orgID, jobHistoryLimit)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	return jobs, nil
@@ -478,18 +478,18 @@ func (s *service) PurgeExpiredExports(ctx context.Context) (int, error) {
 		job := &expired[i]
 		if job.ArchiveKey != nil && s.blobs != nil {
 			if derr := s.blobs.Delete(ctx, *job.ArchiveKey); derr != nil {
-				sentry.CaptureException(derr)
+				errs.CaptureException(derr)
 			}
 		}
 		if err := s.repo.MarkExportExpired(ctx, job.ID); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			continue
 		}
 		purged++
 	}
 
 	if err := s.repo.FailStaleTransfers(ctx, time.Now().Add(-staleTransferDeadline)); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 	}
 	return purged, nil
 }

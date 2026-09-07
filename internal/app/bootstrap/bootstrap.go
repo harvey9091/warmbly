@@ -26,7 +26,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/warmbly/warmbly/internal/app/organization"
 	"github.com/warmbly/warmbly/internal/app/trial"
 	"github.com/warmbly/warmbly/internal/app/user"
@@ -34,6 +33,7 @@ import (
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/cache"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/argon2"
 	"github.com/warmbly/warmbly/internal/pkg/crypt"
 	"github.com/warmbly/warmbly/internal/repository"
@@ -269,7 +269,7 @@ func (s *Service) Claim(ctx context.Context, token, address, password, firstName
 	// token: a stale link out of an old log must never mint a second owner.
 	empty, eerr := s.users.IsEmpty(ctx)
 	if eerr != nil {
-		sentry.CaptureException(eerr)
+		errs.CaptureException(eerr)
 		return nil, errx.InternalError()
 	}
 	if !empty {
@@ -295,13 +295,13 @@ func (s *Service) Claim(ctx context.Context, token, address, password, firstName
 
 	hash, herr := argon2.Hash(password)
 	if herr != nil {
-		sentry.CaptureException(herr)
+		errs.CaptureException(herr)
 		return nil, errx.InternalError()
 	}
 
 	u, uerr := s.users.CreateUser(ctx, parsed, hash)
 	if uerr != nil {
-		sentry.CaptureException(uerr)
+		errs.CaptureException(uerr)
 		return nil, errx.InternalError()
 	}
 	if firstName != "" {
@@ -319,7 +319,7 @@ func (s *Service) Claim(ctx context.Context, token, address, password, firstName
 	}
 	org, orgErr := s.orgSvc.Create(ctx, u.ID, orgName)
 	if orgErr != nil {
-		sentry.CaptureException(orgErr)
+		errs.CaptureException(orgErr)
 		return nil, errx.InternalError()
 	}
 	if s.trialSvc != nil {
@@ -327,7 +327,7 @@ func (s *Service) Claim(ctx context.Context, token, address, password, firstName
 	}
 
 	if err := s.adminRepo.GrantBootstrapAdmin(ctx, u.ID, uint32(models.AllAdminPermissions)); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 

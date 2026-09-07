@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/crypt"
 )
 
@@ -47,12 +47,12 @@ func getResetPasswordSessionKey(sessionID uuid.UUID) string {
 func (s *authService) saveLoginSession(ctx context.Context, sessionID uuid.UUID, session *models.LoginSession, expiresAt time.Time) *errx.Error {
 	data, err := json.Marshal(session)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
 	if err := s.cache.Set(ctx, getLoginSessionKey(sessionID), data, time.Until(expiresAt)).Err(); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
@@ -65,13 +65,13 @@ func (s *authService) getLoginSession(ctx context.Context, sessionID uuid.UUID) 
 		if errors.Is(err, redis.Nil) {
 			return nil, nil
 		}
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
 	var session models.LoginSession
 	if err := json.Unmarshal(data, &session); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
@@ -81,12 +81,12 @@ func (s *authService) getLoginSession(ctx context.Context, sessionID uuid.UUID) 
 func (s *authService) saveRegistrationSession(ctx context.Context, sessionID uuid.UUID, session *models.RegistrationSession, expiresAt time.Time) *errx.Error {
 	data, err := json.Marshal(session)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
 	if err := s.cache.Set(ctx, getRegistrationSessionKey(sessionID), data, time.Until(expiresAt)).Err(); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
@@ -99,13 +99,13 @@ func (s *authService) getRegistrationSession(ctx context.Context, sessionID uuid
 		if errors.Is(err, redis.Nil) {
 			return nil, nil
 		}
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
 	var session models.RegistrationSession
 	if err := json.Unmarshal(data, &session); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
@@ -117,13 +117,13 @@ func (s *authService) canSendEmail(ctx context.Context, flow, email string) *err
 
 	count, err := s.cache.Incr(ctx, key).Result()
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
 	if count == 1 {
 		if err := s.cache.Expire(ctx, key, AuthEmailTTL).Err(); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return errx.InternalError()
 		}
 	}
@@ -140,13 +140,13 @@ func (s *authService) passwordResetLimit(ctx context.Context, email string) *err
 
 	count, err := s.cache.Incr(ctx, key).Result()
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
 	if count == 1 {
 		if err := s.cache.Expire(ctx, key, PasswordResetLimitTTL).Err(); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return errx.InternalError()
 		}
 	}
@@ -164,7 +164,7 @@ func (s *authService) passwordResetLimit(ctx context.Context, email string) *err
 // token and a mail that promised 4 hours.
 func (s *authService) saveResetPasswordSession(ctx context.Context, sessionID uuid.UUID, nonce string) *errx.Error {
 	if err := s.cache.SetEx(ctx, getResetPasswordSessionKey(sessionID), nonce, PasswordResetTTL).Err(); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
@@ -178,7 +178,7 @@ func (s *authService) getResetPasswordSession(ctx context.Context, sessionID uui
 		if errors.Is(err, redis.Nil) {
 			return "", errx.ErrToken
 		}
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", errx.InternalError()
 	}
 
@@ -220,7 +220,7 @@ func deviceFingerprint(userAgent string) string {
 func (s *authService) deletePasswordResetSession(ctx context.Context, sessionID uuid.UUID) *errx.Error {
 	val, err := s.cache.Del(ctx, getResetPasswordSessionKey(sessionID)).Result()
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 

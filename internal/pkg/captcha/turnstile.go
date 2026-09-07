@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/warmbly/warmbly/internal/errx"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 type TurnstileConfig struct {
@@ -90,14 +90,14 @@ func (t *Turnstile) Verify(ctx context.Context, token, remoteIP string) *errx.Er
 		strings.NewReader(data.Encode()),
 	)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := t.cfg.HTTPClient.Do(req)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 	defer resp.Body.Close()
@@ -105,21 +105,21 @@ func (t *Turnstile) Verify(ctx context.Context, token, remoteIP string) *errx.Er
 	if resp.StatusCode != http.StatusOK {
 		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<12)) // 4KB max
 		if readErr != nil {
-			sentry.CaptureException(readErr)
+			errs.CaptureException(readErr)
 		}
-		sentry.CaptureException(fmt.Errorf("turnstile verify http status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw))))
+		errs.CaptureException(fmt.Errorf("turnstile verify http status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw))))
 		return errx.ErrCaptcha
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MB max
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
 	var r Response
 	if err := json.Unmarshal(body, &r); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 

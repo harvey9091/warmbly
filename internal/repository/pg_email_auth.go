@@ -5,12 +5,12 @@ import (
 	"errors"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 func (r *emailRepository) GetSMTPIMAP(ctx context.Context, userID, emailAccountID string) (*models.SmtpImap, *errx.Error) {
@@ -63,32 +63,32 @@ func (r *emailRepository) GetSMTPIMAP(ctx context.Context, userID, emailAccountI
 	}
 	imap.Username, err = r.Encrypt.Decrypt(imap.Username)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	imap.Password, err = r.Encrypt.Decrypt(imap.Password)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	imap.Host, err = r.Encrypt.Decrypt(imap.Host)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	smtp.Username, err = r.Encrypt.Decrypt(smtp.Username)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	smtp.Password, err = r.Encrypt.Decrypt(smtp.Password)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	smtp.Host, err = r.Encrypt.Decrypt(smtp.Host)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 

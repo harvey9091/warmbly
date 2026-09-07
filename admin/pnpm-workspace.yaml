@@ -4,6 +4,10 @@
 # refuse to run them. esbuild is pulled in transitively by vite and
 # needs to compile its native binary at install time.
 allowBuilds:
+  # The Sentry Vite plugin shells out to @sentry/cli, so its install script
+  # (which fetches the binary) has to run or the optional source-map upload
+  # has nothing to invoke.
+  '@sentry/cli': true
   esbuild: true
 
 # Match the dashboard's overrides so transitive deps don't drift.

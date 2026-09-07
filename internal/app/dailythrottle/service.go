@@ -16,10 +16,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/cache"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 // Resource enumerates the actions the throttle bounds. Keeping the
@@ -66,7 +66,7 @@ func (s *service) CheckAndIncrement(ctx context.Context, scope uuid.UUID, res Re
 
 	count, err := s.cache.Incr(ctx, key).Result()
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil // fail-open
 	}
 	// On the very first hit the TTL is unset; set a 25h floor so the

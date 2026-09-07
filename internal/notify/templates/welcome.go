@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"html/template"
 
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 // Welcome template — also moved onto the shared base shell so it
@@ -64,7 +64,7 @@ func GenerateWelcomeHTML(firstName string) (string, error) {
 	}{FirstName: firstName, AppURL: AppURL}
 	var buf bytes.Buffer
 	if err := welcomeTmpl.Execute(&buf, data); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", err
 	}
 	return renderEmail("Welcome to "+CompanyName, buf.String())

@@ -6,11 +6,11 @@ import (
 	"errors"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 func getSessionKey(id uuid.UUID) string {
@@ -20,7 +20,7 @@ func getSessionKey(id uuid.UUID) string {
 func (s *tokenService) saveSession(ctx context.Context, session *models.Session, ttl time.Duration) *errx.Error {
 	data, err := json.Marshal(session)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
@@ -37,13 +37,13 @@ func (s *tokenService) getSession(ctx context.Context, sessionID uuid.UUID) (*mo
 		if errors.Is(err, redis.Nil) {
 			return nil, nil
 		}
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
 	var session models.Session
 	if err := json.Unmarshal(data, &session); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
@@ -52,7 +52,7 @@ func (s *tokenService) getSession(ctx context.Context, sessionID uuid.UUID) (*mo
 
 func (s *tokenService) deleteSession(ctx context.Context, sessionID uuid.UUID) *errx.Error {
 	if err := s.cache.Del(ctx, getSessionKey(sessionID)).Err(); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 

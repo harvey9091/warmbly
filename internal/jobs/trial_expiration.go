@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/notify"
 	"github.com/warmbly/warmbly/internal/notify/templates"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -72,26 +72,26 @@ func (j *TrialExpirationJob) Run(ctx context.Context) error {
 	// Find expired trials without paid subscription
 	expiredSubs, err := repository.GetExpiredTrialsWithoutPayment(ctx, j.db)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return fmt.Errorf("failed to get expired trials: %w", err)
 	}
 
 	for _, sub := range expiredSubs {
 		// Pause all active campaigns for this organization
 		if err := repository.PauseCampaignsByOrganizationID(ctx, j.db, sub.OrganizationID, "paused_trial_expired"); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			// Continue processing other organizations
 		}
 
 		// Disable warmup on all email accounts (they're already blocked, but clean up)
 		if err := repository.DisableWarmupByOrganizationID(ctx, j.db, sub.OrganizationID); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			// Continue processing other organizations
 		}
 
 		// Mark subscription as expired
 		if err := repository.MarkSubscriptionTrialExpired(ctx, j.db, sub.ID); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			// Continue processing other users
 		}
 
@@ -132,7 +132,7 @@ func (j *TrialExpirationJob) notifyTrialExpired(ctx context.Context, userID inte
 	}
 
 	if err := j.emailNotificationService.Send(ctx, []string{userEmail}, nil, nil, subject, body); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 	}
 }
 
@@ -159,14 +159,14 @@ func (s *TrialExpirationScheduler) Start(ctx context.Context) {
 
 	// Run immediately on start
 	if err := s.job.Run(ctx); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 	}
 
 	for {
 		select {
 		case <-ticker.C:
 			if err := s.job.Run(ctx); err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureException(err)
 			}
 		case <-s.stopCh:
 			return

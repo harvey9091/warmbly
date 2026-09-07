@@ -40,6 +40,12 @@ RUN apk add --no-cache ca-certificates libgcc && \
 WORKDIR /app
 COPY --from=builder /tracking /app/tracking
 
+# Build identity, the same VERSION/COMMIT the Go images take. Read at runtime
+# and used only to tag error events, so it needs no rebuild of the binary.
+ARG VERSION=""
+ARG COMMIT=""
+ENV WARMBLY_RELEASE=${VERSION:-${COMMIT}}
+
 USER tracking
 EXPOSE 3000
 

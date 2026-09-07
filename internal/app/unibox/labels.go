@@ -3,10 +3,10 @@ package unibox
 import (
 	"context"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 // SetThreadLabels replaces the conversation's label set with the given
@@ -18,7 +18,7 @@ func (s *uniboxService) SetThreadLabels(ctx context.Context, userID uuid.UUID, t
 	}
 	labels, err := s.uniboxRepository.SetThreadLabels(ctx, userID, threadID, categoryIDs)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	return labels, nil
@@ -31,7 +31,7 @@ func (s *uniboxService) ListThreadLabels(ctx context.Context, userID uuid.UUID, 
 	}
 	labels, err := s.uniboxRepository.ListThreadLabels(ctx, userID, threadID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	return labels, nil

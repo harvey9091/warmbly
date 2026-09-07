@@ -11,9 +11,25 @@ RUN corepack enable && corepack prepare pnpm@11.9.0 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY . .
-# No VITE_* is baked here on purpose: URLs come from the runtime config below,
-# so this one image works for any deployment.
-RUN pnpm build
+# The build identity, the same VERSION/COMMIT the Go images take. This is the
+# one VITE_* that must be baked: it tags every error event with the build, and
+# it has to match the release the source maps were uploaded under, which a
+# container variable set after the bundle was built could not. Every other
+# setting comes from the runtime config below, so one image still serves any
+# deployment.
+ARG VERSION=""
+ARG COMMIT=""
+# Source-map upload is optional and off unless CI passes all three. A fork or a
+# self-host build sets none of them, needs no Sentry account, and ships no
+# source maps.
+ARG SENTRY_ORG=""
+ARG SENTRY_PROJECT=""
+RUN --mount=type=secret,id=sentry_auth_token,required=false \
+    VITE_SENTRY_RELEASE="${VERSION:-$COMMIT}" \
+    SENTRY_ORG="$SENTRY_ORG" \
+    SENTRY_PROJECT="$SENTRY_PROJECT" \
+    SENTRY_AUTH_TOKEN="$(cat /run/secrets/sentry_auth_token 2>/dev/null || true)" \
+    pnpm build
 
 # Stage 2: serve the built SPA from nginx with a history fallback. The
 # entrypoint renders /config.js from container env at startup.

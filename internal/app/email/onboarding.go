@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/crypt"
 	"golang.org/x/oauth2"
 )
@@ -34,7 +34,7 @@ func (s *emailService) OAuthStart(ctx context.Context, userID string, orgID *uui
 
 	state, err := crypt.Nonce()
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
@@ -228,7 +228,7 @@ func (s *emailService) OnboardSMTPIMAP(ctx context.Context, userID string, orgID
 	// the scheduler will pick the account up on its next pass.
 	if orgID != nil {
 		if _, err := s.workerAssignment.AssignWorkerToEmail(ctx, acc.ID, *orgID); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 		}
 	}
 
@@ -256,7 +256,7 @@ func (s *emailService) dispatchAccountConnected(ctx context.Context, orgID *uuid
 		"created_at":       acc.CreatedAt,
 	}
 	if _, err := s.webhookService.Dispatch(ctx, *orgID, models.WebhookEventEmailAccountConnected, payload); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 	}
 }
 

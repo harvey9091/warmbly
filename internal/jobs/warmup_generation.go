@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 
 	"github.com/warmbly/warmbly/internal/app/warmupcontent"
 	"github.com/warmbly/warmbly/internal/repository"
@@ -37,7 +37,7 @@ func (j *WarmupGenerationJob) Run(ctx context.Context) error {
 	}
 	settings, err := j.repo.GetGenerationSettings(ctx)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return err
 	}
 	if settings == nil || !settings.ScheduleEnabled {
@@ -54,7 +54,7 @@ func (j *WarmupGenerationJob) Run(ctx context.Context) error {
 	j.mu.Unlock()
 
 	if err := j.svc.RunScheduled(ctx); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return err
 	}
 	return nil
@@ -86,7 +86,7 @@ func (s *WarmupGenerationScheduler) Start(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			if err := s.job.Run(ctx); err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureException(err)
 			}
 		case <-s.stopCh:
 			return

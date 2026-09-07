@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/warmbly/warmbly/internal/email"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 func (w *WorkerService) HandleEmailValidation(ctx context.Context, data models.EventWorkerEmailValidation) error {
@@ -15,19 +15,19 @@ func (w *WorkerService) HandleEmailValidation(ctx context.Context, data models.E
 
 	cipher, err := w.CipherService.Cipher(ctx, data.OrgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil
 	}
 
 	data.Credentials.IMAP.Password, err = cipher.Decrypt(ctx, data.Credentials.IMAP.Password)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil
 	}
 
 	data.Credentials.SMTP.Password, err = cipher.Decrypt(ctx, data.Credentials.SMTP.Password)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil
 	}
 
@@ -40,7 +40,7 @@ func (w *WorkerService) HandleEmailValidation(ctx context.Context, data models.E
 			ok := false
 			defer func() {
 				if r := recover(); r != nil {
-					sentry.CurrentHub().Recover(r)
+					errs.Recover(r)
 				}
 				results <- ok
 			}()
@@ -65,7 +65,7 @@ func (w *WorkerService) HandleEmailValidation(ctx context.Context, data models.E
 	}
 
 	if err := w.Cache.Publish(ctx, "email_validation:"+data.ProcessID.String(), msg).Err(); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil
 	}
 

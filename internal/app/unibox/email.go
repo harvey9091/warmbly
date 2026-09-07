@@ -4,10 +4,10 @@ import (
 	"context"
 	"strings"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/mailhtml"
 )
 
@@ -27,7 +27,7 @@ func (s *uniboxService) GetByID(
 	{
 		msg, owner, err := s.uniboxRepository.GetByIDForOrg(ctx, orgID, id)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return nil, errx.InternalError()
 		}
 		ownerID = owner
@@ -67,7 +67,7 @@ func (s *uniboxService) GetByID(
 			// still has its preview text. Returning 500 made the whole message
 			// unopenable instead of showing what we have.
 			if !fixtureMessage {
-				sentry.CaptureException(err)
+				errs.CaptureException(err)
 			}
 			resp.BodyPlain = snippet
 			resp.BodyTruncated = !fixtureMessage

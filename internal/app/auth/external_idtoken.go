@@ -5,11 +5,11 @@ import (
 	"errors"
 	"net/mail"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/app/token"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/idtoken"
 )
 
@@ -90,7 +90,7 @@ func (s *authService) resolveFederatedUser(ctx context.Context, provider, issuer
 	if s.identities != nil && issuer != "" && subject != "" {
 		existing, ierr := s.identities.FindUserByIdentity(ctx, issuer, subject)
 		if ierr != nil {
-			sentry.CaptureException(ierr)
+			errs.CaptureException(ierr)
 			return uuid.Nil, errx.InternalError()
 		}
 		if existing != uuid.Nil {
@@ -101,7 +101,7 @@ func (s *authService) resolveFederatedUser(ctx context.Context, provider, issuer
 
 	u, uerr := s.userRepository.GetUserByEmail(ctx, email.Address)
 	if uerr != nil && !errors.Is(uerr, errx.ErrUser) {
-		sentry.CaptureException(uerr)
+		errs.CaptureException(uerr)
 		return uuid.Nil, errx.InternalError()
 	}
 
@@ -115,13 +115,13 @@ func (s *authService) resolveFederatedUser(ctx context.Context, provider, issuer
 		var cerr error
 		u, cerr = s.createExternalUser(ctx, email, firstName, lastName)
 		if cerr != nil {
-			sentry.CaptureException(cerr)
+			errs.CaptureException(cerr)
 			return uuid.Nil, errx.InternalError()
 		}
 	} else if s.identities != nil && issuer != "" {
 		linked, herr := s.identities.HasIdentityForIssuer(ctx, u.ID, issuer)
 		if herr != nil {
-			sentry.CaptureException(herr)
+			errs.CaptureException(herr)
 			return uuid.Nil, errx.InternalError()
 		}
 		if linked {
@@ -138,7 +138,7 @@ func (s *authService) resolveFederatedUser(ctx context.Context, provider, issuer
 		}); lerr != nil {
 			// A unique-index violation means another account already owns this
 			// identity. Refuse rather than sign anyone in.
-			sentry.CaptureException(lerr)
+			errs.CaptureException(lerr)
 			return uuid.Nil, errx.New(errx.Forbidden, "that identity is already linked to another account")
 		}
 	}
@@ -183,14 +183,14 @@ func (s *authService) createExternalUser(ctx context.Context, email *mail.Addres
 		var orgErr *errx.Error
 		org, orgErr = s.organizationService.Create(ctx, u.ID, orgName)
 		if orgErr != nil {
-			sentry.CaptureException(orgErr)
+			errs.CaptureException(orgErr)
 			// Don't fail the sign-in if org creation fails.
 		}
 	}
 
 	if s.trialService != nil && org != nil {
 		if terr := s.trialService.StartFreeTrialWithOrg(ctx, u.ID, org.ID); terr != nil {
-			sentry.CaptureException(terr)
+			errs.CaptureException(terr)
 			// Don't fail the sign-in if trial creation fails.
 		}
 	}

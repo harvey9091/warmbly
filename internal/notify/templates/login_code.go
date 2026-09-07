@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"html/template"
 
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 // Dashboard-style content. Small uppercase eyebrow, slate-900 plain
@@ -47,7 +47,7 @@ func GenerateLoginCodeHTML(code string) (string, error) {
 	data := struct{ Code string }{Code: code}
 	var buf bytes.Buffer
 	if err := loginCodeTmpl.Execute(&buf, data); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", err
 	}
 	return renderEmail("Your Login Code", buf.String())

@@ -3,10 +3,10 @@ package unibox
 import (
 	"context"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/generation"
 )
 
@@ -20,7 +20,7 @@ const GroundingLimitMax = 20
 func (s *uniboxService) ThreadGrounding(ctx context.Context, orgID uuid.UUID, threadID string, limit int) ([]models.MessageGrounding, *errx.Error) {
 	out, err := s.uniboxRepository.GroundingByThread(ctx, orgID, threadID, clampGroundingLimit(limit))
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	return out, nil
@@ -31,7 +31,7 @@ func (s *uniboxService) ThreadGrounding(ctx context.Context, orgID uuid.UUID, th
 func (s *uniboxService) AddressGrounding(ctx context.Context, orgID uuid.UUID, address string, limit int) ([]models.MessageGrounding, *errx.Error) {
 	out, err := s.uniboxRepository.GroundingByAddress(ctx, orgID, address, clampGroundingLimit(limit))
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	return out, nil

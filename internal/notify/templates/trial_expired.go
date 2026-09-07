@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"html/template"
 
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 // Trial-expiry notice rendered on the shared base shell so it matches
@@ -61,7 +61,7 @@ func GenerateTrialExpiredHTML() (string, error) {
 	data := struct{ BillingURL string }{BillingURL: AppURL + "/settings/billing"}
 	var buf bytes.Buffer
 	if err := trialExpiredTmpl.Execute(&buf, data); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", err
 	}
 	return renderEmail("Your Warmbly trial has ended", buf.String())

@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/errx"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/tasks/proto"
 )
 
@@ -19,7 +19,7 @@ func (s *tasksService) HandleUserEmailTask(task *proto.ProcessTask) *errx.Error 
 	// STEP 1: Parse task ID
 	taskID, err := uuid.Parse(task.TaskId)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.BadRequest, "invalid task ID")
 	}
 
@@ -45,7 +45,7 @@ func (s *tasksService) HandleUserEmailTask(task *proto.ProcessTask) *errx.Error 
 	// STEP 2: Load task record
 	taskRecord, err := s.taskRepo.GetTask(ctx, taskID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
@@ -79,7 +79,7 @@ func (s *tasksService) HandleUserEmailTask(task *proto.ProcessTask) *errx.Error 
 	// STEP 3: Load email_task record (with new columns)
 	emailTask, err := s.taskRepo.GetEmailTask(ctx, taskID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
@@ -112,7 +112,7 @@ func (s *tasksService) HandleUserEmailTask(task *proto.ProcessTask) *errx.Error 
 	// Tenancy gate: the entitlement check below is org-scoped, so a mailbox with
 	// no workspace would send without it. Fail closed.
 	if account.OrganizationID == nil {
-		sentry.CaptureException(fmt.Errorf("email account %s reached a unibox send with no organization", account.ID))
+		errs.CaptureException(fmt.Errorf("email account %s reached a unibox send with no organization", account.ID))
 		_ = s.taskRepo.RecordTaskFailure(ctx, taskID,
 			"Mailbox has no workspace",
 			"email account organization_id is NULL at execution time")
@@ -136,7 +136,7 @@ func (s *tasksService) HandleUserEmailTask(task *proto.ProcessTask) *errx.Error 
 
 	// STEP 5: Mark task as active (with advisory lock)
 	if err := s.taskRepo.UpdateTaskStatusWithLock(ctx, taskID, "active"); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
@@ -203,7 +203,7 @@ func (s *tasksService) HandleUserEmailTask(task *proto.ProcessTask) *errx.Error 
 
 	// STEP 11: Mark task completed (with advisory lock)
 	if err := s.taskRepo.UpdateTaskStatusWithLock(ctx, taskID, "completed"); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 

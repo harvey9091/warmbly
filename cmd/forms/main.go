@@ -11,11 +11,22 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/warmbly/warmbly/internal/formserver"
+	"github.com/warmbly/warmbly/internal/observability"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 func main() {
+	// Error reporting, before anything that can fail. Optional here as
+	// everywhere: no SENTRY_DSN means nothing is initialised and nothing is
+	// sent. A failure to configure it must not stop the service serving forms.
+	if err := observability.InitSentryEnv("forms"); err != nil {
+		log.Printf("error reporting not configured: %v", err)
+	}
+	defer errs.Flush(2 * time.Second)
+
 	backendURL := strings.TrimSpace(os.Getenv("BACKEND_INTERNAL_URL"))
 	if backendURL == "" {
 		log.Fatal("BACKEND_INTERNAL_URL is required (the backend's internal API base, e.g. http://localhost:8080)")
@@ -46,6 +57,13 @@ func main() {
 		InternalToken: token,
 		StaticDir:     staticDir,
 		SubmitLimit:   submitLimit,
+		// The browser half of error reporting, separate from this process's
+		// own SENTRY_DSN: form pages are public and their errors belong in a
+		// frontend project, not the service's. Empty means the page loads no
+		// reporting SDK, which is the self-host default.
+		BrowserSentryDSN: strings.TrimSpace(os.Getenv("WARMBLY_SENTRY_DSN")),
+		Release:          observability.Release(),
+		Environment:      appEnv(),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -62,8 +80,21 @@ func main() {
 	}
 	log.Printf("forms service listening on :%s (backend %s)", port, backendURL)
 	if err := r.Run(":" + port); err != nil {
+		// The listener dying is the one failure here worth reporting: the
+		// boot-time checks above are operator configuration, not a bug.
+		errs.CaptureException(err)
+		errs.Flush(2 * time.Second)
 		log.Fatal(err)
 	}
+}
+
+// appEnv is the deployment label, matching what InitSentryEnv reports for this
+// process so the browser and the server halves agree.
+func appEnv() string {
+	if env := strings.TrimSpace(os.Getenv("APP_ENV")); env != "" {
+		return env
+	}
+	return "dev"
 }
 
 func splitCSV(v string) []string {

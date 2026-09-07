@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 
 	"github.com/warmbly/warmbly/internal/api/middleware"
 	"github.com/warmbly/warmbly/internal/errx"
@@ -80,7 +80,7 @@ func (h *Handler) deleteObjectDetached(ctx context.Context, key string) {
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
 	if err := h.Storage.Delete(cleanup, key); err != nil {
-		sentry.CaptureException(fmt.Errorf("attachment %s: cleanup after refused reservation: %w", key, err))
+		errs.CaptureException(fmt.Errorf("attachment %s: cleanup after refused reservation: %w", key, err))
 	}
 }
 

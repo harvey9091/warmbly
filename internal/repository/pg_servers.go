@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/jackc/pgx/v5"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 type ServersRepository interface {
@@ -40,7 +40,7 @@ func (r *serversRepository) GetWorkers(ctx context.Context) ([]models.Worker, *e
 	`
 	rows, err := r.DB.Query(ctx, query)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
@@ -52,7 +52,7 @@ func (r *serversRepository) GetWorkers(ctx context.Context) ([]models.Worker, *e
 			&w.ID, &w.IPAddr,
 			&w.Active, &w.CreatedAt, &w.UpdatedAt,
 		); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return nil, errx.InternalError()
 		}
 
@@ -102,7 +102,7 @@ func (r *serversRepository) UpdateWorker(ctx context.Context, id string, data *m
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errx.ErrNotFound
 		}
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
@@ -124,7 +124,7 @@ func (r *serversRepository) DeleteWorker(ctx context.Context, id string) *errx.E
 		params...,
 	)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 	if cmd.RowsAffected() == 0 {

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
@@ -46,7 +46,7 @@ func (s *sequenceService) Delete(ctx context.Context, userID, campaignID, sequen
 
 	for _, key := range keys {
 		if err := s.storage.Delete(ctx, key); err != nil {
-			sentry.CaptureException(fmt.Errorf("sequence %s delete: object %s: %w", sequenceID, key, err))
+			errs.CaptureException(fmt.Errorf("sequence %s delete: object %s: %w", sequenceID, key, err))
 		}
 	}
 	return nil
@@ -69,7 +69,7 @@ func (s *sequenceService) stepObjectKeys(ctx context.Context, campaignID, sequen
 	}
 	atts, err := s.attachmentRepo.ListForStep(ctx, cID, sID)
 	if err != nil {
-		sentry.CaptureException(fmt.Errorf("sequence %s delete: list attachments: %w", sequenceID, err))
+		errs.CaptureException(fmt.Errorf("sequence %s delete: list attachments: %w", sequenceID, err))
 		return nil
 	}
 	keys := make([]string, 0, len(atts))

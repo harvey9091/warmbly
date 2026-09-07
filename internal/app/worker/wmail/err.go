@@ -4,17 +4,16 @@ import (
 	"errors"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 func (w *WMail) CaptureError(err error) {
-	sentry.WithScope(func(scope *sentry.Scope) {
-		scope.SetTag("user_id", w.UserID.String())
-		scope.SetTag("email_id", w.ID.String())
-		sentry.CaptureException(err)
-	})
+	errs.CaptureException(err,
+		errs.Tag("user_id", w.UserID.String()),
+		errs.Tag("email_id", w.ID.String()),
+	)
 
 	// If the error is a critical mail error (auth, disabled, rate limit), publish
 	// an event so the consumer can mark the account inactive and stop syncing.

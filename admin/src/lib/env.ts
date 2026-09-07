@@ -11,6 +11,15 @@ export const DASHBOARD_URL: string = runtimeEnv("DASHBOARD_URL", import.meta.env
 
 export const TURNSTILE_KEY: string = runtimeEnv("TURNSTILE_KEY", import.meta.env.VITE_TURNSTILE_KEY);
 
+// Browser error reporting. The admin panel ships to self-hosters like every
+// other image, so the DSN is the operator's and an empty one means the SDK is
+// never initialised. See lib/observability.
+export const SENTRY_DSN: string = runtimeEnv("SENTRY_DSN", import.meta.env.VITE_SENTRY_DSN);
+export const SENTRY_ENVIRONMENT: string = runtimeEnv("SENTRY_ENVIRONMENT", import.meta.env.VITE_SENTRY_ENVIRONMENT, import.meta.env.MODE);
+// Build-time on purpose: it has to match the release the source maps were
+// uploaded under, which a container variable set afterwards could not.
+export const SENTRY_RELEASE: string = import.meta.env.VITE_SENTRY_RELEASE ?? "";
+
 export type EnvLabel = "production" | "staging" | "development";
 
 const RAW_ENV_LABEL = runtimeEnv("ENV_LABEL", import.meta.env.VITE_ENV_LABEL as string | undefined).toLowerCase();

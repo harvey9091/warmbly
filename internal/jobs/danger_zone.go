@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 
 	"github.com/warmbly/warmbly/internal/app/dangerzone"
 )
@@ -26,10 +26,10 @@ func NewDangerZoneJob(svc dangerzone.Service) *DangerZoneJob {
 // got marked failed.
 func (j *DangerZoneJob) Run(ctx context.Context) {
 	if _, _, err := j.svc.ExecuteDuePendingDeletions(ctx); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 	}
 	if err := j.svc.DispatchReminders(ctx); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 	}
 }
 

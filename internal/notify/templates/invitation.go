@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"html/template"
 
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 // Team invitation rendered on the shared base shell. The org name and
@@ -49,7 +49,7 @@ func GenerateInvitationHTML(inviterName, orgName, acceptURL string) (string, err
 	}{InviterName: inviterName, OrgName: orgName, AcceptURL: acceptURL}
 	var buf bytes.Buffer
 	if err := invitationTmpl.Execute(&buf, data); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", err
 	}
 	return renderEmail("You've been invited to Warmbly", buf.String())

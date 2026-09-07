@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -45,6 +46,15 @@ type Config struct {
 	// endpoints, the service's only dependency.
 	BackendURL    string
 	InternalToken string
+	// BrowserSentryDSN is stamped into the page shell so the form app can
+	// report browser errors. Empty, which is the default, means the app never
+	// loads the SDK.
+	BrowserSentryDSN string
+	// Release tags those browser events with the build serving them.
+	Release string
+	// Environment is the deployment label those events carry, so staging and
+	// production form pages are separable in one project.
+	Environment string
 	// StaticDir is the built forms app (forms/dist): index.html is the page
 	// shell, assets/ the hashed bundles.
 	StaticDir string
@@ -77,6 +87,12 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("formserver: cannot read %s/index.html (run `pnpm build` in forms/): %w", cfg.StaticDir, err)
 	}
+	// The browser DSN and the release are the same for every request, so they
+	// are stamped once here rather than per shell serve. An empty DSN leaves
+	// the placeholder empty and the page loads no reporting SDK at all.
+	shell = stampMeta(shell, "wf-sentry-dsn", cfg.BrowserSentryDSN)
+	shell = stampMeta(shell, "wf-release", cfg.Release)
+	shell = stampMeta(shell, "wf-environment", cfg.Environment)
 	limit := cfg.SubmitLimit
 	if limit <= 0 {
 		limit = submitDefaultLimit
@@ -146,6 +162,17 @@ func (s *Server) fetchForm(c *gin.Context) (*formwire.PublicForm, error) {
 // wfTokenPlaceholder is the meta tag forms/index.html ships; the shell serve
 // stamps the real render token into it.
 const wfTokenPlaceholder = `<meta name="wf-token" content="" />`
+
+// stampMeta fills in one of the empty meta tags forms/index.html ships. An
+// empty value is left alone, and so is a shell built before the tag existed.
+func stampMeta(shell []byte, name, value string) []byte {
+	if value == "" {
+		return shell
+	}
+	placeholder := []byte(`<meta name="` + name + `" content="" />`)
+	stamped := []byte(`<meta name="` + name + `" content="` + html.EscapeString(value) + `" />`)
+	return bytes.Replace(shell, placeholder, stamped, 1)
+}
 
 // ServeFormShell serves the app shell for a published form. Public and
 // unauthenticated: the unguessable public id is the capability. The form is

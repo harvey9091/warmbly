@@ -41,6 +41,11 @@ moka = { version = "0.12", features = ["future"] }
 # Trusted-proxy CIDR matching for the client IP
 ipnet = "2"
 
+# Error reporting. Optional at runtime: with no SENTRY_DSN the guard is never
+# created, no transport thread starts and no host is contacted. rustls for the
+# same reason reqwest uses it, so the image needs no OpenSSL system libraries.
+sentry = { version = "0.49", default-features = false, features = ["backtrace", "contexts", "panic", "reqwest", "rustls"] }
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

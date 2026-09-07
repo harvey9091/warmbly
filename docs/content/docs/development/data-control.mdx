@@ -213,10 +213,15 @@ An instance reports errors nowhere unless you point it somewhere. Every service 
 | Service | Variable |
 |---|---|
 | Backend, consumer, worker | `SENTRY_DSN` |
-| Dashboard container | `WARMBLY_SENTRY_DSN` |
-| Realtime | `SENTRY_DSN` |
+| Forms service | `SENTRY_DSN` |
+| Tracking service | `SENTRY_DSN` |
+| Realtime service | `SENTRY_DSN` |
+| Dashboard and admin containers | `WARMBLY_SENTRY_DSN` |
+| Public form pages | `WARMBLY_SENTRY_DSN` on the forms service |
 
-Set one and that service reports to whatever Sentry Cloud project, self-hosted Sentry or Sentry-compatible server you name. Leave it unset, which is the default the installer writes, and the SDK is never initialised: there is no host to contact and nothing to opt out of.
+Set one and that service reports to whatever Sentry Cloud project, self-hosted Sentry or Sentry-compatible server you name. Leave it unset, which is the default the installer writes, and nothing leaves the process: there is no host to contact and nothing to opt out of. Errors still reach that service's own log, as they always did. The dashboard, the admin panel and form pages go further and load no reporting code at all, so there is not even a script to block.
+
+The `warmbly` CLI runs on your own machine and reports nowhere, ever. It has no DSN to set.
 
 ## See also
 

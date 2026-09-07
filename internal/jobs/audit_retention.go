@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/warmbly/warmbly/internal/config"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -42,7 +42,7 @@ func (j *AuditRetentionJob) Run(ctx context.Context) error {
 
 	cutoff := time.Now().AddDate(0, 0, -days)
 	if _, err := j.repo.PruneOlderThan(ctx, cutoff); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return err
 	}
 	return nil
@@ -70,14 +70,14 @@ func (s *AuditRetentionScheduler) Start(ctx context.Context) {
 	defer ticker.Stop()
 
 	if err := s.job.Run(ctx); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 	}
 
 	for {
 		select {
 		case <-ticker.C:
 			if err := s.job.Run(ctx); err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureException(err)
 			}
 		case <-s.stopCh:
 			return

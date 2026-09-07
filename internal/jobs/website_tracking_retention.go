@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -24,13 +24,13 @@ func (j *WebsiteTrackingRetentionJob) Run(ctx context.Context) error {
 	}
 	cutoffs, err := j.repo.RetentionCutoffs(ctx, time.Now())
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return err
 	}
 	var last error
 	for _, c := range cutoffs {
 		if _, err := j.repo.PruneBefore(ctx, c.OrganizationID, c.Before); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			last = err
 		}
 	}

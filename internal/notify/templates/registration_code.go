@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"html/template"
 
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 const registrationCodeContent = `
@@ -37,7 +37,7 @@ func GenerateRegistrationCodeHTML(code string) (string, error) {
 	data := struct{ Code string }{Code: code}
 	var buf bytes.Buffer
 	if err := registrationCodeTmpl.Execute(&buf, data); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", err
 	}
 	return renderEmail("Your Verification Code", buf.String())

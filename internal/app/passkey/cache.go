@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/warmbly/warmbly/internal/errx"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 // Challenge/session data lives in Redis between a Begin and Finish call,
@@ -28,12 +28,12 @@ func loginKey(sessionID uuid.UUID) string {
 func (s *service) saveSession(ctx context.Context, key string, data *webauthn.SessionData) *errx.Error {
 	raw, err := json.Marshal(data)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
 	if err := s.cache.Set(ctx, key, raw, CeremonyTTL).Err(); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
@@ -49,13 +49,13 @@ func (s *service) takeSession(ctx context.Context, key string) (*webauthn.Sessio
 		if errors.Is(err, redis.Nil) {
 			return nil, errx.ErrPasskeySession
 		}
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
 	var data webauthn.SessionData
 	if err := json.Unmarshal(raw, &data); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 

@@ -6,12 +6,12 @@ import (
 	"net/mail"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/argon2"
 )
 
@@ -61,7 +61,7 @@ func (r *authRepository) IsValidCredentials(ctx context.Context, email, password
 
 	val, err := argon2.Verify(password, pw)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return uuid.Nil, errx.InternalError()
 	}
 

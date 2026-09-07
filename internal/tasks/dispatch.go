@@ -4,10 +4,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/errx"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/tasks/proto"
 )
 
@@ -18,7 +18,7 @@ import (
 func (s *tasksService) HandleTask(task *proto.ProcessTask) *errx.Error {
 	taskID, err := uuid.Parse(task.TaskId)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.BadRequest, "invalid task ID")
 	}
 
@@ -26,7 +26,7 @@ func (s *tasksService) HandleTask(task *proto.ProcessTask) *errx.Error {
 	rec, err := s.taskRepo.GetTask(ctx, taskID)
 	cancel()
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 	if rec == nil {

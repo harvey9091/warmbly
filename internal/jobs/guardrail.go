@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/rs/zerolog/log"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 
 	"github.com/warmbly/warmbly/internal/app/guardrail"
 	"github.com/warmbly/warmbly/internal/repository"
@@ -35,7 +35,7 @@ func (j *GuardrailJob) Run(ctx context.Context) {
 	if j.svc != nil {
 		paused, err := j.svc.Sweep(ctx)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 		} else if paused > 0 {
 			log.Info().Int("paused", paused).Msg("guardrail sweep paused campaigns")
 		}
@@ -43,7 +43,7 @@ func (j *GuardrailJob) Run(ctx context.Context) {
 
 	if j.behaviorRepo != nil {
 		if _, err := j.behaviorRepo.PurgePlansBefore(ctx, time.Now().Add(-planRetention)); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 		}
 	}
 }

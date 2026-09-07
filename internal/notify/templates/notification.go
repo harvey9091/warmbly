@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"html/template"
 
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 // Generic transactional notification used by the in-app notification
@@ -55,7 +55,7 @@ func GenerateNotificationHTML(title, body, ctaURL, ctaLabel string) (string, err
 	}{Title: title, Body: body, CTAURL: ctaURL, CTALabel: ctaLabel}
 	var buf bytes.Buffer
 	if err := notificationTmpl.Execute(&buf, data); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", err
 	}
 	subject := title

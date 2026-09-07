@@ -3,6 +3,10 @@
 # refuse to run them. esbuild is pulled in transitively by vite/vitest
 # and needs to compile its native binary at install time.
 allowBuilds:
+  # The Sentry Vite plugin shells out to @sentry/cli, so its install script
+  # (which fetches the binary) has to run or the optional source-map upload
+  # has nothing to invoke.
+  '@sentry/cli': true
   esbuild: true
 
 # Overrides used to live under `pnpm.overrides` in package.json but

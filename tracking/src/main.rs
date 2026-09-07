@@ -55,6 +55,7 @@ async fn connect_producer(config: &Config) -> Producer {
             Err(e) => {
                 if attempt >= MAX_ATTEMPTS {
                     report_error("Failed to create tracking event producer", e.as_ref());
+                    observability::flush();
                     std::process::exit(1);
                 }
                 warn!(
@@ -84,10 +85,12 @@ async fn main() {
         Ok(c) => c,
         Err(e) => {
             report_error("Failed to load config", e.as_ref());
+            observability::flush();
             std::process::exit(1);
         }
     };
-    observability::init(&config.env);
+    // Held until main returns so queued events are flushed on shutdown.
+    let _sentry = observability::init(&config.env, Some(&config.sentry_dsn), &config.release);
     info!("Starting tracking service on {}", config.addr());
 
     // Event-bus producer (NATS by default; Kafka when EVENTBUS_PROVIDER=kafka
@@ -122,6 +125,7 @@ async fn main() {
         Ok(a) => a,
         Err(e) => {
             observability::report_issue("Invalid tracking listen address", &e.to_string());
+            observability::flush();
             std::process::exit(1);
         }
     };
@@ -131,6 +135,7 @@ async fn main() {
         Ok(l) => l,
         Err(e) => {
             observability::report_issue("Failed to bind tracking listener", &e.to_string());
+            observability::flush();
             std::process::exit(1);
         }
     };
@@ -144,6 +149,7 @@ async fn main() {
     .await
     {
         observability::report_issue("Tracking server terminated unexpectedly", &e.to_string());
+        observability::flush();
         std::process::exit(1);
     }
 }

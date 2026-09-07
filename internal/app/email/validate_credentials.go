@@ -5,10 +5,10 @@ import (
 	"errors"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 // ValidateCredentials seals a copy of the credentials with the org DEK and asks
@@ -24,21 +24,21 @@ func (s *emailService) ValidateCredentials(ctx context.Context, orgID uuid.UUID,
 
 	cipher, err := s.cipherService.Cipher(ctx, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
 	sealedIMAP := *credentials.IMAP
 	sealedIMAP.Password, err = cipher.Encrypt(ctx, credentials.IMAP.Password)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
 	sealedSMTP := *credentials.SMTP
 	sealedSMTP.Password, err = cipher.Encrypt(ctx, credentials.SMTP.Password)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
@@ -47,7 +47,7 @@ func (s *emailService) ValidateCredentials(ctx context.Context, orgID uuid.UUID,
 		ProcessID:   processID,
 		Credentials: &models.SmtpImap{SMTP: &sealedSMTP, IMAP: &sealedIMAP},
 	}); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
@@ -63,7 +63,7 @@ func (s *emailService) ValidateCredentials(ctx context.Context, orgID uuid.UUID,
 			if errors.Is(err, context.DeadlineExceeded) {
 				return errx.ErrEmailValidation
 			}
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return errx.InternalError()
 		}
 

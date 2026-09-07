@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/crypt"
 )
 
@@ -39,31 +39,31 @@ func (s *tokenService) RefreshToken(ctx context.Context, refreshToken string) (*
 	accessTokenExpiresAt := issuedAt.Add(AccessTokenLifeTime)
 	accessNonce, xerr := crypt.Nonce()
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 
 	newAccessToken, xerr := s.GenerateToken(sess.UserID, sess.ID, "", accessNonce, issuedAt, accessTokenExpiresAt)
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 
 	refreshTokenExpiresAt := issuedAt.Add(RefreshTokenLifeTime)
 	refreshNonce, xerr := crypt.Nonce()
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 
 	newRefreshToken, xerr := s.GenerateToken(sess.UserID, sess.ID, "", refreshNonce, issuedAt, refreshTokenExpiresAt)
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 
 	if err := s.tokenRepository.RefreshToken(ctx, sess.ID, t.Nonce, accessNonce, refreshNonce, issuedAt); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
@@ -75,7 +75,7 @@ func (s *tokenService) RefreshToken(ctx context.Context, refreshToken string) (*
 	// Dropping the cache forces the next GetSession to re-read from the
 	// updated Postgres row.
 	if err := s.deleteSession(ctx, sess.ID); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		// Don't fail the refresh — the worst case if the delete somehow
 		// failed is the user retries; we already returned the new tokens.
 	}

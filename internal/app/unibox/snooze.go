@@ -4,10 +4,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 func (s *uniboxService) Snooze(ctx context.Context, userID uuid.UUID, threadID string, until time.Time) (*models.UniboxSnooze, *errx.Error) {
@@ -27,7 +27,7 @@ func (s *uniboxService) Snooze(ctx context.Context, userID uuid.UUID, threadID s
 
 	row, err := s.uniboxRepository.UpsertSnooze(ctx, userID, threadID, until.UTC())
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	return row, nil
@@ -38,7 +38,7 @@ func (s *uniboxService) Unsnooze(ctx context.Context, userID uuid.UUID, threadID
 		return errx.New(errx.BadRequest, "thread_id is required")
 	}
 	if err := s.uniboxRepository.DeleteSnooze(ctx, userID, threadID); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 	return nil
@@ -47,7 +47,7 @@ func (s *uniboxService) Unsnooze(ctx context.Context, userID uuid.UUID, threadID
 func (s *uniboxService) ListSnoozes(ctx context.Context, userID uuid.UUID) ([]models.UniboxSnooze, *errx.Error) {
 	rows, err := s.uniboxRepository.ListSnoozes(ctx, userID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	return rows, nil

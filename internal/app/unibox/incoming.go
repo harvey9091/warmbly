@@ -4,10 +4,10 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 func (s *uniboxService) Incoming(
@@ -36,7 +36,7 @@ func (s *uniboxService) Incoming(
 	}
 
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 

@@ -7,7 +7,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2/types"
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 type EmailNotificationService interface {
@@ -29,7 +29,7 @@ type emailNotificationService struct {
 func NewEmailNotficiationService(ctx context.Context, name, address string) (EmailNotificationService, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, err
 	}
 
@@ -67,7 +67,7 @@ func (s *emailNotificationService) Send(ctx context.Context, to, cc, bcc []strin
 
 	_, err := s.Client.SendEmail(ctx, input)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return err
 	}
 
@@ -100,7 +100,7 @@ func (s *emailNotificationService) SendOutreach(ctx context.Context, to []string
 
 	_, err := s.Client.SendEmail(ctx, input)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return err
 	}
 	return nil

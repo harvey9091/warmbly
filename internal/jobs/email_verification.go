@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 
 	emailverifyapp "github.com/warmbly/warmbly/internal/app/emailverify"
 )
@@ -39,7 +39,7 @@ func (j *EmailVerificationJob) Run(ctx context.Context) error {
 	for {
 		n, err := j.svc.VerifyPending(ctx, j.batchSize)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return err
 		}
 		if n < j.batchSize || ctx.Err() != nil {
@@ -84,7 +84,7 @@ func (s *EmailVerificationScheduler) Start(ctx context.Context) {
 			return
 		}
 		if err := s.job.Run(ctx); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 		}
 	}
 }

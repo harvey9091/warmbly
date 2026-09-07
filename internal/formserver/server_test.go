@@ -402,3 +402,33 @@ func TestFormServerSubmitRateLimit(t *testing.T) {
 		t.Fatalf("third submit status %d, want 429", w.Code)
 	}
 }
+
+// The browser DSN is stamped into the shell once at construction, so a page a
+// stranger loads either carries the operator's DSN or carries an empty tag and
+// loads no reporting SDK at all. There is no third state.
+func TestFormShellStampsBrowserSentryDSN(t *testing.T) {
+	shell := []byte(`<!doctype html><html><head>` +
+		`<meta name="wf-sentry-dsn" content="" />` +
+		`<meta name="wf-release" content="" />` +
+		`</head><body></body></html>`)
+
+	unset := string(stampMeta(stampMeta(shell, "wf-sentry-dsn", ""), "wf-release", ""))
+	if !strings.Contains(unset, `<meta name="wf-sentry-dsn" content="" />`) {
+		t.Fatalf("empty DSN should leave the placeholder untouched, got %s", unset)
+	}
+
+	set := string(stampMeta(stampMeta(shell, "wf-sentry-dsn", `https://k@example.invalid/1`), "wf-release", "v1.2.3"))
+	if !strings.Contains(set, `<meta name="wf-sentry-dsn" content="https://k@example.invalid/1" />`) {
+		t.Fatalf("DSN was not stamped, got %s", set)
+	}
+	if !strings.Contains(set, `<meta name="wf-release" content="v1.2.3" />`) {
+		t.Fatalf("release was not stamped, got %s", set)
+	}
+
+	// A DSN is operator-supplied, so it must not be able to close the tag and
+	// inject markup into a page served to the public.
+	escaped := string(stampMeta(shell, "wf-sentry-dsn", `" /><script>alert(1)</script><meta x="`))
+	if strings.Contains(escaped, "<script>") {
+		t.Fatalf("stamped value was not escaped: %s", escaped)
+	}
+}

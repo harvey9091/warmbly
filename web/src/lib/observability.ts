@@ -12,7 +12,7 @@
 // a chunk still in flight would miss exactly that error. Not initialising it
 // costs a self-hoster some dead bundle weight and zero network calls.
 import * as Sentry from "@sentry/react";
-import { SENTRY_DSN } from "./information";
+import { SENTRY_DSN, SENTRY_ENVIRONMENT, SENTRY_RELEASE } from "./information";
 
 let reporting = false;
 
@@ -23,7 +23,10 @@ export function initErrorReporting(): void {
     Sentry.init({
         dsn: SENTRY_DSN,
         sendDefaultPii: true,
-        environment: import.meta.env.MODE,
+        environment: SENTRY_ENVIRONMENT,
+        // Empty is omitted rather than sent: an event tagged with the empty
+        // release matches no uploaded source map and reads as a real release.
+        release: SENTRY_RELEASE || undefined,
     });
     reporting = true;
 }

@@ -3,15 +3,15 @@ package unibox
 import (
 	"context"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 func (s *uniboxService) MarkSeen(ctx context.Context, userID, emailID uuid.UUID, seen bool) *errx.Error {
 	if err := s.uniboxRepository.MarkSeen(ctx, userID, emailID, seen); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
@@ -33,14 +33,14 @@ func (s *uniboxService) MarkSeenBulk(ctx context.Context, orgID uuid.UUID, data 
 			return nil, errx.ErrUniboxFolder
 		}
 		if err := s.uniboxRepository.MarkSeenByFolder(ctx, orgID, data.Folder, data.Seen); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return nil, errx.InternalError()
 		}
 		return data, nil
 	}
 
 	if err := s.uniboxRepository.MarkSeenBulk(ctx, orgID, data.EmailIDs, data.Seen); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 

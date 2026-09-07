@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 
 	"github.com/warmbly/warmbly/internal/app/warmupcontent"
 )
@@ -39,7 +39,7 @@ func (p *WarmupBatchPoller) Run(ctx context.Context) error {
 		return nil
 	}
 	if err := p.svc.PollBatches(ctx); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return err
 	}
 	return nil
@@ -54,7 +54,7 @@ func (p *WarmupBatchPoller) Start(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			if err := p.Run(ctx); err != nil {
-				sentry.CaptureException(err)
+				errs.CaptureException(err)
 			}
 		case <-p.stopCh:
 			return

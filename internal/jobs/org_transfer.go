@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 
 	"github.com/warmbly/warmbly/internal/app/orgtransfer"
 )
@@ -34,7 +34,7 @@ func (j *OrgTransferJob) Run(ctx context.Context) {
 		return
 	}
 	if _, err := j.svc.PurgeExpiredExports(ctx); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 	}
 }
 

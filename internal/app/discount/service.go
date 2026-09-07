@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -83,7 +83,7 @@ func NormalizeCode(code string) string {
 func (s *service) List(ctx context.Context, search *models.AdminDiscountSearch) (*models.AdminDiscountsResult, *errx.Error) {
 	result, err := s.codeRepo.List(ctx, search)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to list discount codes")
 	}
 	return result, nil
@@ -92,7 +92,7 @@ func (s *service) List(ctx context.Context, search *models.AdminDiscountSearch) 
 func (s *service) Get(ctx context.Context, id uuid.UUID) (*models.DiscountCode, *errx.Error) {
 	code, err := s.codeRepo.GetByID(ctx, id)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get discount code")
 	}
 	if code == nil {
@@ -156,7 +156,7 @@ func (s *service) Create(ctx context.Context, adminID uuid.UUID, req *models.Cre
 
 	existing, err := s.codeRepo.GetByCode(ctx, code)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to check existing code")
 	}
 	if existing != nil {
@@ -164,7 +164,7 @@ func (s *service) Create(ctx context.Context, adminID uuid.UUID, req *models.Cre
 	}
 
 	if err := s.codeRepo.Create(ctx, dc); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to create discount code")
 	}
 
@@ -175,7 +175,7 @@ func (s *service) Create(ctx context.Context, adminID uuid.UUID, req *models.Cre
 func (s *service) Update(ctx context.Context, adminID, id uuid.UUID, req *models.UpdateDiscountCodeRequest, ipAddress, userAgent string) (*models.DiscountCode, *errx.Error) {
 	dc, err := s.codeRepo.GetByID(ctx, id)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get discount code")
 	}
 	if dc == nil {
@@ -239,7 +239,7 @@ func (s *service) Update(ctx context.Context, adminID, id uuid.UUID, req *models
 	}
 
 	if err := s.codeRepo.Update(ctx, dc); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to update discount code")
 	}
 
@@ -250,14 +250,14 @@ func (s *service) Update(ctx context.Context, adminID, id uuid.UUID, req *models
 func (s *service) Delete(ctx context.Context, adminID, id uuid.UUID, ipAddress, userAgent string) *errx.Error {
 	dc, err := s.codeRepo.GetByID(ctx, id)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to get discount code")
 	}
 	if dc == nil {
 		return errx.ErrNotFound
 	}
 	if err := s.codeRepo.Delete(ctx, id); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to delete discount code")
 	}
 	s.log(ctx, adminID, "delete_discount_code", id, map[string]any{"code": dc.Code}, ipAddress, userAgent)
@@ -267,7 +267,7 @@ func (s *service) Delete(ctx context.Context, adminID, id uuid.UUID, ipAddress, 
 func (s *service) ListRedemptions(ctx context.Context, codeID uuid.UUID, offset, limit int) (*models.AdminDiscountRedemptionsResult, *errx.Error) {
 	result, err := s.redRepo.ListByCode(ctx, codeID, offset, limit)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to list redemptions")
 	}
 	return result, nil
@@ -276,7 +276,7 @@ func (s *service) ListRedemptions(ctx context.Context, codeID uuid.UUID, offset,
 func (s *service) ListOrganizationRedemptions(ctx context.Context, orgID uuid.UUID, limit int) ([]models.DiscountRedemption, *errx.Error) {
 	rows, err := s.redRepo.ListByOrganization(ctx, orgID, limit)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to list redemptions")
 	}
 	return rows, nil
@@ -342,7 +342,7 @@ func (s *service) resolve(ctx context.Context, orgID uuid.UUID, code string, pla
 
 	dc, err := s.codeRepo.GetByCode(ctx, normalized)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, "", errx.New(errx.Internal, "failed to validate discount code")
 	}
 	if dc == nil {
@@ -380,7 +380,7 @@ func (s *service) resolve(ctx context.Context, orgID uuid.UUID, code string, pla
 
 	orgCount, err := s.redRepo.CountActiveByCodeAndOrg(ctx, dc.ID, orgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, "", errx.New(errx.Internal, "failed to validate discount code")
 	}
 	if dc.PerAccountLimit > 0 && orgCount >= dc.PerAccountLimit {
@@ -424,7 +424,7 @@ func (s *service) reserve(ctx context.Context, code *models.DiscountCode, orgID 
 	case errors.Is(err, repository.ErrDiscountAlreadyRedeemed):
 		return uuid.Nil, errx.New(errx.BadRequest, "You've already used this discount code.")
 	case err != nil:
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return uuid.Nil, errx.New(errx.Internal, "failed to record discount redemption")
 	}
 	return red.ID, nil
@@ -432,7 +432,7 @@ func (s *service) reserve(ctx context.Context, code *models.DiscountCode, orgID 
 
 func (s *service) AttachRedemptionStripe(ctx context.Context, redemptionID uuid.UUID, sessionID, couponID *string) *errx.Error {
 	if err := s.redRepo.AttachStripeRefs(ctx, redemptionID, sessionID, couponID); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to attach redemption references")
 	}
 	return nil
@@ -440,7 +440,7 @@ func (s *service) AttachRedemptionStripe(ctx context.Context, redemptionID uuid.
 
 func (s *service) CancelRedemptionByID(ctx context.Context, redemptionID uuid.UUID) *errx.Error {
 	if err := s.redRepo.CancelByID(ctx, redemptionID); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to cancel redemption")
 	}
 	return nil
@@ -448,7 +448,7 @@ func (s *service) CancelRedemptionByID(ctx context.Context, redemptionID uuid.UU
 
 func (s *service) MarkRedemptionApplied(ctx context.Context, sessionID string, subscriptionID *uuid.UUID) *errx.Error {
 	if err := s.redRepo.MarkAppliedBySession(ctx, sessionID, subscriptionID); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to mark redemption applied")
 	}
 	return nil
@@ -456,7 +456,7 @@ func (s *service) MarkRedemptionApplied(ctx context.Context, sessionID string, s
 
 func (s *service) CancelRedemption(ctx context.Context, sessionID string) *errx.Error {
 	if err := s.redRepo.CancelBySession(ctx, sessionID); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to cancel redemption")
 	}
 	return nil

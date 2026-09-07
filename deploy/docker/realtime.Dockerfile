@@ -40,6 +40,12 @@ EXPOSE 4000
 
 ENV PHX_SERVER=true
 
+# Build identity, the same VERSION/COMMIT the Go images take. Read at runtime
+# by config/runtime.exs and used only to tag error events.
+ARG VERSION=""
+ARG COMMIT=""
+ENV WARMBLY_RELEASE=${VERSION:-${COMMIT}}
+
 # 127.0.0.1, not localhost: busybox wget tries ::1 first but the server binds IPv4.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
   CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:4000/health || exit 1

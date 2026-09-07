@@ -4,18 +4,18 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/notify/templates"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/argon2"
 	"github.com/warmbly/warmbly/internal/pkg/crypt"
 )
 
 func (s *authService) ResetPasswordStart(ctx context.Context, data *ResetPasswordStart, ipaddr string) *errx.Error {
 	if err := s.captcha.Verify(ctx, data.Turnstile, ipaddr); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return err
 	}
 
@@ -41,7 +41,7 @@ func (s *authService) ResetPasswordStart(ctx context.Context, data *ResetPasswor
 	sessionID := uuid.New()
 	nonce, err := crypt.Nonce()
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
@@ -50,7 +50,7 @@ func (s *authService) ResetPasswordStart(ctx context.Context, data *ResetPasswor
 
 	token, err := s.tokenService.GenerateToken(user.ID, sessionID, data.Email, nonce, issuedAt, expiresAt)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
@@ -62,12 +62,12 @@ func (s *authService) ResetPasswordStart(ctx context.Context, data *ResetPasswor
 
 	text, err := templates.GenerateResetPasswordHTML(u.FirstName, url)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
 	if err := s.sendAuthEmail(ctx, u.Email, "Password Reset Confirmation", text); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.ErrMailUndeliverable
 	}
 
@@ -76,7 +76,7 @@ func (s *authService) ResetPasswordStart(ctx context.Context, data *ResetPasswor
 
 func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPasswordConfirm, session, ipaddr string) *errx.Error {
 	if err := s.captcha.Verify(ctx, data.Turnstile, ipaddr); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return err
 	}
 
@@ -108,7 +108,7 @@ func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPassw
 
 	passwordHash, hashErr := argon2.Hash(data.Password)
 	if hashErr != nil {
-		sentry.CaptureException(hashErr)
+		errs.CaptureException(hashErr)
 		return errx.InternalError()
 	}
 
@@ -121,7 +121,7 @@ func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPassw
 	// none, so all are revoked) so a reset always fully cuts off prior access.
 	if s.tokenService != nil {
 		if err := s.tokenService.RevokeOtherSessions(ctx, sess.UserID, uuid.Nil); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			// Non-fatal: the password is already reset.
 		}
 	}
@@ -143,7 +143,7 @@ func (s *authService) ChangePassword(ctx context.Context, userID, currentSession
 
 	ok, verr := argon2.Verify(data.CurrentPassword, hash)
 	if verr != nil {
-		sentry.CaptureException(verr)
+		errs.CaptureException(verr)
 		return errx.InternalError()
 	}
 	if !ok {
@@ -159,7 +159,7 @@ func (s *authService) ChangePassword(ctx context.Context, userID, currentSession
 
 	newHash, hashErr := argon2.Hash(data.NewPassword)
 	if hashErr != nil {
-		sentry.CaptureException(hashErr)
+		errs.CaptureException(hashErr)
 		return errx.InternalError()
 	}
 	if err := s.authRepository.ResetPassword(ctx, userID, newHash); err != nil {
@@ -172,7 +172,7 @@ func (s *authService) ChangePassword(ctx context.Context, userID, currentSession
 	// they just performed.
 	if s.tokenService != nil && currentSessionID != uuid.Nil {
 		if err := s.tokenService.RevokeOtherSessions(ctx, userID, currentSessionID); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			// Non-fatal: the password is already changed.
 		}
 	}

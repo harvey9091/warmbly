@@ -6,6 +6,12 @@
     <meta name="robots" content="noindex" />
     <!-- The Go shell stamps the render token here; empty in `vite dev`. -->
     <meta name="wf-token" content="" />
+    <!-- Browser error reporting, stamped by the Go shell from the forms
+         service's WARMBLY_SENTRY_DSN. Empty (the default, and always in
+         `vite dev`) means the SDK chunk is never even fetched. -->
+    <meta name="wf-sentry-dsn" content="" />
+    <meta name="wf-release" content="" />
+    <meta name="wf-environment" content="" />
     <title>Form</title>
   </head>
   <body>

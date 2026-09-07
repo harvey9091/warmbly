@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"html/template"
 
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 // Notification digest: several pending notifications bundled into one email
@@ -67,7 +67,7 @@ func GenerateDigestHTML(count int, items []DigestItem) (string, error) {
 	}{Count: count, Items: items, AppURL: AppURL}
 	var buf bytes.Buffer
 	if err := digestTmpl.Execute(&buf, data); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", err
 	}
 	return renderEmail(fmt.Sprintf("%d updates in your Warmbly workspace", count), buf.String())

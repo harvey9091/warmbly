@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 // ─── Centralized Business Details ────────────────────────────────
@@ -86,7 +86,7 @@ func renderEmail(subject, content string) (string, error) {
 	}
 	var buf bytes.Buffer
 	if err := baseTmpl.Execute(&buf, data); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", err
 	}
 	return buf.String(), nil

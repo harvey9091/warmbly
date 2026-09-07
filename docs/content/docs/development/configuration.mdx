@@ -377,13 +377,31 @@ Delayed sends run through the local poller, so the backend must be running for s
 
 ## Observability
 
+### Error reporting
+
+Every runtime in Warmbly can report its errors, and none of them do unless you say where. A DSN is the operator's choice, not a requirement of the software, so the default install reports nowhere and contacts no host. Each variable is read by one process, so pointing the backend at a project does not make the dashboard report too.
+
+| Variable | Read by | What it does | Default |
+|---|---|---|---|
+| `SENTRY_DSN` | backend, consumer, worker | Server-side error reporting. Optional in every environment, including `prod` | unset |
+| `SENTRY_DSN` | forms service | The forms service's own errors. It reads its own environment, like tracking | unset |
+| `SENTRY_DSN` | tracking service | Rust errors and panics. An invalid DSN disables reporting with a log line rather than stopping the service | unset |
+| `SENTRY_DSN` | realtime service | An empty string is treated as unset on purpose, because the library rejects `""` hard enough to take the node down | unset |
+| `WARMBLY_SENTRY_DSN` | web, admin containers | Browser error reporting, read at container start like the other `WARMBLY_*` values. Unset means the SDK is never initialised and no host is contacted | unset |
+| `WARMBLY_SENTRY_DSN` | forms service | Stamped into the public form page for the form app's browser errors, along with the service's `APP_ENV` as their environment. Separate from the forms service's own `SENTRY_DSN`: one is a Go process, the other is a page a stranger loads | unset |
+| `WARMBLY_SENTRY_ENVIRONMENT` | web, admin containers | The environment label those browser events carry. Defaults to the build mode. Form pages do not read it: the forms service stamps its own `APP_ENV` into the page instead | unset |
+| `APP_ENV` | every server-side service | Doubles as the environment label on the events that service reports. Browser events take theirs from `WARMBLY_SENTRY_ENVIRONMENT` instead, because the container serving the bundle is not the process reporting the error | `dev` |
+| `WARMBLY_RELEASE` | tracking, realtime | The build events are tagged with. The published images set it from the release tag; the Go services and the frontends read the same value from their build stamp instead | `dev` |
+
+An unset DSN means nothing leaves the process and no Sentry host is contacted. The dashboard, the admin panel and form pages go further and never load the SDK at all, so there is not even a script; the Go, Rust and Elixir services still record errors, to their own logs. A set DSN can point at Sentry Cloud, a self-hosted Sentry, or any Sentry-compatible server such as GlitchTip; nothing in Warmbly assumes sentry.io.
+
+The `admin` panel and the dashboard also tag events with the build they were served from. That value is baked at image build time, because it has to match the release the source maps were uploaded under, so it cannot be changed by a container variable afterwards.
+
+### Push
+
 | Variable | What it does | Default |
 |---|---|---|
-| `SENTRY_DSN` | Error reporting. Optional in every environment, including `prod` | unset |
-| `WARMBLY_SENTRY_DSN` | Browser error reporting for the dashboard container, read at container start like the other `WARMBLY_*` values. Unset means the dashboard initialises no reporting SDK and contacts no Sentry host | unset |
 | `APNS_KEY` or `APNS_KEY_PATH`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC` | Mobile push on backend and consumer. Partial configuration disables push with a warning, never a crash | unset |
-
-Error reporting is off by default everywhere. A DSN is the operator's choice, and each of these is read by one process, so pointing the backend at a project does not make the dashboard report too. Both accept Sentry Cloud, a self-hosted Sentry or any Sentry-compatible server.
 
 ## Updates
 
@@ -410,6 +428,8 @@ The public face of hosted forms (`cmd/forms`): it serves the React (TanStack) fo
 | `BACKEND_INTERNAL_URL` | Where the service resolves forms and forwards submissions, the same variable the tracking service uses. **Required**: the service exits at boot without it | none |
 | `INTERNAL_API_TOKEN` | Bearer token for those calls, matching the backend's. **Required**: the service exits at boot on an empty value | none |
 | `FORM_IP_RATE_LIMIT` | Public form submissions allowed per source IP per 10 minutes, per forms-service instance | `30` |
+| `SENTRY_DSN` | The service's own error reporting. Unset means none | unset |
+| `WARMBLY_SENTRY_DSN` | Stamped into the form page so the browser app reports too. Unset means the page loads no reporting SDK at all | unset |
 | `TRUSTED_PROXIES` | CIDRs whose `X-Forwarded-For` the service believes, same convention as the backend. Empty trusts nothing and uses the socket peer; set it behind a reverse proxy or the submit limiter throttles the proxy's address instead of the visitor's | empty |
 
 ## Tracking service
@@ -432,7 +452,9 @@ The Rust open and click service. It reads its own environment, so these have to 
 | `KAFKA_BOOTSTRAP_SERVERS`, `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD` | Broker transport when `EVENTBUS_PROVIDER=kafka` | unset |
 | `SCHEMA_REGISTRY_URL`, `SCHEMA_REGISTRY_KEY`, `SCHEMA_REGISTRY_SECRET` | Registry for the Avro codec | unset |
 | `AWS_CONFIG_ENABLED` | `true` falls back to AWS SSM and Secrets Manager for any value missing from the environment | `false` |
-| `APP_ENV` | Environment label used in logs | `dev` |
+| `APP_ENV` | Environment label used in logs, and on reported errors | `dev` |
+| `SENTRY_DSN` | Error and panic reporting. Unset means none; an invalid value logs and disables it rather than stopping the service | unset |
+| `WARMBLY_RELEASE` | The build reported errors are tagged with | `dev` |
 
 ## Realtime service
 
@@ -457,6 +479,7 @@ The Elixir websocket service. Its runtime configuration is read only when the re
 | `RATE_LIMIT_WS_JOIN` | Channel joins per minute, counted per `phx_join` on an open socket | `30` |
 | `RATE_LIMIT_WS_EVENT` | Client events per minute, which is what bounds presence updates | `60` |
 | `SENTRY_DSN` | Error reporting. An empty string is treated as unset on purpose, because the library rejects `""` hard enough to take the node down | unset |
+| `WARMBLY_RELEASE` | The build reported errors are tagged with | `dev` |
 
 <Callout type="warn" title="CHECK_ORIGIN is false by default">
 The shipped default accepts a websocket upgrade from **any** origin. A token is still required to join a channel, so an attacker needs a valid JWT either way, but on a deployment reachable from the internet set `PHX_HOST` to the public websocket hostname and `CHECK_ORIGIN=true` so only your own dashboard can open a socket.

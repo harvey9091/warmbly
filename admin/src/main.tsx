@@ -15,6 +15,8 @@ import "@fontsource/inter/600.css";
 import "@fontsource/poppins/600.css";
 import "@fontsource/poppins/700.css";
 
+import { initErrorReporting } from "@/lib/observability";
+
 import { Toaster } from "@/components/ui/sonner";
 import { AppShell } from "@/components/layout/AppShell";
 import { RequireAdmin } from "@/components/layout/RequireAdmin";
@@ -208,6 +210,9 @@ function AppShellWithKey() {
 // Tiny outlet helper exported so React-Router's typing is happy when
 // we need a passthrough.
 export { Outlet };
+
+// Before the first render, so a boot failure is reported too.
+initErrorReporting();
 
 createRoot(document.getElementById("root")!).render(
     <StrictMode>

@@ -9,10 +9,10 @@ import (
 	"net/mail"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/warmbly/warmbly/internal/app/token"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/idtoken"
 )
 
@@ -140,16 +140,16 @@ func (s *authService) FederatedProviderLabels() map[string]string {
 func (s *authService) mintHandoff(ctx context.Context, result *models.LoginResult, binding string) (string, *errx.Error) {
 	code, err := randomHex(32)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", errx.InternalError()
 	}
 	payload, err := json.Marshal(ssoHandoff{Binding: binding, Result: *result})
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", errx.InternalError()
 	}
 	if err := s.cache.SetEx(ctx, ssoHandoffKey(code), payload, ssoHandoffTTL).Err(); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", errx.InternalError()
 	}
 	return code, nil
@@ -173,7 +173,7 @@ func (s *authService) SSOExchange(ctx context.Context, code, binding string) (*m
 	}
 	var handoff ssoHandoff
 	if err := json.Unmarshal(raw, &handoff); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	if subtle.ConstantTimeCompare([]byte(handoff.Binding), []byte(binding)) != 1 {
@@ -191,32 +191,32 @@ func (s *authService) SSOBegin(ctx context.Context, provider string) (*SSORedire
 
 	state, err := randomHex(32)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	nonce, err := randomHex(32)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	verifier, err := randomHex(32)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	binding, err := randomHex(32)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
 	payload, err := json.Marshal(ssoFlow{Provider: provider, Verifier: verifier, Nonce: nonce, Binding: binding})
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	if err := s.cache.SetEx(ctx, ssoStateKey(state), payload, ssoStateTTL).Err(); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
@@ -242,7 +242,7 @@ func (s *authService) SSOCallbackComplete(ctx context.Context, in SSOCallback) (
 
 	var flow ssoFlow
 	if err := json.Unmarshal(raw, &flow); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", errx.InternalError()
 	}
 	// A state minted for one provider presented at another's callback is a
@@ -255,7 +255,7 @@ func (s *authService) SSOCallbackComplete(ctx context.Context, in SSOCallback) (
 	if err != nil {
 		// Reported, not buried: these are configuration problems more often
 		// than attacks.
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", errx.ErrExternalCode
 	}
 

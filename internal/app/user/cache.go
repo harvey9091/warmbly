@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 func getUserKey(id uuid.UUID) string {
@@ -19,13 +19,13 @@ func getUserKey(id uuid.UUID) string {
 func (s *userService) SaveUser(ctx context.Context, user *models.User) *errx.Error {
 	raw, err := json.Marshal(user)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
 	key := getUserKey(user.ID)
 	if err := s.cache.SetEx(ctx, key, raw, UserTTL).Err(); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
@@ -38,13 +38,13 @@ func (s *userService) getUser(ctx context.Context, userID uuid.UUID) (*models.Us
 		if errors.Is(err, redis.Nil) {
 			return nil, nil
 		}
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
 	var user models.User
 	if err := json.Unmarshal(data, &user); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 

@@ -6,10 +6,10 @@ import (
 	"errors"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/redis/go-redis/v9"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 // OnboardingStateTTL bounds the time a user has to complete an OAuth round trip.
@@ -25,11 +25,11 @@ func (s *emailService) saveOnboardingState(ctx context.Context, state string, da
 	}
 	raw, err := json.Marshal(data)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 	if err := s.r.Set(ctx, onboardingStateKey(state), raw, OnboardingStateTTL).Err(); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 	return nil
@@ -44,16 +44,16 @@ func (s *emailService) takeOnboardingState(ctx context.Context, state string) (*
 		if errors.Is(err, redis.Nil) {
 			return nil, errx.ErrEmailOnboardState
 		}
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	// Single-use: remove immediately to prevent replay even on later errors.
 	if err := s.r.Del(ctx, onboardingStateKey(state)).Err(); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 	}
 	var out models.EmailOnboardingState
 	if err := json.Unmarshal(raw, &out); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	return &out, nil

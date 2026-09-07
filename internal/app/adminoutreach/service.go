@@ -9,11 +9,11 @@ package adminoutreach
 import (
 	"context"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/notify"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -65,12 +65,12 @@ func (s *service) Send(ctx context.Context, adminID uuid.UUID, req *models.SendA
 	}
 
 	if err := s.repo.Insert(ctx, m); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to record outreach")
 	}
 
 	if err := s.mailer.SendOutreach(ctx, []string{to}, req.ReplyTo, req.Subject, req.Body); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		_ = s.repo.MarkFailed(ctx, m.ID, err.Error())
 		errStr := err.Error()
 		m.Status = models.AdminOutreachStatusFailed
@@ -81,7 +81,7 @@ func (s *service) Send(ctx context.Context, adminID uuid.UUID, req *models.SendA
 	if err := s.repo.MarkSent(ctx, m.ID); err != nil {
 		// Mail went out; audit row stuck in queued. Log and return
 		// success so the admin isn't confused into re-sending.
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 	}
 	m.Status = models.AdminOutreachStatusSent
 	return m, nil
@@ -90,7 +90,7 @@ func (s *service) Send(ctx context.Context, adminID uuid.UUID, req *models.SendA
 func (s *service) Search(ctx context.Context, search *models.AdminOutreachSearch) (*models.AdminOutreachResult, *errx.Error) {
 	result, err := s.repo.Search(ctx, search)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to load outreach log")
 	}
 	return result, nil
@@ -117,7 +117,7 @@ func (s *service) resolveRecipient(ctx context.Context, req *models.SendAdminOut
 	if req.ToUserID != nil {
 		u, err := s.userRepo.GetUser(ctx, *req.ToUserID)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return "", errx.New(errx.Internal, "failed to load user")
 		}
 		if u == nil {
@@ -128,7 +128,7 @@ func (s *service) resolveRecipient(ctx context.Context, req *models.SendAdminOut
 	// to_org_id → owner's email
 	org, err := s.orgRepo.GetByID(ctx, *req.ToOrgID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", errx.New(errx.Internal, "failed to load organization")
 	}
 	if org == nil {
@@ -136,7 +136,7 @@ func (s *service) resolveRecipient(ctx context.Context, req *models.SendAdminOut
 	}
 	u, err := s.userRepo.GetUser(ctx, org.OwnerUserID)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", errx.New(errx.Internal, "failed to load owner")
 	}
 	if u == nil {

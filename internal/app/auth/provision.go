@@ -5,9 +5,9 @@ import (
 	"net/mail"
 	"strings"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 
 	"github.com/warmbly/warmbly/internal/app/orgrisk"
 	"github.com/warmbly/warmbly/internal/config"
@@ -43,7 +43,7 @@ func (s *authService) createAccount(ctx context.Context, address, passwordHash, 
 
 	u, xerr := s.userRepository.CreateUser(ctx, email, passwordHash)
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 
@@ -79,7 +79,7 @@ func (s *authService) createAccount(ctx context.Context, address, passwordHash, 
 		var orgErr *errx.Error
 		org, orgErr = s.organizationService.Create(ctx, u.ID, orgName)
 		if orgErr != nil {
-			sentry.CaptureException(orgErr)
+			errs.CaptureException(orgErr)
 			// Don't fail registration if org creation fails
 		}
 	}
@@ -95,7 +95,7 @@ func (s *authService) createAccount(ctx context.Context, address, passwordHash, 
 	// Start 2-week free trial for new user (linked to organization)
 	if s.trialService != nil && org != nil {
 		if err := s.trialService.StartFreeTrialWithOrg(ctx, u.ID, org.ID); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			// Don't fail registration if trial creation fails
 		}
 	}
@@ -104,7 +104,7 @@ func (s *authService) createAccount(ctx context.Context, address, passwordHash, 
 	// Best-effort: a bad or self-referral code never fails registration.
 	if s.referral != nil && org != nil && referralCode != "" {
 		if xerr := s.referral.AttributeSignup(ctx, referralCode, org.ID, u.ID); xerr != nil {
-			sentry.CaptureException(xerr)
+			errs.CaptureException(xerr)
 		}
 	}
 
@@ -158,7 +158,7 @@ func (s *authService) signupAllowed(ctx context.Context, address, invite string)
 	if s.policy.Registration != config.RegistrationClosed {
 		empty, err := s.userRepository.IsEmpty(ctx)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return errx.InternalError()
 		}
 		if empty {
@@ -236,7 +236,7 @@ func (s *authService) federatedSignupAllowed(ctx context.Context, address string
 	if s.policy.Registration != config.RegistrationClosed {
 		empty, err := s.userRepository.IsEmpty(ctx)
 		if err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return errx.InternalError()
 		}
 		if empty {

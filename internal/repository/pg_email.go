@@ -7,13 +7,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/encrypt"
 	"github.com/warmbly/warmbly/internal/utils"
 	"github.com/warmbly/warmbly/internal/utils/paging"
@@ -330,7 +330,7 @@ func reserveMailboxSlotTx(ctx context.Context, tx pgx.Tx, orgID *uuid.UUID, a *m
 
 func (r *emailRepository) NewOauthAccount(ctx context.Context, userID string, data models.NewOauthAccount) (*models.Email, *errx.Error) {
 	if data.Provider == models.InboxProviderSMTPIMAP {
-		sentry.CaptureException(errors.New("invalid inbox provider"))
+		errs.CaptureException(errors.New("invalid inbox provider"))
 		return nil, errx.InternalError()
 	}
 
@@ -459,7 +459,7 @@ func (r *emailRepository) NewOauthAccount(ctx context.Context, userID string, da
 
 func (r *emailRepository) NewManagedAccount(ctx context.Context, userID string, data models.NewOauthAccount) (*models.Email, *errx.Error) {
 	if data.Provider != models.InboxProviderGoogle && data.Provider != models.InboxProviderOutlook {
-		sentry.CaptureException(errors.New("managed account: unsupported provider"))
+		errs.CaptureException(errors.New("managed account: unsupported provider"))
 		return nil, errx.InternalError()
 	}
 	sigplain := utils.GetSignaturePlain(data.Name)
@@ -479,7 +479,7 @@ func (r *emailRepository) NewManagedAccount(ctx context.Context, userID string, 
 
 func (r *emailRepository) NewSMTPIMAPAccount(ctx context.Context, userID string, data models.NewSMTPIMAPAccount) (*models.Email, *errx.Error) {
 	if r.Encrypt == nil {
-		sentry.CaptureException(errNoCredentialEncrypter)
+		errs.CaptureException(errNoCredentialEncrypter)
 		return nil, errx.InternalError()
 	}
 	tx, err := r.DB.Begin(ctx)
@@ -529,33 +529,33 @@ func (r *emailRepository) NewSMTPIMAPAccount(ctx context.Context, userID string,
 
 	smtphost, err := r.Encrypt.Encrypt(data.SMTP.Host)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	smtpuser, err := r.Encrypt.Encrypt(data.SMTP.Username)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	smtppass, err := r.Encrypt.Encrypt(data.SMTP.Password)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
 	imaphost, err := r.Encrypt.Encrypt(data.IMAP.Host)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	imapuser, err := r.Encrypt.Encrypt(data.IMAP.Username)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 	imappass, err := r.Encrypt.Encrypt(data.IMAP.Password)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
@@ -1628,7 +1628,7 @@ func (r *emailRepository) GetByCampaignSenders(ctx context.Context, scope Accoun
 // GetSMTPCredentials retrieves SMTP/IMAP credentials for an email account
 func (r *emailRepository) GetSMTPCredentials(ctx context.Context, emailAccountID uuid.UUID) (*SMTPCredentials, *errx.Error) {
 	if r.Encrypt == nil {
-		sentry.CaptureException(errNoCredentialEncrypter)
+		errs.CaptureException(errNoCredentialEncrypter)
 		return nil, errx.InternalError()
 	}
 	query := `
@@ -1657,32 +1657,32 @@ func (r *emailRepository) GetSMTPCredentials(ctx context.Context, emailAccountID
 	var xerr error
 	creds.SMTPHost, xerr = r.Encrypt.Decrypt(smtpHost)
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 	creds.SMTPUser, xerr = r.Encrypt.Decrypt(smtpUser)
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 	creds.SMTPPassword, xerr = r.Encrypt.Decrypt(smtpPassword)
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 	creds.IMAPHost, xerr = r.Encrypt.Decrypt(imapHost)
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 	creds.IMAPUser, xerr = r.Encrypt.Decrypt(imapUser)
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 	creds.IMAPPassword, xerr = r.Encrypt.Decrypt(imapPassword)
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 
@@ -1692,7 +1692,7 @@ func (r *emailRepository) GetSMTPCredentials(ctx context.Context, emailAccountID
 // GetOAuthCredentials retrieves OAuth credentials for an email account
 func (r *emailRepository) GetOAuthCredentials(ctx context.Context, emailAccountID uuid.UUID) (*OAuthCredentials, *errx.Error) {
 	if r.Encrypt == nil {
-		sentry.CaptureException(errNoCredentialEncrypter)
+		errs.CaptureException(errNoCredentialEncrypter)
 		return nil, errx.InternalError()
 	}
 	query := `
@@ -1718,12 +1718,12 @@ func (r *emailRepository) GetOAuthCredentials(ctx context.Context, emailAccountI
 	// Decrypt tokens, tolerating rows written before OAuth tokens were sealed.
 	decryptedAccessToken, accessLegacy, xerr := r.openCredential(accessToken)
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 	decryptedRefreshToken, refreshLegacy, xerr := r.openCredential(refreshToken)
 	if xerr != nil {
-		sentry.CaptureException(xerr)
+		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 	if accessLegacy || refreshLegacy {
@@ -1745,12 +1745,12 @@ func (r *emailRepository) GetOAuthCredentials(ctx context.Context, emailAccountI
 func (r *emailRepository) resealOAuthCredentials(ctx context.Context, emailAccountID uuid.UUID, accessToken, refreshToken string) {
 	encAccessToken, err := r.sealCredential(accessToken)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return
 	}
 	encRefreshToken, err := r.sealCredential(refreshToken)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return
 	}
 

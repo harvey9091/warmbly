@@ -408,6 +408,12 @@ services:
       # container via host.docker.internal, mirroring the tracking service.
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8080}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-local-dev-internal-token}
+      APP_ENV: ${APP_ENV:-dev}
+      # Two DSNs, two audiences: SENTRY_DSN is this Go process, and
+      # WARMBLY_SENTRY_DSN is stamped into the public form page for the browser
+      # app. Both unset means neither reports and no host is contacted.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      WARMBLY_SENTRY_DSN: ${WARMBLY_SENTRY_DSN:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -535,6 +541,9 @@ services:
       # Behind a reverse proxy set CHECK_ORIGIN=true once PHX_HOST matches the
       # public websocket hostname.
       CHECK_ORIGIN: ${CHECK_ORIGIN:-false}
+      # The environment label events are tagged with, matching every other
+      # service in this file.
+      APP_ENV: ${APP_ENV:-dev}
     # SENTRY_DSN deliberately arrives via env_file, not the mapping above: the
     # Elixir Sentry library reads the variable itself and refuses to start on an
     # empty string, so it has to be genuinely absent rather than "".
@@ -581,6 +590,9 @@ services:
       WARMBLY_DASHBOARD_URL: ${APP_URL:-http://${PUBLIC_HOST:-localhost}:5173}
       WARMBLY_ENV_LABEL: ${ENV_LABEL:-development}
       WARMBLY_TURNSTILE_KEY: ${WARMBLY_TURNSTILE_KEY:-1x00000000000000000000AA}
+      # Unset means the panel initialises no error reporting and contacts no
+      # Sentry host, exactly like the dashboard above.
+      WARMBLY_SENTRY_DSN: ${WARMBLY_SENTRY_DSN:-}
     depends_on:
       backend: { condition: service_healthy }
 

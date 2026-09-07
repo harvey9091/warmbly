@@ -5,11 +5,11 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 func (s *service) BeginRegistration(ctx context.Context, userID uuid.UUID) (*protocol.CredentialCreation, *errx.Error) {
@@ -27,7 +27,7 @@ func (s *service) BeginRegistration(ctx context.Context, userID uuid.UUID) (*pro
 		webauthn.WithExclusions(wuser.excludeList()),
 	)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.ErrPasskey
 	}
 

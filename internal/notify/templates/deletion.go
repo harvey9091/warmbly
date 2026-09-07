@@ -6,7 +6,7 @@ import (
 	"html/template"
 	"time"
 
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 // Danger-zone (scheduled deletion) emails. These move off the old
@@ -162,7 +162,7 @@ var (
 func renderDeletion(tmpl *template.Template, subject string, data any) (string, error) {
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return "", err
 	}
 	return renderEmail(subject, buf.String())

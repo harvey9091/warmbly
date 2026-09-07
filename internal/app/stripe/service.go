@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 
 	"github.com/google/uuid"
 	"github.com/stripe/stripe-go/v76"
@@ -170,7 +170,7 @@ func (s *stripeService) CreateCustomer(ctx context.Context, userID uuid.UUID, em
 
 	cust, err := customer.New(params)
 	if err != nil {
-		sentry.CaptureException(fmt.Errorf("stripe customer creation failed: %w", err))
+		errs.CaptureException(fmt.Errorf("stripe customer creation failed: %w", err))
 		return "", errx.New(errx.Internal, "failed to create billing account")
 	}
 
@@ -204,7 +204,7 @@ func (s *stripeService) ApplyCustomerCredit(ctx context.Context, customerID stri
 	}
 	txn, err := balancetxn.New(params)
 	if err != nil {
-		sentry.CaptureException(fmt.Errorf("stripe customer balance txn failed: %w", err))
+		errs.CaptureException(fmt.Errorf("stripe customer balance txn failed: %w", err))
 		return "", errx.New(errx.Internal, "failed to apply referral credit")
 	}
 	return txn.ID, nil
@@ -310,7 +310,7 @@ func (s *stripeService) CreateCheckoutSession(ctx context.Context, userID uuid.U
 		if reservedID != nil {
 			_ = s.discountService.CancelRedemptionByID(ctx, *reservedID)
 		}
-		sentry.CaptureException(fmt.Errorf("stripe checkout session failed: %w", err))
+		errs.CaptureException(fmt.Errorf("stripe checkout session failed: %w", err))
 		return nil, errx.New(errx.Internal, "failed to create checkout session")
 	}
 
@@ -319,7 +319,7 @@ func (s *stripeService) CreateCheckoutSession(ctx context.Context, userID uuid.U
 	// checkout.session.expired.
 	if reservedID != nil {
 		if xerr := s.discountService.AttachRedemptionStripe(ctx, *reservedID, &sess.ID, couponID); xerr != nil {
-			sentry.CaptureException(fmt.Errorf("attach discount redemption refs failed: %s", xerr.Message))
+			errs.CaptureException(fmt.Errorf("attach discount redemption refs failed: %s", xerr.Message))
 		}
 	}
 
@@ -359,7 +359,7 @@ func (s *stripeService) mintCoupon(dc *models.DiscountCode) (string, *errx.Error
 
 	c, err := coupon.New(params)
 	if err != nil {
-		sentry.CaptureException(fmt.Errorf("stripe coupon creation failed: %w", err))
+		errs.CaptureException(fmt.Errorf("stripe coupon creation failed: %w", err))
 		return "", errx.New(errx.Internal, "failed to apply discount")
 	}
 	return c.ID, nil
@@ -410,7 +410,7 @@ func (s *stripeService) CreateCreditCheckoutSession(ctx context.Context, userID,
 
 	sess, serr := session.New(params)
 	if serr != nil {
-		sentry.CaptureException(fmt.Errorf("stripe credit checkout session failed: %w", serr))
+		errs.CaptureException(fmt.Errorf("stripe credit checkout session failed: %w", serr))
 		return nil, errx.New(errx.Internal, "failed to create checkout session")
 	}
 	return sess, nil
@@ -499,7 +499,7 @@ func (s *stripeService) CreatePortalSession(ctx context.Context, customerID, ret
 
 	sess, err := portalsession.New(params)
 	if err != nil {
-		sentry.CaptureException(fmt.Errorf("stripe portal session failed: %w", err))
+		errs.CaptureException(fmt.Errorf("stripe portal session failed: %w", err))
 		return "", errx.New(errx.Internal, "failed to create billing portal session")
 	}
 
@@ -521,7 +521,7 @@ func (s *stripeService) CancelSubscription(ctx context.Context, subscriptionID s
 
 	_, err := subscription.Update(subscriptionID, params)
 	if err != nil {
-		sentry.CaptureException(fmt.Errorf("stripe subscription cancel failed: %w", err))
+		errs.CaptureException(fmt.Errorf("stripe subscription cancel failed: %w", err))
 		return errx.New(errx.Internal, "failed to update subscription")
 	}
 
@@ -630,7 +630,7 @@ func (s *stripeService) ChangePlan(ctx context.Context, orgID uuid.UUID, newPlan
 	// a direct plan change). Best-effort: the discount is already live.
 	if reservedID != nil {
 		if xerr := s.discountService.AttachRedemptionStripe(ctx, *reservedID, nil, couponID); xerr != nil {
-			sentry.CaptureException(fmt.Errorf("attach discount redemption refs failed: %s", xerr.Message))
+			errs.CaptureException(fmt.Errorf("attach discount redemption refs failed: %s", xerr.Message))
 		}
 	}
 
@@ -867,7 +867,7 @@ func (s *stripeService) handleCheckoutCompleted(ctx context.Context, event *stri
 			subID = &sub.ID
 		}
 		if xerr := s.discountService.MarkRedemptionApplied(ctx, checkoutSession.ID, subID); xerr != nil {
-			sentry.CaptureException(fmt.Errorf("mark discount redemption applied failed: %s", xerr.Message))
+			errs.CaptureException(fmt.Errorf("mark discount redemption applied failed: %s", xerr.Message))
 		}
 	}
 
@@ -1130,7 +1130,7 @@ func (s *stripeService) handleInvoicePaid(ctx context.Context, event *stripe.Eve
 		(inv.BillingReason == stripe.InvoiceBillingReasonSubscriptionCreate ||
 			inv.BillingReason == stripe.InvoiceBillingReasonSubscriptionCycle) {
 		if err := s.credits.ResetMonthlyAllowance(ctx, sub.OrganizationID, plan.MonthlyCredits, event.ID); err != nil {
-			sentry.CaptureException(fmt.Errorf("monthly credit reset failed for org %s: %w", sub.OrganizationID, err))
+			errs.CaptureException(fmt.Errorf("monthly credit reset failed for org %s: %w", sub.OrganizationID, err))
 		} else if s.audit != nil {
 			s.audit.LogAction(ctx, sub.OrganizationID, sub.UserID, models.AuditActionUpdate, models.AuditEntityCreditGrant, nil, "", "", nil, map[string]string{
 				"reason":  "monthly_reset",

@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	wsmtp "github.com/warmbly/warmbly/internal/client/smtpimap/smtp"
 	"github.com/warmbly/warmbly/internal/config"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 const smtpSendTimeout = 30 * time.Second
@@ -59,7 +59,7 @@ func (s *smtpEmailNotificationService) send(ctx context.Context, to, cc, bcc []s
 	}
 
 	if err := s.deliver(ctx, recipients, msg); err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return err
 	}
 	return nil

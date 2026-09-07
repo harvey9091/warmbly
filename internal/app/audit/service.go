@@ -4,11 +4,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -90,11 +90,11 @@ func (s *auditService) LogAction(ctx context.Context, orgID, actorID uuid.UUID, 
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				sentry.CurrentHub().Recover(r)
+				errs.Recover(r)
 			}
 		}()
 		if err := s.repo.Log(context.Background(), log); err != nil {
-			sentry.CaptureException(err)
+			errs.CaptureException(err)
 			return
 		}
 		// Notify the org's dashboard to refetch the activity log live. Carries
@@ -138,7 +138,7 @@ func (s *auditService) Search(ctx context.Context, params *models.AuditLogSearch
 
 	result, err := s.repo.Search(ctx, params)
 	if err != nil {
-		sentry.CaptureException(err)
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
