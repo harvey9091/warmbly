@@ -28,6 +28,7 @@ import beginSSO from "@/lib/api/client/auth/beginSSO";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
 import { captureException } from "@/lib/observability";
+import { isEmpty, readAcquisition } from "@/lib/acquisition";
 import type Token from "@/lib/api/models/auth/Token";
 import {
     beginPasskeyLogin,
@@ -214,6 +215,13 @@ export default function LoginPage() {
         () => new URLSearchParams(location.search).get("invite") ?? "",
         [location.search],
     );
+    // Where this signup came from, read once from the URL so a re-render or a
+    // history replace cannot lose it. Empty for a direct visit.
+    const acquisition = useMemo(() => {
+        const acq = readAcquisition();
+        return isEmpty(acq) ? undefined : acq;
+    }, []);
+
     const signupPossible = authConfig.registration === "false" || !!inviteToken;
     // Set when the API refuses a signup the screen believed was possible.
     const [refusal, setRefusal] = useState<SignupBlock | null>(null);
@@ -550,6 +558,7 @@ export default function LoginPage() {
                     password: data.password,
                     turnstile: token,
                     invite: inviteToken || undefined,
+                    acquisition,
                 });
                 // Email verification off means the account already exists and
                 // is signed in: land in the dashboard.
@@ -647,14 +656,14 @@ export default function LoginPage() {
             try {
                 const res = mode === "signin"
                     ? await loginMutation.mutateAsync({ email, password, turnstile: token })
-                    : await registerMutation.mutateAsync({ email, password, turnstile: token, invite: inviteToken || undefined });
+                    : await registerMutation.mutateAsync({ email, password, turnstile: token, invite: inviteToken || undefined, acquisition });
                 toast.success("Code resent!");
                 setSession(res.session ?? "");
             } catch (e) {
                 toast.error(buildError(e as AppError));
             }
         });
-    }, [mode, email, password, inviteToken, loginMutation, registerMutation, withCaptcha]);
+    }, [mode, email, password, inviteToken, acquisition, loginMutation, registerMutation, withCaptcha]);
 
     return (
         <div className="relative">

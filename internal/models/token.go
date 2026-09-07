@@ -102,4 +102,8 @@ type RegistrationSession struct {
 	// Invite is the invitation token captured at RegistrationStart, re-checked
 	// and redeemed at confirm so the account lands in the inviting org.
 	Invite string `json:"invite,omitempty"`
+	// Acquisition is where the signup came from, captured at
+	// RegistrationStart and written onto the org once it exists at confirm.
+	// Omitted when the signup carried nothing, which is most of them.
+	Acquisition *OrgAcquisition `json:"acquisition,omitempty"`
 }

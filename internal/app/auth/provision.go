@@ -13,6 +13,7 @@ import (
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/analytics"
 	"github.com/warmbly/warmbly/internal/pkg/signuprisk"
 )
 
@@ -30,7 +31,17 @@ type SignupOrigin struct {
 	UserAgent string
 }
 
-func (s *authService) createAccount(ctx context.Context, address, passwordHash, referralCode, invite string, origin SignupOrigin) (*models.User, *errx.Error) {
+// SignupAttribution is everything the signup link carried: who sent the person
+// (a referral code or a team invitation) and where they came from. All three
+// are captured at RegistrationStart, held on the registration session across
+// the emailed code, and applied once the account and its organization exist.
+type SignupAttribution struct {
+	ReferralCode string
+	Invite       string
+	Acquisition  models.OrgAcquisition
+}
+
+func (s *authService) createAccount(ctx context.Context, address, passwordHash string, attr SignupAttribution, origin SignupOrigin) (*models.User, *errx.Error) {
 	email, perr := mail.ParseAddress(address)
 	if perr != nil {
 		return nil, errx.ErrEmail
@@ -39,7 +50,7 @@ func (s *authService) createAccount(ctx context.Context, address, passwordHash, 
 	// Whether the invitation is the only thing that permitted this signup.
 	// When it is, a failed accept cannot fall through to a personal workspace:
 	// that would turn an invite-gated signup into an unrelated account.
-	inviteRequired := s.inviteIsLoadBearing(ctx, invite)
+	inviteRequired := s.inviteIsLoadBearing(ctx, attr.Invite)
 
 	u, xerr := s.userRepository.CreateUser(ctx, email, passwordHash)
 	if xerr != nil {
@@ -57,11 +68,16 @@ func (s *authService) createAccount(ctx context.Context, address, passwordHash, 
 	// workspace, no trial of its own. A token that died between start and
 	// confirm only falls through to a personal org when open registration
 	// would have accepted the signup anyway.
-	if invite != "" && s.organizationService != nil {
-		if _, err := s.organizationService.AcceptInvitation(ctx, invite, u.ID, u.Email); err == nil {
+	if attr.Invite != "" && s.organizationService != nil {
+		if _, err := s.organizationService.AcceptInvitation(ctx, attr.Invite, u.ID, u.Email); err == nil {
 			// An invited account finished signing up just as much as a
-			// self-serve one; it simply joined an existing workspace.
+			// self-serve one; it simply joined an existing workspace. It is
+			// counted here rather than at the end because this path returns
+			// early, and the count cannot move above the invitation check: a
+			// failed invitation either refuses or falls through to a
+			// self-serve signup, and only one of those is a signup.
 			s.notifyOperatorSignup(u, "")
+			s.countSignup(attr, origin)
 			return u, nil
 		}
 		if inviteRequired {
@@ -84,6 +100,17 @@ func (s *authService) createAccount(ctx context.Context, address, passwordHash, 
 		}
 	}
 
+	// Where the workspace came from, written once and never updated.
+	// Best-effort: attribution is a reporting nicety and must never be the
+	// reason a signup fails.
+	if s.acquisition != nil && org != nil && !attr.Acquisition.Empty() {
+		acq := attr.Acquisition
+		acq.OrganizationID = org.ID
+		if err := s.acquisition.RecordOrganizationAcquisition(ctx, &acq); err != nil {
+			errs.CaptureException(err)
+		}
+	}
+
 	// Fold the signup's own risk into the new workspace's posture. A signup
 	// signal alone can only ever reach `watch`, which by definition changes
 	// nothing a customer can feel; it takes several detectors agreeing to
@@ -97,13 +124,22 @@ func (s *authService) createAccount(ctx context.Context, address, passwordHash, 
 		if err := s.trialService.StartFreeTrialWithOrg(ctx, u.ID, org.ID); err != nil {
 			errs.CaptureException(err)
 			// Don't fail registration if trial creation fails
+		} else if s.productAnalytics != nil {
+			// Counted here rather than in the browser because this is where
+			// the trial actually starts; a self-host with billing off never
+			// reaches this line and so never reports one.
+			s.productAnalytics.Capture("trial_started", analytics.Request{
+				IP:        origin.IP,
+				UserAgent: origin.UserAgent,
+				Host:      s.analyticsHost,
+			}, nil)
 		}
 	}
 
 	// Attribute the signup to a referrer if a referral code rode along.
 	// Best-effort: a bad or self-referral code never fails registration.
-	if s.referral != nil && org != nil && referralCode != "" {
-		if xerr := s.referral.AttributeSignup(ctx, referralCode, org.ID, u.ID); xerr != nil {
+	if s.referral != nil && org != nil && attr.ReferralCode != "" {
+		if xerr := s.referral.AttributeSignup(ctx, attr.ReferralCode, org.ID, u.ID); xerr != nil {
 			errs.CaptureException(xerr)
 		}
 	}
@@ -113,8 +149,45 @@ func (s *authService) createAccount(ctx context.Context, address, passwordHash, 
 		workspace = org.Name
 	}
 	s.notifyOperatorSignup(u, workspace)
+	s.countSignup(attr, origin)
 
 	return u, nil
+}
+
+// countSignup records the finished signup in product analytics, carrying the
+// channel it came from and nothing that names the person: no user id, no
+// organization id, no email. The request's address and user agent are only
+// forwarded so PostHog's cookieless hash matches this browser's own events;
+// it deletes both once it has hashed them.
+func (s *authService) countSignup(attr SignupAttribution, origin SignupOrigin) {
+	if s.productAnalytics == nil {
+		return
+	}
+	acq := attr.Acquisition.Normalize()
+	props := map[string]any{}
+	if acq.UTMSource != "" {
+		props["utm_source"] = acq.UTMSource
+	}
+	if acq.UTMMedium != "" {
+		props["utm_medium"] = acq.UTMMedium
+	}
+	if acq.UTMCampaign != "" {
+		props["utm_campaign"] = acq.UTMCampaign
+	}
+	if acq.LandingPath != "" {
+		props["landing_path"] = acq.LandingPath
+	}
+	if acq.ReferrerHost != "" {
+		props["referrer_host"] = acq.ReferrerHost
+	}
+	props["invited"] = attr.Invite != ""
+	props["referred"] = attr.ReferralCode != ""
+
+	s.productAnalytics.Capture("signup_completed", analytics.Request{
+		IP:        origin.IP,
+		UserAgent: origin.UserAgent,
+		Host:      s.analyticsHost,
+	}, props)
 }
 
 // notifyOperatorSignup raises the operator alert for a finished signup. Both

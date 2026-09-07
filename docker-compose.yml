@@ -216,6 +216,11 @@ x-selfhost-env: &selfhost-env
 
 
 
+  # Server-side product analytics, hosted-only. Unset (the default, and what
+  # every self-host has) means no client is built and nothing is ever sent.
+  POSTHOG_KEY: ${POSTHOG_KEY:-}
+  POSTHOG_HOST: ${POSTHOG_HOST:-}
+
 services:
 
   # ─── infrastructure ───────────────────────────────────────────────────
@@ -575,6 +580,11 @@ services:
       # Unset means the dashboard initialises no error reporting and contacts
       # no Sentry host. Point it at your own project to collect browser errors.
       WARMBLY_SENTRY_DSN: ${WARMBLY_SENTRY_DSN:-}
+      # Cookieless product analytics, hosted-only. Unset (the default, and what
+      # every self-host has) means the SDK chunk is never fetched and no
+      # PostHog host is contacted.
+      WARMBLY_POSTHOG_KEY: ${WARMBLY_POSTHOG_KEY:-}
+      WARMBLY_POSTHOG_HOST: ${WARMBLY_POSTHOG_HOST:-}
     depends_on:
       backend: { condition: service_healthy }
 

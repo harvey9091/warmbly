@@ -42,7 +42,11 @@ func (s *authService) RegistrationStart(ctx context.Context, data *AuthData, ori
 	// nothing to confirm: create the account now rather than issuing a code
 	// nobody can receive. Every product surveyed defaults self-host to this.
 	if !s.policy.RequireEmailVerification || !s.mailDelivers {
-		u, err := s.createAccount(ctx, data.Email, passwordHash, data.ReferralCode, data.Invite, origin)
+		u, err := s.createAccount(ctx, data.Email, passwordHash, SignupAttribution{
+			ReferralCode: data.ReferralCode,
+			Invite:       data.Invite,
+			Acquisition:  data.Acquisition,
+		}, origin)
 		if err != nil {
 			return nil, err
 		}
@@ -91,6 +95,12 @@ func (s *authService) RegistrationStart(ctx context.Context, data *AuthData, ori
 		Nonce:        nonce,
 		ReferralCode: data.ReferralCode,
 		Invite:       data.Invite,
+	}
+	// Held across the emailed code so the org created at confirm still knows
+	// which link brought the person here. Normalized now, so the session never
+	// holds an unclamped value a caller supplied.
+	if acq := data.Acquisition.Normalize(); !acq.Empty() {
+		session.Acquisition = &acq
 	}
 
 	if err := s.saveRegistrationSession(ctx, sessionID, session, expiresAt); err != nil {
@@ -147,7 +157,11 @@ func (s *authService) RegistrationConfirm(ctx context.Context, data *ConfirmData
 		return nil, err
 	}
 
-	u, cerr := s.createAccount(ctx, token.Email, sess.PasswordHash, sess.ReferralCode, sess.Invite, origin)
+	attr := SignupAttribution{ReferralCode: sess.ReferralCode, Invite: sess.Invite}
+	if sess.Acquisition != nil {
+		attr.Acquisition = *sess.Acquisition
+	}
+	u, cerr := s.createAccount(ctx, token.Email, sess.PasswordHash, attr, origin)
 	if cerr != nil {
 		return nil, cerr
 	}

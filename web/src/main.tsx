@@ -66,9 +66,12 @@ import NotFound from './app/not-found';
 import { Toaster } from '@/components/ui/toaster';
 
 import { initErrorReporting } from "@/lib/observability";
+import { initProductAnalytics } from "@/lib/productAnalytics";
 
 // Before the first render, so a boot failure is reported too.
 initErrorReporting();
+// Off unless the deployment configured a key; a self-host never loads it.
+initProductAnalytics();
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools"

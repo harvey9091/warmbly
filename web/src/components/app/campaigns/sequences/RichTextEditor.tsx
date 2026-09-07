@@ -49,6 +49,7 @@ import { FormLinkNode } from "./nodes/FormLinkNode";
 import EditorSuggest from "./nodes/EditorSuggest";
 import {
     TOKEN_META,
+    UNSUBSCRIBE_TOKEN,
     cleanFieldName,
     parseToken,
     buildToken,
@@ -65,6 +66,17 @@ function insertToken(editor: Editor, token: string) {
     } else {
         editor.chain().focus().insertContent(token).run();
     }
+}
+
+// Picking the unsubscribe link with text selected links that text instead of
+// dropping a chip, so the copy keeps its own wording. With no selection the
+// chip is inserted and the send path gives it an anchor of its own.
+function insertLinkToken(editor: Editor, token: string) {
+    if (token !== UNSUBSCRIBE_TOKEN || editor.state.selection.empty) {
+        insertToken(editor, token);
+        return;
+    }
+    editor.chain().focus().setLink({ href: token }).run();
 }
 
 export default function RichTextEditor({
@@ -227,7 +239,11 @@ function Toolbar({ editor, variables, links = [] }: { editor: Editor; variables:
                 <Link2Icon className="w-3.5 h-3.5" />
             </Btn>
             <Divider />
-            <VariableMenu onPick={(v) => insertToken(editor, v)} variables={variables} links={links} />
+            <VariableMenu
+                onPick={(v) => (links.includes(v) ? insertLinkToken(editor, v) : insertToken(editor, v))}
+                variables={variables}
+                links={links}
+            />
             <button
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
@@ -276,6 +292,17 @@ function Toolbar({ editor, variables, links = [] }: { editor: Editor; variables:
                             placeholder="https://…"
                             className="h-7 w-56 rounded border border-slate-200 px-2 text-[12px] text-slate-800 outline-none focus:border-sky-400"
                         />
+                        {links.includes(UNSUBSCRIBE_TOKEN) && (
+                            <button
+                                type="button"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => setLinkUrl(UNSUBSCRIBE_TOKEN)}
+                                title="Point this link at the recipient's unsubscribe page"
+                                className="h-7 px-2 inline-flex items-center rounded text-[11.5px] font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                            >
+                                Unsubscribe
+                            </button>
+                        )}
                         <button
                             type="button"
                             onClick={applyLink}

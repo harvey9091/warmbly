@@ -58,6 +58,7 @@ import {
 import SecuritySelect from "@/components/app/emails/SecuritySelect";
 import onboardOAuthStart from "@/lib/api/client/app/emails/onboardOAuthStart";
 import onboardOAuthFinish from "@/lib/api/client/app/emails/onboardOAuthFinish";
+import { capture } from "@/lib/productAnalytics";
 import { finishCloudOAuth, startCloudOAuth } from "@/lib/api/client/app/cloudlink/cloudLink";
 import { useAdoptCloudMailbox, useCloudWorkspaceMailboxes } from "@/lib/api/hooks/app/cloudlink/useCloudLink";
 import useCloudPool from "@/hooks/useCloudPool";
@@ -201,6 +202,7 @@ export default function AddEmailModal() {
                 finishCloudOAuth(data.session).then((inbox) => {
                     qc.invalidateQueries({ queryKey: ["emails", "list"] });
                     qc.invalidateQueries({ queryKey: ["cloud-link"] });
+                    capture("mailbox_connected", { provider: expected.provider, method: "cloud" });
                     user.setAddEmail(false);
                     return inbox;
                 }),
@@ -243,6 +245,7 @@ export default function AddEmailModal() {
             void toast.promise(
                 onboardOAuthFinish(data.code, data.state).then((inbox) => {
                     qc.invalidateQueries({ queryKey: ["emails", "list"] });
+                    capture("mailbox_connected", { provider: expected.provider, method: "oauth" });
                     user.setAddEmail(false);
                     return inbox;
                 }),

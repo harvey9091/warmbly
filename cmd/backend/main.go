@@ -126,6 +126,7 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/notify"
 	"github.com/warmbly/warmbly/internal/observability"
+	productanalytics "github.com/warmbly/warmbly/internal/observability/analytics"
 	"github.com/warmbly/warmbly/internal/pkg/captcha"
 	"github.com/warmbly/warmbly/internal/pkg/emailverify"
 	"github.com/warmbly/warmbly/internal/pkg/encrypt"
@@ -877,6 +878,16 @@ func main() {
 		// external sign-in resolves accounts by email alone, which is only safe
 		// for issuers that control their own email namespace.
 		authService.WireIdentities(repository.NewIdentityRepository(primaryDB.Pool))
+		// Where a signup came from, written onto the new org once it exists.
+		authService.WireAcquisition(organizationRepository)
+
+		// Server-side product analytics. Nil (and therefore off) unless the
+		// operator set POSTHOG_KEY, which no self-host does: the events are
+		// only useful to whoever runs the hosted service. The client is
+		// cookieless and never sends a user id, an org id or an email.
+		productAnalytics := productanalytics.New(cfg.LoadPostHogKey(ctx), config.PostHogHost())
+		authService.WireAnalytics(productAnalytics, analyticsHostFrom(os.Getenv("APP_URL")))
+		stripeService.WireAnalytics(productAnalytics)
 
 		// Generic OIDC. Discovery runs at boot: an unreachable issuer is a
 		// configuration error worth surfacing now rather than as a login button
@@ -2148,6 +2159,22 @@ func main() {
 }
 
 // emailVerifyHeloHost resolves the hostname the pre-send verifier announces in
+// analyticsHostFrom reduces APP_URL to a bare hostname. It is one of the three
+// inputs to PostHog's cookieless hash, and PostHog reduces it further to the
+// registrable root domain, which is what makes a visit to warmbly.com and the
+// signup on app.warmbly.com one visitor.
+func analyticsHostFrom(appURL string) string {
+	appURL = strings.TrimSpace(appURL)
+	if appURL == "" {
+		return ""
+	}
+	u, err := url.Parse(appURL)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	return u.Hostname()
+}
+
 // EHLO/HELO: the explicit setting first, else the host of APP_URL. Returns ""
 // when neither is set, which makes the verifier skip the SMTP probe rather than
 // greet remote servers with a name they will reject.

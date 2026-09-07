@@ -49,7 +49,7 @@ func TestCreateAccountRecordsTheSignupOrigin(t *testing.T) {
 	svc := &authService{userRepository: repo, userService: noopUserService{}}
 
 	origin := SignupOrigin{IP: "203.0.113.5", UserAgent: "Mozilla/5.0 (test)"}
-	if _, err := svc.createAccount(context.Background(), "Ada.Lovelace+signup@gmail.com", "hash", "", "", origin); err != nil {
+	if _, err := svc.createAccount(context.Background(), "Ada.Lovelace+signup@gmail.com", "hash", SignupAttribution{}, origin); err != nil {
 		t.Fatalf("createAccount: %v", err.Message)
 	}
 
@@ -78,7 +78,7 @@ func TestCreateAccountRecordsACleanSignupToo(t *testing.T) {
 	repo := &recordingUserRepo{}
 	svc := &authService{userRepository: repo, userService: noopUserService{}}
 
-	if _, err := svc.createAccount(context.Background(), "ada@acme.com", "hash", "", "", SignupOrigin{IP: "203.0.113.9"}); err != nil {
+	if _, err := svc.createAccount(context.Background(), "ada@acme.com", "hash", SignupAttribution{}, SignupOrigin{IP: "203.0.113.9"}); err != nil {
 		t.Fatalf("createAccount: %v", err.Message)
 	}
 	if repo.recordHits != 1 {

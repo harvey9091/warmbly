@@ -85,9 +85,10 @@ func (s *tasksService) PreviewEmail(ctx context.Context, orgID uuid.UUID, in Ema
 }
 
 // finishBody applies what the send path adds after rendering, in its order:
-// derive the plain part, drop HTML for a plain-text campaign, add the mailbox
-// signature, then the opt-out footer (nil settings skip it). Shared by the
-// preview and the test send so both show what a recipient gets.
+// derive the plain part, drop HTML for a plain-text campaign, turn a
+// hand-placed unsubscribe link into an anchor, add the mailbox signature,
+// then the opt-out footer (nil settings skip it). Shared by the preview and
+// the test send so both show what a recipient gets.
 func finishBody(bodyHTML, bodyPlain string, textOnly bool, account *models.Email, optOut *models.UnsubscribeSettings, unsubURL string) (string, string) {
 	if bodyPlain == "" && bodyHTML != "" {
 		bodyPlain = ExtractPlainTextFromHTML(bodyHTML)
@@ -95,6 +96,12 @@ func finishBody(bodyHTML, bodyPlain string, textOnly bool, account *models.Email
 	if textOnly {
 		bodyHTML = ""
 	}
+	// After the plain part is derived, so plain text keeps the URL it needs.
+	linkText := ""
+	if optOut != nil {
+		linkText = optOut.LinkText
+	}
+	bodyHTML = linkifyUnsubscribeURL(bodyHTML, unsubURL, linkText)
 	if account != nil && account.SignatureSync {
 		if bodyHTML != "" {
 			bodyHTML = AddSignature(bodyHTML, account.SignatureHTML, true)

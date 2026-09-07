@@ -126,6 +126,12 @@ const (
 	UnsubscribeCopyMaxLen       = 300
 )
 
+// UnsubscribeLinkToken is the template token a step places by hand to put the
+// recipient's own opt-out link in its copy. The send path renders it as an
+// anchor in HTML, but plain text has nowhere to hide the address, so preflight
+// looks for it on a plain-text campaign.
+const UnsubscribeLinkToken = "{{.UnsubscribeLink}}"
+
 // UnsubscribeSettings is the workspace default for the in-body opt-out. The
 // List-Unsubscribe header is a per-campaign flag and is not part of this.
 type UnsubscribeSettings struct {

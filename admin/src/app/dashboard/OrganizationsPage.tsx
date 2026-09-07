@@ -125,6 +125,26 @@ const columns: Column<AdminOrgListItem>[] = [
         csv: (o) => o.plan_name || "",
     },
     {
+        id: "channel",
+        header: "Channel",
+        // Where the workspace came from, recorded once at signup. Hidden by
+        // default: most signups are direct and the column would read empty.
+        defaultHidden: true,
+        // "direct" means no acquisition data at all, which is the same thing
+        // the "No acquisition data" filter selects. A row with only a landing
+        // path is not direct, so it shows the path rather than falling through.
+        cell: (o) =>
+            o.utm_source || o.utm_medium || o.utm_campaign || o.landing_path ? (
+                <div className="flex flex-col leading-tight" title={[o.utm_campaign, o.landing_path].filter(Boolean).join(" · ")}>
+                    <span className="text-xs">{o.utm_source || o.landing_path || "—"}</span>
+                    {o.utm_medium && <span className="text-[10px] text-muted-foreground">{o.utm_medium}</span>}
+                </div>
+            ) : (
+                <span className="text-xs text-muted-foreground">direct</span>
+            ),
+        csv: (o) => [o.utm_source, o.utm_medium, o.utm_campaign, o.landing_path].filter(Boolean).join(" | "),
+    },
+    {
         id: "posture",
         header: "Posture",
         cell: (o) =>
@@ -208,6 +228,12 @@ export default function OrganizationsPage() {
     const [ownerBanned, setOwnerBanned] = useState(false);
     const [hasActiveCampaigns, setHasActiveCampaigns] = useState(false);
     const [hasEmailAccounts, setHasEmailAccounts] = useState(false);
+    // Acquisition channel. utmSource/utmMedium match exactly; the two toggles
+    // split "arrived through a tagged link" from "came in directly".
+    const [utmSource, setUtmSource] = useState("");
+    const [utmMedium, setUtmMedium] = useState("");
+    const [hasAcquisition, setHasAcquisition] = useState(false);
+    const [noAcquisition, setNoAcquisition] = useState(false);
     // Count ranges
     const [memMin, setMemMin] = useState<number | undefined>();
     const [memMax, setMemMax] = useState<number | undefined>();
@@ -234,6 +260,7 @@ export default function OrganizationsPage() {
     const filterKey = JSON.stringify({
         query, status, planId, visibility, subStatus, enterprise, hasOverrides, risk, cancelAtPeriodEnd,
         hasActiveSubscription, noSubscription, ownerBanned, hasActiveCampaigns, hasEmailAccounts,
+        utmSource, utmMedium, hasAcquisition, noAcquisition,
         memMin, memMax, mbMin, mbMax, campMin, campMax, created, trialEnd, periodEnd, updated, sort,
     });
 
@@ -260,6 +287,10 @@ export default function OrganizationsPage() {
                 owner_banned: ownerBanned || undefined,
                 has_active_campaigns: hasActiveCampaigns || undefined,
                 has_email_accounts: hasEmailAccounts || undefined,
+                utm_source: utmSource.trim() || undefined,
+                utm_medium: utmMedium.trim() || undefined,
+                has_acquisition: hasAcquisition || undefined,
+                no_acquisition: noAcquisition || undefined,
                 member_count_min: memMin,
                 member_count_max: memMax,
                 email_account_count_min: mbMin,
@@ -286,7 +317,7 @@ export default function OrganizationsPage() {
 
     const rows = data?.data ?? [];
 
-    const bools = [enterprise, hasOverrides, cancelAtPeriodEnd, hasActiveSubscription, noSubscription, ownerBanned, hasActiveCampaigns, hasEmailAccounts];
+    const bools = [enterprise, hasOverrides, cancelAtPeriodEnd, hasActiveSubscription, noSubscription, ownerBanned, hasActiveCampaigns, hasEmailAccounts, hasAcquisition, noAcquisition];
     const ranges = [[memMin, memMax], [mbMin, mbMax], [campMin, campMax]];
     const activeCount =
         (query ? 1 : 0) +
@@ -295,6 +326,8 @@ export default function OrganizationsPage() {
         (visibility ? 1 : 0) +
         (subStatus ? 1 : 0) +
         (risk ? 1 : 0) +
+        (utmSource ? 1 : 0) +
+        (utmMedium ? 1 : 0) +
         bools.filter(Boolean).length +
         ranges.filter(([a, b]) => a !== undefined || b !== undefined).length +
         [created, trialEnd, periodEnd, updated].filter(rangeActive).length +
@@ -314,6 +347,10 @@ export default function OrganizationsPage() {
         setOwnerBanned(false);
         setHasActiveCampaigns(false);
         setHasEmailAccounts(false);
+        setUtmSource("");
+        setUtmMedium("");
+        setHasAcquisition(false);
+        setNoAcquisition(false);
         setMemMin(undefined);
         setMemMax(undefined);
         setMbMin(undefined);
@@ -388,6 +425,27 @@ export default function OrganizationsPage() {
                         </FilterGroup>
                         <FilterGroup label="Signed up">
                             <DateRangeFilter value={created} onChange={setCreated} />
+                        </FilterGroup>
+                        <FilterGroup label="Acquisition channel">
+                            <SearchFilter value={utmSource} onChange={setUtmSource} placeholder="utm_source…" />
+                            <div className="mt-2">
+                                <SearchFilter value={utmMedium} onChange={setUtmMedium} placeholder="utm_medium…" />
+                            </div>
+                            <div className="mt-2 flex flex-col gap-2">
+                                {/* Mutually exclusive: the backend resolves both-at-once
+                                    by ignoring one, which would leave a filter switched
+                                    on that is doing nothing. */}
+                                <ToggleFilter
+                                    checked={hasAcquisition}
+                                    onChange={(v) => { setHasAcquisition(v); if (v) setNoAcquisition(false); }}
+                                    label="Has acquisition data"
+                                />
+                                <ToggleFilter
+                                    checked={noAcquisition}
+                                    onChange={(v) => { setNoAcquisition(v); if (v) setHasAcquisition(false); }}
+                                    label="No acquisition data (direct)"
+                                />
+                            </div>
                         </FilterGroup>
                         <FilterGroup label="Flags">
                             <div className="flex flex-col gap-2">

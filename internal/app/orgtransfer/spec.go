@@ -111,6 +111,11 @@ const (
 var Tables = []Table{
 	// ---------- core: the workspace itself ----------
 	{
+		Name: "organization_acquisition", Group: models.OrgDataGroupCore,
+		Scope: scopeOrg,
+		Note:  "Where the workspace came from, recorded once at signup. It travels because it is the workspace's own record; the destination never rewrites it.",
+	},
+	{
 		Name: "organization_roles", Group: models.OrgDataGroupCore,
 		Scope: scopeOrg,
 	},

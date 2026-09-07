@@ -113,6 +113,13 @@ type OrganizationRepository interface {
 	ListLimitRequestsForOrg(ctx context.Context, orgID uuid.UUID) ([]models.LimitIncreaseRequest, error)
 	ListLimitRequestsForAdmin(ctx context.Context, search *models.AdminLimitRequestSearch) (*models.AdminLimitRequestsResult, error)
 	UpdateLimitRequestStatus(ctx context.Context, id uuid.UUID, status models.LimitRequestStatus, reviewedBy uuid.UUID, notes string) error
+
+	// Acquisition: where the workspace came from, written once at signup.
+	// The write is ON CONFLICT DO NOTHING because the record is a fact about
+	// the signup, not a mutable setting: a later visit through a different
+	// campaign must not rewrite where the account actually came from.
+	RecordOrganizationAcquisition(ctx context.Context, acq *models.OrgAcquisition) error
+	GetOrganizationAcquisition(ctx context.Context, orgID uuid.UUID) (*models.OrgAcquisition, error)
 }
 
 type organizationRepository struct {
@@ -749,7 +756,13 @@ const adminOrgListColumns = `
 	(SELECT COUNT(*) FROM email_accounts ea WHERE ea.organization_id = o.id) AS email_account_count,
 	(SELECT COUNT(*) FROM campaigns c WHERE c.organization_id = o.id) AS campaign_count,
 	(SELECT COUNT(*) FROM campaigns c WHERE c.organization_id = o.id AND c.status = 'active') AS active_campaigns,
-	o.risk_state`
+	o.risk_state,
+	oa.utm_source, oa.utm_medium, oa.utm_campaign, oa.landing_path`
+
+// adminOrgAcquisitionJoin brings in the signup channel. LEFT because most
+// workspaces have no row: a direct signup carries nothing to record.
+const adminOrgAcquisitionJoin = `
+		LEFT JOIN organization_acquisition oa ON oa.organization_id = o.id`
 
 // SearchOrganizationsForAdmin lists orgs for the admin panel with cursor
 // pagination. The cursor is the last seen org id; rows are returned in
@@ -854,6 +867,29 @@ func (r *organizationRepository) SearchOrganizationsForAdmin(ctx context.Context
 		where += ` AND u.banned_at IS NOT NULL`
 	}
 
+	// Acquisition channel
+	addChannel := func(col, v string) {
+		if v == "" {
+			return
+		}
+		where += ` AND oa.` + col + ` = $` + itoa(argNum)
+		args = append(args, v)
+		argNum++
+	}
+	addChannel("utm_source", search.UTMSource)
+	addChannel("utm_medium", search.UTMMedium)
+	addChannel("utm_campaign", search.UTMCampaign)
+	// Presence of a record, not presence of a UTM tag: a signup that came from
+	// a marketing page with no campaign parameters still has a landing path,
+	// and calling that "direct" would be wrong. The admin panel's labels and
+	// its Channel column use the same definition (models.AdminOrgSearch).
+	// Mutually exclusive; both set applies only HasAcquisition.
+	if search.HasAcquisition {
+		where += ` AND oa.organization_id IS NOT NULL`
+	} else if search.NoAcquisition {
+		where += ` AND oa.organization_id IS NULL`
+	}
+
 	// Relationship existence
 	if search.HasActiveCampaigns {
 		where += ` AND EXISTS (SELECT 1 FROM campaigns c WHERE c.organization_id = o.id AND c.status = 'active')`
@@ -913,7 +949,7 @@ func (r *organizationRepository) SearchOrganizationsForAdmin(ctx context.Context
 		FROM organizations o
 		JOIN users u ON u.id = o.owner_user_id
 		LEFT JOIN subscriptions s ON s.organization_id = o.id
-		LEFT JOIN plans p ON p.id = s.plan_id
+		LEFT JOIN plans p ON p.id = s.plan_id` + adminOrgAcquisitionJoin + `
 		` + where + `
 		` + orderBy + `
 		LIMIT $` + itoa(argNum)
@@ -936,6 +972,7 @@ func (r *organizationRepository) SearchOrganizationsForAdmin(ctx context.Context
 			&item.CreatedAt, &item.DeletionScheduledFor,
 			&item.MemberCount, &item.EmailAccountCount, &item.CampaignCount, &item.ActiveCampaigns,
 			&item.RiskState,
+			&item.UTMSource, &item.UTMMedium, &item.UTMCampaign, &item.LandingPath,
 			&planName, &planPublic, &isEnterprise,
 		); err != nil {
 			return nil, err
@@ -957,7 +994,7 @@ func (r *organizationRepository) SearchOrganizationsForAdmin(ctx context.Context
 	}
 
 	// Total count for the same filter — drop the trailing LIMIT arg.
-	countQuery := `SELECT COUNT(*) FROM organizations o JOIN users u ON u.id = o.owner_user_id LEFT JOIN subscriptions s ON s.organization_id = o.id LEFT JOIN plans p ON p.id = s.plan_id ` + where
+	countQuery := `SELECT COUNT(*) FROM organizations o JOIN users u ON u.id = o.owner_user_id LEFT JOIN subscriptions s ON s.organization_id = o.id LEFT JOIN plans p ON p.id = s.plan_id` + adminOrgAcquisitionJoin + ` ` + where
 	var total int64
 	if err := r.db.QueryRow(ctx, countQuery, args[:len(args)-1]...).Scan(&total); err == nil {
 		result.Pagination.Total = &total
@@ -977,7 +1014,7 @@ func (r *organizationRepository) GetOrganizationAdminDetail(ctx context.Context,
 		FROM organizations o
 		JOIN users u ON u.id = o.owner_user_id
 		LEFT JOIN subscriptions s ON s.organization_id = o.id
-		LEFT JOIN plans p ON p.id = s.plan_id
+		LEFT JOIN plans p ON p.id = s.plan_id` + adminOrgAcquisitionJoin + `
 		WHERE o.id = $1`
 
 	var detail models.AdminOrgDetail
@@ -988,6 +1025,7 @@ func (r *organizationRepository) GetOrganizationAdminDetail(ctx context.Context,
 		&detail.CreatedAt, &detail.DeletionScheduledFor,
 		&detail.MemberCount, &detail.EmailAccountCount, &detail.CampaignCount, &detail.ActiveCampaigns,
 		&detail.RiskState,
+		&detail.UTMSource, &detail.UTMMedium, &detail.UTMCampaign, &detail.LandingPath,
 		&detail.UpdatedAt, &detail.DeletionScheduledAt,
 		&detail.PlanName, &detail.SubscriptionStatus, &isEnterprise, &detail.CurrentPeriodEnd, &detail.TrialEnd,
 	)
@@ -1376,4 +1414,60 @@ func (r *organizationRepository) UpdateLimitRequestStatus(ctx context.Context, i
 		WHERE id = $1`
 	_, err := r.db.Exec(ctx, query, id, status, reviewedBy, notes)
 	return err
+}
+
+// RecordOrganizationAcquisition stores where a signup came from. First write
+// wins: the row is the account's origin, and nothing later changes it.
+func (r *organizationRepository) RecordOrganizationAcquisition(ctx context.Context, acq *models.OrgAcquisition) error {
+	if acq == nil {
+		return nil
+	}
+	n := acq.Normalize()
+	if n.Empty() {
+		return nil
+	}
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO organization_acquisition (
+			organization_id, landing_path, referrer_host,
+			utm_source, utm_medium, utm_campaign, utm_term, utm_content
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (organization_id) DO NOTHING`,
+		acq.OrganizationID,
+		nullIfEmpty(n.LandingPath), nullIfEmpty(n.ReferrerHost),
+		nullIfEmpty(n.UTMSource), nullIfEmpty(n.UTMMedium), nullIfEmpty(n.UTMCampaign),
+		nullIfEmpty(n.UTMTerm), nullIfEmpty(n.UTMContent),
+	)
+	return err
+}
+
+// GetOrganizationAcquisition returns nil when the signup carried nothing,
+// which is the normal case for a direct visit.
+func (r *organizationRepository) GetOrganizationAcquisition(ctx context.Context, orgID uuid.UUID) (*models.OrgAcquisition, error) {
+	acq := &models.OrgAcquisition{OrganizationID: orgID}
+	var landingPath, referrerHost, source, medium, campaign, term, content *string
+	err := r.db.QueryRow(ctx, `
+		SELECT landing_path, referrer_host, utm_source, utm_medium, utm_campaign, utm_term, utm_content
+		FROM organization_acquisition WHERE organization_id = $1`, orgID).
+		Scan(&landingPath, &referrerHost, &source, &medium, &campaign, &term, &content)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	acq.LandingPath = derefString(landingPath)
+	acq.ReferrerHost = derefString(referrerHost)
+	acq.UTMSource = derefString(source)
+	acq.UTMMedium = derefString(medium)
+	acq.UTMCampaign = derefString(campaign)
+	acq.UTMTerm = derefString(term)
+	acq.UTMContent = derefString(content)
+	return acq, nil
+}
+
+func derefString(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }

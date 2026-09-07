@@ -541,6 +541,12 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 		bodyHTML = ""
 	}
 
+	// STEP 10.7: A hand-placed {{.UnsubscribeLink}} resolved to the bare signed
+	// URL; give it an anchor so the recipient reads "Unsubscribe" and not the
+	// API address (issue #341). After the plain part was derived, so plain text
+	// keeps the URL it needs, and before tracking, which leaves it alone.
+	bodyHTML = linkifyUnsubscribeURL(bodyHTML, unsubscribeURL, optOut.LinkText)
+
 	// STEP 10.75: Score the copy the recipient will actually receive, after
 	// merge fields, spintax, A/B and AI blocks have resolved. Advisory: it
 	// warns once per step and never blocks or delays the send.

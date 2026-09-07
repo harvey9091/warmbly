@@ -38,8 +38,9 @@ import useCreateTemplate from "@/lib/api/hooks/app/templates/useCreateTemplate";
 import { useConfirm } from "@/hooks/context/confirm";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
-import { VARIABLES, htmlToPlain, promptToHtml, renderPreview, templateIssue } from "./emailPreview";
-import { LINK_VARIABLES } from "@/lib/templateVars";
+import { VARIABLES, htmlToPlain, linkifyUnsubscribe, promptToHtml, renderPreview, templateIssue } from "./emailPreview";
+import { LINK_VARIABLES, UNSUBSCRIBE_TOKEN } from "@/lib/templateVars";
+import useCampaign from "@/lib/api/hooks/app/campaigns/useCampaign";
 
 export default function EmailContentEditor({
     subject,
@@ -125,6 +126,14 @@ export default function EmailContentEditor({
     }, [tab, subject, bodyHtml, previewContact?.id, campaignId, previewMailbox?.id, stepId]);
 
     const tplIssue = templateIssue(subject) || templateIssue(bodyHtml) || templateIssue(htmlToPlain(bodyHtml));
+
+    // A plain-text campaign ships no HTML, so the send path cannot give the
+    // unsubscribe variable an anchor: the recipient reads the whole signed
+    // address. Preflight says the same at launch; say it here, while it is
+    // still one keystroke to fix.
+    const { data: previewCampaign } = useCampaign(campaignId ?? "");
+    const plainTextUnsubLink =
+        !!previewCampaign?.text_only && (bodyHtml.includes(UNSUBSCRIBE_TOKEN) || subject.includes(UNSUBSCRIBE_TOKEN));
 
     // Toolbar: template library, save as template, write with AI.
     const { data: templates } = useTemplates("");
@@ -280,7 +289,7 @@ export default function EmailContentEditor({
                             className="tiptap-body min-h-[200px] px-3 py-2.5 text-[13px] leading-relaxed text-slate-800"
                             dangerouslySetInnerHTML={{
                                 __html:
-                                    (serverPreview?.body_html ?? renderPreview(bodyHtml)) ||
+                                    (serverPreview?.body_html ?? linkifyUnsubscribe(renderPreview(bodyHtml))) ||
                                     (serverPreview?.body_plain
                                         ? `<pre class="whitespace-pre-wrap font-sans">${escapeHtml(serverPreview.body_plain)}</pre>`
                                         : '<p class="text-slate-300">Nothing to preview yet.</p>'),
@@ -321,6 +330,16 @@ export default function EmailContentEditor({
                         {tplIssue} It&apos;ll fall back to plain text — fix it before sending.
                     </p>
                 ) : null}
+                {plainTextUnsubLink && (
+                    <p className="mt-1.5 flex items-start gap-1.5 text-[11px] text-amber-600">
+                        <AlertCircleIcon className="mt-px w-3.5 h-3.5 shrink-0" />
+                        <span>
+                            This campaign sends plain text only, so the unsubscribe link cannot render as a word and the
+                            recipient reads its whole address. Leave the unsubscribe header on and invite a reply
+                            instead, or turn plain text off in Preferences.
+                        </span>
+                    </p>
+                )}
                 {(serverPreview?.unresolved?.length ?? 0) > 0 && (
                     <p className="mt-1.5 flex items-start gap-1.5 text-[11px] text-amber-600">
                         <AlertCircleIcon className="mt-px w-3.5 h-3.5 shrink-0" />

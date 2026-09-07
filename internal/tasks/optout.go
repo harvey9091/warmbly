@@ -61,3 +61,94 @@ func appendOptOut(bodyHTML, bodyPlain string, settings models.UnsubscribeSetting
 	}
 	return bodyHTML, bodyPlain
 }
+
+// linkifyUnsubscribeURL turns a hand-placed {{.UnsubscribeLink}} into a real
+// link. The variable resolves to the recipient's signed URL, so a token
+// dropped into prose ships as the bare API address (issue #341); this wraps
+// every loose occurrence in an anchor labelled with the workspace's
+// unsubscribe link text instead. A URL the author already put in an
+// attribute (their own <a href>) is inside a tag and left untouched, and one
+// sitting as the text of an existing anchor becomes that anchor's label
+// rather than a nested link.
+func linkifyUnsubscribeURL(bodyHTML, linkURL, linkText string) string {
+	if bodyHTML == "" || linkURL == "" || !strings.Contains(bodyHTML, linkURL) {
+		return bodyHTML
+	}
+	label := html.EscapeString(strings.TrimSpace(linkText))
+	if label == "" {
+		label = models.DefaultUnsubscribeLinkText
+	}
+	anchor := `<a href="` + html.EscapeString(linkURL) + `">` + label + `</a>`
+
+	var b strings.Builder
+	b.Grow(len(bodyHTML) + len(anchor))
+	depth := 0 // open <a> elements around the current text node
+	for i := 0; i < len(bodyHTML); {
+		if bodyHTML[i] == '<' {
+			end := tagEnd(bodyHTML[i:])
+			if end < 0 {
+				b.WriteString(bodyHTML[i:]) // unterminated tag: copy the rest verbatim
+				break
+			}
+			tag := bodyHTML[i : i+end+1]
+			switch {
+			case isTagStart(tag, "a"):
+				depth++
+			case isTagStart(tag, "/a"):
+				if depth > 0 {
+					depth--
+				}
+			}
+			b.WriteString(tag)
+			i += end + 1
+			continue
+		}
+		stop := len(bodyHTML)
+		if next := strings.IndexByte(bodyHTML[i:], '<'); next >= 0 {
+			stop = i + next
+		}
+		with := anchor
+		if depth > 0 {
+			with = label
+		}
+		b.WriteString(strings.ReplaceAll(bodyHTML[i:stop], linkURL, with))
+		i = stop
+	}
+	return b.String()
+}
+
+// tagEnd returns the index of the '>' that closes the tag starting at s[0], or
+// -1 when there is none. A '>' inside a quoted attribute value does not close
+// anything: reading one as the end split `<a title="x > y" href="URL">` into a
+// tag and a run of text, and the href in that "text" was then rewritten into a
+// dead link.
+func tagEnd(s string) int {
+	var quote byte
+	for i := 1; i < len(s); i++ {
+		switch c := s[i]; {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '>':
+			return i
+		}
+	}
+	return -1
+}
+
+// isTagStart reports whether tag (a full "<...>" slice) is the named tag,
+// case-insensitively: isTagStart(`<A HREF="x">`, "a") and
+// isTagStart("</A>", "/a") are both true.
+func isTagStart(tag, name string) bool {
+	if len(tag) < len(name)+2 || !strings.EqualFold(tag[1:1+len(name)], name) {
+		return false
+	}
+	switch c := tag[1+len(name)]; c {
+	case '>', '/', ' ', '\t', '\n', '\r', '\f':
+		return true
+	}
+	return false
+}

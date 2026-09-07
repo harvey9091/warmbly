@@ -223,6 +223,14 @@ Set one and that service reports to whatever Sentry Cloud project, self-hosted S
 
 The `warmbly` CLI runs on your own machine and reports nowhere, ever. It has no DSN to set.
 
+### Usage analytics
+
+There are none. A self-hosted instance loads no analytics script and sends no usage data, not aggregated, not anonymised, not "to help us improve the product".
+
+The hosted service at warmbly.com does measure its own marketing site and dashboard, and the code for that ships in the same images you run. It is inert without a key: the installer never asks for one, the `.env` template does not mention it, and a build without one contains no analytics script for you to block. If you want to check, `grep posthog` the served assets of your own dashboard.
+
+If you do want product analytics on your own instance, the variables are on [configuration](/development/configuration/#product-analytics) and they accept a self-hosted PostHog. That is your decision to make, and nothing about it points at us.
+
 ## See also
 
 - [Install](/development/install/): the wizard that asks all of this up front

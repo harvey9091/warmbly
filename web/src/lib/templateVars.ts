@@ -22,15 +22,20 @@ export const STANDARD_VARS: TemplateVar[] = [
     { token: "{{.Phone}}", key: "Phone", label: "Phone", desc: "The contact's phone number", sample: "+1 555-0100" },
 ];
 
+// The recipient's opt-out link. Named because the editor treats it specially:
+// applied to a text selection it becomes that text's href, so the copy can say
+// what it likes and the signed URL never shows.
+export const UNSUBSCRIBE_TOKEN = "{{.UnsubscribeLink}}";
+
 // Per-send values that are not contact fields. Only campaign email bodies
 // resolve these (template.go RenderTemplateWith); a deal name or automation
 // value has no recipient link to offer.
 export const LINK_VARS: TemplateVar[] = [
     {
-        token: "{{.UnsubscribeLink}}",
+        token: UNSUBSCRIBE_TOKEN,
         key: "UnsubscribeLink",
         label: "Unsubscribe link",
-        desc: "This recipient's own unsubscribe link. Use it to place the opt-out in your copy instead of the footer line",
+        desc: "This recipient's own unsubscribe link, rendered as a link labelled with your unsubscribe link text. Use it to place the opt-out in your copy instead of the footer line",
         sample: "https://example.com/unsubscribe/preview",
     },
 ];
@@ -140,10 +145,24 @@ export function upgradeVariableTokens(html: string): string {
         html.includes("data-form-link")
     )
         return html;
-    return html
-        .replace(FIELD_TOKEN_RE, (tok) => {
-            const esc = tok.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-            return `<span data-var="">${esc}</span>`;
-        })
-        .replace(FORM_LINK_RE, (tok, publicId: string) => `<span data-form-link="${publicId}">${tok}</span>`);
+    // Text nodes only. A token can legitimately live in an attribute (an
+    // <a href="{{.UnsubscribeLink}}"> the author wrote), and wrapping that one
+    // in a span would break the tag.
+    return html.replace(HTML_CHUNK_RE, (chunk) =>
+        chunk.startsWith("<")
+            ? chunk
+            : chunk
+                  .replace(FIELD_TOKEN_RE, (tok) => {
+                      const esc = tok.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                      return `<span data-var="">${esc}</span>`;
+                  })
+                  .replace(FORM_LINK_RE, (tok, publicId: string) => `<span data-form-link="${publicId}">${tok}</span>`),
+    );
 }
+
+// HTML_CHUNK_RE splits a body into alternating tags and text runs. A tag ends
+// at the first ">" OUTSIDE a quoted attribute value, so `<a title="x > y"
+// href="…">` stays one tag: reading the quoted ">" as the end split the tag and
+// let the href be treated as text. A stray "<" matches on its own and is left
+// alone rather than swallowing the rest of the body.
+export const HTML_CHUNK_RE = /<(?:"[^"]*"|'[^']*'|[^>"'])*>|[^<]+|</g;

@@ -18,6 +18,10 @@ export const SENTRY_ENVIRONMENT = runtimeEnv("SENTRY_ENVIRONMENT", import.meta.e
 // release the source maps were uploaded under, and a container variable set
 // after the bundle was built could not.
 export const SENTRY_RELEASE = import.meta.env.VITE_SENTRY_RELEASE ?? "";
+// Cookieless product analytics, hosted-only. Empty means the SDK is never
+// loaded and no PostHog host is contacted. See lib/productAnalytics.
+export const POSTHOG_KEY = runtimeEnv("POSTHOG_KEY", import.meta.env.VITE_POSTHOG_KEY);
+export const POSTHOG_HOST = runtimeEnv("POSTHOG_HOST", import.meta.env.VITE_POSTHOG_HOST, "https://eu.i.posthog.com");
 export const HUMAN_VERIFICATION_FAIL = "We couldn’t verify you’re human. Please try the security check again or reload the page.";
 export const PASSWORD_FAIL = "The password must be at least 8 characters long and contain both uppercase and lowercase letters, as well as a number."
 export const TOKEN_KEY = "auth_token";

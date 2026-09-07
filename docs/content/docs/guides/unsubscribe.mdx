@@ -21,7 +21,17 @@ The wording of the sentence and of the link text is yours to change.
 
 **Unsubscribe link** is the right choice when your list skews toward consumers, when your legal team asks for a link, or when your volume is high enough that provider bulk-sender rules apply. The link is unique to the recipient and campaign, signed so it cannot be guessed or altered, and valid for a year after the send. Clicking it opens a plain confirmation page with one button. Nothing happens until the button is pressed, because link scanners and preview fetchers follow every link in an email. The page then offers a way back for anyone who unsubscribed by mistake.
 
-You can also place the link inside your own copy instead of the footer: insert the **Unsubscribe link** variable from the variable menu, or type `{{.UnsubscribeLink}}`. Click tracking never rewrites it, so an opt-out is never counted as a click.
+You can also place the link inside your own copy instead of the footer: insert the **Unsubscribe link** variable from the variable menu, or type `{{.UnsubscribeLink}}`.
+
+Dropped into your copy on its own, the variable becomes a real link in the HTML message, labelled with the same **Link text** the footer uses ("Unsubscribe" by default). The recipient reads a word, not the signed address. To choose the wording yourself, select the text first and then pick **Unsubscribe link** from the variable menu, or press the link button and use the **Unsubscribe** shortcut next to the address field: the selected text becomes the link and Warmbly fills in the address at send time.
+
+Two things follow from that. The plain-text alternative of the message has nowhere to hide a URL, so it carries the address in full when you place the variable on its own, and only your wording when you wrap your own link around it. And click tracking never rewrites the link either way, so an opt-out is never counted as a click.
+
+### Plain-text campaigns
+
+A campaign with **Plain text only** switched on ships no HTML at all, so there is nothing for a link to hide inside: link mode and a hand-placed variable both print the full signed address in the copy, which is the one place a cold email least wants a long tracking-shaped URL. The composer warns while you are writing and the launch check warns again before you start.
+
+The answer there is the header. It is not visible copy, it works the same on a plain-text send, and it is what Gmail and Yahoo actually look for. Leave **Unsubscribe header** on, leave the opt-out line as the reply sentence, and the recipient gets a one-click control in their mail client plus a human sentence in the message.
 
 ## The List-Unsubscribe header
 

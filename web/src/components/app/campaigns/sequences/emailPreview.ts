@@ -6,7 +6,7 @@
 // The standard merge fields and their sample values live in one catalog
 // (@/lib/templateVars); imported for local use (renderPreview's default context)
 // and re-exported so existing imports keep working.
-import { VARIABLES, SAMPLE } from "@/lib/templateVars";
+import { VARIABLES, SAMPLE, HTML_CHUNK_RE } from "@/lib/templateVars";
 export { VARIABLES, SAMPLE };
 
 // Derive plain text from the editor HTML so both alternatives ship populated.
@@ -137,6 +137,25 @@ export function renderPreview(s: string, ctx: PreviewCtx = SAMPLE): string {
     out = out.replace(/\{\{\s*\.([A-Za-z0-9_]+)\s*\}\}/g, (_, k: string) => ctx[k] ?? "");
     out = out.replace(/\{([^{}|]+(?:\|[^{}]+)+)\}/g, (_, g: string) => g.split("|")[0]);
     return out;
+}
+
+// linkifyUnsubscribe mirrors the send path (internal/tasks/optout.go): the
+// unsubscribe variable resolves to a signed URL a recipient should never have
+// to read, so a loose one in the body becomes an anchor. Only the local
+// fallback preview needs this; a server preview arrives already linkified. An
+// occurrence the author put in their own <a href> sits inside a tag and is
+// left alone, and one used as an anchor's text becomes that anchor's label.
+export function linkifyUnsubscribe(html: string, url: string = SAMPLE.UnsubscribeLink, text = "Unsubscribe"): string {
+    if (!url || !html.includes(url)) return html;
+    let depth = 0;
+    return html.replace(HTML_CHUNK_RE, (chunk) => {
+        if (chunk.startsWith("<")) {
+            if (/^<a[\s/>]/i.test(chunk)) depth++;
+            else if (/^<\/a[\s>]/i.test(chunk)) depth = Math.max(0, depth - 1);
+            return chunk;
+        }
+        return chunk.split(url).join(depth > 0 ? text : `<a href="${url}">${text}</a>`);
+    });
 }
 
 // templateIssue returns a friendly message when a template is obviously

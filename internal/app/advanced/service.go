@@ -1774,6 +1774,13 @@ func (s *service) RunPreflight(ctx context.Context, organizationID, campaignID u
 		checks = append(checks, check)
 	}
 
+	// A plain-text campaign has no HTML for an anchor to hide a URL in, so an
+	// in-body opt-out link prints its whole signed address in the copy. The
+	// List-Unsubscribe header does the same job and the reader never sees it.
+	if settings.Preflight.CheckUnsubscribeHeader && campaign.TextOnly {
+		checks = append(checks, s.plainTextOptOutCheck(ctx, campaign, settings.Unsubscribe, &recommendations))
+	}
+
 	if settings.Preflight.CheckTrackingDomain && (campaign.OpenTracking || campaign.LinkTracking) {
 		// The same pool the scheduler sends from (explicit senders, tags, or
 		// every active mailbox when neither is picked), so a campaign on the
@@ -2046,6 +2053,89 @@ func worstStepContentScore(seqs []models.Sequence, attachmentsFor func(models.Se
 		}
 	}
 	return worst, worstStep, issue, scored
+}
+
+// plainTextOptOutCheck reports whether a plain-text-only campaign is putting the
+// opt-out link in the body. Link mode is decided by the settings alone; only a
+// hand-placed variable needs the steps, and a step list it could not read
+// reports as FAILED, not passed, like every other check that cannot run.
+func (s *service) plainTextOptOutCheck(ctx context.Context, campaign *models.Campaign, unsub models.UnsubscribeSettings, recommendations *[]string) models.PreflightCheckResult {
+	where := ""
+	if unsub.Effective(campaign.UnsubscribeMode).Mode == models.UnsubscribeModeLink {
+		where = "the opt-out line is set to Unsubscribe link"
+	} else {
+		seqs, err := s.campaignRepo.GetSequencesByCampaignID(ctx, campaign.ID)
+		if err != nil {
+			*recommendations = append(*recommendations, "Re-run preflight; the campaign's steps could not be read.")
+			return models.PreflightCheckResult{
+				Key:         "plain_text_opt_out",
+				Passed:      false,
+				Severity:    "warning",
+				Message:     "Could not read the campaign's steps to check what its opt-out puts in the copy.",
+				Remediation: "Re-run preflight.",
+			}
+		}
+		where = stepPlacingUnsubscribeLink(seqs)
+	}
+
+	check := plainTextOptOutResult(where)
+	if !check.Passed {
+		*recommendations = append(*recommendations, "On a plain-text campaign, let the unsubscribe header carry the opt-out instead of a link in the body.")
+	}
+	return check
+}
+
+// stepPlacingUnsubscribeLink names the first email step whose SHIPPED copy
+// carries the {{.UnsubscribeLink}} variable, or "" when none does. A plain-text
+// campaign sends body_plain, falling back to the text of body_html, so a token
+// that only ever appears in an HTML attribute (the author's own <a href>) never
+// reaches the recipient and is not worth warning about.
+func stepPlacingUnsubscribeLink(seqs []models.Sequence) string {
+	// Named, not numbered: `position` is 0-based on some campaigns and 1-based
+	// on others, so a number computed from it would point at the wrong step.
+	// The list arrives in builder order, so the index is the honest fallback
+	// when a step has no name.
+	for i, seq := range seqs {
+		if seq.Kind != "" && seq.Kind != "email" {
+			continue
+		}
+		body := seq.BodyPlain
+		if strings.TrimSpace(body) == "" {
+			body = htmlTagRE.ReplaceAllString(seq.BodyHTML, "")
+		}
+		if !strings.Contains(seq.Subject, models.UnsubscribeLinkToken) && !strings.Contains(body, models.UnsubscribeLinkToken) {
+			continue
+		}
+		if name := strings.TrimSpace(seq.Name); name != "" {
+			return fmt.Sprintf("the step %q places the unsubscribe link variable", name)
+		}
+		return fmt.Sprintf("step %d places the unsubscribe link variable", i+1)
+	}
+	return ""
+}
+
+// htmlTagRE strips tags to leave the text a plain-text send actually carries.
+// The send path derives its plain part the same way (tasks.ExtractPlainTextFromHTML),
+// which this package cannot call: tasks imports advanced.
+var htmlTagRE = regexp.MustCompile(`(?s)<[^>]*>`)
+
+// plainTextOptOutResult turns "what puts the link in the body", or "" for
+// nothing, into the check. Only called when campaign.TextOnly is set, so it
+// never fires on an HTML campaign, where the link renders as a word.
+func plainTextOptOutResult(where string) models.PreflightCheckResult {
+	check := models.PreflightCheckResult{
+		Key:      "plain_text_opt_out",
+		Passed:   true,
+		Severity: "warning",
+		Message:  "Plain text only: the opt-out puts no raw URL in the copy.",
+	}
+	if where == "" {
+		return check
+	}
+	check.Passed = false
+	check.Message = fmt.Sprintf("This campaign sends plain text only and %s, so recipients read the whole signed unsubscribe address instead of a word.", where)
+	check.Remediation = "Keep the List-Unsubscribe header on and switch the opt-out line to Reply to opt out, or turn plain text off so the link can render as a word."
+	return check
 }
 
 // contentScoreCheck scores every step's copy and reports the worst. A step list

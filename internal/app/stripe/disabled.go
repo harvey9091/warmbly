@@ -78,4 +78,6 @@ func (d *disabledService) AutoTopUpCredits(_ context.Context, _ uuid.UUID, _ str
 
 func (d *disabledService) WireReferral(_ ReferralRewarder) {}
 
+func (d *disabledService) WireAnalytics(_ ProductAnalytics) {}
+
 func (d *disabledService) WireCredits(_ CreditGranter, _ AuditLogger) {}

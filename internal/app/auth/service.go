@@ -16,6 +16,7 @@ import (
 	"github.com/warmbly/warmbly/internal/infrastructure/cache"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/notify"
+	"github.com/warmbly/warmbly/internal/observability/analytics"
 	"github.com/warmbly/warmbly/internal/pkg/captcha"
 	"github.com/warmbly/warmbly/internal/repository"
 )
@@ -33,6 +34,25 @@ type TwoFAChallenger interface {
 // so the auth package needs no import of referral (no cycle).
 type ReferralAttributor interface {
 	AttributeSignup(ctx context.Context, code string, inviteeOrgID, inviteeUserID uuid.UUID) *errx.Error
+}
+
+// AcquisitionRecorder stores where a signup came from on the new workspace.
+// Satisfied by repository.OrganizationRepository; injected post-construction
+// (WireAcquisition) and nil-safe, so a deployment that never wires it simply
+// records no attribution.
+type AcquisitionRecorder interface {
+	RecordOrganizationAcquisition(ctx context.Context, acq *models.OrgAcquisition) error
+}
+
+// ProductAnalytics counts a finished signup. Satisfied by
+// *analytics.Client; injected post-construction (WireAnalytics) and nil-safe,
+// so a deployment with no POSTHOG_KEY counts nothing and calls nothing.
+//
+// The signup is counted server-side because that is the only place it is
+// exact: an ad blocker, a closed tab or a failed beacon all lose the browser's
+// version of the event that matters most.
+type ProductAnalytics interface {
+	Capture(name string, req analytics.Request, properties map[string]any)
 }
 
 // InstanceSettings is the operator-editable half of the signup policy.
@@ -53,6 +73,8 @@ type AuthService interface {
 	// WireReferral attaches the referral attributor (post-construction; nil = no
 	// referral attribution at signup).
 	WireReferral(r ReferralAttributor)
+	WireAcquisition(r AcquisitionRecorder)
+	WireAnalytics(a ProductAnalytics, host string)
 
 	// WireOperatorNotifier attaches the instance-wide operator alert channel
 	// (post-construction; nil = no alerts).
@@ -138,6 +160,13 @@ type authService struct {
 	googleIDTokens IDTokenVerifier
 	twofa          TwoFAChallenger
 	referral       ReferralAttributor
+	// acquisition records the signup's channel on the new org. Nil-safe.
+	acquisition AcquisitionRecorder
+	// productAnalytics counts finished signups. Nil-safe.
+	productAnalytics ProductAnalytics
+	// analyticsHost is the dashboard's public hostname, forwarded so PostHog's
+	// cookieless hash resolves to the same root domain the browser reported.
+	analyticsHost string
 	// settings is the operator-editable settings document, wired after
 	// construction because it needs the database pool.
 	settings InstanceSettings
@@ -170,6 +199,16 @@ func (s *authService) Policy() *config.AuthPolicy { return s.policy }
 func (s *authService) WireIdentities(r repository.IdentityRepository) { s.identities = r }
 
 func (s *authService) WireReferral(r ReferralAttributor) { s.referral = r }
+
+// WireAcquisition attaches the store for signup attribution.
+func (s *authService) WireAcquisition(r AcquisitionRecorder) { s.acquisition = r }
+
+// WireAnalytics attaches the product-analytics sink. host is the dashboard's
+// public hostname, which is one of the three inputs to the cookieless hash.
+func (s *authService) WireAnalytics(a ProductAnalytics, host string) {
+	s.productAnalytics = a
+	s.analyticsHost = host
+}
 
 // WireOperatorNotifier attaches the operator alert channel.
 func (s *authService) WireOperatorNotifier(n OperatorNotifier) { s.opsNotify = n }

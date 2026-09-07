@@ -29,6 +29,12 @@ const {
 
 const extraJsonLd = jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : [];
 
+// Cookieless analytics, hosted-only. Unset means no script tag is emitted at
+// all: this is a build-time variable, so a build without it produces a site
+// with no analytics code in it, not a site that decides at runtime.
+const posthogKey = import.meta.env.PUBLIC_POSTHOG_KEY ?? '';
+const posthogHost = import.meta.env.PUBLIC_POSTHOG_HOST ?? 'https://eu.i.posthog.com';
+
 const siteOrigin = (Astro.site ?? new URL('https://warmbly.com')).toString().replace(/\/$/, '');
 const canonical = new URL(Astro.url.pathname, Astro.site ?? 'https://warmbly.com').toString();
 const ogImageAbsolute = new URL(ogImage, Astro.site ?? 'https://warmbly.com').toString();
@@ -142,6 +148,83 @@ const websiteJsonLd = {
     {extraJsonLd.map((schema) => (
       <script type="application/ld+json" is:inline set:html={JSON.stringify(schema)} />
     ))}
+    <!--
+      Cookieless analytics. Nothing is written to this browser: no cookie, no
+      localStorage, no sessionStorage, and so no consent banner. The visitor is
+      derived on PostHog's side from a daily-rotated salt plus IP, root domain
+      and user agent, and the salt is deleted at the end of the day.
+
+      That only holds if nobody is ever identified, which is what
+      person_profiles: 'never' enforces. Autocapture and session recording stay
+      off: this is a marketing site, page views are the question.
+
+      The root domain is one of the hash inputs, so a visit here and the signup
+      on app.warmbly.com are one visitor within a day, with no cross-domain
+      wiring on our side.
+    -->
+    {posthogKey && (
+      <script is:inline define:vars={{ posthogKey, posthogHost }}>
+        !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey getNextSurveyStep identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug getPageViewId captureTraceFeedback captureTraceMetric".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+        window.posthog.init(posthogKey, {
+          api_host: posthogHost,
+          cookieless_mode: 'always',
+          person_profiles: 'never',
+          autocapture: false,
+          capture_pageview: true,
+          disable_session_recording: true,
+          respect_dnt: true,
+        });
+      </script>
+    )}
+    <!--
+      Carry the landing page and any UTM parameters through to the dashboard's
+      signup form, in the query string and nowhere else. The dashboard reads
+      them at signup and the backend records them once on the new organization,
+      so channel attribution survives the daily salt rotation without anything
+      being stored in this browser.
+
+      Done here rather than in each CTA because there are forty of these links
+      across the site and a new one should not have to remember.
+    -->
+    <script is:inline>
+      (function () {
+        // This script sits in <head>, so the anchors it rewrites do not exist
+        // yet. Wait for the parsed document before touching any of them.
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', decorate);
+        } else {
+          decorate();
+        }
+
+        function decorate() {
+          var params = new URLSearchParams(location.search);
+          var carried = new URLSearchParams();
+
+          ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'].forEach(function (name) {
+            var value = params.get(name);
+            if (value) carried.set(name, value.slice(0, 255));
+          });
+          carried.set('wb_lp', location.pathname.slice(0, 255));
+
+          if (document.referrer) {
+            try {
+              var host = new URL(document.referrer).hostname;
+              if (host && host !== location.hostname) carried.set('wb_ref', host);
+            } catch (e) { /* an unparseable referrer is simply not recorded */ }
+          }
+
+          document.querySelectorAll('a[href*="/register"]').forEach(function (link) {
+            try {
+              var url = new URL(link.href);
+              carried.forEach(function (value, name) {
+                if (!url.searchParams.has(name)) url.searchParams.set(name, value);
+              });
+              link.href = url.toString();
+            } catch (e) { /* leave a link we cannot parse exactly as it was */ }
+          });
+        }
+      })();
+    </script>
     <!-- Phone diagnostics: ?noshell / ?noanim / ?nogl switch heavy subsystems off (global.css, GrainBackdrop). -->
     <script is:inline>
       var diagParams = new URLSearchParams(location.search);

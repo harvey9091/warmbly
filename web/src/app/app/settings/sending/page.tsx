@@ -230,7 +230,7 @@ function SendingSettings() {
 
             <Section
                 eyebrow="Unsubscribe"
-                description="The opt-out every campaign email carries, added after the signature. A reply that asks to stop, a click on the link, and the mail client's own unsubscribe button all put the recipient on the suppression list, and no campaign emails them again. A campaign can override this in its preferences."
+                description="The opt-out every campaign email carries, added after the signature. A reply that asks to stop, a click on the link, and the mail client's own unsubscribe button all put the recipient on the suppression list, and no campaign emails them again. For cold outreach the List-Unsubscribe header (per campaign, on by default) is what satisfies the bulk-sender rules, so this line can stay a plain sentence. A campaign can override this in its preferences."
             >
                 {isLoading || !draft ? (
                     <div className="h-7 w-40 rounded bg-slate-100 animate-pulse" />
@@ -311,7 +311,7 @@ function UnsubscribeRows({
                     mode === "text"
                         ? "A plain sentence inviting a reply. Reads like a personal email; the reply is detected and honoured automatically."
                         : mode === "link"
-                          ? "A sentence with a real unsubscribe link. One click on a confirmation page; the mail client may also show its own Unsubscribe button."
+                          ? "A sentence with a real unsubscribe link. One click on a confirmation page; the mail client may also show its own Unsubscribe button. Reads as bulk mail where a reply reads as a person, so keep it for lists that need a link. On a plain-text campaign it prints the full address in the copy."
                           : "No opt-out in the body. Keep the unsubscribe header on in each campaign, or you are relying on recipients replying."
                 }
             >

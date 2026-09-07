@@ -28,6 +28,7 @@ import (
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/analytics"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -86,6 +87,10 @@ type StripeService interface {
 	// referral hooks in the webhook flow are skipped).
 	WireReferral(r ReferralRewarder)
 
+	// WireAnalytics attaches the product-analytics sink (post-construction;
+	// nil = money events are not counted, which is the self-host default).
+	WireAnalytics(a ProductAnalytics)
+
 	// WireCredits attaches the AI-credit granter and an audit logger
 	// (post-construction; nil = the credit grant/reset hooks are skipped).
 	WireCredits(g CreditGranter, a AuditLogger)
@@ -123,6 +128,13 @@ type OperatorNotifier interface {
 	NotifyOperator(key, title, summary string, fields map[string]string)
 }
 
+// ProductAnalytics counts a started subscription. Satisfied by
+// *analytics.Client; nil-safe, so an instance with no POSTHOG_KEY counts
+// nothing. Properties never name an organization or a person.
+type ProductAnalytics interface {
+	Capture(name string, req analytics.Request, properties map[string]any)
+}
+
 type stripeService struct {
 	cfg              *config.StripeConfig
 	subRepo          repository.SubscriptionRepository
@@ -133,12 +145,15 @@ type stripeService struct {
 	credits          CreditGranter
 	audit            AuditLogger
 	opsNotify        OperatorNotifier
+	productAnalytics ProductAnalytics
 }
 
 // WireOperatorNotifier attaches the operator alert channel.
 func (s *stripeService) WireOperatorNotifier(n OperatorNotifier) { s.opsNotify = n }
 
 func (s *stripeService) WireReferral(r ReferralRewarder) { s.referral = r }
+
+func (s *stripeService) WireAnalytics(a ProductAnalytics) { s.productAnalytics = a }
 
 func (s *stripeService) WireCredits(g CreditGranter, a AuditLogger) { s.credits = g; s.audit = a }
 
@@ -941,6 +956,50 @@ func (s *stripeService) handleSubscriptionCreated(ctx context.Context, event *st
 	return s.handleSubscriptionUpdated(ctx, event)
 }
 
+// countSubscriptionStarted records a workspace starting to pay.
+//
+// It fires from the webhook rather than the browser because this is the money
+// event and it has to be exact: the customer may have closed the tab on
+// Stripe's success page, and an ad blocker would drop the browser's version.
+//
+// It hangs off the trial-to-paid transition rather than off the
+// customer.subscription.created event, so a redelivered or duplicated webhook
+// does not report a second start: by the time it arrives the subscription
+// already carries a Stripe id and the transition no longer reads as new. That
+// is the same guard the paid-worker migration beside it relies on, and it is
+// bounded by the same window, which is far narrower than the webhook
+// idempotency check that runs before either of them.
+//
+// Unlike the signup event there is no browser request to join: Stripe called
+// us, not the customer. So this lands as its own cookieless visitor and is
+// useful as a count and a plan mix, not as the end of a session funnel.
+// Nothing here names the organization or the person.
+func (s *stripeService) countSubscriptionStarted(ctx context.Context, sub *models.Subscription, plan *models.Plan, stripeSub *stripe.Subscription) {
+	if s.productAnalytics == nil || stripeSub == nil {
+		return
+	}
+
+	props := map[string]any{"status": string(stripeSub.Status)}
+	if plan != nil {
+		props["plan"] = plan.Name
+	} else if sub != nil {
+		if p, err := s.planRepo.GetByID(ctx, sub.PlanID); err == nil && p != nil {
+			props["plan"] = p.Name
+		}
+	}
+	if len(stripeSub.Items.Data) > 0 {
+		if price := stripeSub.Items.Data[0].Price; price != nil {
+			props["currency"] = string(price.Currency)
+			props["amount"] = float64(price.UnitAmount) / 100
+			if price.Recurring != nil {
+				props["interval"] = string(price.Recurring.Interval)
+			}
+		}
+	}
+
+	s.productAnalytics.Capture("subscription_started", analytics.Request{}, props)
+}
+
 func (s *stripeService) handleSubscriptionUpdated(ctx context.Context, event *stripe.Event) *errx.Error {
 	var stripeSub stripe.Subscription
 	if err := json.Unmarshal(event.Data.Raw, &stripeSub); err != nil {
@@ -1001,6 +1060,14 @@ func (s *stripeService) handleSubscriptionUpdated(ctx context.Context, event *st
 
 	if err := s.subRepo.Update(ctx, sub); err != nil {
 		return errx.New(errx.Internal, "failed to update subscription")
+	}
+
+	// The workspace has started paying. Reported after the write, so a failed
+	// update never counts as a start, and keyed off the same transition the
+	// premium-worker migration below uses, so a redelivered webhook does not
+	// count a second one.
+	if wasTrialOnly && sub.HasPaidSubscription() {
+		s.countSubscriptionStarted(ctx, sub, newPlan, &stripeSub)
 	}
 
 	// Handle worker migrations if workerAssignment service is available
