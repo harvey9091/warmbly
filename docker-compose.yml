@@ -636,7 +636,7 @@ services:
     working_dir: ${WARMBLY_REPO_DIR:-${PWD}}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${WARMBLY_REPO_DIR:-.}:${WARMBLY_REPO_DIR:-${PWD}}
+      - ${WARMBLY_REPO_DIR:-.}:${WARMBLY_REPO_DIR:-.}
       - ${WARMBLY_UPDATER_STATE:-updater_state}:/var/lib/warmbly-updater
     profiles: ["updater"]
 
