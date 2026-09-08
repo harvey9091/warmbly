@@ -330,7 +330,6 @@ services:
         BUILT_AT: ${WARMBLY_BUILD_TIME:-}
     expose:
       - "8080"
-    ports: ["8080:8080"]
     environment:
       <<: *selfhost-env
       API_HOST: "0.0.0.0:8080"

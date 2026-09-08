@@ -1291,7 +1291,7 @@ NATSEOF
   backend:
     <<: *app
     image: \${WARMBLY_IMAGE_PREFIX}/backend:\${WARMBLY_TAG}
-    ports: ["${BIND}${PORT_BACKEND}:8080"]
+    expose: ["8080"]
     environment:
       API_HOST: "0.0.0.0:8080"
       GIN_MODE: release
