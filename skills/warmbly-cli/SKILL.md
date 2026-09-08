@@ -61,7 +61,8 @@ warmbly contact list --json --limit 100
 
 Lists are `{"data": [...], "pagination": {"next_cursor", "has_more"}}`. Page
 with `--cursor <next_cursor>`, or let `--all` do it. Cursors are opaque, never
-construct one.
+construct one, and a cursor belongs to the ordering it came from: changing the
+sort halfway through a walk is rejected, not silently reordered.
 
 ## Command map
 

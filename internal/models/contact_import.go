@@ -109,6 +109,11 @@ type ContactImportCommit struct {
 	// SegmentIDs pins every imported row into these segments as a manual
 	// include override, the same write the "Add to segment" bulk action does.
 	SegmentIDs []string `json:"segment_ids,omitempty"`
+	// SkipMissingSegments drops a target segment that no longer exists instead
+	// of refusing the import. Set by saved recurring sources (the Google Sheets
+	// sync), where a segment deleted months later must not stop every run; an
+	// interactive import still gets a 400 on a segment the user just picked.
+	SkipMissingSegments bool `json:"-"`
 
 	// SubscribedDefault is what new contacts inherit when no
 	// subscribed column was mapped. Defaults to true server-side.
@@ -150,6 +155,13 @@ type ContactImportResult struct {
 	// ErrorsTruncated is true when that cap was reached, so the UI can say
 	// "showing the first N of M" instead of implying it listed everything.
 	ErrorsTruncated bool `json:"errors_truncated,omitempty"`
+
+	// SegmentsPinned is nil when the import had no segment targets to write.
+	// With targets it is true when every membership write landed and false
+	// when one did not, with the reason among the notes. A plain bool could
+	// not carry that third state: omitempty drops false, so a failed pin
+	// looked exactly like an import that never asked for one.
+	SegmentsPinned *bool `json:"segments_pinned,omitempty"`
 
 	// Quality is what the uploaded addresses look like, measured at import.
 	// Advisory: a bad list is reported here and stopped at launch, never

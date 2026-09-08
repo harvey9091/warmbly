@@ -47,7 +47,7 @@ type Service interface {
 	Preview(ctx context.Context, orgID, connID uuid.UUID, sheetID, tabTitle string) (*models.ContactImportPreview, *errx.Error)
 
 	// Source CRUD.
-	List(ctx context.Context, orgID uuid.UUID, campaignID *uuid.UUID) ([]models.LeadSyncSource, error)
+	List(ctx context.Context, orgID uuid.UUID, campaignID, segmentID *uuid.UUID) ([]models.LeadSyncSource, error)
 	Get(ctx context.Context, orgID, id uuid.UUID) (*models.LeadSyncSource, *errx.Error)
 	Create(ctx context.Context, orgID, userID uuid.UUID, in *models.CreateLeadSyncSource) (*models.LeadSyncSource, *errx.Error)
 	Update(ctx context.Context, orgID, id uuid.UUID, in *models.UpdateLeadSyncSource) (*models.LeadSyncSource, *errx.Error)
@@ -114,8 +114,8 @@ func (s *service) Preview(ctx context.Context, orgID, connID uuid.UUID, sheetID,
 	}, nil
 }
 
-func (s *service) List(ctx context.Context, orgID uuid.UUID, campaignID *uuid.UUID) ([]models.LeadSyncSource, error) {
-	return s.repo.List(ctx, orgID, campaignID)
+func (s *service) List(ctx context.Context, orgID uuid.UUID, campaignID, segmentID *uuid.UUID) ([]models.LeadSyncSource, error) {
+	return s.repo.List(ctx, orgID, campaignID, segmentID)
 }
 
 func (s *service) Get(ctx context.Context, orgID, id uuid.UUID) (*models.LeadSyncSource, *errx.Error) {
@@ -166,6 +166,13 @@ func (s *service) Create(ctx context.Context, orgID, userID uuid.UUID, in *model
 	if cats == nil {
 		cats = []string{}
 	}
+	segs := in.SegmentIDs
+	if segs == nil {
+		segs = []string{}
+	}
+	if xerr := s.contacts.ValidateSegmentTargets(ctx, orgID, segs); xerr != nil {
+		return nil, xerr
+	}
 
 	src := &models.LeadSyncSource{
 		OrganizationID:    orgID,
@@ -181,6 +188,7 @@ func (s *service) Create(ctx context.Context, orgID, userID uuid.UUID, in *model
 		Dedup:             in.Dedup,
 		TargetCampaignID:  in.TargetCampaignID,
 		CategoryIDs:       cats,
+		SegmentIDs:        segs,
 		SubscribedDefault: subscribed,
 		Label:             strings.TrimSpace(in.Label),
 		Status:            models.LeadSyncStatusIdle,
@@ -240,6 +248,12 @@ func (s *service) Update(ctx context.Context, orgID, id uuid.UUID, in *models.Up
 	if in.CategoryIDs != nil {
 		src.CategoryIDs = *in.CategoryIDs
 	}
+	if in.SegmentIDs != nil {
+		if xerr := s.contacts.ValidateSegmentTargets(ctx, orgID, *in.SegmentIDs); xerr != nil {
+			return nil, xerr
+		}
+		src.SegmentIDs = *in.SegmentIDs
+	}
 	if in.SubscribedDefault != nil {
 		src.SubscribedDefault = *in.SubscribedDefault
 	}
@@ -297,14 +311,18 @@ func (s *service) SyncNow(ctx context.Context, triggeringUserID, orgID, sourceID
 	}
 	subscribed := src.SubscribedDefault
 	opts := &models.ContactImportCommit{
-		Mapping:           src.ColumnMapping,
-		Dedup:             src.Dedup,
-		HasHeader:         src.HasHeader,
-		CategoryIDs:       src.CategoryIDs,
-		CampaignIDs:       campaignIDs,
-		SubscribedDefault: &subscribed,
-		Source:            models.ContactSourceSheetSync,
-		SourceDetail:      src.SheetTitle,
+		Mapping:     src.ColumnMapping,
+		Dedup:       src.Dedup,
+		HasHeader:   src.HasHeader,
+		CategoryIDs: src.CategoryIDs,
+		CampaignIDs: campaignIDs,
+		SegmentIDs:  src.SegmentIDs,
+		// A segment deleted after the source was saved is dropped from the run;
+		// a recurring sync must not stop importing because a target is gone.
+		SkipMissingSegments: true,
+		SubscribedDefault:   &subscribed,
+		Source:              models.ContactSourceSheetSync,
+		SourceDetail:        src.SheetTitle,
 	}
 
 	result, ierr := s.contacts.ImportCommit(ctx, triggeringUserID.String(), orgID, bytes.NewReader(csvBytes), "google-sheets-sync.csv", opts)

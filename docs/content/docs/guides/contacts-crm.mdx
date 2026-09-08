@@ -9,7 +9,7 @@ Contacts are the people you reach out to; the CRM tracks what happens after they
 
 Two routes share the same column-mapping screen: a file upload and an on-demand Google Sheets sync.
 
-**From a file** (CSV, TSV, or XLSX, up to 50 MB and 50,000 rows), the wizard runs **Upload**, **Map**, **Options**, **Result**. Parsing happens server-side. Start it from Contacts, or from a campaign's Leads tab to attach the imports to that campaign automatically. The result step reports imported, updated, skipped, and failed counts, and failed rows download as an error CSV you can fix and re-import.
+**From a file** (CSV, TSV, or XLSX, up to 50 MB and 50,000 rows), the wizard runs **Upload**, **Map**, **Options**, **Result**. Parsing happens server-side. Start it from Contacts, or from a campaign's Leads tab to attach the imports to that campaign automatically, or from a [segment](/guides/segments/)'s member list to pin every row into that segment. The wizard names the target it inherited in its header and on the Options step, and the result step confirms it. The result step reports imported, updated, skipped, and failed counts, and failed rows download as an error CSV you can fix and re-import.
 
 You must map at least one column to **Email**.
 
@@ -31,9 +31,11 @@ Rows with a missing or invalid email are reported with a line number and reason 
 
 Problems with the mapping itself, an unnamed custom field or a name Warmbly cannot use, are reported once before anything is written, so a single typo can never fail every row.
 
-The **Options** step also decides where the contacts land: **Add to campaigns** enrols everyone in the file as leads of the campaigns you pick (hidden when the wizard was started from a campaign's Leads tab, since that campaign is already the target), and **Add to segments** pins them into the [segments](/guides/segments/) you pick as manual includes, so they stay members whatever the segment's conditions say.
+The **Options** step also decides where the contacts land: **Add to campaigns** enrols everyone in the file as leads of the campaigns you pick (hidden when the wizard was started from a campaign's Leads tab, since that campaign is already the target), and **Add to segments** pins them into the [segments](/guides/segments/) you pick as manual includes, so they stay members whatever the segment's conditions say. Started from a segment, that segment is always applied and shown as a fixed row; the picker below it adds more.
 
-**From Google Sheets**, a sheet is a reusable **sync source** rather than a one-time upload. Connect it once (Warmbly reads only the tab you choose and never writes back), paste the spreadsheet ID from the URL between `/d/` and `/edit`, pick the tab, map columns, then set duplicate handling, a label, and optionally a campaign to enroll into and categories to apply. **Nothing syncs automatically**: press **Sync now**, or save and sync immediately.
+**From Google Sheets**, a sheet is a reusable **sync source** rather than a one-time upload. Connect it once (Warmbly reads only the tab you choose and never writes back), paste the spreadsheet ID from the URL between `/d/` and `/edit`, pick the tab, map columns, then set duplicate handling, a label, and optionally a campaign to enroll into, categories to apply and segments to pin into. **Nothing syncs automatically**: press **Sync now**, or save and sync immediately.
+
+Segment targets apply on every run, so a sheet you keep adding rows to keeps feeding the same audience. Opening **Sync sources** from a segment's member list lists only the sources feeding it and pre-targets a new one to it. A segment deleted later is dropped from the run rather than stopping it.
 
 Saved sources live in your Sync sources list to re-run, edit, or remove. Each sync dedupes on lowercased email using your chosen duplicate handling, so re-syncing a sheet with new rows is safe.
 

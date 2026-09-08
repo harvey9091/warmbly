@@ -5689,7 +5689,7 @@
             "name": "cursor",
             "in": "query",
             "required": false,
-            "description": "Opaque pagination cursor from the previous page's pagination.next_cursor.",
+            "description": "Opaque pagination cursor from the previous page's pagination.next_cursor. It carries the exact position of the next page under the ordering it was issued for, so rows that share a sort value are never skipped or repeated. A malformed cursor, or one replayed with a different sort_by or reverse than it was issued under, is a 400.",
             "schema": {
               "type": "string"
             }
@@ -21786,11 +21786,11 @@
           },
           "sort_by": {
             "type": "string",
-            "description": "Sort column, e.g. first_name, campaign_count."
+            "description": "Sort column: created_at (the default), updated_at, first_name, last_name, email, or campaign_count. Any other value falls back to created_at."
           },
           "reverse": {
             "type": "boolean",
-            "description": "Descending when true."
+            "description": "Ascending when true. The default is descending."
           }
         }
       },

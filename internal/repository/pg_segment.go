@@ -127,6 +127,19 @@ func (r *segmentRepository) Get(ctx context.Context, orgID, id uuid.UUID) (*mode
 	return s, nil
 }
 
+// marshalConditions encodes a condition list for the jsonb column. A nil slice
+// encodes as `null`, which the array CHECK rejects, so it becomes an empty list.
+func marshalConditions(conds []models.SegmentCondition) []byte {
+	if len(conds) == 0 {
+		return []byte("[]")
+	}
+	b, err := json.Marshal(conds)
+	if err != nil {
+		return []byte("[]")
+	}
+	return b
+}
+
 func (r *segmentRepository) Create(ctx context.Context, orgID uuid.UUID, createdBy *uuid.UUID, seg *models.Segment) (*models.Segment, *errx.Error) {
 	var total int
 	if err := r.DB.QueryRow(ctx, `SELECT COUNT(*) FROM segments WHERE organization_id = $1`, orgID).Scan(&total); err != nil {
@@ -136,7 +149,7 @@ func (r *segmentRepository) Create(ctx context.Context, orgID uuid.UUID, created
 	if total >= models.SegmentsPerOrgMax {
 		return nil, errx.New(errx.BadRequest, fmt.Sprintf("a workspace can have at most %d segments", models.SegmentsPerOrgMax))
 	}
-	conds, _ := json.Marshal(seg.Conditions)
+	conds := marshalConditions(seg.Conditions)
 	var id uuid.UUID
 	err := r.DB.QueryRow(ctx, `
 		INSERT INTO segments (organization_id, created_by, name, description, color, match, conditions)
@@ -153,7 +166,7 @@ func (r *segmentRepository) Create(ctx context.Context, orgID uuid.UUID, created
 }
 
 func (r *segmentRepository) Update(ctx context.Context, orgID uuid.UUID, seg *models.Segment) (*models.Segment, *errx.Error) {
-	conds, _ := json.Marshal(seg.Conditions)
+	conds := marshalConditions(seg.Conditions)
 	tag, err := r.DB.Exec(ctx, `
 		UPDATE segments SET name = $3, description = $4, color = $5, match = $6, conditions = $7, updated_at = now()
 		WHERE organization_id = $1 AND id = $2`, orgID, seg.ID, seg.Name, seg.Description, seg.Color, seg.Match, conds)

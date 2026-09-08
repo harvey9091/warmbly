@@ -48,9 +48,13 @@ type LeadSyncSource struct {
 
 	// TargetCampaignID, when set, enrols every new/updated lead into that
 	// campaign on each sync.
-	TargetCampaignID  *uuid.UUID `json:"target_campaign_id,omitempty"`
-	CategoryIDs       []string   `json:"category_ids"`
-	SubscribedDefault bool       `json:"subscribed_default"`
+	TargetCampaignID *uuid.UUID `json:"target_campaign_id,omitempty"`
+	CategoryIDs      []string   `json:"category_ids"`
+	// SegmentIDs pins every synced row into these segments as an include
+	// override, the same write the file import's segment targets do. A segment
+	// deleted later is dropped from the run rather than failing it.
+	SegmentIDs        []string `json:"segment_ids"`
+	SubscribedDefault bool     `json:"subscribed_default"`
 
 	Label  string         `json:"label,omitempty"`
 	Status LeadSyncStatus `json:"status"`
@@ -75,6 +79,7 @@ type CreateLeadSyncSource struct {
 	Dedup             ContactImportDedupStrategy   `json:"dedup"`
 	TargetCampaignID  *uuid.UUID                   `json:"target_campaign_id"`
 	CategoryIDs       []string                     `json:"category_ids"`
+	SegmentIDs        []string                     `json:"segment_ids"`
 	SubscribedDefault *bool                        `json:"subscribed_default"`
 	Label             string                       `json:"label"`
 }
@@ -92,6 +97,7 @@ type UpdateLeadSyncSource struct {
 	TargetCampaignID  *uuid.UUID                    `json:"target_campaign_id"`
 	ClearCampaign     bool                          `json:"clear_campaign"`
 	CategoryIDs       *[]string                     `json:"category_ids"`
+	SegmentIDs        *[]string                     `json:"segment_ids"`
 	SubscribedDefault *bool                         `json:"subscribed_default"`
 	Label             *string                       `json:"label"`
 }

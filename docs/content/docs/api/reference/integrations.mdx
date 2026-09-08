@@ -1061,13 +1061,14 @@ Auth: **Scope** `WRITE_CONTACTS` · **Org permission** `manage_contacts`.
 
 `GET /lead-sync/sources`
 
-Lists this org's saved sync sources, optionally filtered to a campaign.
+Lists this org's saved sync sources, optionally filtered to a campaign or a segment.
 
 Auth: **Scope** `WRITE_CONTACTS` · **Org permission** `manage_contacts`.
 
 | Parameter | In | Type | Description |
 |-----------|-----|------|-------------|
 | `campaign_id` | query | uuid | Optional. Restricts to sources targeting that campaign. Invalid ids return `400`. |
+| `segment_id` | query | uuid | Optional. Restricts to sources that pin their rows into that segment. Invalid ids return `400`. Combines with `campaign_id`. |
 
 ### Response
 
@@ -1090,6 +1091,7 @@ A `data` array (no pagination envelope on this list).
       ],
       "dedup": "update",
       "category_ids": [],
+      "segment_ids": [],
       "subscribed_default": true,
       "status": "idle",
       "last_synced_at": "2026-06-10T12:00:00Z",
@@ -1121,6 +1123,7 @@ Auth: **Scope** `WRITE_CONTACTS` · **Org permission** `manage_contacts`.
 | `dedup` | string | No | Collision strategy: `skip`, `update`, or `create_duplicate`. |
 | `target_campaign_id` | uuid | No | Enrol new/updated leads into this campaign on each sync. |
 | `category_ids` | string[] | No | Categories to assign to synced leads. |
+| `segment_ids` | string[] | No | Segments every synced row is pinned into as a manual include override, on every run. Each id must name a segment in the organization or the save is a `400`; a segment deleted later is dropped from the run instead of failing it. |
 | `subscribed_default` | boolean | No | Default subscription state for new contacts. |
 | `label` | string | No | Friendly name. |
 
@@ -1138,6 +1141,7 @@ Auth: **Scope** `WRITE_CONTACTS` · **Org permission** `manage_contacts`.
   "dedup": "update",
   "target_campaign_id": null,
   "category_ids": [],
+  "segment_ids": [],
   "subscribed_default": true,
   "label": "Q2 inbound leads"
 }
@@ -1162,6 +1166,7 @@ Auth: **Scope** `WRITE_CONTACTS` · **Org permission** `manage_contacts`.
   ],
   "dedup": "update",
   "category_ids": [],
+  "segment_ids": [],
   "subscribed_default": true,
   "status": "idle",
   "created_at": "2026-06-11T15:00:00Z",
@@ -1210,6 +1215,7 @@ Auth: **Scope** `WRITE_CONTACTS` · **Org permission** `manage_contacts`.
 | `target_campaign_id` | uuid | No | New target campaign. |
 | `clear_campaign` | boolean | No | When `true`, unsets the target campaign. |
 | `category_ids` | string[] | No | Replacement category set. |
+| `segment_ids` | string[] | No | Replacement segment target set. An unknown id is a `400`; an empty array clears the targets. |
 | `subscribed_default` | boolean | No | Default subscription state. |
 | `label` | string | No | New label. |
 

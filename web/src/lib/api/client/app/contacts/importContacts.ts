@@ -69,6 +69,10 @@ export interface ImportResult {
     // Set when more rows failed than the API reports back; `errors` then holds
     // the first slice of them and `failed` is the true count.
     errors_truncated?: boolean;
+    // Absent when the import had no segment targets. With targets, true when
+    // every membership write landed and false when one did not, with the
+    // reason among the notes in `errors`.
+    segments_pinned?: boolean;
     // What the uploaded addresses look like. Advisory: a bad list is reported
     // here and stopped at launch, never refused here.
     quality?: ImportQuality;

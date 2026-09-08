@@ -54,6 +54,7 @@ import {
 import { Label, TextInput } from "@/components/ui/field";
 import CategoryPicker from "./CategoryPicker";
 import { CampaignMultiPicker, SegmentMultiPicker } from "@/components/app/segments/SegmentPickers";
+import { useSegments } from "@/lib/api/hooks/app/segments";
 import { downloadBlob } from "@/lib/api/client/app/contacts/exportContacts";
 import {
     CUSTOM_KEY_RULES,
@@ -73,11 +74,16 @@ interface Props {
     // When set (the campaign Leads tab), imported contacts are attached to this
     // campaign and the wizard shows a read-only "Adding to …" indicator.
     lockedCampaign?: { id: string; name: string };
+    // When set (a segment's member list), every imported row is pinned into
+    // this segment, the same way the campaign target works. Without it an
+    // import started from inside a segment created contacts that were nowhere
+    // in it (issue #381).
+    lockedSegment?: { id: string; name: string; color?: string };
 }
 
 type Step = "upload" | "map" | "options" | "result";
 
-export default function ImportWizard({ open, onClose, lockedCampaign }: Props) {
+export default function ImportWizard({ open, onClose, lockedCampaign, lockedSegment }: Props) {
     const [step, setStep] = React.useState<Step>("upload");
     const [file, setFile] = React.useState<File | null>(null);
     const [preview, setPreview] = React.useState<ImportPreview | null>(null);
@@ -91,6 +97,7 @@ export default function ImportWizard({ open, onClose, lockedCampaign }: Props) {
     const [commitBusy, setCommitBusy] = React.useState<boolean>(false);
     const [result, setResult] = React.useState<ImportResult | null>(null);
     const queryClient = useQueryClient();
+    const segments = useSegments(open);
 
     function reset() {
         setStep("upload");
@@ -127,6 +134,20 @@ export default function ImportWizard({ open, onClose, lockedCampaign }: Props) {
         }
     }
 
+    // The segment the wizard was opened inside always travels with the
+    // import, whether or not the user opened the options step.
+    const targetSegmentIds = React.useMemo(
+        () => (lockedSegment ? [lockedSegment.id, ...segmentIds.filter((id) => id !== lockedSegment.id)] : segmentIds),
+        [lockedSegment, segmentIds],
+    );
+
+    // What the result step names back. A segment the list has not loaded
+    // falls back to the locked one's name rather than showing an id.
+    const pinnedSegmentNames = React.useMemo(() => {
+        const byId = new Map((segments.data ?? []).map((seg) => [seg.id, seg.name]));
+        return targetSegmentIds.map((id) => byId.get(id) ?? (id === lockedSegment?.id ? lockedSegment.name : "a segment"));
+    }, [segments.data, targetSegmentIds, lockedSegment]);
+
     async function commit() {
         if (!file || !preview) return;
         setCommitBusy(true);
@@ -137,11 +158,16 @@ export default function ImportWizard({ open, onClose, lockedCampaign }: Props) {
                 has_header: hasHeader,
                 category_ids: categoryIds.length > 0 ? categoryIds : undefined,
                 campaign_ids: lockedCampaign ? [lockedCampaign.id] : campaignIds.length > 0 ? campaignIds : undefined,
-                segment_ids: segmentIds.length > 0 ? segmentIds : undefined,
+                segment_ids: targetSegmentIds.length > 0 ? targetSegmentIds : undefined,
             });
             setResult(res);
             setStep("result");
-            await queryClient.invalidateQueries({ queryKey: ["contacts"] });
+            // Segment counts and pinned-member lists move with the import, so
+            // the page behind the wizard is right before the spine event lands.
+            await Promise.all([
+                queryClient.invalidateQueries({ queryKey: ["contacts"] }),
+                queryClient.invalidateQueries({ queryKey: ["segments"] }),
+            ]);
             if (res.failed === 0) {
                 toast.success(`Imported ${res.imported} · updated ${res.updated} · skipped ${res.skipped}`);
             } else {
@@ -196,6 +222,15 @@ export default function ImportWizard({ open, onClose, lockedCampaign }: Props) {
                                     → {lockedCampaign.name}
                                 </span>
                             )}
+                            {lockedSegment && (
+                                <span className="hidden sm:inline-flex items-center gap-1 h-5 px-1.5 rounded bg-sky-50 text-sky-700 text-[10px] font-medium max-w-[180px]">
+                                    <span className="shrink-0">→</span>
+                                    {lockedSegment.color && (
+                                        <span className="size-2 rounded-full shrink-0" style={{ backgroundColor: lockedSegment.color }} />
+                                    )}
+                                    <span className="truncate">{lockedSegment.name}</span>
+                                </span>
+                            )}
                             <StepDots step={step} />
                             <button
                                 type="button"
@@ -235,10 +270,15 @@ export default function ImportWizard({ open, onClose, lockedCampaign }: Props) {
                                     segmentIds={segmentIds}
                                     setSegmentIds={setSegmentIds}
                                     campaignLocked={!!lockedCampaign}
+                                    lockedSegment={lockedSegment}
                                 />
                             )}
                             {step === "result" && result && (
-                                <ResultStep result={result} filename={file?.name ?? "import"} />
+                                <ResultStep
+                                    result={result}
+                                    filename={file?.name ?? "import"}
+                                    pinnedSegments={pinnedSegmentNames}
+                                />
                             )}
                         </div>
 
@@ -673,6 +713,7 @@ function OptionsStep({
     segmentIds,
     setSegmentIds,
     campaignLocked,
+    lockedSegment,
 }: {
     dedup: ImportDedupStrategy;
     setDedup: (v: ImportDedupStrategy) => void;
@@ -685,6 +726,9 @@ function OptionsStep({
     // From a campaign's Leads tab the target campaign is fixed, so the
     // campaign picker is hidden and the header chip shows the target instead.
     campaignLocked: boolean;
+    // From a segment's member list the segment is fixed and always applied;
+    // the picker stays so more segments can be added alongside it.
+    lockedSegment?: { id: string; name: string; color?: string };
 }) {
     return (
         <div className="space-y-5">
@@ -755,10 +799,23 @@ function OptionsStep({
                     Add to segments
                 </h2>
                 <p className="text-[11px] text-slate-400 leading-tight mb-2">
-                    Every imported contact is pinned into these segments. A segment linked to a campaign enrols them
-                    there automatically.
+                    {lockedSegment
+                        ? "Every imported contact is pinned into this segment, whether or not it matches the segment's conditions. Add more below."
+                        : "Every imported contact is pinned into these segments. A segment linked to a campaign enrols them there automatically."}
                 </p>
-                <SegmentMultiPicker value={segmentIds} onChange={setSegmentIds} />
+                {lockedSegment && (
+                    <div className="mb-2 flex items-center gap-1.5 rounded-md border border-sky-200 bg-sky-50/60 px-2 h-7">
+                        <span
+                            className="size-2 rounded-full shrink-0"
+                            style={{ backgroundColor: lockedSegment.color ?? "#0284c7" }}
+                        />
+                        <span className="text-[12px] font-medium text-sky-900 truncate">{lockedSegment.name}</span>
+                        <span className="ml-auto text-[10px] uppercase tracking-[0.14em] text-sky-700 shrink-0">
+                            Always
+                        </span>
+                    </div>
+                )}
+                <SegmentMultiPicker value={segmentIds} onChange={setSegmentIds} exclude={lockedSegment?.id} />
             </section>
 
             <section className="rounded-md border border-slate-200 bg-slate-50/40 p-3">
@@ -774,7 +831,17 @@ function OptionsStep({
 
 // ----- Result step ----------------------------------------------
 
-export function ResultStep({ result, filename }: { result: ImportResult; filename: string }) {
+export function ResultStep({
+    result,
+    filename,
+    pinnedSegments,
+}: {
+    result: ImportResult;
+    filename: string;
+    // Names of the segments every imported, updated and skipped row was
+    // pinned into, so the wizard confirms the membership it just wrote.
+    pinnedSegments?: string[];
+}) {
     function downloadErrors() {
         if (!result.errors || result.errors.length === 0) return;
         const rows = [["line", "email", "reason"]];
@@ -807,6 +874,9 @@ export function ResultStep({ result, filename }: { result: ImportResult; filenam
                     <p className="text-[11.5px] text-slate-500 leading-snug mt-0.5">
                         Processed {result.total.toLocaleString()} rows in{" "}
                         {durationText(result.started_at, result.ended_at)}.
+                        {result.segments_pinned && pinnedSegments && pinnedSegments.length > 0 && (
+                            <> Pinned into {pinnedSegments.join(", ")}.</>
+                        )}
                     </p>
                 </div>
             </div>
@@ -817,6 +887,22 @@ export function ResultStep({ result, filename }: { result: ImportResult; filenam
                 <StatCard label="Skipped"   value={result.skipped}  accent="slate" />
                 <StatCard label="Failed"    value={result.failed}   accent={result.failed > 0 ? "red" : "slate"} />
             </div>
+
+            {result.segments_pinned === false && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 flex items-start gap-2">
+                    <AlertTriangleIcon className="w-3.5 h-3.5 mt-px shrink-0 text-amber-600" />
+                    <div className="min-w-0">
+                        <p className="text-[12.5px] font-medium text-amber-900">
+                            The contacts are in, but not in the segment
+                        </p>
+                        <p className="text-[11.5px] text-amber-800/90 leading-relaxed mt-0.5">
+                            The rows imported; the membership write did not. The reason is in the notes below. Select
+                            them in your contact list and use <span className="font-medium">Segment</span> to add them,
+                            or run the import again.
+                        </p>
+                    </div>
+                </div>
+            )}
 
             {result.quality?.flagged && (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 flex items-start gap-2">
@@ -835,7 +921,7 @@ export function ResultStep({ result, filename }: { result: ImportResult; filenam
                 <div className="rounded-md border border-slate-200 overflow-hidden">
                     <div className="px-3 h-9 border-b border-slate-200 bg-slate-50/60 flex items-center gap-2">
                         <span className="text-[11px] uppercase tracking-[0.14em] text-slate-500 font-medium">
-                            Errors
+                            {result.failed === 0 ? "Notes" : "Errors"}
                         </span>
                         <span className="text-[11px] text-slate-500">
                             {result.errors_truncated
@@ -863,7 +949,9 @@ export function ResultStep({ result, filename }: { result: ImportResult; filenam
                             <tbody>
                                 {result.errors.slice(0, 200).map((e, i) => (
                                     <tr key={i} className="border-b border-slate-100 last:border-b-0">
-                                        <td className="px-3 py-1.5 text-[11px] text-slate-500 font-mono">{e.line}</td>
+                                        <td className="px-3 py-1.5 text-[11px] text-slate-500 font-mono">
+                                            {e.line > 0 ? e.line : <span className="text-slate-300">—</span>}
+                                        </td>
                                         <td className="hidden md:table-cell px-3 py-1.5 text-[11.5px] text-slate-700 truncate max-w-[180px]">
                                             {e.email || <span className="text-slate-300">—</span>}
                                         </td>

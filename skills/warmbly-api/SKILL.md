@@ -59,7 +59,9 @@ or `@file`.
 
 - Lists return `{"data": [...], "pagination": {"next_cursor", "has_more"}}`.
   Page with `--cursor <next_cursor>` until `has_more` is false. The cursor is
-  opaque; never construct one.
+  opaque; never construct one, and never change the sort or filters halfway
+  through a walk: a cursor belongs to the ordering it came from and is rejected
+  under another.
 - Errors carry `code` and `request_id`. Branch on `code`
   (`not_found`, `forbidden`, `rate_limit_exceeded`, ...), quote `request_id`
   when reporting a failure.

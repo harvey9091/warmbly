@@ -210,3 +210,81 @@ func DecodeMergedCursor(token string) (time.Time, int, uuid.UUID, *errx.Error) {
 	}
 	return at, source, id, nil
 }
+
+// sortPrefix versions the composite sort-keyset token: (sort key, sort value,
+// id). Used by lists whose sort column is caller-chosen, nullable, or computed,
+// where the boundary cannot be re-read from the row later: the row may be gone
+// by the next page, and a mutable column (updated_at) may have moved.
+const sortPrefix = "s1_"
+
+// SortCursor is the keyset boundary of a caller-sorted list: the first row of
+// the next page, described by the ordering it was taken under, that row's sort
+// value (nil when the column is NULL there) and its id, which breaks ties.
+type SortCursor struct {
+	// Sort names the ordering ("<column>:<asc|desc>"). A token replayed under a
+	// different ordering describes a position that does not exist there, so the
+	// caller rejects the mismatch instead of paging into nonsense.
+	Sort string
+	// Value is the boundary row's sort key rendered as text. The caller casts it
+	// back to the column's type, so the rendering has to round-trip.
+	Value *string
+	ID    uuid.UUID
+}
+
+// EncodeSort wraps a (sort key, sort value, id) keyset position in an opaque
+// token. Returns nil for the zero id ("no next page") so the JSON field
+// serializes as null.
+func EncodeSort(sort string, value *string, id uuid.UUID) *string {
+	if id == uuid.Nil {
+		return nil
+	}
+	// Flag byte, then the fixed-width id, then the sort key; the value goes last
+	// so it keeps every byte it had, separators included.
+	flag := "0"
+	raw := ""
+	if value != nil {
+		flag = "1"
+		raw = *value
+	}
+	payload := flag + id.String() + "|" + sort + "|" + raw
+	tok := sortPrefix + base64.RawURLEncoding.EncodeToString([]byte(payload))
+	return &tok
+}
+
+// DecodeSortCursor reverses EncodeSort. An empty token yields (nil, nil) (start
+// from the beginning); an invalid token returns a 400.
+func DecodeSortCursor(token string) (*SortCursor, *errx.Error) {
+	if token == "" {
+		return nil, nil
+	}
+	invalid := errx.New(errx.BadRequest, "invalid cursor")
+	if !strings.HasPrefix(token, sortPrefix) {
+		return nil, invalid
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(token, sortPrefix))
+	if err != nil {
+		return nil, invalid
+	}
+	head, rest, ok := strings.Cut(string(raw), "|")
+	if !ok || len(head) != 37 {
+		return nil, invalid
+	}
+	id, err := uuid.Parse(head[1:])
+	if err != nil {
+		return nil, invalid
+	}
+	sort, value, ok := strings.Cut(rest, "|")
+	if !ok || sort == "" {
+		return nil, invalid
+	}
+	switch head[0] {
+	case '0':
+		if value != "" {
+			return nil, invalid
+		}
+		return &SortCursor{Sort: sort, ID: id}, nil
+	case '1':
+		return &SortCursor{Sort: sort, Value: &value, ID: id}, nil
+	}
+	return nil, invalid
+}

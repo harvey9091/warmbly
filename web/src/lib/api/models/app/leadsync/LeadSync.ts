@@ -43,6 +43,8 @@ export interface LeadSyncSource {
     dedup: ImportDedupStrategy;
     target_campaign_id?: string;
     category_ids: string[];
+    // Segments every synced row is pinned into on each run.
+    segment_ids: string[];
     subscribed_default: boolean;
     label?: string;
     status: LeadSyncStatus;
@@ -94,6 +96,7 @@ export interface CreateLeadSyncSource {
     dedup: ImportDedupStrategy;
     target_campaign_id?: string;
     category_ids: string[];
+    segment_ids: string[];
     subscribed_default?: boolean;
     label: string;
 }
@@ -111,6 +114,7 @@ export interface UpdateLeadSyncSource {
     target_campaign_id?: string;
     clear_campaign?: boolean;
     category_ids?: string[];
+    segment_ids?: string[];
     subscribed_default?: boolean;
     label?: string;
 }

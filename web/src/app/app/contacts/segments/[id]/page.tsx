@@ -127,7 +127,7 @@ function SegmentDetail() {
 
             {(s.included_count > 0 || s.excluded_count > 0) && <OverridesPanel segment={s} />}
 
-            <ContactsTable key={s.id} segment={{ id: s.id, name: s.name }} />
+            <ContactsTable key={s.id} segment={{ id: s.id, name: s.name, color: s.color }} />
 
             <SegmentEditor open={editorOpen} onClose={() => setEditorOpen(false)} segment={s} />
             <AddSegmentToCampaignDialog open={campaignOpen} onClose={() => setCampaignOpen(false)} segment={s} />
@@ -190,6 +190,12 @@ function OverridesPanel({ segment }: { segment: Segment }) {
     }
 
     const list = overrides.data ?? [];
+    // The API caps one listing, so a segment a big import pinned into shows a
+    // slice of its overrides. Say so rather than implying this is all of them,
+    // but only once the listing actually arrived: while it is pending `list`
+    // is empty, and the notice would read "the newest 0 of 5,000".
+    const pinned = segment.included_count + segment.excluded_count;
+    const truncated = overrides.isSuccess && pinned > list.length;
     return (
         <div className="border-b border-slate-200 bg-slate-50/40">
             <button
@@ -232,6 +238,13 @@ function OverridesPanel({ segment }: { segment: Segment }) {
                             </li>
                         );
                     })}
+                    {truncated && (
+                        <li className="px-5 py-2 flex items-center text-[11.5px] text-slate-400 leading-snug">
+                            Showing the newest {list.length.toLocaleString()} of {pinned.toLocaleString()}. Find any other
+                            pinned contact in Contacts and use the Segments section of its drawer to release it: a
+                            pinned-out contact never appears in the member list below.
+                        </li>
+                    )}
                 </ul>
             )}
         </div>

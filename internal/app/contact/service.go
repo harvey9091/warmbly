@@ -40,6 +40,10 @@ type ContactService interface {
 	// that persist a mapping for later (the Google Sheets sync sources) use
 	// it so a bad mapping is caught when it is saved, not on the next sync.
 	ValidateImportMapping(mapping []models.ContactImportColumnMapping) *errx.Error
+	// ValidateSegmentTargets reports whether every id names a segment in the
+	// organization, so a saved source is refused when it is written rather
+	// than on its next run.
+	ValidateSegmentTargets(ctx context.Context, orgID uuid.UUID, ids []string) *errx.Error
 
 	// ImportCommit re-parses the uploaded file with the chosen mapping
 	// and performs the upsert / skip / dedup work. Returns per-row

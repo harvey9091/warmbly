@@ -224,7 +224,7 @@ func (s *contactService) ImportCommit(
 	}
 	// Segment targets are resolved up front: each must exist in the org.
 	// Membership is written after the rows exist, as an include override.
-	segmentIDs, xerr := s.parseSegmentIDs(ctx, orgID, opts.SegmentIDs)
+	segmentIDs, xerr := s.resolveSegmentIDs(ctx, orgID, opts.SegmentIDs, opts.SkipMissingSegments)
 	if xerr != nil {
 		return nil, xerr
 	}
@@ -378,6 +378,18 @@ func (s *contactService) ImportCommit(
 	fail := func(line int, addr string, values []string, reason string) {
 		res.Failed++
 		warn(line, addr, values, reason)
+	}
+	// noteImport records a message about the whole import rather than one row.
+	// It goes to the front and is never dropped by the per-row cap: a file full
+	// of bad addresses must not push out the one note explaining why the rows
+	// that DID import are not in the segment they were imported into, nor bury
+	// it past the entries the dashboard renders.
+	noteImport := func(reason string) {
+		res.Errors = append([]models.ContactImportRowError{{Reason: reason}}, res.Errors...)
+		if len(res.Errors) > models.MaxContactImportReportedErrors {
+			res.Errors = res.Errors[:models.MaxContactImportReportedErrors]
+			res.ErrorsTruncated = true
+		}
 	}
 
 	// Bucket rows by target action. We send fresh inserts through
@@ -542,13 +554,26 @@ func (s *contactService) ImportCommit(
 	}
 
 	// Segment membership last, once every touched row exists. A failed write
-	// is a note, not a failed import: the contacts themselves are in.
-	if len(touched) > 0 {
+	// is a note, not a failed import: the contacts themselves are in, and the
+	// result says the pin did not land so the UI does not claim it did.
+	if len(segmentIDs) > 0 && len(touched) > 0 {
+		pinned, failedPins, firstReason := true, 0, ""
 		for _, segID := range segmentIDs {
 			if _, xerr := s.segmentLinker.SetMembers(ctx, orgID, segID, touched, models.SegmentMemberInclude); xerr != nil {
-				warn(0, "", nil, "imported contacts could not be added to a segment: "+xerr.Message)
+				pinned, failedPins = false, failedPins+1
+				if firstReason == "" {
+					firstReason = xerr.Message
+				}
 			}
 		}
+		// One note for the whole pin, however many segments were targeted:
+		// the same failure repeated per segment is noise, not information.
+		if failedPins == 1 {
+			noteImport("imported contacts could not be added to a segment: " + firstReason)
+		} else if failedPins > 1 {
+			noteImport(fmt.Sprintf("imported contacts could not be added to %d segments: %s", failedPins, firstReason))
+		}
+		res.SegmentsPinned = &pinned
 	}
 
 	res.EndedAt = time.Now().UTC()
@@ -564,9 +589,22 @@ func (s *contactService) ImportCommit(
 	return res, nil
 }
 
+// ValidateSegmentTargets exposes resolveSegmentIDs' verdict without running an
+// import, so a saved Google Sheets source is rejected at save time.
+func (s *contactService) ValidateSegmentTargets(ctx context.Context, orgID uuid.UUID, ids []string) *errx.Error {
+	_, xerr := s.resolveSegmentIDs(ctx, orgID, ids, false)
+	return xerr
+}
+
 // parseSegmentIDs validates the import's target segments: well-formed ids
 // that exist in the org, deduplicated.
 func (s *contactService) parseSegmentIDs(ctx context.Context, orgID uuid.UUID, raw []string) ([]uuid.UUID, *errx.Error) {
+	return s.resolveSegmentIDs(ctx, orgID, raw, false)
+}
+
+// resolveSegmentIDs is parseSegmentIDs with the recurring-source relaxation:
+// skipMissing drops an id whose segment is gone instead of failing the run.
+func (s *contactService) resolveSegmentIDs(ctx context.Context, orgID uuid.UUID, raw []string, skipMissing bool) ([]uuid.UUID, *errx.Error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
@@ -578,6 +616,9 @@ func (s *contactService) parseSegmentIDs(ctx context.Context, orgID uuid.UUID, r
 	for _, r := range raw {
 		id, err := uuid.Parse(strings.TrimSpace(r))
 		if err != nil {
+			if skipMissing {
+				continue
+			}
 			return nil, errx.New(errx.BadRequest, "invalid segment id")
 		}
 		if seen[id] {
@@ -586,6 +627,9 @@ func (s *contactService) parseSegmentIDs(ctx context.Context, orgID uuid.UUID, r
 		seen[id] = true
 		if _, xerr := s.segmentLinker.Get(ctx, orgID, id); xerr != nil {
 			if xerr.Code == errx.NotFound {
+				if skipMissing {
+					continue
+				}
 				return nil, errx.New(errx.BadRequest, "a selected segment does not exist")
 			}
 			return nil, xerr

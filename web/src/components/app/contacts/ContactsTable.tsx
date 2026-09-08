@@ -117,7 +117,7 @@ export default function ContactsTable({
 }: {
     current_campaign?: MiniCampaign;
     // Scope the list to one segment's members (the segment detail page).
-    segment?: { id: string; name: string };
+    segment?: { id: string; name: string; color?: string };
 }) {
     const confirm = useConfirm();
     const segmentMembers = useSetSegmentMembers();
@@ -487,7 +487,7 @@ export default function ContactsTable({
                                         ? "Pick people from your contacts, import a file, or add one by hand. The linked segments could not be loaded."
                                         : "Pick people from your contacts, link a segment, import a file, or add one by hand."
                                 : segment
-                                    ? "Nobody matches its conditions yet. Adjust them or pin contacts in."
+                                    ? "Nothing matches it yet. Pin people in from your contacts, import a file, or add one by hand."
                                     : "Add or upload contacts to get started."
             }
             emptyCta={
@@ -532,6 +532,29 @@ export default function ContactsTable({
                             Import file
                         </TopbarAction>
                     </div>
+                ) : segment ? (
+                    <div className="flex flex-wrap items-center justify-center gap-1.5">
+                        <TopbarAction
+                            icon={<UsersIcon className="w-3 h-3" />}
+                            onClick={() => setFromContactsOpen(true)}
+                        >
+                            Add contacts
+                        </TopbarAction>
+                        <TopbarAction
+                            variant="ghost"
+                            icon={<UploadIcon className="w-3 h-3" />}
+                            onClick={() => setImportOpen(true)}
+                        >
+                            Import file
+                        </TopbarAction>
+                        <TopbarAction
+                            variant="ghost"
+                            icon={<UserPlusIcon className="w-3 h-3" />}
+                            onClick={() => setNewOpen(true)}
+                        >
+                            New contact
+                        </TopbarAction>
+                    </div>
                 ) : (
                     <TopbarAction
                         icon={<UserPlusIcon className="w-3 h-3" />}
@@ -544,6 +567,9 @@ export default function ContactsTable({
             hasNextPage={!!contactsData.hasNextPage}
             isFetchingNextPage={contactsData.isFetchingNextPage}
             onLoadMore={() => contactsData.fetchNextPage()}
+            nextPageFailed={contactsData.isFetchNextPageError}
+            loadedCount={contacts?.length ?? 0}
+            totalCount={total}
         />
     );
 
@@ -931,8 +957,9 @@ export default function ContactsTable({
             <ImportWizard
                 open={importOpen}
                 onClose={() => setImportOpen(false)}
+                lockedSegment={segment}
             />
-            <SyncSourcesPanel open={syncOpen} onClose={() => setSyncOpen(false)} />
+            <SyncSourcesPanel open={syncOpen} onClose={() => setSyncOpen(false)} segment={segment} />
         </Page>
     );
 }
@@ -958,6 +985,9 @@ function ContactsTableBody({
     hasNextPage,
     isFetchingNextPage,
     onLoadMore,
+    nextPageFailed,
+    loadedCount,
+    totalCount,
 }: {
     embedded?: boolean;
     isLoading: boolean;
@@ -999,6 +1029,12 @@ function ContactsTableBody({
     hasNextPage: boolean;
     isFetchingNextPage: boolean;
     onLoadMore: () => void;
+    // Whether the failure was the next page rather than a refetch of the whole
+    // list, which decides what "Try again" runs.
+    nextPageFailed: boolean;
+    // How far through the list we are, so "Load more" says how much is left.
+    loadedCount: number;
+    totalCount: number;
 }) {
     if (isLoading) {
         return (
@@ -1015,7 +1051,11 @@ function ContactsTableBody({
             </div>
         );
     }
-    if (isError) {
+    // A page that fails once rows are loaded is reported in the footer instead;
+    // throwing away 500 loaded leads because page 13 failed is worse than the
+    // failure. The count is of rows LOADED, not of rows left after the
+    // client-side subscription filter, which can hide all of them.
+    if (isError && loadedCount === 0) {
         return (
             <div className="px-5 py-12 text-center">
                 <div className="mx-auto mb-3 size-8 rounded-md bg-red-50 text-red-600 flex items-center justify-center">
@@ -1050,8 +1090,66 @@ function ContactsTableBody({
             </div>
         );
     }
+    // "Try again" runs the request that actually failed: the page that did not
+    // arrive, or a refetch of the whole list when it was the refetch that broke.
+    const retry = nextPageFailed ? onLoadMore : onRetry;
+    const retrying = nextPageFailed ? isFetchingNextPage : isRefetching;
+    const footer = isError ? (
+        <div className="px-5 py-3 flex flex-col items-center gap-2 border-t border-slate-200/60">
+            <p className="text-[11.5px] text-slate-500 text-center max-w-[52ch] leading-relaxed">
+                <AlertTriangleIcon className="w-3 h-3 inline-block mr-1 -mt-px text-red-500" />
+                {errorMessage}
+            </p>
+            <button
+                type="button"
+                onClick={retry}
+                disabled={retrying}
+                className="h-7 px-3 rounded-md border border-slate-200 hover:border-slate-300 text-[12px] text-slate-700 hover:text-slate-900 inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
+            >
+                {retrying ? (
+                    <Loader2Icon className="w-3 h-3 animate-spin" />
+                ) : (
+                    <RefreshCcwIcon className="w-3 h-3" />
+                )}
+                Try again
+            </button>
+        </div>
+    ) : hasNextPage ? (
+        <div className="px-5 py-3 flex justify-center border-t border-slate-200/60">
+            <button
+                onClick={onLoadMore}
+                disabled={isFetchingNextPage}
+                className="h-7 px-3 rounded-md border border-slate-200 hover:border-slate-300 text-[12px] text-slate-700 hover:text-slate-900 inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
+            >
+                {isFetchingNextPage ? (
+                    <>
+                        <Loader2Icon className="w-3 h-3 animate-spin" />
+                        Loading…
+                    </>
+                ) : (
+                    <>
+                        <PlusIcon className="w-3 h-3" />
+                        Load more
+                        {totalCount > loadedCount && (
+                            <span className="text-slate-400">
+                                · {loadedCount.toLocaleString()} of {totalCount.toLocaleString()}
+                            </span>
+                        )}
+                    </>
+                )}
+            </button>
+        </div>
+    ) : null;
+
+    // Rows are loaded but the sub-filter hides all of them: still say so, and
+    // still surface a failed page rather than swallowing it.
     if (contacts.length === 0) {
-        return <EmptyBlock title={emptyTitle} body={emptyBody} cta={emptyCta} />;
+        return (
+            <>
+                <EmptyBlock title={emptyTitle} body={emptyBody} cta={emptyCta} />
+                {footer}
+            </>
+        );
     }
     return (
         <>
@@ -1297,27 +1395,7 @@ function ContactsTableBody({
                     })}
                 </tbody>
             </table>
-            {hasNextPage && (
-                <div className="px-5 py-3 flex justify-center border-t border-slate-200/60">
-                    <button
-                        onClick={onLoadMore}
-                        disabled={isFetchingNextPage}
-                        className="h-7 px-3 rounded-md border border-slate-200 hover:border-slate-300 text-[12px] text-slate-700 hover:text-slate-900 inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
-                    >
-                        {isFetchingNextPage ? (
-                            <>
-                                <Loader2Icon className="w-3 h-3 animate-spin" />
-                                Loading…
-                            </>
-                        ) : (
-                            <>
-                                <PlusIcon className="w-3 h-3" />
-                                Load more
-                            </>
-                        )}
-                    </button>
-                </div>
-            )}
+            {footer}
         </>
     );
 }

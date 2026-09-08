@@ -15,7 +15,7 @@ Auth: **Scope** `READ_CONTACTS` · **Org permission** `view_contacts`
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
-| `cursor` | query | string | Opaque pagination cursor from the previous page's `pagination.next_cursor`. |
+| `cursor` | query | string | Opaque pagination cursor from the previous page's `pagination.next_cursor`. It carries the exact position of the next page under the ordering it was issued for, so rows that share a sort value are never skipped or repeated. A malformed cursor, or one replayed with a different `sort_by` or `reverse` than it was issued under, is a `400`. |
 | `limit` | query | string | Page size (numeric string). |
 | `category` | query | string | Convenience filter for a single category ID. |
 
@@ -40,8 +40,8 @@ Every field is optional; an empty body matches all contacts in the organization.
 | `created_before` | string (RFC 3339) | No | Created on or before this time. |
 | `updated_after` | string (RFC 3339) | No | Updated on or after this time. |
 | `updated_before` | string (RFC 3339) | No | Updated on or before this time. |
-| `sort_by` | string | No | Sort column, e.g. `first_name`, `campaign_count`. |
-| `reverse` | boolean | No | Descending when true. |
+| `sort_by` | string | No | Sort column: `created_at` (the default), `updated_at`, `first_name`, `last_name`, `email`, or `campaign_count`. Any other value falls back to `created_at`. |
+| `reverse` | boolean | No | Ascending when true. The default is descending. |
 
 ```json
 {
@@ -56,7 +56,7 @@ Every field is optional; an empty body matches all contacts in the organization.
 
 ### Response
 
-Returns a `data` array of contacts plus a `pagination` envelope.
+Returns a `data` array of contacts plus a `pagination` envelope. Paginate by passing `pagination.next_cursor` back as `cursor` until `has_more` is `false`; `pagination.total` is the count for the whole filtered set and is only sent on the first page.
 
 ```json
 {
@@ -86,7 +86,7 @@ Returns a `data` array of contacts plus a `pagination` envelope.
   ],
   "pagination": {
     "total": 1280,
-    "next_cursor": "c1_b3BhcXVlLWN1cnNvcg",
+    "next_cursor": "s1_b3BhcXVlLWN1cnNvcg",
     "has_more": true
   }
 }
@@ -367,7 +367,7 @@ Send `multipart/form-data` with a `file` field and an `options` field containing
 | `has_header` | boolean | Yes | Whether the first row is a header. |
 | `category_ids` | string[] | No | Categories to assign to imported contacts. |
 | `campaign_ids` | string[] | No | Campaigns to add imported contacts to. |
-| `segment_ids` | string[] | No | Segments to pin imported contacts into, as a manual include override. Applies to imported, updated, and skipped-but-linked contacts alike. |
+| `segment_ids` | string[] | No | Segments to pin imported contacts into, as a manual include override. Applies to imported, updated, and skipped-but-linked contacts alike. An id that is not a valid UUID, or that names no segment in the organization, is rejected with `400` before any row is written. |
 | `subscribed_default` | boolean | No | Subscription state for new contacts when no subscribed column is mapped. Defaults to true. |
 
 ```json
@@ -398,6 +398,7 @@ Send `multipart/form-data` with a `file` field and an `options` field containing
   "errors": [
     { "line": 57, "email": "not-an-email", "reason": "invalid email" }
   ],
+  "segments_pinned": true,
   "quality": {
     "malformed": 4,
     "disposable": 0,
@@ -411,6 +412,8 @@ Send `multipart/form-data` with a `file` field and an `options` field containing
 `quality` describes the addresses in the file: `malformed` are not addresses at all, `disposable` are on known throwaway domains, and `role` counts shared inboxes such as `info@`. `bad_share_pct` is malformed plus disposable, as a percentage of the file; role addresses are deliberately excluded from it, since mailing a shared inbox is a choice rather than a defect. `flagged` is set above 25% on files of at least 20 rows, and carries a `summary` sentence. It is advisory: a flagged import still stores every row it could parse. A list bad enough to matter is refused at campaign launch instead.
 
 Imports are capped at 50,000 rows. `errors` carries at most the first 1,000 entries; past that `errors_truncated` is `true` and the counters, not the list, are the real totals. Every row lands in exactly one of `imported`, `updated`, `skipped`, or `failed`, so those four always sum to `total`.
+
+`errors` also carries notes about rows that were not failures, so an entry there does not always mean a lost row. A note about the import as a whole rather than one row carries `line: 0` and is listed first, so a file full of bad addresses cannot push it out of a truncated list. `segments_pinned` is present only when `segment_ids` was set: `true` when every membership write landed, `false` when one did not, with the reason among the notes.
 
 A custom-field name may use letters, numbers, underscores, spaces, and dashes (`Company Mobile`, `first-name`, `plan_tier`). Anything else is a `400` on the whole request, raised before any row is written, along with a mapping that names no `email` column or a `custom` column with no `custom_key`. Per-row `errors` are reserved for problems with the data itself.
 

@@ -1,10 +1,12 @@
 // SyncSourcesPanel — the management surface for on-demand Google-Sheet → leads
 // "sync sources". Lists saved sources with their last-sync result + status, and
 // offers per-row Sync now / Edit / Delete plus a "New sync" entry that opens the
-// SheetSyncWizard. Works in two placements:
-//   - global Contacts page (no campaignId): lists every source.
-//   - per-campaign leads view (campaignId set): lists that campaign's sources
+// SheetSyncWizard. Works in three placements:
+//   - global Contacts page (no scope): lists every source.
+//   - per-campaign leads view (campaign set): lists that campaign's sources
 //     and pre-targets the wizard to it.
+//   - a segment's member list (segment set): the same, for the segment every
+//     synced row is pinned into.
 //
 // Rendered as a centered modal mirroring ImportWizard's dialog shell + theme.
 
@@ -36,13 +38,17 @@ export default function SyncSourcesPanel({
     open,
     onClose,
     campaign,
+    segment,
 }: {
     open: boolean;
     onClose: () => void;
     // When set, scopes the list + pre-targets new sources to this campaign.
     campaign?: { id: string; name: string };
+    // When set, the same for a segment: only the sources that feed it, and a
+    // new source pins every synced row into it.
+    segment?: { id: string; name: string; color?: string };
 }) {
-    const sources = useLeadSyncSources(campaign?.id);
+    const sources = useLeadSyncSources(campaign?.id, segment?.id);
     const deleteSource = useDeleteLeadSyncSource();
     const syncSource = useSyncLeadSyncSource();
     const confirm = useConfirm();
@@ -108,23 +114,23 @@ export default function SyncSourcesPanel({
                                 <span className="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">
                                     Sync sources
                                 </span>
-                                {campaign && (
+                                {(campaign || segment) && (
                                     <>
                                         <div className="h-4 w-px bg-slate-200" />
                                         <span className="text-[12.5px] text-slate-900 font-medium truncate min-w-0 max-w-[110px] md:max-w-[200px]">
-                                            {campaign.name}
+                                            {campaign?.name ?? segment?.name}
                                         </span>
                                     </>
                                 )}
                                 <button
                                     type="button"
                                     onClick={() => setWizardOpen(true)}
-                                    aria-label={campaign ? "Connect a Google Sheet" : "New sync"}
+                                    aria-label={campaign || segment ? "Connect a Google Sheet" : "New sync"}
                                     className="ml-auto h-7 px-2.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-colors"
                                 >
                                     <PlusIcon className="w-3 h-3" />
                                     <span className="hidden md:inline">
-                                        {campaign ? "Connect a Google Sheet" : "New sync"}
+                                        {campaign || segment ? "Connect a Google Sheet" : "New sync"}
                                     </span>
                                     <span className="md:hidden">New</span>
                                 </button>
@@ -178,7 +184,8 @@ export default function SyncSourcesPanel({
                                         </p>
                                         <p className="text-[11.5px] text-slate-500 mt-1 max-w-[42ch] mx-auto leading-relaxed">
                                             Connect a Google Sheet and re-run it on demand to pull new and
-                                            updated leads into Warmbly{campaign ? ` and into ${campaign.name}` : ""}.
+                                            updated leads into Warmbly
+                                            {campaign ? ` and into ${campaign.name}` : segment ? ` and into ${segment.name}` : ""}.
                                         </p>
                                         <button
                                             type="button"
@@ -186,7 +193,7 @@ export default function SyncSourcesPanel({
                                             className="mt-4 h-8 px-4 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-colors"
                                         >
                                             <PlusIcon className="w-3.5 h-3.5" />
-                                            {campaign ? "Connect a Google Sheet" : "New sync"}
+                                            {campaign || segment ? "Connect a Google Sheet" : "New sync"}
                                         </button>
                                     </div>
                                 ) : (
@@ -213,6 +220,7 @@ export default function SyncSourcesPanel({
                 open={wizardOpen}
                 onClose={() => setWizardOpen(false)}
                 lockedCampaign={campaign}
+                lockedSegment={segment}
                 onSaved={() => sources.refetch()}
             />
             {editing && (

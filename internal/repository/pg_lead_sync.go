@@ -16,7 +16,9 @@ import (
 // reachable by the org that created it.
 type LeadSyncRepository interface {
 	Create(ctx context.Context, src *models.LeadSyncSource) error
-	List(ctx context.Context, orgID uuid.UUID, campaignID *uuid.UUID) ([]models.LeadSyncSource, error)
+	// List filters to the sources feeding one campaign and/or one segment;
+	// both nil lists every source in the organization.
+	List(ctx context.Context, orgID uuid.UUID, campaignID, segmentID *uuid.UUID) ([]models.LeadSyncSource, error)
 	Get(ctx context.Context, orgID, id uuid.UUID) (*models.LeadSyncSource, error)
 	Update(ctx context.Context, src *models.LeadSyncSource) error
 	Delete(ctx context.Context, orgID, id uuid.UUID) error
@@ -36,7 +38,7 @@ func NewLeadSyncRepository(db *pgxpool.Pool) LeadSyncRepository {
 const leadSyncCols = `
 	id, organization_id, created_by_user_id, provider, connection_id,
 	sheet_id, COALESCE(sheet_title, ''), COALESCE(tab_title, ''), COALESCE(a1_range, ''),
-	has_header, column_mapping, dedup, target_campaign_id, category_ids,
+	has_header, column_mapping, dedup, target_campaign_id, category_ids, segment_ids,
 	subscribed_default, COALESCE(label, ''), status, last_synced_at, last_result,
 	COALESCE(last_error, ''), created_at, updated_at`
 
@@ -56,32 +58,41 @@ func (r *leadSyncRepository) Create(ctx context.Context, src *models.LeadSyncSou
 
 	mapping := marshalJSONDefault(src.ColumnMapping, "[]")
 	cats := marshalJSONDefault(src.CategoryIDs, "[]")
+	segs := marshalJSONDefault(src.SegmentIDs, "[]")
 
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO lead_sync_sources (
 			id, organization_id, created_by_user_id, provider, connection_id,
 			sheet_id, sheet_title, tab_title, a1_range, has_header,
-			column_mapping, dedup, target_campaign_id, category_ids,
+			column_mapping, dedup, target_campaign_id, category_ids, segment_ids,
 			subscribed_default, label, status, created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5,
 			$6, $7, $8, $9, $10,
-			$11, $12, $13, $14,
-			$15, $16, $17, $18, $18
+			$11, $12, $13, $14, $15,
+			$16, $17, $18, $19, $19
 		)`,
 		src.ID, src.OrganizationID, src.CreatedByUserID, src.Provider, src.ConnectionID,
 		src.SheetID, nullIfEmptyStr(src.SheetTitle), nullIfEmptyStr(src.TabTitle), nullIfEmptyStr(src.A1Range), src.HasHeader,
-		mapping, string(src.Dedup), src.TargetCampaignID, cats,
+		mapping, string(src.Dedup), src.TargetCampaignID, cats, segs,
 		src.SubscribedDefault, nullIfEmptyStr(src.Label), string(src.Status), now,
 	)
 	return err
 }
 
-func (r *leadSyncRepository) List(ctx context.Context, orgID uuid.UUID, campaignID *uuid.UUID) ([]models.LeadSyncSource, error) {
+func (r *leadSyncRepository) List(ctx context.Context, orgID uuid.UUID, campaignID, segmentID *uuid.UUID) ([]models.LeadSyncSource, error) {
+	// The segment filter is a jsonb containment test against the id list the
+	// importer reads, so it needs no extra column.
+	var wantSegment []byte
+	if segmentID != nil {
+		wantSegment = []byte(`["` + segmentID.String() + `"]`)
+	}
 	rows, err := r.db.Query(ctx, `SELECT `+leadSyncCols+`
 		FROM lead_sync_sources
-		WHERE organization_id = $1 AND ($2::uuid IS NULL OR target_campaign_id = $2)
-		ORDER BY created_at DESC`, orgID, campaignID)
+		WHERE organization_id = $1
+		  AND ($2::uuid IS NULL OR target_campaign_id = $2)
+		  AND ($3::jsonb IS NULL OR segment_ids @> $3::jsonb)
+		ORDER BY created_at DESC`, orgID, campaignID, wantSegment)
 	if err != nil {
 		return nil, err
 	}
@@ -116,16 +127,17 @@ func (r *leadSyncRepository) Update(ctx context.Context, src *models.LeadSyncSou
 	src.UpdatedAt = now
 	mapping := marshalJSONDefault(src.ColumnMapping, "[]")
 	cats := marshalJSONDefault(src.CategoryIDs, "[]")
+	segs := marshalJSONDefault(src.SegmentIDs, "[]")
 
 	_, err := r.db.Exec(ctx, `
 		UPDATE lead_sync_sources SET
 			sheet_id = $1, sheet_title = $2, tab_title = $3, a1_range = $4,
 			has_header = $5, column_mapping = $6, dedup = $7, target_campaign_id = $8,
-			category_ids = $9, subscribed_default = $10, label = $11, updated_at = $12
-		WHERE organization_id = $13 AND id = $14`,
+			category_ids = $9, segment_ids = $10, subscribed_default = $11, label = $12, updated_at = $13
+		WHERE organization_id = $14 AND id = $15`,
 		src.SheetID, nullIfEmptyStr(src.SheetTitle), nullIfEmptyStr(src.TabTitle), nullIfEmptyStr(src.A1Range),
 		src.HasHeader, mapping, string(src.Dedup), src.TargetCampaignID,
-		cats, src.SubscribedDefault, nullIfEmptyStr(src.Label), now,
+		cats, segs, src.SubscribedDefault, nullIfEmptyStr(src.Label), now,
 		src.OrganizationID, src.ID,
 	)
 	return err
@@ -165,6 +177,7 @@ func scanLeadSyncInto(row scanner, s *models.LeadSyncSource) error {
 	var (
 		mapping    []byte
 		cats       []byte
+		segs       []byte
 		lastResult []byte
 		status     string
 		dedup      string
@@ -172,7 +185,7 @@ func scanLeadSyncInto(row scanner, s *models.LeadSyncSource) error {
 	if err := row.Scan(
 		&s.ID, &s.OrganizationID, &s.CreatedByUserID, &s.Provider, &s.ConnectionID,
 		&s.SheetID, &s.SheetTitle, &s.TabTitle, &s.A1Range,
-		&s.HasHeader, &mapping, &dedup, &s.TargetCampaignID, &cats,
+		&s.HasHeader, &mapping, &dedup, &s.TargetCampaignID, &cats, &segs,
 		&s.SubscribedDefault, &s.Label, &status, &s.LastSyncedAt, &lastResult,
 		&s.LastError, &s.CreatedAt, &s.UpdatedAt,
 	); err != nil {
@@ -188,6 +201,10 @@ func scanLeadSyncInto(row scanner, s *models.LeadSyncSource) error {
 	s.CategoryIDs = []string{}
 	if len(cats) > 0 {
 		_ = json.Unmarshal(cats, &s.CategoryIDs)
+	}
+	s.SegmentIDs = []string{}
+	if len(segs) > 0 {
+		_ = json.Unmarshal(segs, &s.SegmentIDs)
 	}
 	if len(lastResult) > 0 {
 		var res models.ContactImportResult

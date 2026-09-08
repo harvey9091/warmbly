@@ -133,7 +133,7 @@ func (h *Handler) PreviewLeadSync(c *gin.Context) {
 }
 
 // ListLeadSyncSources lists this org's saved sources, optionally filtered to a
-// campaign via ?campaign_id=.
+// campaign via ?campaign_id= or to a segment via ?segment_id=.
 func (h *Handler) ListLeadSyncSources(c *gin.Context) {
 	orgID, ok := requireOrgID(c)
 	if !ok {
@@ -148,7 +148,16 @@ func (h *Handler) ListLeadSyncSources(c *gin.Context) {
 		}
 		campaignID = &id
 	}
-	sources, err := h.LeadSyncService.List(c.Request.Context(), orgID, campaignID)
+	var segmentID *uuid.UUID
+	if raw := strings.TrimSpace(c.Query("segment_id")); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			errx.JSON(c, errx.New(errx.BadRequest, "invalid segment_id"))
+			return
+		}
+		segmentID = &id
+	}
+	sources, err := h.LeadSyncService.List(c.Request.Context(), orgID, campaignID, segmentID)
 	if err != nil {
 		errx.JSON(c, errx.New(errx.Internal, "failed to list sync sources"))
 		return

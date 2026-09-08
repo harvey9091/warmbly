@@ -1,7 +1,8 @@
 // SyncSourceEditDrawer — edit a saved sync source's options without re-running
 // the column mapper. Editing the sheet/tab/mapping is a "make a new source"
 // operation conceptually, so here we only expose the safe, common edits:
-// label, dedup, target campaign (with detach), categories, and the header flag.
+// label, dedup, target campaign (with detach), categories, segments, and the
+// header flag.
 // Sheet/tab/mapping are shown read-only for context.
 
 import React from "react";
@@ -11,6 +12,7 @@ import toast from "react-hot-toast";
 
 import { DEDUP_OPTIONS, describeError } from "./importShared";
 import CategoryPicker from "./CategoryPicker";
+import { SegmentMultiPicker } from "@/components/app/segments/SegmentPickers";
 import { Label, TextInput } from "@/components/ui/field";
 import {
     PopoverMenu,
@@ -45,6 +47,7 @@ export default function SyncSourceEditDrawer({
         source.target_campaign_id ?? null,
     );
     const [categoryIds, setCategoryIds] = React.useState<string[]>(source.category_ids ?? []);
+    const [segmentIds, setSegmentIds] = React.useState<string[]>(source.segment_ids ?? []);
     const [busy, setBusy] = React.useState(false);
 
     const campaignName =
@@ -59,6 +62,7 @@ export default function SyncSourceEditDrawer({
                 dedup,
                 has_header: hasHeader,
                 category_ids: categoryIds,
+                segment_ids: segmentIds,
             };
             // A nil pointer can't express "clear", so detach explicitly.
             if (campaignId) {
@@ -223,6 +227,16 @@ export default function SyncSourceEditDrawer({
                                 Apply categories
                             </h2>
                             <CategoryPicker value={categoryIds} onChange={setCategoryIds} />
+                        </section>
+
+                        <section>
+                            <h2 className="text-[10px] uppercase tracking-[0.14em] font-semibold text-slate-500 mb-2">
+                                Add to segments
+                            </h2>
+                            <p className="text-[11px] text-slate-400 leading-tight mb-2">
+                                Every synced contact is pinned into these segments on each run.
+                            </p>
+                            <SegmentMultiPicker value={segmentIds} onChange={setSegmentIds} />
                         </section>
                     </div>
 

@@ -97,7 +97,7 @@ func (s *contactService) checkSegmentTargets(ctx context.Context, orgID uuid.UUI
 }
 
 func (s *contactService) Search(ctx context.Context, orgID, cursor, category, limit string, filters models.SearchContacts) (*models.ContactsResult, *errx.Error) {
-	cursorId, err := paging.DecodeCursor(cursor)
+	cursorPos, err := paging.DecodeSortCursor(cursor)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func (s *contactService) Search(ctx context.Context, orgID, cursor, category, li
 		return nil, err
 	}
 
-	return s.contactRepository.Search(ctx, orgID, categoryId, cursorId, filters, limitN)
+	return s.contactRepository.Search(ctx, orgID, categoryId, cursorPos, filters, limitN)
 }
 
 // validateLeadFilters gates the single-campaign Leads-view filters: an unknown

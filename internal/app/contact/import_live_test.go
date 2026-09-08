@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/warmbly/warmbly/internal/app/orgrisk"
+	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/repository"
@@ -33,6 +34,7 @@ type importFixture struct {
 	campaign uuid.UUID
 	svc      ContactService
 	repo     repository.ContactRepository
+	segments repository.SegmentRepository
 	pool     *pgxpool.Pool
 }
 
@@ -79,6 +81,8 @@ func newImportFixture(t *testing.T) *importFixture {
 			{`DELETE FROM campaign_leads WHERE campaign_id IN (SELECT id FROM campaigns WHERE organization_id = $1)`, f.org},
 			{`DELETE FROM campaigns WHERE organization_id = $1`, f.org},
 			{`DELETE FROM contact_categories WHERE contact_id IN (SELECT id FROM contacts WHERE organization_id = $1)`, f.org},
+			{`DELETE FROM segment_members WHERE segment_id IN (SELECT id FROM segments WHERE organization_id = $1)`, f.org},
+			{`DELETE FROM segments WHERE organization_id = $1`, f.org},
 			{`DELETE FROM contacts WHERE organization_id = $1`, f.org},
 			{`DELETE FROM categories WHERE user_id = $1`, f.user},
 			{`DELETE FROM organization_members WHERE organization_id = $1`, f.org},
@@ -92,8 +96,12 @@ func newImportFixture(t *testing.T) *importFixture {
 	})
 
 	f.repo = repository.NewContactRepostory(handle)
+	f.segments = repository.NewSegmentRepository(handle)
 	// nil sub/plan repos: the plan cap is skipped, which is what we want here.
 	f.svc = NewService(f.repo, nil, nil)
+	// Segment targets on an import are written through the same repository the
+	// backend wires in; no syncer, so nothing enrols campaigns here.
+	f.svc.(SegmentAware).WireSegments(f.segments, nil)
 	return f
 }
 
@@ -719,5 +727,161 @@ func TestLiveImportQualityFoldsInALegacyFinding(t *testing.T) {
 	}
 	if orgrisk.HasSignal(risk, "list_quality") {
 		t.Errorf("the finding survived enough good data to outweigh it: %v", risk.Signals)
+	}
+}
+
+// Issue #381: a CSV imported with segment targets must land in those segments,
+// including rows the dedup strategy skipped, and the segment's own contact
+// list (the query the dashboard runs) must return them.
+func TestLiveImportPinsRowsIntoSegments(t *testing.T) {
+	f := newImportFixture(t)
+	ctx := context.Background()
+
+	// Conditions nothing in the file matches, so membership can only come
+	// from the import's pin.
+	seg, xerr := f.segments.Create(ctx, f.org, &f.user, &models.Segment{
+		Name: "Import target", Color: "#0284c7", Match: models.SegmentMatchAll,
+		Conditions: []models.SegmentCondition{{Field: "company", Operator: "equals", Value: "nobody-here"}},
+	})
+	if xerr != nil {
+		t.Fatalf("create segment: %v", xerr)
+	}
+
+	tag := uuid.New().String()[:6]
+	emails := []string{"seg1-" + tag + "@i381.test", "seg2-" + tag + "@i381.test"}
+	opts := &models.ContactImportCommit{
+		Mapping:    emailOnlyMapping(),
+		Dedup:      models.ContactImportDedupSkip,
+		HasHeader:  true,
+		SegmentIDs: []string{seg.ID.String()},
+	}
+	res, msg := f.commit(t, simpleCSV(emails), opts)
+	if msg != "" {
+		t.Fatalf("commit: %s", msg)
+	}
+	if res.Imported != 2 {
+		t.Fatalf("imported = %d, want 2", res.Imported)
+	}
+	if res.SegmentsPinned == nil || !*res.SegmentsPinned {
+		t.Fatalf("result does not report the pin: %+v", res.Errors)
+	}
+
+	members := func() []string {
+		t.Helper()
+		page, xerr := f.repo.Search(ctx, f.org.String(), nil, nil,
+			models.SearchContacts{SegmentIDs: []string{seg.ID.String()}}, 50)
+		if xerr != nil {
+			t.Fatalf("search: %v", xerr)
+		}
+		out := make([]string, 0, len(page.Data))
+		for _, c := range page.Data {
+			out = append(out, c.Email)
+		}
+		return out
+	}
+	if got := members(); len(got) != 2 {
+		t.Fatalf("segment holds %v, want both imported rows", got)
+	}
+
+	// The same file again: every row is skipped as a duplicate, and a third
+	// row is new. All three have to be in the segment afterwards, because
+	// "skip" means "leave their fields alone", not "leave them out".
+	emails = append(emails, "seg3-"+tag+"@i381.test")
+	res, msg = f.commit(t, simpleCSV(emails), opts)
+	if msg != "" {
+		t.Fatalf("second commit: %s", msg)
+	}
+	if res.Skipped != 2 || res.Imported != 1 {
+		t.Fatalf("second run: imported=%d skipped=%d, want 1/2", res.Imported, res.Skipped)
+	}
+	if got := members(); len(got) != 3 {
+		t.Fatalf("segment holds %v, want all three rows", got)
+	}
+
+	// No targets at all leaves the flag absent, so a caller can tell "nothing
+	// to pin" apart from "the pin failed".
+	res, msg = f.commit(t, simpleCSV([]string{"untargeted-" + tag + "@i381.test"}),
+		&models.ContactImportCommit{Mapping: emailOnlyMapping(), Dedup: models.ContactImportDedupSkip, HasHeader: true})
+	if msg != "" {
+		t.Fatalf("untargeted commit: %s", msg)
+	}
+	if res.SegmentsPinned != nil {
+		t.Fatalf("import with no segment targets reported segments_pinned=%v", *res.SegmentsPinned)
+	}
+
+	// A segment id from another organization is refused up front rather than
+	// dropping the pin silently.
+	gone := uuid.NewString()
+	opts.SegmentIDs = []string{gone}
+	if _, msg := f.commit(t, simpleCSV([]string{"ghost-" + tag + "@i381.test"}), opts); msg == "" {
+		t.Fatalf("import with an unknown segment succeeded")
+	}
+
+	// A recurring source (the Google Sheets sync) keeps importing when one of
+	// its saved targets is gone, and says the pin did not fully land.
+	opts.SegmentIDs = []string{seg.ID.String(), gone}
+	opts.SkipMissingSegments = true
+	res, msg = f.commit(t, simpleCSV([]string{"lenient-" + tag + "@i381.test"}), opts)
+	if msg != "" {
+		t.Fatalf("lenient commit: %s", msg)
+	}
+	if res.Imported != 1 || res.SegmentsPinned == nil || !*res.SegmentsPinned {
+		t.Fatalf("lenient run: imported=%d pinned=%v", res.Imported, res.SegmentsPinned)
+	}
+	if got := members(); len(got) != 4 {
+		t.Fatalf("segment holds %v after the lenient run, want four rows", got)
+	}
+}
+
+// failingLinker validates segment targets through the real repository but
+// refuses every membership write, which is the only way to reach the pin
+// failure path from a test.
+type failingLinker struct{ repository.SegmentRepository }
+
+func (failingLinker) SetMembers(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID, models.SegmentMemberMode) (int, *errx.Error) {
+	return 0, errx.New(errx.Internal, "segment store unavailable")
+}
+
+// A pin that does not land is reported as segments_pinned=false with one note
+// saying why, and that note survives a file that produced more row errors than
+// the payload cap: it explains the rows that DID import, so it must not be the
+// entry that gets dropped.
+func TestLiveImportReportsAPinThatDidNotLand(t *testing.T) {
+	f := newImportFixture(t)
+	ctx := context.Background()
+
+	seg, xerr := f.segments.Create(ctx, f.org, &f.user, &models.Segment{
+		Name: "Unreachable " + uuid.New().String()[:6], Color: "#0284c7", Match: models.SegmentMatchAll,
+	})
+	if xerr != nil {
+		t.Fatalf("create segment: %v", xerr)
+	}
+	f.svc.(SegmentAware).WireSegments(failingLinker{f.segments}, nil)
+
+	tag := uuid.New().String()[:6]
+	rows := []string{"good-" + tag + "@i381.test"}
+	for i := 0; i < models.MaxContactImportReportedErrors+5; i++ {
+		rows = append(rows, fmt.Sprintf("not-an-email-%d", i))
+	}
+	res, msg := f.commit(t, simpleCSV(rows), &models.ContactImportCommit{
+		Mapping: emailOnlyMapping(), Dedup: models.ContactImportDedupSkip, HasHeader: true,
+		SegmentIDs: []string{seg.ID.String()},
+	})
+	if msg != "" {
+		t.Fatalf("commit: %s", msg)
+	}
+	if res.Imported != 1 {
+		t.Fatalf("imported = %d, want the one valid row", res.Imported)
+	}
+	if res.SegmentsPinned == nil || *res.SegmentsPinned {
+		t.Fatalf("a refused membership write reported segments_pinned=%v", res.SegmentsPinned)
+	}
+	if !res.ErrorsTruncated || len(res.Errors) != models.MaxContactImportReportedErrors {
+		t.Fatalf("errors = %d truncated=%v, want the cap", len(res.Errors), res.ErrorsTruncated)
+	}
+	// First, so the dashboard renders it however many row errors came with it.
+	first := res.Errors[0]
+	if first.Line != 0 || !strings.Contains(first.Reason, "could not be added to a segment") {
+		t.Fatalf("first note = %+v, want the segment-pin reason", first)
 	}
 }

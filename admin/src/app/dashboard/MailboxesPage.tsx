@@ -166,8 +166,10 @@ export default function MailboxesPage() {
     const userId = params.get("user") || undefined;
     const workerParam = params.get("worker") || "";
 
-    const [query, setQuery] = useState("");
-    const [status, setStatus] = useState<StatusFilter>("active");
+    // `?q=` seeds the search box so the command palette can land here on a
+    // mailbox; a status of "all" keeps a disabled mailbox findable that way.
+    const [query, setQuery] = useState(params.get("q") ?? "");
+    const [status, setStatus] = useState<StatusFilter>(params.get("q") ? "all" : "active");
     const [provider, setProvider] = useState("");
     const [warmup, setWarmup] = useState<WarmupFilter>("all");
     const [workerId, setWorkerId] = useState(workerParam);
@@ -195,6 +197,14 @@ export default function MailboxesPage() {
     useEffect(() => {
         setWorkerId(workerParam);
     }, [workerParam]);
+
+    // The page stays mounted when the palette lands here again with another
+    // ?q=, so the search box follows the URL rather than only its first value.
+    const qParam = params.get("q") ?? "";
+    useEffect(() => {
+        setQuery(qParam);
+        if (qParam) setStatus("all");
+    }, [qParam]);
 
     const { data: workersData } = useQuery({ queryKey: ["admin", "workers", "managed"], queryFn: listManagedWorkers, staleTime: 60_000 });
     const workerOptions = [
@@ -304,6 +314,7 @@ export default function MailboxesPage() {
         next.delete("org");
         next.delete("user");
         next.delete("worker");
+        next.delete("q");
         setParams(next, { replace: true });
     }
 
