@@ -33,7 +33,7 @@ GIN_MODE=release
 OPEN_API=true
 
 # Logs
-SENTRY_DSN=""
+# SENTRY_DSN is intentionally omitted here so empty values are never emitted.
 
 # SECRETS
 AUTH_SECRET="example123"

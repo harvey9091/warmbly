@@ -1245,11 +1245,11 @@ HDR
     environment:
       POSTGRES_USER: warmbly
       POSTGRES_PASSWORD: \${POSTGRES_PASSWORD}
-      POSTGRES_DB: warmbly
+      POSTGRES_DB: warmbly_dev
     volumes:
       - \${WARMBLY_PG_DATA}:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U warmbly"]
+      test: ["CMD-SHELL", "pg_isready -U warmbly -d \${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
