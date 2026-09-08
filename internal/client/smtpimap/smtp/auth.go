@@ -3,9 +3,10 @@ package smtp
 import (
 	"errors"
 	"fmt"
-	"net"
 	"net/smtp"
 	"strings"
+
+	"github.com/warmbly/warmbly/internal/models"
 )
 
 // ErrSMTPCleartextAuth is returned rather than sending credentials over an
@@ -93,13 +94,9 @@ func (a *LoginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
 }
 
 // IsLoopbackHost reports whether host is this machine, where credentials
-// cannot reach a wire even without TLS.
+// cannot reach a wire even without TLS. One definition, shared with the
+// mailbox security modes, so the AUTH guard and the "none" mode can never
+// disagree about what counts as local.
 func IsLoopbackHost(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
-	}
-	return false
+	return models.LoopbackMailHost(host)
 }

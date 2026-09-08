@@ -41,10 +41,15 @@ type SmtpImapData struct {
 	ImapClient ImapConn
 	SmtpClient *smtp.Client
 	Mailboxes  []*models.Mailbox
-	mailbox    uint32
-	// folder is the canonical folder of the mailbox currently being walked,
-	// set alongside mailbox and stamped on every stored/updated message.
-	folder string
+	// mailbox is the UIDVALIDITY of the folder currently being walked: the
+	// generation the UIDs stamped on stored messages belong to, not the
+	// folder's identity.
+	mailbox uint32
+	// folderPath is that folder's name, which IS its identity, and folder the
+	// canonical folder it maps to. Both are set alongside mailbox and stamped
+	// on every stored or updated message.
+	folderPath string
+	folder     string
 	// overflowReported keeps the "more folders than we follow" warning to
 	// one per worker session; the condition is static until the user
 	// reorganizes their mail.
@@ -90,9 +95,9 @@ type WMail struct {
 	laneCache  laneCache
 	googleTick *tickStats
 	graphTick  *tickStats
-	// flagScan is the previous flag snapshot per folder, used only on IMAP
-	// servers without CONDSTORE, which cannot say what changed.
-	flagScan map[uint32]*folderFlagScan
+	// flagScan is the previous flag snapshot per folder name, used only on
+	// IMAP servers without CONDSTORE, which cannot say what changed.
+	flagScan map[string]*folderFlagScan
 	// transportFailures counts consecutive passes that could not reach the
 	// mail server, which paces the retry and keeps one outage to one warning.
 	transportFailures int

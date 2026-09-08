@@ -26,7 +26,11 @@ type JobEventEmailUpdate struct {
 	ID      uuid.UUID `json:"id"`
 	UID     uint32    `json:"uid"`
 	ModSeq  uint64    `json:"mod_seq"`
-	Mailbox uint32    `json:"mailbox"`
+	// Mailbox is the folder's UIDVALIDITY, the generation UID belongs to.
+	Mailbox uint32 `json:"mailbox"`
+	// FolderPath is the folder's name, its identity. Empty on events from
+	// workers predating the field (the consumer then keeps the stored value).
+	FolderPath string `json:"folder_path,omitempty"`
 	// Folder is the canonical folder the message now sits in; empty on events
 	// from workers predating folder tracking (the consumer then keeps the
 	// stored value).

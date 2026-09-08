@@ -152,18 +152,21 @@ func TestIsVirtualFolder(t *testing.T) {
 	}
 }
 
-// Two folders sharing a UIDVALIDITY is a server doing something RFC 3501 does
-// not forbid but everything downstream assumes away: the folder row is keyed
-// on it. Following both would advance each other's cursor and delete each
-// other's row, so one is dropped and reported.
-func TestDedupeByUIDValidity(t *testing.T) {
-	kept, conflicts := dedupeByUIDValidity([]models.Mailbox{
+// A folder is kept once per name, which is the identity IMAP guarantees.
+// Two rows under one name would advance each other's cursor and delete each
+// other's row, so the second is dropped and reported.
+//
+// A shared UIDVALIDITY is explicitly NOT a collision any more: servers that
+// derive the number from a folder's creation time give a whole tree the same
+// one, and dropping those folders cost them their entire sync.
+func TestDedupeByName(t *testing.T) {
+	kept, conflicts := dedupeByName([]models.Mailbox{
 		{Name: "INBOX", UIDValidity: 100},
 		{Name: "Sent", UIDValidity: 200},
 		// Created in the same second as Sent on a server that stamps
-		// UIDVALIDITY with the creation time.
+		// UIDVALIDITY with the creation time. A different folder, kept.
 		{Name: "Projects", UIDValidity: 200},
-		{Name: "Notes", UIDValidity: 300},
+		{Name: "Sent", UIDValidity: 900},
 	})
 	if conflicts != 1 {
 		t.Fatalf("conflicts = %d, want 1", conflicts)
@@ -171,26 +174,27 @@ func TestDedupeByUIDValidity(t *testing.T) {
 	if len(kept) != 3 {
 		t.Fatalf("kept %d folders, want 3", len(kept))
 	}
-	// The ranked order puts the special folder first, so Sent is the one that
-	// survives and the plain user folder is the one dropped.
-	if kept[1].Name != "Sent" {
-		t.Errorf("kept[1] = %q, want Sent to win the collision", kept[1].Name)
+	if kept[1].Name != "Sent" || kept[1].UIDValidity != 200 {
+		t.Errorf("kept[1] = %+v, want the first Sent to win", kept[1])
 	}
-	seen := map[uint32]bool{}
+	if kept[2].Name != "Projects" {
+		t.Errorf("kept[2] = %q, want the folder that only shares a UIDVALIDITY to survive", kept[2].Name)
+	}
+	seen := map[string]bool{}
 	for _, b := range kept {
-		if seen[b.UIDValidity] {
-			t.Fatalf("UIDVALIDITY %d survived twice", b.UIDValidity)
+		if seen[b.Name] {
+			t.Fatalf("folder %q survived twice", b.Name)
 		}
-		seen[b.UIDValidity] = true
+		seen[b.Name] = true
 	}
 }
 
 // The common case must not allocate a conflict or reorder anything.
-func TestDedupeByUIDValidityLeavesADistinctListingAlone(t *testing.T) {
+func TestDedupeByNameLeavesADistinctListingAlone(t *testing.T) {
 	in := []models.Mailbox{{Name: "INBOX", UIDValidity: 1}, {Name: "Sent", UIDValidity: 2}}
-	kept, conflicts := dedupeByUIDValidity(in)
+	kept, conflicts := dedupeByName(in)
 	if conflicts != 0 || len(kept) != 2 || kept[0].Name != "INBOX" || kept[1].Name != "Sent" {
-		t.Fatalf("a listing with distinct ids was changed: %+v, conflicts %d", kept, conflicts)
+		t.Fatalf("a listing with distinct names was changed: %+v, conflicts %d", kept, conflicts)
 	}
 }
 

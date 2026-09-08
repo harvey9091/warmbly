@@ -359,7 +359,7 @@ func TestImapBackfillRetriesAFolderAfterATransientFailure(t *testing.T) {
 	if err := w.Sync(t.Context()); err == nil {
 		t.Fatal("a failed folder search was swallowed; the pass must end so the folder is retried")
 	}
-	if w.tracker.folder("8").Done {
+	if w.tracker.folder("Archive").Done {
 		t.Fatal("the archive backfill was marked complete by a transient failure")
 	}
 	if st := w.tracker.state.BackfillStatus; st == models.SyncBackfillComplete {
@@ -369,7 +369,7 @@ func TestImapBackfillRetriesAFolderAfterATransientFailure(t *testing.T) {
 	if err := w.Sync(t.Context()); err != nil {
 		t.Fatalf("second pass: %v", err.Message)
 	}
-	if !w.tracker.folder("8").Done {
+	if !w.tracker.folder("Archive").Done {
 		t.Error("archive is still not done after a successful search")
 	}
 	if err := w.Sync(t.Context()); err != nil {
@@ -475,7 +475,7 @@ func TestImapFlagScanBaselinesThenRelaysChanges(t *testing.T) {
 
 	// The message is marked read in the customer's own mail client.
 	conn.flags[1] = imap.FlagState{MessageID: "<known@test>", Flags: []string{"\\Seen"}}
-	w.flagScan[7].at = time.Now().Add(-2 * config.ImapFlagScanInterval)
+	w.flagScan["INBOX"].at = time.Now().Add(-2 * config.ImapFlagScanInterval)
 	if err := w.Sync(t.Context()); err != nil {
 		t.Fatalf("second Sync: %v", err)
 	}

@@ -139,12 +139,13 @@ func (w *WorkerService) runGraphWarmupActions(ctx context.Context, mail *wmail.W
 }
 
 func (w *WorkerService) runImapWarmupActions(ctx context.Context, mail *wmail.WMail, action models.WarmupEmailAction) {
-	sourceBox := lookupMailboxByUIDValidity(mail.SmtpImapData.Mailboxes, action.MailboxUIDValidity)
+	sourceBox := lookupWarmupSourceFolder(mail.SmtpImapData.Mailboxes, action)
 	if sourceBox == nil {
 		log.Warn().
+			Str("folder", action.MailboxFolder).
 			Uint32("uid_validity", action.MailboxUIDValidity).
 			Str("email_id", action.EmailID.String()).
-			Msg("Source mailbox for warmup action not found; skipping")
+			Msg("Source mailbox for warmup action not found or its UIDs have been reissued; skipping")
 		return
 	}
 
@@ -187,6 +188,28 @@ func (w *WorkerService) runImapWarmupActions(ctx context.Context, mail *wmail.WM
 			log.Warn().Str("action", act).Msg("Unknown warmup action")
 		}
 	}
+}
+
+// lookupWarmupSourceFolder resolves the folder an action's UID lives in.
+//
+// The folder is found by name, its identity. The UIDVALIDITY still has to
+// match: it is the generation the stored UID belongs to, and a server that
+// reissued it has given that number to some other message, so acting on it
+// would star or file a message nobody asked about. Nothing to act on is the
+// right answer there.
+//
+// An action published before the folder name was carried has only the
+// UIDVALIDITY to go on, which is the old behaviour and stays as the fallback.
+func lookupWarmupSourceFolder(boxes []*models.Mailbox, action models.WarmupEmailAction) *models.Mailbox {
+	if action.MailboxFolder == "" {
+		return lookupMailboxByUIDValidity(boxes, action.MailboxUIDValidity)
+	}
+	for _, b := range boxes {
+		if b != nil && b.Name == action.MailboxFolder && b.UIDValidity == action.MailboxUIDValidity {
+			return b
+		}
+	}
+	return nil
 }
 
 func lookupMailboxByUIDValidity(boxes []*models.Mailbox, uidValidity uint32) *models.Mailbox {

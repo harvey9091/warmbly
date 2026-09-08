@@ -2,11 +2,12 @@ package jobs
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
-	"github.com/warmbly/warmbly/internal/observability/errs"
-
 	"github.com/warmbly/warmbly/internal/app/dangerzone"
+	"github.com/warmbly/warmbly/internal/jobrun"
 )
 
 // DangerZoneJob ticks the dangerzone subsystem: it executes any pending
@@ -24,13 +25,15 @@ func NewDangerZoneJob(svc dangerzone.Service) *DangerZoneJob {
 // Run performs one tick. Errors are logged to Sentry and swallowed so
 // the scheduler keeps ticking; the next tick will retry anything that
 // got marked failed.
-func (j *DangerZoneJob) Run(ctx context.Context) {
+func (j *DangerZoneJob) Run(ctx context.Context) error {
+	var failures []error
 	if _, _, err := j.svc.ExecuteDuePendingDeletions(ctx); err != nil {
-		errs.CaptureException(err)
+		failures = append(failures, fmt.Errorf("execute deletions: %w", err))
 	}
 	if err := j.svc.DispatchReminders(ctx); err != nil {
-		errs.CaptureException(err)
+		failures = append(failures, fmt.Errorf("dispatch reminders: %w", err))
 	}
+	return errors.Join(failures...)
 }
 
 // DangerZoneScheduler runs the job on a fixed interval.
@@ -53,21 +56,9 @@ func NewDangerZoneScheduler(job *DangerZoneJob, interval time.Duration) *DangerZ
 
 // Start runs Run() on every tick until ctx is cancelled or Stop() is called.
 func (s *DangerZoneScheduler) Start(ctx context.Context) {
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
-
-	s.job.Run(ctx)
-
-	for {
-		select {
-		case <-ticker.C:
-			s.job.Run(ctx)
-		case <-s.stopCh:
-			return
-		case <-ctx.Done():
-			return
-		}
-	}
+	ctx, cancel := stopContext(ctx, s.stopCh)
+	defer cancel()
+	jobrun.Loop(ctx, "danger_zone", s.interval, true, s.job.Run)
 }
 
 // Stop halts the scheduler.

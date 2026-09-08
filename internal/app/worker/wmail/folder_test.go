@@ -95,7 +95,7 @@ func TestImapSyncSkipsVirtualFolders(t *testing.T) {
 				t.Fatal("All Mail was baselined; virtual folders must be skipped")
 			}
 		case models.JobEventTypeMailboxDelete:
-			if e.body.(*models.JobEventMailboxDelete).UIDValidity == 11 {
+			if e.body.(*models.JobEventMailboxDelete).Mailbox == "[Gmail]/Starred" {
 				retired = true
 			}
 		}

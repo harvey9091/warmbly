@@ -19,7 +19,9 @@ type UpdateUniboxEntry struct {
 	Flags   []string `json:"flags"`
 	ModSeq  *uint64  `json:"mod_seq"`
 	Mailbox *uint32  `json:"mailbox"`
-	Folder  *string  `json:"folder"`
+	// FolderPath is the source folder's name, the folder's identity.
+	FolderPath *string `json:"folder_path"`
+	Folder     *string `json:"folder"`
 }
 
 type UniboxRepository interface {
@@ -105,7 +107,7 @@ func NewUniboxRepository(db *db.DB) UniboxRepository {
 }
 
 var mailFieldsFull = []string{
-	"id", "email_id", "mailbox", "thread_id", "message_id",
+	"id", "email_id", "mailbox", "folder_path", "thread_id", "message_id",
 	"gmail_id", "parent_id", "uid", "mod_seq",
 	"flags", "bcc", "cc", "from_addr", "in_reply_to", "reply_to",
 	"to_addr", "subject", "size", "internal_date", "sent_date",
@@ -120,17 +122,17 @@ var mailFieldsPreview = []string{
 func (r *uniboxRepository) CreateEntry(ctx context.Context, userID uuid.UUID, e *models.EmailMessageStoreData) error {
 	query := `
 		INSERT INTO unibox_emails (
-			id, user_id, email_id, mailbox, thread_id, message_id,
+			id, user_id, email_id, mailbox, folder_path, thread_id, message_id,
 			gmail_id, parent_id, uid, mod_seq,
 			flags, bcc, cc, from_addr, in_reply_to, reply_to,
 			to_addr, subject, size, internal_date, sent_date,
 			snippet, seen, created_at, updated_at, body_text, folder
 		) VALUES (
-			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10,
-			$11, $12, $13, $14, $15, $16,
-			$17, $18, $19, $20, $21,
-			$22, $23, $24, $25, $26, $27
+			$1, $2, $3, $4, $5, $6, $7,
+			$8, $9, $10, $11,
+			$12, $13, $14, $15, $16, $17,
+			$18, $19, $20, $21, $22,
+			$23, $24, $25, $26, $27, $28
 		)
 		ON CONFLICT (id) DO NOTHING
 	`
@@ -138,7 +140,7 @@ func (r *uniboxRepository) CreateEntry(ctx context.Context, userID uuid.UUID, e 
 	// The array columns are NOT NULL. A nil Go slice binds as SQL NULL, so a
 	// message with no In-Reply-To (any thread root) would fail the insert.
 	_, err := r.db.Exec(ctx, query,
-		e.ID, userID, e.EmailID, e.Mailbox, e.ThreadID, e.MessageID,
+		e.ID, userID, e.EmailID, e.Mailbox, e.FolderPath, e.ThreadID, e.MessageID,
 		e.GmailID, e.ParentID, e.UID, e.ModSeq,
 		textArray(e.Flags), textArray(e.BCC), textArray(e.CC), textArray(e.FromAddr),
 		textArray(e.InReplyTo), textArray(e.ReplyTo), textArray(e.ToAddr),
@@ -181,6 +183,11 @@ func (r *uniboxRepository) UpdateEntry(ctx context.Context, userID, emailID, id 
 	if e.UID != nil {
 		setClauses = append(setClauses, fmt.Sprintf("uid = $%d", argPos))
 		args = append(args, *e.UID)
+		argPos++
+	}
+	if e.FolderPath != nil {
+		setClauses = append(setClauses, fmt.Sprintf("folder_path = $%d", argPos))
+		args = append(args, *e.FolderPath)
 		argPos++
 	}
 	if e.Folder != nil {
@@ -240,7 +247,7 @@ func (r *uniboxRepository) GetByID(ctx context.Context, userID, id uuid.UUID) (*
 
 	var e models.EmailMessageStoreData
 	err := r.db.QueryRow(ctx, query, userID, id).Scan(
-		&e.ID, &e.EmailID, &e.Mailbox, &e.ThreadID, &e.MessageID,
+		&e.ID, &e.EmailID, &e.Mailbox, &e.FolderPath, &e.ThreadID, &e.MessageID,
 		&e.GmailID, &e.ParentID, &e.UID, &e.ModSeq,
 		&e.Flags, &e.BCC, &e.CC, &e.FromAddr, &e.InReplyTo, &e.ReplyTo,
 		&e.ToAddr, &e.Subject, &e.Size, &e.InternalDate, &e.SentDate,
@@ -279,7 +286,7 @@ func (r *uniboxRepository) GetByIDForOrg(ctx context.Context, orgID, id uuid.UUI
 	var e models.EmailMessageStoreData
 	err := r.db.QueryRow(ctx, query, orgID, id).Scan(
 		&ownerID,
-		&e.ID, &e.EmailID, &e.Mailbox, &e.ThreadID, &e.MessageID,
+		&e.ID, &e.EmailID, &e.Mailbox, &e.FolderPath, &e.ThreadID, &e.MessageID,
 		&e.GmailID, &e.ParentID, &e.UID, &e.ModSeq,
 		&e.Flags, &e.BCC, &e.CC, &e.FromAddr, &e.InReplyTo, &e.ReplyTo,
 		&e.ToAddr, &e.Subject, &e.Size, &e.InternalDate, &e.SentDate,

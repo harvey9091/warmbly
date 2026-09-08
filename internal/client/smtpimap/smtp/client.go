@@ -252,7 +252,11 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 		port = c.Oauth2.Port
 	}
 
-	addr := fmt.Sprintf("%s:%d", host, port)
+	// Normalized before it is used anywhere: brackets belong to the address,
+	// not to the host, and JoinHostPort is what puts them back for an IPv6
+	// literal.
+	host = models.NormalizeMailHost(host)
+	addr := models.MailDialAddress(host, port)
 	tlsConf := &tls.Config{
 		ServerName:         host,
 		InsecureSkipVerify: netbind.InsecureTLS(), //nolint:gosec // MAIL_TLS_INSECURE, local dev only
@@ -272,7 +276,14 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 	// Implicit TLS (SMTPS) means the server speaks TLS from the first byte, so
 	// a plaintext dial + STARTTLS never gets past the greeting. The mode is
 	// the mailbox's stored choice, falling back to the port convention.
-	implicitTLS := models.ResolveSMTPSecurity(security, port) == models.MailSecurityTLS
+	resolved := models.ResolveSMTPSecurity(security, port)
+	// The unencrypted mode is checked before the dial and again against the
+	// peer we actually got, because only the second one is a fact about this
+	// socket rather than about what DNS said a moment ago.
+	if resolved == models.MailSecurityNone && !models.CleartextMailAllowed(host) {
+		return errx.ErrMailInsecureRemoteHost
+	}
+	implicitTLS := resolved == models.MailSecurityTLS
 	if implicitTLS {
 		conn, err = netbind.TLSDialer(c.BindIP, tlsConf).DialContext(ctx, "tcp", addr)
 	} else {
@@ -282,6 +293,9 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 		return errx.ErrMailServerUnreachable
 	}
 	defer conn.Close()
+	if resolved == models.MailSecurityNone && !netbind.LoopbackPeer(conn) {
+		return errx.ErrMailInsecureRemoteHost
+	}
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
@@ -301,10 +315,13 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 		}
 	}
 
-	// TLS is mandatory. The MAIL_TLS_INSECURE dev knob additionally allows a
-	// server with no STARTTLS at all (the local mailpit sink) — never taken in
-	// production, where the env var is unset.
-	if !implicitTLS {
+	// TLS is mandatory everywhere but the loopback mode, which was already
+	// proved to be talking to this machine. STARTTLS is not attempted there
+	// even when the relay advertises it: a self-signed certificate no client
+	// can verify is exactly why the mode was chosen. The MAIL_TLS_INSECURE
+	// dev knob additionally allows a server with no STARTTLS at all (the
+	// local mailpit sink), never taken in production, where it is unset.
+	if !implicitTLS && resolved != models.MailSecurityNone {
 		if ok, _ := client.Extension("STARTTLS"); ok {
 			if err := client.StartTLS(tlsConf); err != nil {
 				return errx.ErrMailServerUnreachable
@@ -321,7 +338,12 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 		// rejects a blind AUTH PLAIN, and that rejection reads exactly like a
 		// wrong password, so the mailbox was deactivated over credentials
 		// that were correct.
-		auth, aerr := NegotiateAuth(client, c.Credentials.Username, c.Credentials.Password, c.Credentials.Host)
+		// The normalized host, not the stored one: net/smtp records the name
+		// it was handed in NewClient as the server name, and PlainAuth
+		// refuses to authenticate when its own host does not match it. A
+		// bracketed IPv6 literal differs from the normalized form, so the
+		// stored string would fail on the address it is correct about.
+		auth, aerr := NegotiateAuth(client, c.Credentials.Username, c.Credentials.Password, host)
 		if aerr != nil {
 			return errx.ErrMailAuthUnsupported
 		}

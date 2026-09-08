@@ -177,6 +177,44 @@ else
   echo "· python3 not installed; the width check was skipped"
 fi
 
+# A registry that will not serve an image answers "unauthorized", and
+# reporting that as a missing tag is what sent the first person who hit it
+# looking in entirely the wrong place (#371). Both branches of the diagnosis
+# are checked, against the literal text docker produces.
+diag() {
+  local log=$1
+  {
+    sed -n '/^pull_failed()/,/^}/p' "$SCRIPT"
+    cat <<'STUB'
+show_log() { :; }
+fail_with() { printf '%s\n' "$@"; exit 1; }
+REGISTRY=ghcr.io/warmbly/warmbly
+RESOLVED_TAG=v0.0.0-test
+REPO=warmbly/warmbly
+pull_failed
+STUB
+  } | LOGFILE="$log" sh || true
+}
+
+printf 'Error response from daemon: Head "https://ghcr.io/v2/warmbly/warmbly/forms/manifests/v0.4.0": unauthorized\n' >"$work/log.unauth"
+printf 'Error response from daemon: manifest unknown\n' >"$work/log.missing"
+printf 'Error response from daemon: denied\n' >"$work/log.denied"
+
+diag "$work/log.unauth" | grep -q 'refused to serve' ||
+  fail "an unauthorized pull is not diagnosed as a registry refusal"
+diag "$work/log.unauth" | grep -q 'probably fine' ||
+  fail "an unauthorized pull still blames the tag"
+diag "$work/log.unauth" | grep -q 'check it for a typo' ||
+  fail "an unauthorized pull does not mention a mistyped --registry, which"
+diag "$work/log.missing" | grep -q 'may not exist' ||
+  fail "an ordinary pull failure lost its generic message"
+if diag "$work/log.missing" | grep -q 'refused to serve'; then
+  fail "an ordinary pull failure is misreported as a registry refusal"
+fi
+diag "$work/log.denied" | grep -q 'check it for a typo' ||
+  fail "a bare denied does not offer the mistyped-registry reading"
+pass "diagnoses an unauthorized pull separately from a missing tag"
+
 # The checksum is the whole answer to "why would I pipe this into a shell", so
 # a stale one is a failure, not a warning.
 if [[ ! -f $SUMFILE ]]; then

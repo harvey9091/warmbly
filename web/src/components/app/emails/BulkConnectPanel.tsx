@@ -29,6 +29,7 @@ import {
 import { DitherMeter } from "@/components/ui/dither";
 import addEmailsBulk, { BULK_CONNECT_BATCH } from "@/lib/api/client/app/emails/addEmailsBulk";
 import useMailboxAllowance from "@/lib/api/hooks/app/emails/useMailboxAllowance";
+import useAuthConfig from "@/lib/api/hooks/auth/useAuthConfig";
 import type { BulkConnectRow } from "@/lib/api/models/app/emails/BulkConnect";
 import { downloadBlob } from "@/lib/api/client/app/contacts/exportContacts";
 import { downloadTemplate, failedRowsCSV, parseBulkFile, type BulkRow } from "./bulkConnectCsv";
@@ -50,6 +51,12 @@ export default function BulkConnectPanel({
 }) {
     const qc = useQueryClient();
     const allowance = useMailboxAllowance();
+    // The unencrypted security mode is self-host only, so a row asking for it
+    // on the hosted product is invalid here rather than at the API. Only a
+    // loaded config can say that, and while it is loading the row is left for
+    // the API to judge: calling it invalid on a self-hosted instance whose
+    // config had not arrived yet would reject a file that is perfectly good.
+    const allowNoEncryption = useAuthConfig().data?.self_hosted !== false;
     const [step, setStep] = React.useState<Step>("upload");
     const [filename, setFilename] = React.useState("");
     const [columns, setColumns] = React.useState<string[]>([]);
@@ -72,7 +79,7 @@ export default function BulkConnectPanel({
     async function onFile(file: File) {
         setParsing(true);
         try {
-            const parsed = await parseBulkFile(file);
+            const parsed = await parseBulkFile(file, allowNoEncryption);
             setFilename(file.name);
             setColumns(parsed.columns);
             setRows(parsed.rows);

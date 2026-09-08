@@ -2273,17 +2273,45 @@ SECRET_KEY_BASE=$SECRET_KEY_BASE
 KEYSEOF
 }
 
+# A registry that refuses to serve an image answers "unauthorized", which the
+# generic message below would report as a missing tag and send the operator
+# looking in entirely the wrong place. Every Warmbly image is meant to be
+# pullable with no account at all, so this is a bug in the release rather than
+# anything wrong with their machine (#371).
+pull_failed() {
+    show_log
+    if [ -s "$LOGFILE" ] &&
+       grep -Eqi 'unauthorized|denied|authentication required' "$LOGFILE"; then
+        _host=${REGISTRY%%/*}
+        fail_with "The registry refused to serve the release images." \
+                  "It answered unauthorized rather than 'no such tag', so" \
+                  "${RESOLVED_TAG} is probably fine and the images are simply" \
+                  "not readable without an account." \
+                  "" \
+                  "Every Warmbly image is meant to be public. If you did not" \
+                  "pass --registry, that makes this our bug, not yours:" \
+                  "please tell us at https://github.com/$REPO/issues" \
+                  "" \
+                  "If you did pass it, check it for a typo. A namespace that" \
+                  "does not exist is refused in exactly the same way as a" \
+                  "private one." \
+                  "" \
+                  "To get past it now: docker login $_host as someone who can" \
+                  "read these images, or point --registry at a mirror you can."
+    fi
+    fail_with "Could not pull the release images." \
+              "The tag ${RESOLVED_TAG} may not exist, or this host cannot" \
+              "reach ${REGISTRY}." \
+              "Releases: https://github.com/$REPO/releases"
+}
+
 # pull_images shows one row per image, flipping to a tick the moment that image
 # lands. The pull itself runs in the background, so this is compose's own
 # parallel pull with a readable face on it rather than a serial one.
 pull_images() {
     _refs=$(cd "$DIR" && composec config --images 2>/dev/null | sort -u)
     if [ -z "$_refs" ]; then
-        spin "Pulling images" sh -c "cd '$DIR' && $COMPOSE pull" || {
-            show_log
-            fail_with "Could not pull the release images." \
-                      "Check the tag exists: https://github.com/$REPO/pkgs/container/warmbly%2Fbackend"
-        }
+        spin "Pulling images" sh -c "cd '$DIR' && $COMPOSE pull" || pull_failed
         return 0
     fi
     _total=$(printf '%s\n' "$_refs" | wc -l | tr -d ' ')
@@ -2296,7 +2324,7 @@ pull_images() {
         say "  ... pulling $_total images"
         wait "$_pid" 2>/dev/null && _rc=0 || _rc=$?
         [ "$_rc" = 0 ] && say "  ok  pulled $_total images"
-        [ "$_rc" = 0 ] || { show_log; fail_with "Could not pull the release images."; }
+        [ "$_rc" = 0 ] || pull_failed
         return 0
     fi
 
@@ -2336,10 +2364,7 @@ pull_images() {
     printf '%b' "$SHOW"
     wait "$_pid" 2>/dev/null && _rc=0 || _rc=$?
     if [ "$_rc" != 0 ]; then
-        show_log
-        fail_with "Could not pull the release images." \
-                  "The tag ${RESOLVED_TAG} may not exist, or this host cannot reach ${REGISTRY}." \
-                  "Releases: https://github.com/$REPO/releases"
+        pull_failed
     fi
 }
 
@@ -2562,6 +2587,11 @@ finale() {
     out "    ${DIM}Back up${R}   docker compose -p warmbly exec backend warmblyctl backup"
     out "    ${DIM}Update${R}    the version pill in the admin panel, or compose pull + up -d"
     out "    ${DIM}Guide${R}     $DOCS/development/first-run/"
+    out "    ${DIM}Mailboxes${R} $DOCS/guides/mailboxes/"
+    say ""
+    note "A mail server on this machine, such as Proton Bridge on 127.0.0.1,"
+    note "connects with Security: None. That mode is offered only here, where"
+    note "the worker and the relay share a host and no password reaches a wire."
     say ""
     if [ "$EXISTING" = 0 ]; then
         out "  ${RED}Keep a copy of $DIR/keys-backup.txt somewhere other than this machine.${R}"

@@ -4,7 +4,6 @@ import (
 	"context"
 	"slices"
 	"sort"
-	"strconv"
 	"time"
 
 	goimap "github.com/emersion/go-imap/v2"
@@ -45,6 +44,14 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 	// that reached it would re-file known mail as archive under a second UID.
 	folders = slices.DeleteFunc(folders, func(b models.Mailbox) bool { return imapVirtualFolder(&b) })
 
+	// Before anything is matched by name, follow the folders whose name
+	// changed. A rename read as a delete plus a first sighting would orphan
+	// every message filed under the old name and re-import the folder's
+	// history under the new one.
+	if err := w.imapFollowRenames(folders); err != nil {
+		return nil
+	}
+
 	// condStore decides the incremental strategy for the whole account:
 	// mod-sequences where the server has CONDSTORE, UIDNEXT where it does not
 	// (Outlook.com, Microsoft 365 over IMAP, Yahoo, many hosted servers).
@@ -64,11 +71,29 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 			continue
 		}
 
+		// A folder whose UIDVALIDITY moved is the server telling us every UID
+		// we hold for it is void: the cursors address nothing and the flag
+		// snapshot is about messages that may no longer be there. Re-baseline
+		// it exactly like a first sighting, and drop its backfill floor so an
+		// import still running walks it again (stored messages are matched by
+		// Message-ID, so nothing is stored twice). A finished import stays
+		// finished; the mail that is already here keeps its rows, and its
+		// stale UIDs are what the warmup path checks the generation against.
+		if befBox.UIDValidity != box.UIDValidity {
+			saved := *box
+			if err := w.mboxEvent(&saved); err != nil {
+				return nil
+			}
+			*befBox = saved
+			delete(w.flagScan, box.Name)
+			w.tracker.setFolder(box.Name, models.SyncFolderCursor{})
+			continue
+		}
+
 		changed := imapFolderChanged(befBox, box, condStore)
 		fullyProcessed := true
 		if changed && !stats.aborted {
-			w.SmtpImapData.mailbox = box.UIDValidity
-			w.SmtpImapData.folder = imapCanonicalFolder(box)
+			w.setWalking(box)
 			done, err := w.imapIncremental(ctx, box, befBox, condStore, stats)
 			if err != nil {
 				return err
@@ -79,7 +104,7 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 			fullyProcessed = false
 		}
 
-		if changed || befBox.Name != box.Name || !slices.Equal(befBox.Attrs, box.Attrs) {
+		if changed || !slices.Equal(befBox.Attrs, box.Attrs) {
 			// The stored cursor only moves once every change up to it was
 			// stored; a deferred message keeps the folder re-asked.
 			next := *box
@@ -90,22 +115,18 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 			if err := w.mboxEvent(&next); err != nil {
 				return nil
 			}
-			for _, ibox := range w.SmtpImapData.Mailboxes {
-				if ibox.UIDValidity == box.UIDValidity {
-					ibox.HighestModSeq = next.HighestModSeq
-					ibox.UIDNext = next.UIDNext
-					ibox.Name = next.Name
-					ibox.Attrs = next.Attrs
-				}
-			}
+			// befBox is the stored copy itself, matched by name, so there is
+			// nothing else in the list to keep in step with it.
+			befBox.HighestModSeq = next.HighestModSeq
+			befBox.UIDNext = next.UIDNext
+			befBox.Attrs = next.Attrs
 		}
 
 		// Without CONDSTORE a message marked read elsewhere moves no cursor,
 		// so read state is mirrored by a periodic scan instead. It runs after
 		// the arrivals above so a message stored this pass is already known.
 		if !condStore && !stats.aborted {
-			w.SmtpImapData.mailbox = box.UIDValidity
-			w.SmtpImapData.folder = imapCanonicalFolder(box)
+			w.setWalking(box)
 			if _, err := w.SmtpImapData.ImapClient.SelectForSync(box.Name); err != nil {
 				return err
 			}
@@ -115,12 +136,14 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 		}
 	}
 
-	// Collect deletions first to avoid modifying the slice during iteration
-	var deleted []uint32
+	// Collect deletions first to avoid modifying the slice during iteration.
+	// Renames were already followed above, so a name missing from the listing
+	// at this point really is a folder that is gone.
+	var deleted []string
 outer:
 	for _, box := range w.SmtpImapData.Mailboxes {
 		for _, f := range folders {
-			if box.UIDValidity == f.UIDValidity {
+			if box.Name == f.Name {
 				continue outer
 			}
 		}
@@ -128,20 +151,25 @@ outer:
 		if err := w.onEvent(models.JobEventTypeMailboxDelete, &models.JobEventMailboxDelete{
 			UserID:      w.UserID,
 			EmailID:     w.ID,
+			Mailbox:     box.Name,
 			UIDValidity: box.UIDValidity,
 		}); err != nil {
 			return nil
 		}
-		deleted = append(deleted, box.UIDValidity)
+		deleted = append(deleted, box.Name)
 	}
 
 	if len(deleted) > 0 {
-		for _, uidv := range deleted {
-			delete(w.flagScan, uidv)
+		for _, name := range deleted {
+			delete(w.flagScan, name)
+			// The backfill floor goes with the folder. A name is reusable,
+			// and a floor left behind would be inherited by whatever is
+			// created under it next.
+			w.tracker.clearFolder(name)
 		}
 		filtered := w.SmtpImapData.Mailboxes[:0]
 		for _, b := range w.SmtpImapData.Mailboxes {
-			if !slices.Contains(deleted, b.UIDValidity) {
+			if !slices.Contains(deleted, b.Name) {
 				filtered = append(filtered, b)
 			}
 		}
@@ -244,14 +272,15 @@ func (w *WMail) imapApply(ctx context.Context, fetched []*imap.Fetched, backfill
 			continue
 		}
 		if err := w.onEvent(models.JobEventTypeEmailUpdate, &models.JobEventEmailUpdate{
-			UserID:  w.UserID,
-			EmailID: w.ID,
-			ID:      internalID,
-			UID:     f.Email.UID,
-			ModSeq:  f.Email.ModSeq,
-			Mailbox: w.SmtpImapData.mailbox,
-			Folder:  w.SmtpImapData.folder,
-			Flags:   f.Email.Flags,
+			UserID:     w.UserID,
+			EmailID:    w.ID,
+			ID:         internalID,
+			UID:        f.Email.UID,
+			ModSeq:     f.Email.ModSeq,
+			Mailbox:    w.SmtpImapData.mailbox,
+			FolderPath: w.SmtpImapData.folderPath,
+			Folder:     w.SmtpImapData.folder,
+			Flags:      f.Email.Flags,
 		}); err != nil {
 			return false, w.controlPlaneError(err, stats)
 		}
@@ -291,7 +320,7 @@ func (w *WMail) imapApply(ctx context.Context, fetched []*imap.Fetched, backfill
 		if backfill {
 			w.tracker.state.BackfillSynced++
 			w.tracker.mark()
-			w.tracker.setFolder(strconv.FormatUint(uint64(w.SmtpImapData.mailbox), 10), models.SyncFolderCursor{UID: f.Email.UID})
+			w.tracker.setFolder(w.SmtpImapData.folderPath, models.SyncFolderCursor{UID: f.Email.UID})
 		}
 	}
 	return all, nil
@@ -332,6 +361,7 @@ func (w *WMail) imapStore(ctx context.Context, msg *models.EmailMessageData) err
 		ID:           msg.ID,
 		EmailID:      w.ID,
 		Mailbox:      w.SmtpImapData.mailbox,
+		FolderPath:   w.SmtpImapData.folderPath,
 		Folder:       w.SmtpImapData.folder,
 		ThreadID:     threadID,
 		MessageID:    msg.MessageID,
@@ -382,7 +412,7 @@ func (w *WMail) imapBackfill(ctx context.Context, folders []models.Mailbox, stat
 		if stats.aborted || stats.laneDenied(LaneBackfill) {
 			return nil
 		}
-		key := strconv.FormatUint(uint64(box.UIDValidity), 10)
+		key := box.Name
 		cur := w.tracker.folder(key)
 		if cur.Done {
 			continue
@@ -391,8 +421,7 @@ func (w *WMail) imapBackfill(ctx context.Context, folders []models.Mailbox, stat
 			w.tracker.completeBackfill(time.Now())
 			return nil
 		}
-		w.SmtpImapData.mailbox = box.UIDValidity
-		w.SmtpImapData.folder = imapCanonicalFolder(box)
+		w.setWalking(box)
 
 		count, err := client.SelectForSync(box.Name)
 		if err != nil {
@@ -484,11 +513,95 @@ func (w *WMail) mboxEvent(box *models.Mailbox) error {
 	})
 }
 
+// FindPair is the stored copy of a listed folder, matched on the folder's
+// identity: its name.
 func (w *SmtpImapData) FindPair(m *models.Mailbox) *models.Mailbox {
 	for _, f := range w.Mailboxes {
-		if f.UIDValidity == m.UIDValidity {
+		if f.Name == m.Name {
 			return f
 		}
+	}
+	return nil
+}
+
+// setWalking records which folder the pass is inside. Every message stored or
+// updated from here is stamped with all three: the folder's name, which is
+// its identity, the UIDVALIDITY generation its uid belongs to, and the
+// canonical folder the dashboard files it under.
+func (w *WMail) setWalking(box *models.Mailbox) {
+	w.SmtpImapData.mailbox = box.UIDValidity
+	w.SmtpImapData.folderPath = box.Name
+	w.SmtpImapData.folder = imapCanonicalFolder(box)
+}
+
+// imapFollowRenames matches a folder that left the listing to one that
+// arrived carrying its UIDVALIDITY, and relays the pair as a rename.
+//
+// That is what an IMAP RENAME looks like from a LIST: RENAME keeps
+// UIDVALIDITY and every UID, so the cursor we hold is still good and the
+// folder's history does not need re-importing. Read as a delete plus a first
+// sighting it would be both, and the mail filed under the old name would be
+// left pointing at a folder that no longer exists.
+//
+// A rename is only claimed when the UIDVALIDITY has exactly one folder on
+// each side of it: one stored folder that is gone, and one listed folder that
+// is new. Anything else is a guess. On a server that stamps UIDVALIDITY from
+// a creation time a whole tree shares one number, so two stored folders can
+// go missing while one arrives, and picking either would move the wrong
+// folder's mail into it. Those fall through to the ordinary delete and
+// first-sight paths, which lose nothing that was not already gone.
+func (w *WMail) imapFollowRenames(folders []models.Mailbox) error {
+	listed := make(map[string]struct{}, len(folders))
+	for i := range folders {
+		listed[folders[i].Name] = struct{}{}
+	}
+
+	// Group both sides by UIDVALIDITY: the stored folders that are no longer
+	// listed, and the listed folders that are not stored.
+	gone := map[uint32][]*models.Mailbox{}
+	for _, before := range w.SmtpImapData.Mailboxes {
+		if _, still := listed[before.Name]; still || before.UIDValidity == 0 {
+			continue
+		}
+		gone[before.UIDValidity] = append(gone[before.UIDValidity], before)
+	}
+	if len(gone) == 0 {
+		return nil
+	}
+
+	arrived := map[uint32][]*models.Mailbox{}
+	for i := range folders {
+		f := &folders[i]
+		if f.UIDValidity == 0 || w.SmtpImapData.FindPair(f) != nil {
+			continue
+		}
+		arrived[f.UIDValidity] = append(arrived[f.UIDValidity], f)
+	}
+
+	for uidValidity, before := range gone {
+		to := arrived[uidValidity]
+		if len(before) != 1 || len(to) != 1 {
+			continue
+		}
+		from := before[0]
+
+		if err := w.onEvent(models.JobEventTypeMailboxRename, &models.JobEventMailboxRename{
+			UserID:  w.UserID,
+			EmailID: w.ID,
+			From:    from.Name,
+			To:      to[0].Name,
+		}); err != nil {
+			return err
+		}
+		// The worker's own per-folder state is keyed by name too, so it moves
+		// with the folder or the backfill restarts and the flag scan
+		// re-baselines for a change of label.
+		if scan, ok := w.flagScan[from.Name]; ok {
+			delete(w.flagScan, from.Name)
+			w.flagScan[to[0].Name] = scan
+		}
+		w.tracker.renameFolder(from.Name, to[0].Name)
+		from.Name = to[0].Name
 	}
 	return nil
 }

@@ -59,6 +59,9 @@ type WorkerRepository interface {
 	GetActiveDedicatedAssignment(ctx context.Context, userID uuid.UUID) (*models.DedicatedWorkerAssignment, error)
 	GetDedicatedWorkerByOrgID(ctx context.Context, orgID uuid.UUID) (*models.Worker, error)
 	ReleaseDedicatedAssignment(ctx context.Context, userID uuid.UUID) error
+	// ReleaseDedicatedAssignmentByID releases one specific binding; false when
+	// it was already released, so a caller never releases a newer one by accident.
+	ReleaseDedicatedAssignmentByID(ctx context.Context, id uuid.UUID) (bool, error)
 
 	// Email account worker queries
 	GetEmailAccountsByWorkerID(ctx context.Context, workerID uuid.UUID) ([]uuid.UUID, error)
@@ -411,6 +414,18 @@ func (r *workerRepository) ReleaseDedicatedAssignment(ctx context.Context, userI
 
 	_, err := r.db.Exec(ctx, query, time.Now(), userID)
 	return err
+}
+
+func (r *workerRepository) ReleaseDedicatedAssignmentByID(ctx context.Context, id uuid.UUID) (bool, error) {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE dedicated_worker_assignments
+		SET released_at = now()
+		WHERE id = $1 AND released_at IS NULL
+	`, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // GetEmailAccountsByWorkerID retrieves all email account IDs assigned to a worker

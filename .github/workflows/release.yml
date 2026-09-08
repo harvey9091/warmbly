@@ -264,15 +264,39 @@ jobs:
           path: dist/
           retention-days: 1
 
+  # GHCR creates a package private and does not inherit the repository's
+  # visibility, and there is no API to change it, so a green build proves
+  # nothing about whether a stranger can pull what it published. Releases
+  # v0.1.0 to v0.4.0 all shipped an installer that could not pull one byte
+  # (#371). This is the only step here that talks to the registry the way an
+  # operator does: no login, no credentials, no `packages` permission.
+  #
+  # It gates the release rather than trailing it, because install.sh resolves
+  # its default version from the newest GitHub Release. Failing before the
+  # release exists is what keeps an unpullable build from becoming the version
+  # every `curl | sh` picks up. Fix the visibility, then re-run this job; the
+  # images and their digests are untouched by it.
+  verify-public:
+    name: Verify images are publicly pullable
+    needs: [validate-tag, build-go, build-frontend, merge-native]
+    runs-on: ubuntu-latest
+    # contents: read is what checkout needs. The absence of `packages` is the
+    # point: this job must not be able to see a private image.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pull-test every image anonymously
+        env:
+          TAG: ${{ github.ref_name }}
+        run: ./scripts/check-images-public.sh --prefix "$IMAGE_PREFIX" --tag "$TAG"
+
   create-release:
     name: Create GitHub Release
-    needs: [validate-tag, build-go, build-frontend, merge-native, build-cli]
+    needs: [validate-tag, build-go, build-frontend, merge-native, build-cli, verify-public]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      # The manifest step logs in to GHCR and inspects each published image;
-      # without read access that fails on a private package.
-      packages: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -287,34 +311,36 @@ jobs:
       # The installer verifies what it pulled against this file, so it is what
       # makes "curl | sh" checkable after the fact rather than only before it.
       # One line per service, because the thing that reads it is a POSIX shell.
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
+      # Digests are read anonymously, from the same view the operator who
+      # checks them has. Reading them with a token that can see private
+      # packages is what let four releases publish a manifest for images
+      # nobody else could fetch.
       - name: Publish the image manifest
         env:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          ./scripts/check-images-public.sh --prefix "$IMAGE_PREFIX" --tag "$TAG" \
+            backend consumer worker forms updater web admin tracking realtime \
+            | grep -E '^[a-z]+[[:space:]]+sha256:' > /tmp/digests.tsv
           {
             printf '{\n'
             printf '  "tag": "%s",\n' "$TAG"
             printf '  "registry": "%s",\n' "$IMAGE_PREFIX"
             printf '  "images": {\n'
             first=1
-            for s in backend consumer worker forms updater web admin tracking realtime; do
-              digest=$(docker buildx imagetools inspect "$IMAGE_PREFIX/$s:$TAG" \
-                --format '{{json .Manifest.Digest}}' | tr -d '"')
+            while IFS=$'\t' read -r svc digest; do
               [ "$first" = 1 ] || printf ',\n'
               first=0
-              printf '    "%s": "%s"' "$s" "$digest"
-            done
+              printf '    "%s": "%s"' "$svc" "$digest"
+            done < /tmp/digests.tsv
             printf '\n  }\n}\n'
           } > /tmp/images.json
           cat /tmp/images.json
+          # Nine services in, nine digests out, or the manifest is incomplete
+          # and the installer would silently skip whatever is missing.
+          [ "$(wc -l < /tmp/digests.tsv)" -eq 9 ] || {
+            echo "::error::expected 9 image digests, got $(wc -l < /tmp/digests.tsv)"; exit 1; }
 
       - name: Generate release notes
         env:

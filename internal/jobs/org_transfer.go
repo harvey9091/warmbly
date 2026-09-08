@@ -2,11 +2,11 @@ package jobs
 
 import (
 	"context"
+	"fmt"
 	"time"
 
-	"github.com/warmbly/warmbly/internal/observability/errs"
-
 	"github.com/warmbly/warmbly/internal/app/orgtransfer"
+	"github.com/warmbly/warmbly/internal/jobrun"
 )
 
 // OrgTransferJob keeps the workspace-archive tables honest. It deletes archives
@@ -29,13 +29,14 @@ func NewOrgTransferJob(svc orgtransfer.Service) *OrgTransferJob {
 
 // Run performs one tick. Errors are reported and swallowed so the scheduler
 // keeps ticking; the next tick retries whatever did not land.
-func (j *OrgTransferJob) Run(ctx context.Context) {
+func (j *OrgTransferJob) Run(ctx context.Context) error {
 	if j.svc == nil {
-		return
+		return nil
 	}
 	if _, err := j.svc.PurgeExpiredExports(ctx); err != nil {
-		errs.CaptureException(err)
+		return fmt.Errorf("purge expired exports: %w", err)
 	}
+	return nil
 }
 
 // OrgTransferScheduler runs the job on a fixed interval.
@@ -57,21 +58,9 @@ func NewOrgTransferScheduler(job *OrgTransferJob, interval time.Duration) *OrgTr
 
 // Start runs Run() on every tick until ctx is cancelled or Stop() is called.
 func (s *OrgTransferScheduler) Start(ctx context.Context) {
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
-
-	s.job.Run(ctx)
-
-	for {
-		select {
-		case <-ticker.C:
-			s.job.Run(ctx)
-		case <-s.stopCh:
-			return
-		case <-ctx.Done():
-			return
-		}
-	}
+	ctx, cancel := stopContext(ctx, s.stopCh)
+	defer cancel()
+	jobrun.Loop(ctx, "org_transfer_housekeeping", s.interval, true, s.job.Run)
 }
 
 // Stop halts the scheduler.

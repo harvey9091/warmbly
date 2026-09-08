@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
 	"github.com/warmbly/warmbly/internal/models"
@@ -322,12 +323,37 @@ func validPort(port int) bool {
 
 // validateMailSecurity rejects an unknown security mode. Empty is allowed and
 // means "infer from the port", which is how existing clients behave.
+//
+// "none" carries two extra conditions, because it is the one mode that puts a
+// password on an unencrypted socket. It is legal only against a loopback host,
+// where the socket never reaches a wire, and only on a self-hosted instance,
+// where the worker runs on the operator's own machine. On the hosted product
+// the worker is never the customer's machine, so a loopback address there is
+// the WORKER's loopback: the mode could not reach the relay it was meant for
+// and would only be a way to speak plaintext to whatever answers on that port.
 func validateMailSecurity(smtp, imap *models.Service) *errx.Error {
 	if smtp.Security != "" && !models.ValidMailSecurity(smtp.Security) {
 		return errx.ErrEmailSMTPSecurity
 	}
 	if imap.Security != "" && !models.ValidMailSecurity(imap.Security) {
 		return errx.ErrEmailIMAPSecurity
+	}
+	if err := validateCleartextHost(smtp.Security, smtp.Host, errx.ErrEmailSMTPSecurityNotLocal, errx.ErrEmailSMTPSecurityHosted); err != nil {
+		return err
+	}
+	return validateCleartextHost(imap.Security, imap.Host, errx.ErrEmailIMAPSecurityNotLocal, errx.ErrEmailIMAPSecurityHosted)
+}
+
+// validateCleartextHost is the "none" gate for one leg.
+func validateCleartextHost(security, host string, notLocal, hosted *errx.Error) *errx.Error {
+	if security != models.MailSecurityNone {
+		return nil
+	}
+	if !config.SelfHosted() {
+		return hosted
+	}
+	if !models.LoopbackMailHost(host) {
+		return notLocal
 	}
 	return nil
 }

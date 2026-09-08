@@ -498,8 +498,8 @@ func seedLegacyUnibox(ctx context.Context, pool *pgxpool.Pool, rows []legacyUnib
 		if _, err := pool.Exec(ctx, `
 			INSERT INTO unibox_mailboxes (email_id, uid_validity, mailbox, attributes, highestmodseq, updated_at)
 			VALUES ($1, $2, 'INBOX', ARRAY['\HasNoChildren'], 1, NOW())
-			ON CONFLICT (email_id, uid_validity) DO UPDATE SET
-				mailbox = EXCLUDED.mailbox,
+			ON CONFLICT (email_id, mailbox) DO UPDATE SET
+				uid_validity = EXCLUDED.uid_validity,
 				attributes = EXCLUDED.attributes,
 				highestmodseq = EXCLUDED.highestmodseq,
 				updated_at = NOW()

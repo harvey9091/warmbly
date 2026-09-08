@@ -3,7 +3,6 @@ package email
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"net"
 	"net/smtp"
 
@@ -17,7 +16,10 @@ import (
 // and any port is accepted. security may be empty, in which case the port
 // convention decides.
 func VerifySMTP(ctx context.Context, host string, port int, user, pass, security string) bool {
-	addr := fmt.Sprintf("%s:%d", host, port)
+	// Brackets belong to the address, not to the host, and JoinHostPort is
+	// what puts them back for an IPv6 literal.
+	host = models.NormalizeMailHost(host)
+	addr := models.MailDialAddress(host, port)
 
 	// Matches the send client's TLS policy: MAIL_TLS_INSECURE is a dev-only
 	// knob for the local self-signed sandbox, never set in production.
@@ -32,7 +34,15 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 
 	// netbind dialers so validation probes leave from WORKER_BIND_IP exactly
 	// like the sends they are vouching for.
-	implicitTLS := models.ResolveSMTPSecurity(security, port) == models.MailSecurityTLS
+	resolved := models.ResolveSMTPSecurity(security, port)
+	// The unencrypted mode only ever addresses this machine. Refusing it here
+	// as well as at send time means a mailbox that could never be dialled
+	// safely fails at connect, where the user is standing in front of the
+	// form, rather than at the first send.
+	if resolved == models.MailSecurityNone && !models.CleartextMailAllowed(host) {
+		return false
+	}
+	implicitTLS := resolved == models.MailSecurityTLS
 	if implicitTLS {
 		conn, err = netbind.TLSDialer(nil, tlsConf).DialContext(ctx, "tcp", addr)
 	} else {
@@ -45,6 +55,9 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 		return false
 	}
 	defer conn.Close()
+	if resolved == models.MailSecurityNone && !netbind.LoopbackPeer(conn) {
+		return false
+	}
 
 	c, err := smtp.NewClient(conn, host)
 	if err != nil {
@@ -52,7 +65,7 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 	}
 	defer c.Close()
 
-	if !implicitTLS {
+	if !implicitTLS && resolved != models.MailSecurityNone {
 		// TLS stays mandatory, with the same dev-only escape hatch the send
 		// path uses for the local no-STARTTLS sink.
 		if ok, _ := c.Extension("STARTTLS"); ok {

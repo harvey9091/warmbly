@@ -75,3 +75,40 @@ func TestOAuthConfigFor_ConfiguredProviderIsReturned(t *testing.T) {
 		t.Errorf("outlook should still be unconfigured, got %v", err)
 	}
 }
+
+// The unencrypted mailbox mode has two gates and they answer different
+// questions: whether this deployment can host a local relay at all, and
+// whether the host given is that relay. A user who gets the wrong one back is
+// sent to fix the wrong thing.
+func TestValidateMailSecurity_CleartextIsLoopbackOnlyAndSelfHostOnly(t *testing.T) {
+	svc := func(host, security string) *models.Service {
+		return &models.Service{Host: host, Port: 1143, Security: security}
+	}
+	tls := svc("imap.example.com", models.MailSecurityTLS)
+
+	for _, tc := range []struct {
+		name       string
+		deployment string
+		smtp, imap *models.Service
+		want       *errx.Error
+	}{
+		{"self-host, loopback imap", "self_hosted", svc("smtp.example.com", models.MailSecurityStartTLS), svc("127.0.0.1", models.MailSecurityNone), nil},
+		{"self-host, localhost smtp", "self_hosted", svc("localhost", models.MailSecurityNone), tls, nil},
+		{"self-host, ipv6 loopback", "self_hosted", svc("::1", models.MailSecurityNone), tls, nil},
+		{"self-host, remote imap", "self_hosted", svc("smtp.example.com", models.MailSecurityTLS), svc("imap.proton.me", models.MailSecurityNone), errx.ErrEmailIMAPSecurityNotLocal},
+		{"self-host, remote smtp", "self_hosted", svc("mail.example.com", models.MailSecurityNone), tls, errx.ErrEmailSMTPSecurityNotLocal},
+		// Hosted: the worker is not the customer's machine, so a loopback
+		// address there is the worker's own and the mode is refused outright.
+		{"hosted, loopback smtp", "cloud", svc("127.0.0.1", models.MailSecurityNone), tls, errx.ErrEmailSMTPSecurityHosted},
+		{"hosted, loopback imap", "cloud", svc("smtp.example.com", models.MailSecurityTLS), svc("localhost", models.MailSecurityNone), errx.ErrEmailIMAPSecurityHosted},
+		{"unknown mode still rejected", "self_hosted", svc("localhost", "plain"), tls, errx.ErrEmailSMTPSecurity},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("DEPLOYMENT_MODE", tc.deployment)
+			got := validateMailSecurity(tc.smtp, tc.imap)
+			if got != tc.want {
+				t.Fatalf("validateMailSecurity() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

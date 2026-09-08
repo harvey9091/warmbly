@@ -79,6 +79,12 @@ func (c *Client) foldersCapped(limit int) ([]models.Mailbox, *errx.MailError) {
 		return nil, c.handleError(err)
 	}
 
+	// Before the cap, not after: a name the server listed twice would
+	// otherwise spend one of the slots the cap allows and cost a real folder
+	// its sync, which is the same failure this whole change is about.
+	all, conflicts := dedupeByName(all)
+	c.folderConflicts.Store(int32(conflicts))
+
 	kept, overflow := rankFolders(all, limit)
 	c.folderOverflow.Store(int32(overflow))
 
@@ -110,36 +116,36 @@ func (c *Client) foldersCapped(limit int) ([]models.Mailbox, *errx.MailError) {
 		resp = append(resp, box)
 	}
 
-	resp, conflicts := dedupeByUIDValidity(resp)
-	c.folderConflicts.Store(int32(conflicts))
 	return resp, nil
 }
 
-// dedupeByUIDValidity keeps one folder per UIDVALIDITY.
+// dedupeByName keeps one folder per name.
 //
-// Everything downstream identifies a folder by that number, including the
-// primary key of the stored folder row, but RFC 3501 only promises UIDs are
-// stable within one folder: Dovecot and others derive UIDVALIDITY from the
-// creation time, so a folder tree created in the same second shares one.
-// Two folders under a single id would advance each other's cursor and delete
-// each other's row, which loses mail. Dropping the later one leaves it
-// unsynced (and says so) but leaves every other folder correct. Input is
-// already ranked, so the inbox and the special folders win any collision.
-func dedupeByUIDValidity(boxes []models.Mailbox) ([]models.Mailbox, int) {
-	seen := make(map[uint32]string, len(boxes))
+// A folder is identified by its name, which is the one thing IMAP does
+// guarantee is unique per account, and that is also the primary key of the
+// stored folder row. Two rows under one name would advance each other's
+// cursor and delete each other's row, which loses mail.
+//
+// This used to key on UIDVALIDITY, which cost a folder its entire sync
+// whenever a server derived that number from a creation time and handed the
+// same one to every folder made in the same second. Keyed by name it is a
+// guard against a pathological listing rather than an everyday loss, so it
+// should stay at zero; it is reported all the same, because a folder silently
+// not syncing is the failure that took a release to notice. Input is already
+// ranked, so the inbox and the special folders win any collision.
+func dedupeByName(boxes []models.Mailbox) ([]models.Mailbox, int) {
+	seen := make(map[string]struct{}, len(boxes))
 	kept := boxes[:0]
 	conflicts := 0
 	for _, box := range boxes {
-		if other, dup := seen[box.UIDValidity]; dup {
+		if _, dup := seen[box.Name]; dup {
 			log.Warn().
 				Str("folder", box.Name).
-				Str("conflicts_with", other).
-				Uint32("uid_validity", box.UIDValidity).
-				Msg("imap: two folders report the same UIDVALIDITY; the second is not synced")
+				Msg("imap: the server listed one folder name twice; the second is not synced")
 			conflicts++
 			continue
 		}
-		seen[box.UIDValidity] = box.Name
+		seen[box.Name] = struct{}{}
 		kept = append(kept, box)
 	}
 	return kept, conflicts
@@ -152,7 +158,7 @@ func (c *Client) FolderOverflow() int {
 }
 
 // FolderConflicts is how many folders the last Folders call left out because
-// another folder reported the same UIDVALIDITY.
+// the server listed their name more than once.
 func (c *Client) FolderConflicts() int {
 	return int(c.folderConflicts.Load())
 }

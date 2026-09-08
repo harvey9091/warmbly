@@ -94,7 +94,14 @@ type EmailMessageData struct { // used when for kafka when an email arrives
 type EmailMessageStoreData struct {
 	ID      uuid.UUID `json:"id"`
 	EmailID uuid.UUID `json:"email_id"`
-	Mailbox uint32    `json:"mailbox"`
+	// Mailbox is the source folder's UIDVALIDITY at sync time, which is the
+	// generation UID belongs to. It is not the folder's identity: see
+	// FolderPath.
+	Mailbox uint32 `json:"mailbox"`
+	// FolderPath is the source folder's name, the identity IMAP actually
+	// guarantees. Empty on events from workers predating the field and on
+	// providers with no folders (Gmail).
+	FolderPath string `json:"folder_path,omitempty"`
 	// Folder is the canonical folder (see the Folder* constants) the message
 	// was in at sync time. Empty on events from workers predating the field;
 	// the consumer normalizes before storing.

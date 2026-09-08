@@ -15,12 +15,14 @@ import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
 import updateEmailCredentials from "@/lib/api/client/app/emails/updateEmailCredentials";
 import {
+    allowsNoEncryption,
     defaultImapSecurity,
     defaultSmtpSecurity,
     validPort,
     type MailSecurity,
 } from "@/lib/api/models/app/emails/Service";
 import SecuritySelect from "@/components/app/emails/SecuritySelect";
+import useAuthConfig from "@/lib/api/hooks/auth/useAuthConfig";
 
 export default function UpdateCredentialsDialog({
     mailboxId,
@@ -60,6 +62,21 @@ export default function UpdateCredentialsDialog({
     React.useEffect(() => {
         if (!smtpSecurityTouched.current) setSmtpSecurity(defaultSmtpSecurity(Number(smtpPort)));
     }, [smtpPort]);
+
+    // Same rule as the connect form: "no encryption" belongs to a loopback
+    // host on a self-hosted instance, and editing the host away from one takes
+    // the mode with it rather than leaving a value the backend refuses.
+    const selfHosted = useAuthConfig().data?.self_hosted === true;
+    React.useEffect(() => {
+        if (imapSecurity === "none" && !allowsNoEncryption(imapHost, selfHosted)) {
+            setImapSecurity(defaultImapSecurity(Number(imapPort)));
+        }
+    }, [imapHost, imapPort, imapSecurity, selfHosted]);
+    React.useEffect(() => {
+        if (smtpSecurity === "none" && !allowsNoEncryption(smtpHost, selfHosted)) {
+            setSmtpSecurity(defaultSmtpSecurity(Number(smtpPort)));
+        }
+    }, [smtpHost, smtpPort, smtpSecurity, selfHosted]);
 
     // Reset when reopened so a cancelled attempt never leaks a typed password.
     React.useEffect(() => {
@@ -173,6 +190,8 @@ export default function UpdateCredentialsDialog({
                                 <Field label="Security">
                                     <SecuritySelect
                                         value={imapSecurity}
+                                        host={imapHost}
+                                        selfHosted={selfHosted}
                                         onChange={(v) => {
                                             imapSecurityTouched.current = true;
                                             setImapSecurity(v);
@@ -194,6 +213,8 @@ export default function UpdateCredentialsDialog({
                                 <Field label="Security">
                                     <SecuritySelect
                                         value={smtpSecurity}
+                                        host={smtpHost}
+                                        selfHosted={selfHosted}
                                         onChange={(v) => {
                                             smtpSecurityTouched.current = true;
                                             setSmtpSecurity(v);

@@ -35,14 +35,20 @@ type WarmupToken struct {
 //
 // For Gmail accounts the worker uses GmailID to issue Users.Messages.Modify
 // requests. For IMAP-backed accounts (Outlook + custom SMTP/IMAP) the worker
-// needs UID + the source mailbox's UIDValidity to locate the message; the
-// mailbox name is then resolved against the worker's cached folder list.
+// needs UID plus the folder to locate the message: MailboxFolder names the
+// folder and MailboxUIDValidity says which generation of its UIDs the stored
+// UID belongs to, so an action is skipped rather than aimed at whatever
+// message inherited the number after a UIDVALIDITY change.
 type WarmupEmailAction struct {
 	UserID             uuid.UUID `json:"user_id"`
 	EmailID            uuid.UUID `json:"email_id"`
 	GmailID            string    `json:"gmail_id"`
 	UID                uint32    `json:"uid"`
 	MailboxUIDValidity uint32    `json:"mailbox_uid_validity"`
+	// MailboxFolder is the source folder's name. Empty on events from
+	// consumers predating it, where the worker falls back to matching on
+	// MailboxUIDValidity alone.
+	MailboxFolder string `json:"mailbox_folder,omitempty"`
 	// RFCMessageID is the immutable RFC 5322 Message-ID. Graph provider ids
 	// change when a message is moved (copy+delete), so the worker re-resolves
 	// the live Graph id from this stable key at action time.

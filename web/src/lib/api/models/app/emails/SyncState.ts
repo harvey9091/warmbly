@@ -22,7 +22,7 @@ export interface SyncState {
     deferred: number;
     /** Folders the last listing could not follow because the mailbox has more than the sync covers. */
     folders_skipped_cap?: number;
-    /** Folders the mail server gave the same internal id as another folder. */
+    /** Folders left out because the mail server listed their name more than once. */
     folders_skipped_conflict?: number;
     last_synced_at?: string;
 }

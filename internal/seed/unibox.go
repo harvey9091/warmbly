@@ -149,8 +149,8 @@ func seedUniboxMailboxes(ctx context.Context, pool *pgxpool.Pool) error {
 		_, err := pool.Exec(ctx, `
 			INSERT INTO unibox_mailboxes (email_id, uid_validity, mailbox, attributes, highestmodseq, updated_at)
 			VALUES ($1, $2, $3, $4, 1, NOW())
-			ON CONFLICT (email_id, uid_validity) DO UPDATE SET
-				mailbox = EXCLUDED.mailbox,
+			ON CONFLICT (email_id, mailbox) DO UPDATE SET
+				uid_validity = EXCLUDED.uid_validity,
 				attributes = EXCLUDED.attributes,
 				highestmodseq = EXCLUDED.highestmodseq,
 				updated_at = NOW()
@@ -170,13 +170,13 @@ func insertUniboxEmail(ctx context.Context, pool *pgxpool.Pool, row seededUnibox
 
 	_, err = pool.Exec(ctx, `
 		INSERT INTO unibox_emails (
-			id, user_id, email_id, mailbox, thread_id, message_id,
+			id, user_id, email_id, mailbox, folder_path, thread_id, message_id,
 			gmail_id, parent_id, uid, mod_seq,
 			flags, bcc, cc, from_addr, in_reply_to, reply_to,
 			to_addr, subject, size, internal_date, sent_date,
 			snippet, seen, created_at, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6,
+			$1, $2, $3, $4, 'INBOX', $5, $6,
 			'', $7, $8, 1,
 			$9, '{}', '{}', $10, '{}', '{}',
 			$11, $12, $13, $14, $14,
@@ -185,6 +185,7 @@ func insertUniboxEmail(ctx context.Context, pool *pgxpool.Pool, row seededUnibox
 		ON CONFLICT (id) DO UPDATE SET
 			email_id = EXCLUDED.email_id,
 			mailbox = EXCLUDED.mailbox,
+			folder_path = EXCLUDED.folder_path,
 			thread_id = EXCLUDED.thread_id,
 			message_id = EXCLUDED.message_id,
 			parent_id = EXCLUDED.parent_id,

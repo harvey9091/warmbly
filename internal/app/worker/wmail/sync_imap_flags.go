@@ -16,8 +16,8 @@ import (
 // reportFolderOverflow records what the folder listing could not follow, as
 // state rather than as an error raised once.
 //
-// Both conditions are things the user can fix (get under the folder cap,
-// rename the folder the server gave a duplicate id), and an error row is
+// Both conditions are things the user can fix (get under the folder cap, or
+// stop the server listing one name twice), and an error row is
 // never withdrawn once written, so raising one meant a red "needs attention"
 // that stayed after the problem was gone. Relaying the counts every pass
 // makes the warning disappear on its own.
@@ -37,9 +37,9 @@ func (w *WMail) reportFolderOverflow() {
 // not wait for it; that arrives through UIDNEXT on every pass.
 func (w *WMail) imapScanFlags(ctx context.Context, box *models.Mailbox, stats *tickStats) *errx.MailError {
 	if w.flagScan == nil {
-		w.flagScan = map[uint32]*folderFlagScan{}
+		w.flagScan = map[string]*folderFlagScan{}
 	}
-	scan := w.flagScan[box.UIDValidity]
+	scan := w.flagScan[box.Name]
 	now := time.Now()
 	if scan != nil && now.Sub(scan.at) < config.ImapFlagScanInterval {
 		return nil
@@ -77,7 +77,7 @@ func (w *WMail) imapScanFlags(ctx context.Context, box *models.Mailbox, stats *t
 			}
 		}
 	}
-	w.flagScan[box.UIDValidity] = &folderFlagScan{at: now, flags: next}
+	w.flagScan[box.Name] = &folderFlagScan{at: now, flags: next}
 	return nil
 }
 
@@ -100,13 +100,14 @@ func (w *WMail) relayFlags(ctx context.Context, box *models.Mailbox, uid uint32,
 		return nil
 	}
 	if err := w.onEvent(models.JobEventTypeEmailUpdate, &models.JobEventEmailUpdate{
-		UserID:  w.UserID,
-		EmailID: w.ID,
-		ID:      internalID,
-		UID:     uid,
-		Mailbox: box.UIDValidity,
-		Folder:  imapCanonicalFolder(box),
-		Flags:   state.Flags,
+		UserID:     w.UserID,
+		EmailID:    w.ID,
+		ID:         internalID,
+		UID:        uid,
+		Mailbox:    box.UIDValidity,
+		FolderPath: box.Name,
+		Folder:     imapCanonicalFolder(box),
+		Flags:      state.Flags,
 	}); err != nil {
 		return w.controlPlaneError(err, stats)
 	}

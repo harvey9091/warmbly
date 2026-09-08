@@ -64,6 +64,11 @@ const (
 	// MailErrorCodeAuthUnsupported is a server whose advertised
 	// authentication mechanisms we do not implement.
 	MailErrorCodeAuthUnsupported MailErrorCode = "AUTH_UNSUPPORTED"
+	// MailErrorCodeInsecureRemoteHost is the unencrypted mailbox mode aimed
+	// at something that is not this machine. Kept apart from a credentials
+	// or reachability failure because the server is fine and the password is
+	// fine: the connection is one we refuse to make.
+	MailErrorCodeInsecureRemoteHost MailErrorCode = "INSECURE_REMOTE_HOST"
 	// MailErrorCodeDomainAuthRejected is the receiving side refusing the mail
 	// because the SENDING DOMAIN failed its authentication bar (Outlook's
 	// 5.7.515, Gmail's 5.7.26). Not a dead server and not a bad recipient:
@@ -207,6 +212,17 @@ var (
 	ErrMailSendRejected = func(detail string) *MailError {
 		return MError(MailErrorWarning, MailErrorCodeSendRejected, fmt.Sprintf("The receiving mail server refused this message: %s", detail), MailErrorResolveMethodNone)
 	}
+	// ErrMailInsecureRemoteHost is the dial-time half of the loopback rule
+	// for the unencrypted mailbox mode. The connect form enforces it too,
+	// but the worker is the thing holding the socket, so it decides: an
+	// instance-local edit to the stored host cannot talk a worker into
+	// putting a password on a wire.
+	ErrMailInsecureRemoteHost = MError(
+		MailErrorCritical,
+		MailErrorCodeInsecureRemoteHost,
+		"This mailbox is set to connect without encryption, which Warmbly only does to a mail server on the same machine as the worker. Point it at localhost or choose SSL/TLS or STARTTLS.",
+		MailErrorResolveMethodReload,
+	)
 	// ErrMailCleartextAuth is our own refusal to put a password on an
 	// unencrypted wire, raised before anything is sent. Not retryable: no
 	// number of attempts encrypts the link, and reporting it as an outage

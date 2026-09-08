@@ -126,3 +126,30 @@ func (t *syncTracker) setFolder(key string, c models.SyncFolderCursor) {
 	t.state.BackfillCursor.Folders[key] = c
 	t.dirty = true
 }
+
+// clearFolder forgets a folder's backfill floor.
+//
+// It has to go when the folder does. A name is reusable, so a floor left
+// behind is inherited by whatever is created under that name next: a "done"
+// cursor skips the new folder's history entirely, and a UID floor skips
+// everything below it. Neither shows up as an error, because the messages are
+// not new mail either; they are simply never imported.
+func (t *syncTracker) clearFolder(name string) {
+	if _, ok := t.state.BackfillCursor.Folders[name]; !ok {
+		return
+	}
+	delete(t.state.BackfillCursor.Folders, name)
+	t.dirty = true
+}
+
+// renameFolder moves a folder's backfill floor to its new name, so a rename
+// costs nothing rather than restarting the folder's import from the top.
+func (t *syncTracker) renameFolder(from, to string) {
+	cur, ok := t.state.BackfillCursor.Folders[from]
+	if !ok {
+		return
+	}
+	delete(t.state.BackfillCursor.Folders, from)
+	t.state.BackfillCursor.Folders[to] = cur
+	t.dirty = true
+}

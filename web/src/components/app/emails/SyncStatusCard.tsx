@@ -124,8 +124,9 @@ export default function SyncStatusCard({ mailboxId }: { mailboxId: string }) {
 
             {(state?.folders_skipped_conflict ?? 0) > 0 && (
                 <p className="mt-1 text-[11.5px] text-amber-700">
-                    {state!.folders_skipped_conflict!.toLocaleString()} folder{state!.folders_skipped_conflict === 1 ? " shares" : "s share"} an internal id with another
-                    folder, so only one of each pair is synced. Renaming the missing folder on your mail server usually gives it a new id.
+                    Your mail server listed {state!.folders_skipped_conflict!.toLocaleString()} folder
+                    {state!.folders_skipped_conflict === 1 ? " name" : " names"} more than once, so only the first of each is
+                    synced. Renaming one of them on your mail server clears this.
                 </p>
             )}
         </div>

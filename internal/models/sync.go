@@ -36,9 +36,9 @@ const (
 )
 
 // SyncFolderCursor is the resumable position inside one folder of a backfill.
-// IMAP keys folders by UIDVALIDITY and walks UIDs downward; Graph keys by
-// well-known folder name and follows @odata.nextLink; Gmail has no folders and
-// uses SyncCursor.PageToken.
+// Both IMAP and Graph key folders by name and IMAP walks UIDs downward, Graph
+// follows @odata.nextLink; Gmail has no folders and uses
+// SyncCursor.PageToken.
 type SyncFolderCursor struct {
 	// Next is an opaque continuation (Graph nextLink).
 	Next string `json:"next,omitempty" avro:"next"`
@@ -83,9 +83,9 @@ type SyncState struct {
 
 	// FoldersSkippedCap and FoldersSkippedConflict are what the last folder
 	// listing could not follow: more folders than the sync covers, and
-	// folders the server gave the same internal id. Carried as state rather
-	// than raised as an error once, so the warning goes away by itself when
-	// the user fixes it.
+	// folders whose name the server listed more than once. Carried as state
+	// rather than raised as an error once, so the warning goes away by itself
+	// when the user fixes it.
 	FoldersSkippedCap      int `json:"folders_skipped_cap,omitempty" avro:"folders_skipped_cap"`
 	FoldersSkippedConflict int `json:"folders_skipped_conflict,omitempty" avro:"folders_skipped_conflict"`
 

@@ -126,8 +126,15 @@ var (
 	ErrEmailReauthNoRefreshToken = New(BadRequest, "The provider did not return a refresh token and none is stored. Please try re-authorizing again.")
 	ErrEmailSMTPHost             = New(BadRequest, "SMTP host is required.")
 	ErrEmailSMTPPort             = New(BadRequest, "SMTP port must be between 1 and 65535.")
-	ErrEmailSMTPSecurity         = New(BadRequest, "SMTP security must be tls or starttls.")
-	ErrEmailIMAPSecurity         = New(BadRequest, "IMAP security must be tls or starttls.")
+	ErrEmailSMTPSecurity         = New(BadRequest, "SMTP security must be tls, starttls or none.")
+	ErrEmailIMAPSecurity         = New(BadRequest, "IMAP security must be tls, starttls or none.")
+	// The "none" refusals are two different problems with two different ways
+	// out, so they do not share a message: one is a host that has to change,
+	// the other is a mode this deployment cannot offer at all.
+	ErrEmailSMTPSecurityNotLocal = New(BadRequest, "SMTP security \"none\" is only allowed for a mail server on this machine (localhost, 127.0.0.1 or ::1).")
+	ErrEmailIMAPSecurityNotLocal = New(BadRequest, "IMAP security \"none\" is only allowed for a mail server on this machine (localhost, 127.0.0.1 or ::1).")
+	ErrEmailSMTPSecurityHosted   = New(BadRequest, "SMTP security \"none\" needs a self-hosted instance, where the worker runs on the same machine as the mail server. Use tls or starttls.")
+	ErrEmailIMAPSecurityHosted   = New(BadRequest, "IMAP security \"none\" needs a self-hosted instance, where the worker runs on the same machine as the mail server. Use tls or starttls.")
 	ErrEmailIMAPHost             = New(BadRequest, "IMAP host is required.")
 	ErrEmailIMAPPort             = New(BadRequest, "IMAP port must be between 1 and 65535.")
 	ErrEmailCredentialsRequired  = New(BadRequest, "SMTP and IMAP credentials are required.")

@@ -6,6 +6,7 @@ import type AddEmail from "@/lib/api/models/app/emails/AddEmail";
 import {
     defaultImapSecurity,
     defaultSmtpSecurity,
+    isLoopbackHost,
     validPort,
     type MailSecurity,
 } from "@/lib/api/models/app/emails/Service";
@@ -85,11 +86,25 @@ function normaliseHeader(h: string): string {
     return ALIASES[key] ?? key;
 }
 
-function parseSecurity(raw: string | undefined, port: number, leg: "smtp" | "imap"): MailSecurity | null {
+// "none" needs a loopback host, and the backend additionally needs a
+// self-hosted instance. Only the first is knowable for certain here, so
+// `allowNone` is optimistic: it is false only when this is *known* to be the
+// hosted product. Treating "not yet loaded" as hosted would mark a valid row
+// invalid for whoever uploads a file before the config query settles, and a
+// row the API would have accepted is a worse answer than one it will reject
+// with a message naming the reason.
+function parseSecurity(
+    raw: string | undefined,
+    port: number,
+    host: string,
+    allowNone: boolean,
+    leg: "smtp" | "imap",
+): MailSecurity | null {
     const v = (raw ?? "").trim().toLowerCase();
     if (v === "") return leg === "smtp" ? defaultSmtpSecurity(port) : defaultImapSecurity(port);
     if (v === "tls" || v === "ssl" || v === "ssl/tls" || v === "implicit") return "tls";
     if (v === "starttls" || v === "start_tls" || v === "start-tls") return "starttls";
+    if (v === "none" || v === "plain" || v === "insecure") return allowNone && isLoopbackHost(host) ? "none" : null;
     return null;
 }
 
@@ -117,7 +132,7 @@ export interface BulkRow {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function buildRow(line: number, raw: Record<string, string>): BulkRow {
+function buildRow(line: number, raw: Record<string, string>, allowNone: boolean): BulkRow {
     const get = (k: string) => (raw[k] ?? "").trim();
     const email = get("email");
     const invalid = (problem: string): BulkRow => ({ line, raw, account: null, problem, status: "invalid" });
@@ -147,10 +162,13 @@ function buildRow(line: number, raw: Record<string, string>): BulkRow {
     if (!imapPass) return invalid("Missing imap_password (or a shared password column)");
     if (!smtpPass) return invalid("Missing smtp_password (or a shared password column)");
 
-    const smtpSecurity = parseSecurity(raw.smtp_security, smtpPort, "smtp");
-    const imapSecurity = parseSecurity(raw.imap_security, imapPort, "imap");
-    if (!smtpSecurity) return invalid("smtp_security must be tls or starttls");
-    if (!imapSecurity) return invalid("imap_security must be tls or starttls");
+    const smtpSecurity = parseSecurity(raw.smtp_security, smtpPort, smtpHost, allowNone, "smtp");
+    const imapSecurity = parseSecurity(raw.imap_security, imapPort, imapHost, allowNone, "imap");
+    const noneHint = allowNone
+        ? " (none only for a server on this machine)"
+        : " (none needs a self-hosted instance)";
+    if (!smtpSecurity) return invalid("smtp_security must be tls or starttls" + noneHint);
+    if (!imapSecurity) return invalid("imap_security must be tls or starttls" + noneHint);
 
     return {
         line,
@@ -177,7 +195,7 @@ function buildRow(line: number, raw: Record<string, string>): BulkRow {
     };
 }
 
-export function parseBulkFile(file: File): Promise<{ rows: BulkRow[]; columns: string[] }> {
+export function parseBulkFile(file: File, allowNone: boolean): Promise<{ rows: BulkRow[]; columns: string[] }> {
     return new Promise((resolve, reject) => {
         Papa.parse<Record<string, string>>(file, {
             header: true,
@@ -189,7 +207,7 @@ export function parseBulkFile(file: File): Promise<{ rows: BulkRow[]; columns: s
                     reject(new Error("The file needs an email column. Download the template to see the expected headers."));
                     return;
                 }
-                const rows = res.data.map((raw, i) => buildRow(i + 2, raw));
+                const rows = res.data.map((raw, i) => buildRow(i + 2, raw, allowNone));
                 if (rows.length === 0) {
                     reject(new Error("The file has a header but no rows."));
                     return;

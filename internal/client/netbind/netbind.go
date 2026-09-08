@@ -81,3 +81,21 @@ func InsecureTLS() bool {
 	})
 	return insecureTLS
 }
+
+// LoopbackPeer reports whether conn's peer is this machine.
+//
+// The host string was already checked before dialing, but a name check is a
+// promise about DNS, not about the socket: the answer can change between the
+// two. This asks the connection itself, which is the only thing that cannot
+// be moved after the fact, and is what makes the cleartext mailbox mode
+// (models.MailSecurityNone) safe to obey.
+func LoopbackPeer(conn net.Conn) bool {
+	if conn == nil {
+		return false
+	}
+	addr, ok := conn.RemoteAddr().(*net.TCPAddr)
+	if !ok {
+		return false
+	}
+	return addr.IP.IsLoopback()
+}

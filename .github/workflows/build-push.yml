@@ -255,3 +255,29 @@ jobs:
             -t ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ github.sha }} \
             -t ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:dev \
             $(printf '${{ env.IMAGE_PREFIX }}/${{ matrix.service }}@sha256:%s ' *)
+
+  # A package on GHCR is created private and does not inherit the repository's
+  # visibility, and no API can change that: an owner has to flip it by hand.
+  # So a new service image is born unpullable, and the first sign of it would
+  # otherwise be a stranger's failed install (#371).
+  #
+  # This is the early warning: main is where a new image first appears, and
+  # finding out here costs nothing, while finding out at tag time blocks a
+  # release. It only warns, because the fix is not in this repo and nobody can
+  # land a PR that makes main green again.
+  verify-public:
+    name: Warn if images are not publicly pullable
+    needs: [build-go, merge-native]
+    if: always() && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      # Only what this workflow publishes. web, admin and cli are built at
+      # tag time and have no :dev tag, so checking them here would warn about
+      # something no push to main can fix.
+      - name: Pull-test every image anonymously
+        run: |
+          ./scripts/check-images-public.sh --prefix "$IMAGE_PREFIX" --tag dev --warn \
+            backend consumer worker forms updater tracking realtime

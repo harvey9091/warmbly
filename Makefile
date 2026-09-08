@@ -42,7 +42,7 @@ PROTO_GEN_FILES := $(PROTO_DIR)/tasks.pb.go
         restart restart-go restart-all infra infra-down app app-down app-logs \
         backend forms forms-web consumer worker run dev tracking realtime web \
         admin site docs grant-admin revoke-admin gen-key installer-sha installer-check installer-demo \
-        db-reset db-wipe migrate warmbly warmbly-dist cli-sha cli-check
+        db-reset db-wipe migrate warmbly warmbly-dist cli-sha cli-check images-check
 
 setup-tools:
 	@echo "Installing required Go tools into $(GO_BIN)"
@@ -703,6 +703,15 @@ installer-sha:
 # --print-env, a compose file per answer shape, and the checksum.
 installer-check:
 	@./scripts/check-installer.sh
+
+# Every published image has to be pullable by a stranger, and nothing else we
+# run proves it: a package on GHCR is created private, does not inherit the
+# repository's visibility, and no API can change that, so every check that
+# talks to the registry with a token passes while the world sees nothing
+# (#371). This one carries no credentials on purpose. No TAG means the newest
+# release, which is what a fresh install resolves to.
+images-check:
+	@./scripts/check-images-public.sh $(if $(TAG),--tag $(TAG),)
 
 # Walk the installer's wizard without installing anything: the real questions,
 # the real review, and a played pull and start. Writes no file, pulls no image,

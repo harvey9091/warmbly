@@ -30,6 +30,11 @@ func (s *JobsService) HandleUpdateEmail(ctx context.Context, e *models.JobEventE
 	if email.ModSeq != e.ModSeq {
 		updateData.ModSeq = &e.ModSeq
 	}
+	// The source folder's name, which is its identity. Empty on events from
+	// workers predating the field, which keeps the stored value.
+	if e.FolderPath != "" && email.FolderPath != e.FolderPath {
+		updateData.FolderPath = &e.FolderPath
+	}
 	// A folder move follows the provider. Events from workers predating the
 	// field carry "", which keeps the stored value.
 	if models.ValidFolder(e.Folder) && email.Folder != e.Folder {

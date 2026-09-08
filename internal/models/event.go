@@ -27,6 +27,10 @@ const (
 	JobEventTypeEmailUpdate      JobEventType = "UPDATE_EMAIL"
 	JobEventTypeMailboxUpdate    JobEventType = "UPDATE_MAILBOX"
 	JobEventTypeMailboxDelete    JobEventType = "DELETE_MAILBOX"
+	// JobEventTypeMailboxRename is a folder that kept its UIDVALIDITY under a
+	// new name. Distinct from a delete plus an insert because the folder's
+	// stored mail has to move with it rather than be orphaned.
+	JobEventTypeMailboxRename JobEventType = "RENAME_MAILBOX"
 
 	JobEventTypeTokenUpdate      JobEventType = "TOKEN_UPDATE"
 	JobEventTypeHistoryIDUpdate  JobEventType = "HISTORY_ID_UPDATE"

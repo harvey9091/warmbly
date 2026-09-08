@@ -50,12 +50,14 @@ import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
 import addEmail from "@/lib/api/client/app/emails/addEmail";
 import {
+    allowsNoEncryption,
     defaultImapSecurity,
     defaultSmtpSecurity,
     validPort,
     type MailSecurity,
 } from "@/lib/api/models/app/emails/Service";
 import SecuritySelect from "@/components/app/emails/SecuritySelect";
+import useAuthConfig from "@/lib/api/hooks/auth/useAuthConfig";
 import onboardOAuthStart from "@/lib/api/client/app/emails/onboardOAuthStart";
 import onboardOAuthFinish from "@/lib/api/client/app/emails/onboardOAuthFinish";
 import { capture } from "@/lib/productAnalytics";
@@ -834,6 +836,22 @@ function SmtpImapPanel({ onDone, onError }: { onDone: () => void; onError: (e: u
         }
     }, [smtpPort]);
 
+    // "No encryption" is only offered for a local relay on a self-hosted
+    // instance. Editing the host away from loopback has to take the mode with
+    // it, or the form keeps a value the backend will reject and the user is
+    // left reading an error about a control that is no longer on screen.
+    const selfHosted = useAuthConfig().data?.self_hosted === true;
+    React.useEffect(() => {
+        if (imapSecurity === "none" && !allowsNoEncryption(imapHost, selfHosted)) {
+            setImapSecurity(defaultImapSecurity(Number(imapPort)));
+        }
+    }, [imapHost, imapPort, imapSecurity, selfHosted]);
+    React.useEffect(() => {
+        if (smtpSecurity === "none" && !allowsNoEncryption(smtpHost, selfHosted)) {
+            setSmtpSecurity(defaultSmtpSecurity(Number(smtpPort)));
+        }
+    }, [smtpHost, smtpPort, smtpSecurity, selfHosted]);
+
     // Single-credentials toggle — covers the 90% case where IMAP and SMTP
     // share the same login. The user can flip it off and supply distinct
     // SMTP creds for legacy setups.
@@ -930,6 +948,8 @@ function SmtpImapPanel({ onDone, onError }: { onDone: () => void; onError: (e: u
                 <Field label="Security">
                     <SecuritySelect
                         value={imapSecurity}
+                        host={imapHost}
+                        selfHosted={selfHosted}
                         onChange={(v) => {
                             imapSecurityTouched.current = true;
                             setImapSecurity(v);
@@ -965,6 +985,8 @@ function SmtpImapPanel({ onDone, onError }: { onDone: () => void; onError: (e: u
                 <Field label="Security">
                     <SecuritySelect
                         value={smtpSecurity}
+                        host={smtpHost}
+                        selfHosted={selfHosted}
                         onChange={(v) => {
                             smtpSecurityTouched.current = true;
                             setSmtpSecurity(v);

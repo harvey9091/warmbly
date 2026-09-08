@@ -30,8 +30,11 @@ Each side also has a **security** setting, which is what decides how the connect
 | --- | --- | --- |
 | SSL / TLS | Encrypted from the first byte | SMTP `465`, IMAP `993` |
 | STARTTLS | Connects in the clear, then upgrades in place before anything sensitive is sent | SMTP `587` or `2525`, IMAP `143` |
+| None | No encryption. Only offered for a mail server on the same machine as the worker | SMTP `1025`, IMAP `1143` |
 
-The form picks the right one from the port as you type, so standard setups need no thought. Change it yourself when your server is unusual: any port from 1 to 65535 works, so a submission relay on `2525` or IMAP on a custom port is fine as long as the security setting matches what the server actually speaks. Encryption itself is not optional; Warmbly will not send credentials over an unencrypted connection.
+The form picks TLS or STARTTLS from the port as you type, so standard setups need no thought. It never picks **None**, on any port: dropping encryption is always something you ask for. Change the mode yourself when your server is unusual: any port from 1 to 65535 works, so a submission relay on `2525` or IMAP on a custom port is fine as long as the security setting matches what the server actually speaks.
+
+Encryption is not optional over a network. Warmbly will not send credentials over an unencrypted connection to anything but this machine, which is why **None** only appears once the host is `localhost`, an address in `127.0.0.0/8`, or `::1`, and only on a [self-hosted instance](/development/install/). See [local mail relays](#local-mail-relays-proton-bridge) below.
 
 If a mailbox fails to connect with a server-unreachable error and the host and port are definitely right, the security setting is the first thing to check. A server expecting STARTTLS looks unreachable to a client attempting implicit TLS, and vice versa.
 
@@ -44,6 +47,19 @@ Warmbly signs in with whichever method your server offers, preferring CRAM-MD5, 
 <Callout type="warn" title="Authentication runs on connect">
   Credentials and both connections are validated when you add the account, so wrong settings fail immediately rather than silently at send time. Tokens and credentials are sealed with envelope encryption before they touch storage.
 </Callout>
+
+### Local mail relays (Proton Bridge)
+
+Some mail is only reachable through a program running on your own machine. [Proton Bridge](https://proton.me/mail/bridge) is the common one: it signs in to Proton Mail for you and re-serves the account as ordinary IMAP on `127.0.0.1:1143` and SMTP on `127.0.0.1:1025`. It speaks no TLS a client can verify, because it never listens on a network interface in the first place.
+
+Warmbly connects to one of these with the **None** security mode, under two conditions that are checked when you save the mailbox and again every time the worker dials it:
+
+- the host is a loopback literal: `localhost`, an address in `127.0.0.0/8`, or `::1`. A hostname that merely resolves to one is refused, because what a name resolves to can change after it is checked
+- the instance is self-hosted, and the [worker](/development/architecture/) runs on the same machine as the relay
+
+Both are about the same thing: the credentials never leave the machine, so there is no wire to intercept them on. On hosted Warmbly the worker is in our infrastructure, never on your computer, so a local relay is not reachable from it and the mode is not offered. Run a [self-hosted instance](/development/install/) on the machine the Bridge is on if you need it.
+
+Set the Bridge's own username and password, which it shows in its interface, not your Proton account password. The same applies to any relay on the machine: a Dovecot sharing a host with its worker, or a local sink used for testing.
 
 ## Mailbox allowance
 
@@ -84,7 +100,7 @@ Pick **Bulk import from CSV** in the connect dialog to connect any number of SMT
 | `smtp_port`, `imap_port` | `587` and `993` |
 | `smtp_user`, `imap_user` | the address, or a shared `username` column |
 | `smtp_password`, `imap_password` | a shared `password` column |
-| `smtp_security`, `imap_security` | inferred from the port (`465` and `993` are `tls`, `587` and `143` are `starttls`) |
+| `smtp_security`, `imap_security` | inferred from the port (`465` and `993` are `tls`, `587` and `143` are `starttls`); `none` is accepted only for a loopback host on a self-hosted instance |
 
 The dialog offers a template with these headers, and accepts the common spellings (`smtp_server`, `app_password`, `login`, and so on).
 
