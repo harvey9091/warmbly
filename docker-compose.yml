@@ -422,9 +422,9 @@ services:
       APP_ENV: ${APP_ENV:-dev}
       # Two DSNs, two audiences: SENTRY_DSN is this Go process, and
       # WARMBLY_SENTRY_DSN is stamped into the public form page for the browser
-      # app. Both unset means neither reports and no host is contacted.
-      SENTRY_DSN: ${SENTRY_DSN:-}
-      WARMBLY_SENTRY_DSN: ${WARMBLY_SENTRY_DSN:-}
+      # app. Both unset means neither reports and no host is contacted. These
+      # are no longer declared here so Coolify can delete them when unused;
+      # set them in .env or Coolify's environment to enable Sentry later.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -521,9 +521,8 @@ services:
       TRACKING_TRUSTED_PROXIES: ${TRACKING_TRUSTED_PROXIES:-}
       TRACKING_CLIENT_IP_HEADER: ${TRACKING_CLIENT_IP_HEADER:-}
       TRACKING_IP_HASH_KEY: ${TRACKING_IP_HASH_KEY:-}
-      SENTRY_DSN: ${SENTRY_DSN:-}
-      # Overridable so `make dev` (native backend) can point at
-      # host.docker.internal:8080 while `docker compose up` uses the container.
+      # SENTRY_DSN is no longer declared here so Coolify can delete it when
+      # unused; set it in .env or Coolify's environment to enable Sentry later.
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8080}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-local-dev-internal-token}
     extra_hosts:
@@ -583,9 +582,9 @@ services:
       # captcha is off server-side. Set WARMBLY_TURNSTILE_KEY to your site key
       # when you set CAPTCHA_PROVIDER=turnstile.
       WARMBLY_TURNSTILE_KEY: ${WARMBLY_TURNSTILE_KEY:-1x00000000000000000000AA}
-      # Unset means the dashboard initialises no error reporting and contacts
-      # no Sentry host. Point it at your own project to collect browser errors.
-      WARMBLY_SENTRY_DSN: ${WARMBLY_SENTRY_DSN:-}
+      # WARMBLY_SENTRY_DSN is no longer declared here so Coolify can delete it
+      # when unused; set it in .env or Coolify's environment to enable browser
+      # error reporting later.
       # Cookieless product analytics, hosted-only. Unset (the default, and what
       # every self-host has) means the SDK chunk is never fetched and no
       # PostHog host is contacted.
@@ -606,9 +605,9 @@ services:
       WARMBLY_DASHBOARD_URL: ${APP_URL:-http://${PUBLIC_HOST:-localhost}:5173}
       WARMBLY_ENV_LABEL: ${ENV_LABEL:-development}
       WARMBLY_TURNSTILE_KEY: ${WARMBLY_TURNSTILE_KEY:-1x00000000000000000000AA}
-      # Unset means the panel initialises no error reporting and contacts no
-      # Sentry host, exactly like the dashboard above.
-      WARMBLY_SENTRY_DSN: ${WARMBLY_SENTRY_DSN:-}
+      # WARMBLY_SENTRY_DSN is no longer declared here so Coolify can delete it
+      # when unused; set it in .env or Coolify's environment to enable browser
+      # error reporting later.
     depends_on:
       backend: { condition: service_healthy }
 
