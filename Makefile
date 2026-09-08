@@ -450,6 +450,33 @@ app-down:
 app-logs:
 	$(DEV_COMPOSE) logs -f --tail=200 $(APP_SVCS)
 
+# ─── frontend in docker (hot reload) ─────────────────────────────────────
+#
+# Runs the dashboard inside a Node container with bind-mounted source
+# so saves trigger in-container Vite HMR. Backend can be either the
+# native `make backend` or the dockerized one from `make app`.
+#
+#   make web-docker                     # start the dev frontend
+#   make web-docker-logs                # tail logs
+#   make web-docker-down                # stop it
+#
+# When the backend is in Docker (`make app`), the browser-accessible
+# API URL is http://localhost:8080 because the browser runs on the host.
+# Override only if the backend is reachable at a different host address:
+#   make web-docker VITE_API_URL=http://host.docker.internal:8080
+
+web-docker:
+	$(DEV_COMPOSE) up -d --build web-dev
+	@echo ""
+	@echo "Web dev server up at http://localhost:5173"
+	@echo "Logs:  make web-docker-logs    Stop:  make web-docker-down"
+
+web-docker-down:
+	$(DEV_COMPOSE) stop web-dev
+
+web-docker-logs:
+	$(DEV_COMPOSE) logs -f --tail=200 web-dev
+
 # ─── native dev (host-run Go, no docker rebuilds) ───────────────────────
 #
 # The fastest loop: infra stays in docker (`make infra`); the Go services

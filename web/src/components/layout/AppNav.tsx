@@ -667,7 +667,7 @@ function LivePanel() {
     return (
         <Link
             to="/app/analytics"
-            className="group block mx-2 mt-2 mb-3 rounded-md bg-white/80 hover:bg-white border border-slate-200/70 hover:border-slate-300 pt-2 overflow-hidden transition-colors"
+            className="group block mx-2 mt-2 mb-3 rounded-md bg-white/80 border border-slate-200/70 pt-2 overflow-hidden transition-colors glass-panel"
         >
             {/* Hero: today's sends against the derived daily cap. While the
                 sparkline is being scrubbed it shows the hovered day instead. */}

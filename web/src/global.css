@@ -50,13 +50,15 @@
   --app-bg-opacity: 1;
   --app-glass-opacity: 0.88;
   --app-glass-blur: 12px;
+  --app-glass-card-opacity: 0.92;
+  --app-glass-card-blur: 8px;
 }
 
 .dark {
   /* ── Core palette (used by elements that already use CSS variables) ── */
   --background: oklch(0.13 0.01 260);
   --foreground: oklch(0.95 0.005 260);
-  --card: oklch(0.16 0.01 260);
+  --card: rgba(26, 29, 39, 0.82);
   --card-foreground: oklch(0.95 0.005 260);
   --popover: oklch(0.16 0.01 260);
   --popover-foreground: oklch(0.95 0.005 260);
@@ -87,19 +89,31 @@
   --sidebar-ring: oklch(0.60 0.01 260);
   --chrome-bg: oklch(0.13 0.01 260);
 
-  --app-glass-opacity: 0.88;
+  --surface: oklch(0.18 0.015 260);
+  --surface-raised: oklch(0.22 0.015 260);
+  --surface-sunken: oklch(0.10 0.01 260);
+  --surface-hover: oklch(0.24 0.015 260);
+
+  --app-glass-opacity: 0.85;
+  --app-glass-card-opacity: 0.88;
+  --app-glass-card-blur: 10px;
 
   color-scheme: dark;
 
-  /* Surfaces */
+  /* Surfaces — cards and elevated surfaces lighter than the page background
+     so hierarchy reads clearly even without glass. */
   .bg-white,
   .bg-white\/60,
   .bg-white\/80,
-  .bg-white\/90 { background-color: var(--background); }
+  .bg-white\/90 { background-color: var(--card); }
 
   .bg-slate-50,
-  .bg-slate-100 { background-color: var(--secondary); }
-  .bg-slate-200 { background-color: var(--muted); }
+  .bg-slate-100 { background-color: var(--surface); }
+  .bg-slate-200 { background-color: var(--border); }
+  .bg-slate-300 { background-color: oklch(0.42 0.015 260); }
+  .bg-slate-50\/60 { background-color: var(--surface); }
+  .bg-slate-50\/40,
+  .bg-slate-100\/40 { background-color: rgba(26, 29, 39, 0.6); }
 
   /* Text */
   .text-slate-900,
@@ -117,12 +131,12 @@
   .border-slate-200\/70,
   .border-slate-200\/50 { border-color: var(--border); }
   .border-white\/20,
-  .border-white\/30 { border-color: rgba(255,255,255,0.1); }
+  .border-white\/30 { border-color: rgba(255,255,255,0.12); }
 
   /* Hover / active states */
   .hover\:bg-slate-200:hover,
-  .hover\:bg-slate-100:hover,
-  .hover\:bg-slate-50:hover { background-color: var(--secondary); }
+  .hover\:bg-slate-100:hover { background-color: var(--surface-hover); }
+  .hover\:bg-slate-50:hover { background-color: var(--surface-hover); }
   .hover\:text-slate-900:hover,
   .hover\:text-slate-700:hover { color: var(--foreground); }
 
@@ -136,9 +150,8 @@
   .focus\:ring-slate-100:focus { --tw-ring-color: var(--ring); }
 
   /* Disabled / muted surfaces */
-  .disabled\:bg-slate-50:disabled { background-color: var(--secondary); }
+  .disabled\:bg-slate-50:disabled { background-color: var(--surface); }
   .disabled\:text-slate-400:disabled { color: var(--muted-foreground); }
-  .bg-slate-50\/60 { background-color: var(--secondary); }
 
   /* Divider hairlines */
   .divide-slate-200\/70 > * + * { border-color: var(--border); }
@@ -148,6 +161,13 @@
   .cloud-blob,
   .cloud-blob-2,
   .cloud-blob-3 { background: rgba(255,255,255,0.06); }
+
+  /* Sidebar selected nav item — force a light translucent surface and dark
+     text so the active row stays readable in dark mode. */
+  .glassmorphism-enabled.dark .app-shell-nav a.bg-slate-200\/70 {
+    background-color: rgba(255, 255, 255, 0.85);
+    color: rgba(0, 0, 0, 0.85);
+  }
 }
 
 @theme inline {
@@ -665,6 +685,15 @@ svg.loading circle {
   filter: blur(var(--app-bg-blur));
   transform: translateZ(0);
   will-change: filter, opacity;
+  transition: opacity 0.5s ease, filter 0.5s ease;
+}
+
+.appearance-bg-layer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 50%, transparent 50%, rgba(0,0,0,0.08) 100%);
+  pointer-events: none;
 }
 
 /* When a background is active, SkyChrome's solid background fades out
@@ -686,21 +715,25 @@ svg.loading circle {
    the same specificity as the component classes and load after them. */
 .appearance-bg-active .app-shell-header,
 .appearance-bg-active .app-shell-nav {
-  background: rgba(255, 255, 255, 0.84);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
 .appearance-bg-active main.app-shell-content {
-  background: rgba(255, 255, 255, 0.90);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 4px 24px -4px rgba(0,0,0,0.06);
 }
 .appearance-bg-active.dark .app-shell-header,
 .appearance-bg-active.dark .app-shell-nav {
-  background: rgba(20, 20, 30, 0.84);
+  background: rgba(22, 22, 30, 0.82);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.2);
 }
 .appearance-bg-active.dark main.app-shell-content {
-  background: rgba(20, 20, 30, 0.90);
+  background: rgba(22, 22, 30, 0.88);
+  box-shadow: 0 4px 24px -4px rgba(0,0,0,0.3);
 }
 
 /* Glassmorphism: applied conditionally via the .glassmorphism-enabled
@@ -717,7 +750,8 @@ svg.loading circle {
   background: rgba(255, 255, 255, var(--app-glass-opacity));
   backdrop-filter: blur(var(--app-glass-blur));
   -webkit-backdrop-filter: blur(var(--app-glass-blur));
-  border-color: rgba(255, 255, 255, 0.35);
+  border-color: rgba(0, 0, 0, 0.06);
+  box-shadow: 0 4px 24px -4px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.5);
 }
 
 .glassmorphism-enabled.dark .app-shell-header,
@@ -727,6 +761,108 @@ svg.loading circle {
 .glassmorphism-enabled.dark .popover-content,
 .glassmorphism-enabled.dark .dropdown-menu-content,
 .glassmorphism-enabled.dark [role="dialog"] {
-  background: rgba(20, 20, 30, var(--app-glass-opacity));
+  background: rgba(22, 22, 30, var(--app-glass-opacity));
   border-color: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 4px 24px -4px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.04);
 }
+
+/* Smooth transitions for theme and glass changes on app shell surfaces */
+.app-shell-header,
+.app-shell-nav,
+main.app-shell-content,
+[data-dialog-content],
+.popover-content,
+.dropdown-menu-content,
+[role="dialog"] {
+  transition: background-color 0.35s ease, border-color 0.35s ease, box-shadow 0.35s ease;
+}
+
+/* ── Glass panels (cards, elevated surfaces) ───────────────────────
+   Opt-in class for cards that want to participate in the same glass
+   system as the shell. Uses its own opacity/blur tokens so cards read
+   as one level below the header/nav/content panel. */
+.glassmorphism-enabled .glass-panel {
+  background: rgba(255, 255, 255, var(--app-glass-card-opacity));
+  backdrop-filter: blur(var(--app-glass-card-blur));
+  -webkit-backdrop-filter: blur(var(--app-glass-card-blur));
+  border-color: rgba(0, 0, 0, 0.06);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 4px 16px -4px rgba(0,0,0,0.04);
+}
+
+.glassmorphism-enabled .glass-panel:hover {
+  background: rgba(255, 255, 255, 0.94);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+.glassmorphism-enabled.dark .glass-panel {
+  background: rgba(26, 29, 39, var(--app-glass-card-opacity));
+  border-color: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.2), 0 4px 16px -4px rgba(0,0,0,0.15);
+}
+
+.glassmorphism-enabled.dark .glass-panel:hover {
+  background: rgba(26, 29, 39, 0.90);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.appearance-bg-active .glass-panel {
+  background: rgba(255, 255, 255, 0.78);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+.appearance-bg-active .glass-panel:hover {
+  background: rgba(255, 255, 255, 0.80);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+.appearance-bg-active.dark .glass-panel {
+  background: rgba(26, 29, 39, 0.78);
+}
+
+.appearance-bg-active.dark .glass-panel:hover {
+  background: rgba(26, 29, 39, 0.80);
+}
+
+/* ── Transparent page surfaces under glass ─────────────────────────
+   Page, PageTopbar and StatStrip normally paint their own white
+   backgrounds. Under glass they become transparent so the shell glass
+   shows through and the whole content area reads as one continuous
+   surface. */
+.glassmorphism-enabled .glass-page,
+.glassmorphism-enabled .glass-topbar,
+.glassmorphism-enabled .glass-strip {
+  background: transparent;
+}
+
+.appearance-bg-active .glass-page,
+.appearance-bg-active .glass-topbar,
+.appearance-bg-active .glass-strip {
+  background: transparent;
+}
+
+.glass-panel,
+.glass-page,
+.glass-topbar,
+.glass-strip {
+  transition: background-color 0.35s ease, border-color 0.35s ease, box-shadow 0.35s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .appearance-bg-layer {
+    transition: none;
+  }
+  .app-shell-header,
+  .app-shell-nav,
+  main.app-shell-content,
+  [data-dialog-content],
+  .popover-content,
+  .dropdown-menu-content,
+  [role="dialog"],
+  .glass-panel,
+  .glass-page,
+  .glass-topbar,
+  .glass-strip {
+    transition: none;
+  }
+}
+

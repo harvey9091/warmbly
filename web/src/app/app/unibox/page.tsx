@@ -302,7 +302,7 @@ export default function UniboxPage() {
         "Snooze any thread to clear it from the inbox until later",
       ]}
     >
-      <div className="flex flex-col h-full bg-white">
+      <div className="flex flex-col h-full">
         <UniboxHeader
           scopeLabel={scopeLabel}
           onClearScope={() => setScope({ kind: "all" })}
