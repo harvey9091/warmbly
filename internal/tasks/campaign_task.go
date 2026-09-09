@@ -452,6 +452,28 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 		return xerr
 	}
 
+	// STEP 9.25: Stamp the mailbox this send actually goes out from. The chain
+	// seeds a task with the previous tick's pick, and rotation chooses again
+	// here, so tasks.email_account_id (today's budget, the min-gap clock,
+	// rotation's own position, bounce and complaint rates, the contact's
+	// activity feed) has to be corrected before the send (issue #392). Failing
+	// it fails the task like the reservation: a send charged to another mailbox
+	// would let this one past its daily cap.
+	if account.ID != taskRecord.EmailAccountID {
+		if err := s.taskRepo.UpdateTaskEmailAccount(ctx, taskID, account.ID); err != nil {
+			errs.CaptureException(err)
+			s.taskRepo.RecordTaskFailure(ctx, taskID, "Could not record the sending mailbox", err.Error())
+			s.recordSchedulerFailure(ctx, campaign.ID, "sender_attribution_failed",
+				fmt.Sprintf("Could not record which mailbox is sending to %s; retrying", contact.Email), err)
+			if uerr := s.taskRepo.UpdateTaskStatus(ctx, taskID, "pending"); uerr != nil {
+				errs.CaptureException(uerr)
+			}
+			executionStatus = "failed"
+			return errx.InternalError()
+		}
+		taskRecord.EmailAccountID = account.ID
+	}
+
 	// STEP 9.5: Resolve {{form_link:...}} markers to per-recipient form URLs
 	// BEFORE templating, so the substituted literal survives the naive
 	// fallback and gets wrapped by click tracking in STEP 11 like any link.

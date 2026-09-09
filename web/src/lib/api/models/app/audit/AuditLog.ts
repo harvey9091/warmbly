@@ -42,6 +42,7 @@ export type AuditEntityType =
     | "organization_member"
     | "invitation"
     | "template"
+    | "email_image"
     | "webhook"
     | "integration"
     | "warmup_routing_rule"

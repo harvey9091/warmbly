@@ -532,8 +532,10 @@ svg.loading circle {
   margin: 0;
 }
 
-/* Campaign Step composer body (TipTap editor + the rendered Preview pane).
-   Tailwind preflight strips list markers + heading sizes, so restore them. */
+/* Campaign Step composer body (the TipTap editor surface). Tailwind preflight
+   strips list markers + heading sizes, so restore them. The Preview tab is not
+   styled here: it renders in the inbox's sandboxed frame, which carries its
+   own document CSS. */
 .tiptap-body { word-break: break-word; }
 .tiptap-body p { margin: 0 0 0.6em; }
 .tiptap-body p:last-child { margin-bottom: 0; }
@@ -547,8 +549,18 @@ svg.loading circle {
 .tiptap-body strong { font-weight: 600; }
 .tiptap-body:focus { outline: none; }
 
+/* Body images. The sent markup carries its own inline width/margins (mail
+   clients ignore stylesheets), so these rules only cover the editing surface:
+   a sensible ceiling, and a visible ring while the image is the selection the
+   floating size/alignment bar acts on. */
+.tiptap-body img { max-width: 100%; height: auto; border-radius: 2px; }
+.tiptap-body img.ProseMirror-selectednode {
+  outline: 2px solid #38bdf8; /* sky-400 */
+  outline-offset: 1px;
+}
+
 /* Merge-tag chips shown inside the composer editor. Only the node-view button
-   carries .tpl-var; the resolved `<span data-var>` in the Preview pane is left
+   carries .tpl-var; the resolved `<span data-var>` the preview renders is left
    unstyled on purpose so it reads as the plain value it will send as. */
 .tpl-var-wrap { vertical-align: baseline; }
 .tiptap-body .tpl-var {

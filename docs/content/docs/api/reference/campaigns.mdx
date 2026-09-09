@@ -67,6 +67,7 @@ A `data` plus `pagination` envelope. `next_cursor` is the campaign id to resume 
       "esp_match_mode": "off",
       "max_new_leads_per_day": 0,
       "prioritize_new_leads": false,
+      "entry_delay_minutes": 0,
       "continuous": false,
       "idle_since": null,
       "tracking_domain": "",
@@ -186,6 +187,7 @@ Create a campaign. Only `name` is required, every other field is optional and ap
 | `esp_match_mode` | string | no | `off`, `prefer`, or `strict`. |
 | `max_new_leads_per_day` | integer | no | New-lead throttle, `0` is unlimited. |
 | `prioritize_new_leads` | boolean | no | Prefer new leads in each send window. |
+| `entry_delay_minutes` | integer | no | Hold a contact's first email this long after they entered the campaign. `0` (the default) sends it as soon as the schedule and mailbox limits allow; the maximum is `129600` (90 days). Follow-up spacing is unaffected: that is each step's `wait_after`. |
 | `continuous` | boolean | no | Keep running for new leads: out of leads, the campaign stays `active` and waits instead of finishing. Linking a segment, a form or an automation that enrols leads turns it on, and so does starting a campaign whose every lead has finished. Default `false`. |
 | `tracking_domain` | string | no | Campaign-scoped tracking domain (honored only once verified). |
 | `steps` | object[] | no | Initial sequence steps in order (see create sequence input below). They are connected in order: each step routes unconditionally to the next, waiting that step's `wait_after` days. The first step's `wait_after` defaults to `0`, follow-ups to `3`. |
@@ -248,7 +250,9 @@ Patch any subset of campaign fields. Omitted fields are left unchanged. The expl
 
 ### Request body
 
-Every field is optional. Scalar fields use nullable pointers, so any field you send is applied. `start_date` and `end_date` additionally accept an explicit `null` to clear the stored date: a null `start_date` means "start now" and a null `end_date` means "run open-ended". Changing any schedule field (`start_date`, `end_date`, `timezone`, `days`, `start_time`, `end_time`, `schedule_windows`) on an active campaign reschedules its next send immediately, so clearing a future start date takes effect right away. Notable fields: `name`, `description`, `status`, `stop_on_reply`, `open_tracking`, `link_tracking`, `text_only`, `daily_limit`, `unsubscribe_header`, `risky_emails`, `cc`, `bcc`, `start_date`, `end_date`, `timezone`, `days`, `start_time`, `end_time`, `schedule_windows`, `email_tags`, `folders`, `contact_order_by`, `contact_order_dir`, `contact_order_field`, `sender_strategy`, `rotation_mode`, `ramp_enabled`, `ramp_start`, `ramp_increment`, `ramp_ceiling`, `esp_match_mode`, `max_new_leads_per_day`, `prioritize_new_leads`, `continuous`, `tracking_domain`, `utm_tracking`, `utm_source`, `utm_medium`, `utm_campaign`.
+Every field is optional. Scalar fields use nullable pointers, so any field you send is applied. `start_date` and `end_date` additionally accept an explicit `null` to clear the stored date: a null `start_date` means "start now" and a null `end_date` means "run open-ended". Changing any schedule field (`start_date`, `end_date`, `timezone`, `days`, `start_time`, `end_time`, `schedule_windows`, `entry_delay_minutes`) on an active campaign reschedules its next send immediately, so clearing a future start date or shortening the entry delay takes effect right away. Notable fields: `name`, `description`, `status`, `stop_on_reply`, `open_tracking`, `link_tracking`, `text_only`, `daily_limit`, `unsubscribe_header`, `risky_emails`, `cc`, `bcc`, `start_date`, `end_date`, `timezone`, `days`, `start_time`, `end_time`, `schedule_windows`, `email_tags`, `folders`, `contact_order_by`, `contact_order_dir`, `contact_order_field`, `sender_strategy`, `rotation_mode`, `ramp_enabled`, `ramp_start`, `ramp_increment`, `ramp_ceiling`, `esp_match_mode`, `max_new_leads_per_day`, `prioritize_new_leads`, `entry_delay_minutes`, `continuous`, `tracking_domain`, `utm_tracking`, `utm_source`, `utm_medium`, `utm_campaign`.
+
+`entry_delay_minutes` is anchored on when each contact entered the campaign, not on when the campaign started, so a contact enrolled by a linked segment next week waits the same amount from their own arrival. Leads that were in the campaign before the field existed count from the campaign's `created_at`, so turning a delay on never re-delays leads that have been enrolled for weeks.
 
 A campaign with `continuous` set stays `active` when it runs out of leads and carries `idle_since` while it waits; the timestamp clears once it has something to send. A continuous campaign can be started with no leads at all; starting one that is not continuous and has never had a lead answers `400` `no_leads`. Starting a campaign that has at least one lead and nothing left to send, because every lead has finished the sequence, turns `continuous` on and waits for leads (see [start a campaign](#start-a-campaign)). Adding a lead to a `completed` campaign by any path (this API, a linked segment, an automation) restarts it through the same launch checks as starting it by hand; a refused restart is written to the campaign's activity log.
 

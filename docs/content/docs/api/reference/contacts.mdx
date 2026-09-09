@@ -197,11 +197,36 @@ Returns the created contacts as a bare JSON array (same contact shape as search)
 ]
 ```
 
+## Selecting contacts for a bulk action
+
+Every endpoint that acts on a set of contacts (`PATCH /contacts`, `DELETE /contacts`, `POST /contacts/verification`, `POST /contacts/research/batch`, `POST /segments/:id/members` and `POST /integrations/connections/:id/push`) names that set one of two ways.
+
+**By id.** A `contacts` array of up to 1000 ids, the original shape. Nothing about it has changed.
+
+**By filter.** Set `all` to `true` and pass the same body `POST /contacts/search` takes as `filters`. The server resolves that search and applies the action to every contact it matches, so one call can cover far more than a page. `exclude` drops ids back out of the resolved set, which is how the dashboard handles rows unticked after a select-all.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `contacts` | string[] | Yes, unless `all` | Contact ids, up to 1000. |
+| `all` | boolean | No | Resolve the selection from `filters` instead of `contacts`. |
+| `filters` | object | Yes when `all` | A [contact search](#search-contacts) body. The action applies to everything it matches. |
+| `exclude` | string[] | No | Contact ids to drop from the resolved set, up to 50,000 (`too_many_contacts` past that). Ignored unless `all`. |
+
+```json
+{
+  "all": true,
+  "filters": { "query": "acme", "campaign_ids": ["7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d"] },
+  "exclude": ["1b2c3d4e-5f60-4a1b-8c2d-3e4f5a6b7c8d"]
+}
+```
+
+A filter selection that matches more than 50,000 contacts is refused with `selection_too_large` rather than truncated; narrow it and repeat. One that matches nothing is a `400`. `POST /integrations/connections/:id/push` accepts the same shape and answers the same way, but still caps the resolved set at 500, because it calls the CRM once per contact inside the request.
+
 ## Bulk update contacts
 
 `PATCH /contacts`
 
-Applies one set of edits across a list of contacts: add/remove campaigns and categories, set custom-field operations, and toggle subscription. Up to 1000 contacts per batch.
+Applies one set of edits across a [selection of contacts](#selecting-contacts-for-a-bulk-action): add/remove campaigns and categories, set custom-field operations, and toggle subscription.
 
 Auth: **Scope** `BULK_CONTACTS` · **Org permission** `manage_contacts`
 
@@ -209,7 +234,8 @@ Auth: **Scope** `BULK_CONTACTS` · **Org permission** `manage_contacts`
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `contacts` | string[] | Yes | Contact IDs to edit (1 to 1000). |
+| `contacts` | string[] | Yes, unless `all` | Contact IDs to edit (1 to 1000). |
+| `all`, `filters`, `exclude` | — | No | Select by filter instead; see [selecting contacts](#selecting-contacts-for-a-bulk-action). |
 | `add_campaigns` | string[] | No | Campaign IDs to add. |
 | `remove_campaigns` | string[] | No | Campaign IDs to remove. |
 | `add_categories` | string[] | No | Category IDs to add. |
@@ -228,7 +254,7 @@ Auth: **Scope** `BULK_CONTACTS` · **Org permission** `manage_contacts`
 
 ### Response
 
-Returns the updated contacts as a bare JSON array (contact shape as above).
+Returns the updated contacts as a bare JSON array (contact shape as above). A selection made with `all` returns an empty array instead: it can name far more contacts than are worth serializing back, so re-read the list rather than the response.
 
 ```json
 [
@@ -247,7 +273,7 @@ Returns the updated contacts as a bare JSON array (contact shape as above).
 
 `DELETE /contacts`
 
-Deletes a list of contacts. Up to 1000 IDs per batch.
+Deletes a [selection of contacts](#selecting-contacts-for-a-bulk-action).
 
 Auth: **Scope** `BULK_CONTACTS` · **Org permission** `manage_contacts`
 
@@ -257,6 +283,12 @@ A JSON array of contact ID strings (1 to 1000; an empty array is a `400`).
 
 ```json
 ["1b2c3d4e-5f60-4a1b-8c2d-3e4f5a6b7c8d", "2c3d4e5f-6071-4b2c-9d3e-4f5a6b7c8d9e"]
+```
+
+A [selection object](#selecting-contacts-for-a-bulk-action) is accepted in the same place, for deleting everything a filter matches.
+
+```json
+{ "all": true, "filters": { "subscribed": false } }
 ```
 
 ### Response
@@ -449,7 +481,8 @@ Queues a fresh check of the listed contacts, or records a manual verdict on them
 | --- | --- | --- | --- |
 | `action` | string | Yes | `verify` queues a re-check (each contact updates as its verdict lands); `mark_deliverable` records `valid`; `mark_undeliverable` records `invalid`. Manual verdicts are never re-checked automatically. Anything else is rejected with `invalid_action`. |
 | `contacts` | string[] | No | Contact ids, up to the bulk maximum per request. |
-| `campaign_id` | string | No | Instead of, or as well as, `contacts`: every lead of this campaign that verification refused. |
+| `all`, `filters`, `exclude` | — | No | Select by filter instead; see [selecting contacts](#selecting-contacts-for-a-bulk-action). |
+| `campaign_id` | string | No | Instead of, or as well as, a selection: every lead of this campaign that verification refused. |
 
 At least one contact must be selected (`no_contacts`). Marking leads deliverable resumes any campaign of the workspace that was paused for verification.
 
@@ -663,6 +696,10 @@ Returns a `data` array plus a `pagination` envelope.
 }
 ```
 
+`email_account_id`, `email_account_email` and `email_account_name` are the mailbox the email was actually sent from, which is what a campaign rotating across several mailboxes needs: the row names the mailbox that sent this email, not the campaign's pool or the one that sent the previous step.
+
+`opened_at` is a person's open, as it is in `engagement` and in campaign analytics. A fetch by a mail client's prefetch or a security gateway is reported as `machine_opened_at` instead, so a row is never presented as read by the recipient when only a machine touched it. At most one of the two is present.
+
 ## List a contact's timeline
 
 `GET /contacts/:id/timeline`
@@ -806,7 +843,7 @@ Auth: **Scope** `READ_CONTACTS` · **Org permission** `view_contacts`
 }
 ```
 
-`lead_status` uses the same values as the campaign Leads view: `pending`, `active`, `completed`, `replied`, `bounced`, `failed`, `unsubscribed`, or `undeliverable`. Each step carries whichever of `sent_at`, `opened_at`, `clicked_at`, `replied_at`, `bounced_at` and `failed_at` apply, plus `attempts` and `in_flight` (reserved for a worker whose result has not come back). While a branch condition is undecided, `next.step_id` is absent and `next.step_label` says the step depends on the contact's response.
+`lead_status` uses the same values as the campaign Leads view: `pending`, `active`, `completed`, `replied`, `bounced`, `failed`, `unsubscribed`, or `undeliverable`. Each step carries whichever of `sent_at`, `opened_at`, `clicked_at`, `replied_at`, `bounced_at` and `failed_at` apply, plus `attempts` and `in_flight` (reserved for a worker whose result has not come back). `opened_at` is a person's open, as it is in the Leads view: a step a mail client prefetched or a security gateway scanned carries no `opened_at`. While a branch condition is undecided, `next.step_id` is absent and `next.step_label` says the step depends on the contact's response.
 
 ## List a contact's activities
 
@@ -1085,7 +1122,7 @@ Counts the contacts an unsaved definition would match. Send `match` and `conditi
 { "contacts": ["…", "…"], "mode": "include" }
 ```
 
-`mode` is `include` (pin in), `exclude` (pin out) or `auto` (clear the override). Up to 1,000 contact ids per call; ids outside the organization are ignored. Returns `{ "updated": n }`.
+`mode` is `include` (pin in), `exclude` (pin out) or `auto` (clear the override). Up to 1,000 contact ids per call; ids outside the organization are ignored. Returns `{ "updated": n }`. The body also takes a [filter selection](#selecting-contacts-for-a-bulk-action) (`all`, `filters`, `exclude`) instead of `contacts`, for pinning everything a search matches.
 
 `POST /segments/:id/members/lookup` takes `{ "contacts": [...] }` and returns `{ "data": { "<contact id>": "include" | "exclude" } }` for the contacts that carry an override.
 

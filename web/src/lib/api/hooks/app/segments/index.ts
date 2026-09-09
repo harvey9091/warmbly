@@ -16,6 +16,7 @@ import {
     updateSegment,
 } from "@/lib/api/client/app/segments";
 import type { SegmentMemberMode, SegmentPreview, SegmentWrite } from "@/lib/api/models/app/segments/Segment";
+import type ContactSelection from "@/lib/api/models/app/contacts/ContactSelection";
 
 // Every segment read lives under ["segments"]: the realtime spine invalidates
 // that prefix on any segment or contact mutation, since membership is live.
@@ -100,8 +101,8 @@ export function useDeleteSegment() {
 export function useSetSegmentMembers() {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationFn: ({ id, contacts, mode }: { id: string; contacts: string[]; mode: SegmentMemberMode }) =>
-            setSegmentMembers(id, contacts, mode),
+        mutationFn: ({ id, selection, mode }: { id: string; selection: ContactSelection; mode: SegmentMemberMode }) =>
+            setSegmentMembers(id, selection, mode),
         // ["contacts"] as a whole: the list moves and each pinned contact's
         // own segments panel changes.
         onSuccess: () =>

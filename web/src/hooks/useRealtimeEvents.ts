@@ -357,6 +357,8 @@ export function useRealtimeEvents() {
           api_key: [['api-keys']],
           webhook: [['webhooks'], ['integrations', 'connections']],
           template: [['templates']],
+          // The workspace image library the composer picks body images from.
+          email_image: [['email-images']],
           organization: [['organizations']],
           // A risk transition changes send caps and warmup pool placement, so
           // the mailbox and analytics views move with it, not just the banner.

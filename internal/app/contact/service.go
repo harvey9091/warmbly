@@ -22,6 +22,10 @@ type ContactService interface {
 	// CampaignLeadCounts returns per-status lead totals for one campaign.
 	CampaignLeadCounts(ctx context.Context, orgID, campaignID string) (*models.CampaignLeadCounts, *errx.Error)
 	BulkUpdate(ctx context.Context, userID string, orgID uuid.UUID, data *models.BulkEditContactsData) ([]models.Contact, *errx.Error)
+	// ResolveSelection turns a bulk action's selection into the contact ids it
+	// applies to: an explicit list as given, or everything matching the search
+	// the dashboard's "select all matching" sends, minus its exclusions.
+	ResolveSelection(ctx context.Context, orgID uuid.UUID, sel models.ContactSelection) ([]string, *errx.Error)
 	Update(ctx context.Context, userID, contactID string, orgID uuid.UUID, data *models.UpdateContact) (*models.Contact, *errx.Error)
 	BulkDelete(ctx context.Context, userID string, orgID uuid.UUID, contactIDs []string) *errx.Error
 	Delete(ctx context.Context, userID string, orgID uuid.UUID, contactID string) *errx.Error

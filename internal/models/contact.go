@@ -257,9 +257,31 @@ const (
 	ContactVerificationActionMarkUndeliverable = "mark_undeliverable"
 )
 
+// MaxContactBulkSelection bounds how many contacts one "select all matching"
+// bulk action may resolve to. Past it the action is refused and the user
+// narrows the filters, so a stray click can never walk a whole workspace.
+const MaxContactBulkSelection = 50000
+
+// ContactSelection names the contacts a bulk action applies to. Either an
+// explicit id list (Contacts), or every contact matching a search (All +
+// Filters) minus the rows the user unticked afterwards (Exclude), which is
+// what the dashboard's "select all matching" sends. A selection that names
+// both prefers the filter.
+type ContactSelection struct {
+	Contacts []string `json:"contacts"`
+	// All switches the selection from the id list to Filters.
+	All bool `json:"all,omitempty"`
+	// Filters is the same search body /contacts/search takes, so the set
+	// resolved here is exactly the set the list was showing.
+	Filters *SearchContacts `json:"filters,omitempty"`
+	// Exclude drops ids from the resolved set: the rows unticked after a
+	// select-all. Ignored unless All is set.
+	Exclude []string `json:"exclude,omitempty"`
+}
+
 // ContactVerificationRequest is the body of POST /contacts/verification.
 type ContactVerificationRequest struct {
-	Contacts []string `json:"contacts"`
+	ContactSelection
 	// CampaignID selects every lead of one campaign that verification refused
 	// (the "re-verify skipped leads" action), instead of listing ids.
 	CampaignID string `json:"campaign_id,omitempty"`
@@ -372,10 +394,14 @@ type ContactSentEmail struct {
 	SequenceName *string    `json:"step_name,omitempty"`
 
 	// Engagement (from campaign_contact_progress, may be nil).
-	OpenedAt  *time.Time `json:"opened_at,omitempty"`
-	ClickedAt *time.Time `json:"clicked_at,omitempty"`
-	RepliedAt *time.Time `json:"replied_at,omitempty"`
-	BouncedAt *time.Time `json:"bounced_at,omitempty"`
+	// OpenedAt is a person's open. An automated fetch (client prefetch,
+	// security gateway) lands in MachineOpenedAt instead, so the two are
+	// never mistaken for each other.
+	OpenedAt        *time.Time `json:"opened_at,omitempty"`
+	MachineOpenedAt *time.Time `json:"machine_opened_at,omitempty"`
+	ClickedAt       *time.Time `json:"clicked_at,omitempty"`
+	RepliedAt       *time.Time `json:"replied_at,omitempty"`
+	BouncedAt       *time.Time `json:"bounced_at,omitempty"`
 }
 
 type ContactSentEmailsResult struct {
@@ -739,7 +765,7 @@ type BulkEditContactsField struct {
 }
 
 type BulkEditContactsData struct {
-	Contacts []string `json:"contacts"`
+	ContactSelection
 
 	AddCampaigns     []string                `json:"add_campaigns"`
 	RemoveCampaigns  []string                `json:"remove_campaigns"`
@@ -747,4 +773,9 @@ type BulkEditContactsData struct {
 	RemoveCategories []string                `json:"remove_categories,omitempty"`
 	Fields           []BulkEditContactsField `json:"fields"`
 	Subscribe        *bool                   `json:"subscribe"`
+
+	// SkipRows suppresses the hydrated rows in the response. Set by the
+	// handler for a filter-shaped selection, which can name far more contacts
+	// than are worth serializing back. Never part of the request body.
+	SkipRows bool `json:"-"`
 }

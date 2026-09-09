@@ -295,7 +295,7 @@ func TestLiveSegmentCampaignLinks(t *testing.T) {
 	// and clears it too.
 	handle, _ := liveContactDB(t)
 	contacts := NewContactRepostory(handle)
-	removeBob := &models.BulkEditContactsData{Contacts: []string{f.bob.String()}, RemoveCampaigns: []string{f.other.String()}}
+	removeBob := &models.BulkEditContactsData{ContactSelection: models.ContactSelection{Contacts: []string{f.bob.String()}}, RemoveCampaigns: []string{f.other.String()}}
 	if _, xerr := contacts.BulkUpdate(ctx, f.owner.String(), f.org, removeBob); xerr != nil {
 		t.Fatalf("remove: %v", xerr)
 	}
@@ -309,7 +309,7 @@ func TestLiveSegmentCampaignLinks(t *testing.T) {
 		t.Fatalf("links after removal = %+v, %v", links, xerr)
 	}
 	if _, xerr := contacts.BulkUpdate(ctx, f.owner.String(), f.org, &models.BulkEditContactsData{
-		Contacts: []string{f.bob.String()}, AddCampaigns: []string{f.other.String()},
+		ContactSelection: models.ContactSelection{Contacts: []string{f.bob.String()}}, AddCampaigns: []string{f.other.String()},
 	}); xerr != nil {
 		t.Fatalf("re-add: %v", xerr)
 	}

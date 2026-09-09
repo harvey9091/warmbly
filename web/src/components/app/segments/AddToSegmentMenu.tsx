@@ -16,15 +16,24 @@ import {
 import { useSegments, useSetSegmentMembers } from "@/lib/api/hooks/app/segments";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
+import type ContactSelection from "@/lib/api/models/app/contacts/ContactSelection";
 
-export default function AddToSegmentMenu({ contacts, onDone }: { contacts: string[]; onDone?: () => void }) {
+export default function AddToSegmentMenu({
+    selection,
+    count,
+    onDone,
+}: {
+    selection: ContactSelection;
+    count: number;
+    onDone?: () => void;
+}) {
     const segments = useSegments();
     const set = useSetSegmentMembers();
 
     async function add(id: string, name: string) {
         try {
-            await set.mutateAsync({ id, contacts, mode: "include" });
-            toast.success(`Added ${contacts.length} contact${contacts.length === 1 ? "" : "s"} to ${name}`);
+            const added = await set.mutateAsync({ id, selection, mode: "include" });
+            toast.success(`Added ${added.toLocaleString()} contact${added === 1 ? "" : "s"} to ${name}`);
             onDone?.();
         } catch (err) {
             toast.error(buildError(err as AppError));
@@ -45,7 +54,7 @@ export default function AddToSegmentMenu({ contacts, onDone }: { contacts: strin
                 </button>
             </PopoverMenuTrigger>
             <PopoverMenuContent minWidth={200}>
-                <PopoverMenuLabel>Add {contacts.length} to segment</PopoverMenuLabel>
+                <PopoverMenuLabel>Add {count.toLocaleString()} to segment</PopoverMenuLabel>
                 {list.length === 0 && (
                     <div className="px-2.5 py-2 text-[11.5px] text-slate-400">No segments yet. Create one under Contacts &gt; Segments.</div>
                 )}

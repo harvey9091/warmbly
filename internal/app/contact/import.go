@@ -520,8 +520,8 @@ func (s *contactService) ImportCommit(
 		// Attach campaigns separately if the caller requested it.
 		if len(p.contact.Campaigns) > 0 {
 			if _, xerr := s.contactRepository.BulkUpdate(ctx, userID, orgID, &models.BulkEditContactsData{
-				Contacts:     []string{idStr},
-				AddCampaigns: p.contact.Campaigns,
+				ContactSelection: models.ContactSelection{Contacts: []string{idStr}},
+				AddCampaigns:     p.contact.Campaigns,
 			}); xerr != nil {
 				// Non-fatal: the contact was updated, only the link failed.
 				// Surface it as a row note, not as a failed row.
@@ -538,9 +538,9 @@ func (s *contactService) ImportCommit(
 			continue
 		}
 		if _, xerr := s.contactRepository.BulkUpdate(ctx, userID, orgID, &models.BulkEditContactsData{
-			Contacts:      group.contactIDs,
-			AddCampaigns:  group.campaigns,
-			AddCategories: group.categories,
+			ContactSelection: models.ContactSelection{Contacts: group.contactIDs},
+			AddCampaigns:     group.campaigns,
+			AddCategories:    group.categories,
 		}); xerr != nil {
 			// The rows that were imported are fine; only these links failed.
 			// Move the affected rows from skipped to failed rather than

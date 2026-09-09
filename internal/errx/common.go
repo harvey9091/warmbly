@@ -211,11 +211,12 @@ func MailboxAllowanceReached(used, allowance int, paid bool) *Error {
 		fmt.Sprintf("This workspace holds %d of its %d mailboxes. Request an increase, or move to a plan with more daily sends.", used, allowance))
 }
 
-// StorageLimitReached is the refusal for an attachment upload or copy that
-// would take the workspace past its storage quota.
+// StorageLimitReached is the refusal for an upload or copy (an attachment, or
+// an image for an email body) that would take the workspace past its storage
+// quota.
 func StorageLimitReached(usedBytes, limitBytes, addingBytes int64) *Error {
 	const mb = 1024 * 1024
 	return NewWithIdentifier(BadRequest, "storage_limit_reached",
-		fmt.Sprintf("Storage limit reached: %d MB of %d MB used, %d MB to add. Remove attachments or upgrade your plan.",
+		fmt.Sprintf("Storage limit reached: %d MB of %d MB used, %d MB to add. Remove attachments or images, or upgrade your plan.",
 			usedBytes/mb, limitBytes/mb, addingBytes/mb))
 }

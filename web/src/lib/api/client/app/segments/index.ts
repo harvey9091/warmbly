@@ -1,4 +1,5 @@
 import Request from "../../Request";
+import type ContactSelection from "@/lib/api/models/app/contacts/ContactSelection";
 import type Segment from "@/lib/api/models/app/segments/Segment";
 import type {
     CampaignSegmentLink,
@@ -42,11 +43,11 @@ export async function previewSegment(data: SegmentPreview): Promise<number> {
     return res.contact_count;
 }
 
-export async function setSegmentMembers(id: string, contacts: string[], mode: SegmentMemberMode): Promise<number> {
+export async function setSegmentMembers(id: string, selection: ContactSelection, mode: SegmentMemberMode): Promise<number> {
     const res = await Request<{ updated: number }>({
         method: "POST",
         url: `/segments/${id}/members`,
-        data: { contacts, mode },
+        data: { ...selection, mode },
         authorization: true,
     });
     return res.updated;

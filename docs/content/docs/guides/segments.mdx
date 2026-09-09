@@ -50,7 +50,7 @@ A segment with no conditions at all is a plain list: it holds exactly the contac
 
 ## Using a segment
 
-- **Browse**: a segment page lists its current members with the same table, filters, detail drawer and bulk actions as the contacts page.
+- **Browse**: a segment page lists its current members with the same table, filters, detail drawer and bulk actions as the contacts page, including [**Select all matching**](/guides/contacts-crm/#selecting-rows) so an action covers every member and not only the rows loaded so far, for selections up to `50,000` contacts.
 - **Add to campaign**: enrols every current member as a lead of the campaign you pick, from the segment page or with **From segment** on a campaign's Leads tab. Contacts already in that campaign are skipped, and a running campaign wakes up to schedule the new leads. This is a snapshot: contacts who join the segment later are not added until you run it again. To keep a campaign fed automatically, [link the segment](#linking-a-segment-to-a-campaign) instead.
 - **Link to campaign**: attaches the segment to a campaign as a live audience, so contacts who join the segment later become leads on their own. See [below](#linking-a-segment-to-a-campaign).
 - **One-time email**: send one message to the segment without building a sequence. **Campaigns** > **New campaign** > **One-time email** picks the segments, shows how many contacts they resolve to and how long the mailbox pool needs, and sends now or on a date. See [one-time emails](/guides/campaigns/#one-time-emails).
@@ -71,7 +71,7 @@ Enrolment is additive. A contact who later falls out of the segment keeps their 
 
 The campaign reacts to growth by status:
 
-- **Active**, including one **waiting for leads**: woken up to schedule the new leads straight away.
+- **Active**, including one **waiting for leads**: woken up to schedule the new leads straight away, or after the campaign's [delay before the first email](/guides/campaigns/#delay-before-the-first-email) when it sets one. That delay counts from the moment the contact is enrolled as a lead, which for a linked segment is when the background check picks them up, not from when they joined the segment or when the campaign started. So someone the segment adds months later still gets the full wait from their own enrolment.
 - **Finished**: restarted automatically, through the same launch checks as pressing play. A refused restart is noted in the campaign's activity log.
 - **Paused** (or draft): the leads accumulate and send when the campaign runs.
 

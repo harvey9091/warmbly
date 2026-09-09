@@ -146,6 +146,20 @@ func CampaignMaxNewLeads(v int) *errx.Error {
 	return nil
 }
 
+// CampaignEntryDelay validates the delay held before a contact's first email,
+// in minutes. 0 means the first email is due the moment the contact enters the
+// campaign; the ceiling mirrors the column's CHECK constraint.
+func CampaignEntryDelay(v int) *errx.Error {
+	if v < 0 || v > CampaignEntryDelayMaxMinutes {
+		return errx.New(errx.BadRequest, "delay before the first email must be between 0 minutes and 90 days")
+	}
+	return nil
+}
+
+// CampaignEntryDelayMaxMinutes is the ceiling for the entry delay (90 days),
+// kept in step with the entry_delay_minutes CHECK constraint.
+const CampaignEntryDelayMaxMinutes = 90 * 24 * 60
+
 // CampaignTrackingDomain validates a campaign-scoped tracking-domain override.
 // Empty means "fall back to the mailbox/default domain". Otherwise it has to be
 // a bare hostname, by the same rule the mailbox field uses.

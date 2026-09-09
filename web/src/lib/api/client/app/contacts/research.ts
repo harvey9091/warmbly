@@ -1,4 +1,5 @@
 import type { ContactResearchRun } from "@/lib/api/models/app/contacts/Research";
+import type ContactSelection from "@/lib/api/models/app/contacts/ContactSelection";
 import Request from "../../Request";
 
 // Run research for one contact (sync). Returns the terminal run.
@@ -25,15 +26,15 @@ export async function listContactResearch(
     });
 }
 
-// Queue research for many contacts. Returns how many were queued.
+// Queue research for a selection of contacts. Returns how many were queued.
 export async function batchResearch(
-    contactIds: string[],
+    selection: ContactSelection,
     objective: string,
 ): Promise<{ queued: number }> {
     return await Request<{ queued: number }>({
         method: "POST",
         url: `/contacts/research/batch`,
-        data: { contact_ids: contactIds, objective },
+        data: { ...selection, objective },
         authorization: true,
     });
 }

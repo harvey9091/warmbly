@@ -26,8 +26,9 @@ type AttachmentRepository interface {
 	// pointed at another campaign's step would never be sent by either.
 	StepBelongsToCampaign(ctx context.Context, campaignID, sequenceID uuid.UUID) (bool, error)
 	Delete(ctx context.Context, id uuid.UUID) error
-	// SumStorageUsedByOrg totals the bytes of every attachment owned by the org
-	// (joined through campaigns) — the basis for the per-plan storage quota.
+	// SumStorageUsedByOrg totals every stored byte the org owns — its campaign
+	// attachments plus its email-body image library — the basis for the
+	// per-plan storage quota.
 	SumStorageUsedByOrg(ctx context.Context, orgID uuid.UUID) (int64, error)
 	// CreateWithinQuota inserts the row only if the organization's total stays
 	// within the limit. The limit is resolved by limitFn AFTER the org's
@@ -44,22 +45,31 @@ type AttachmentRepository interface {
 type StorageLimitFunc func(ctx context.Context) (int64, error)
 
 // LockStorageQuota serialises quota checks for one organization inside the
-// calling transaction. Every writer of campaign_attachments that checks the
-// quota takes it first, so the sum it reads cannot go stale before its insert.
+// calling transaction. Every writer that checks the quota (campaign_attachments
+// and email_images) takes it first, so the sum it reads cannot go stale before
+// its insert.
 func LockStorageQuota(ctx context.Context, tx pgx.Tx, orgID uuid.UUID) error {
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('campaign_attachments'), hashtext($1::text))`, orgID.String())
 	return err
 }
 
+// storageUsedSQL totals every stored byte one organization owns. Attachments
+// and email-body images share one quota because they share one object store,
+// so they are summed together and taken under the same lock.
+const storageUsedSQL = `
+	SELECT
+		(SELECT COALESCE(SUM(ca.size), 0)
+		   FROM campaign_attachments ca
+		   JOIN campaigns c ON c.id = ca.campaign_id
+		  WHERE c.organization_id = $1)
+		+
+		(SELECT COALESCE(SUM(size), 0) FROM email_images WHERE organization_id = $1)
+`
+
 // storageUsedTx is SumStorageUsedByOrg inside a transaction.
 func storageUsedTx(ctx context.Context, tx pgx.Tx, orgID uuid.UUID) (int64, error) {
 	var total int64
-	err := tx.QueryRow(ctx, `
-		SELECT COALESCE(SUM(ca.size), 0)
-		FROM campaign_attachments ca
-		JOIN campaigns c ON c.id = ca.campaign_id
-		WHERE c.organization_id = $1
-	`, orgID).Scan(&total)
+	err := tx.QueryRow(ctx, storageUsedSQL, orgID).Scan(&total)
 	return total, err
 }
 
@@ -185,11 +195,6 @@ func (r *attachmentRepository) Delete(ctx context.Context, id uuid.UUID) error {
 
 func (r *attachmentRepository) SumStorageUsedByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
 	var total int64
-	err := r.DB.QueryRow(ctx, `
-		SELECT COALESCE(SUM(ca.size), 0)
-		FROM campaign_attachments ca
-		JOIN campaigns c ON c.id = ca.campaign_id
-		WHERE c.organization_id = $1
-	`, orgID).Scan(&total)
+	err := r.DB.QueryRow(ctx, storageUsedSQL, orgID).Scan(&total)
 	return total, err
 }

@@ -25,6 +25,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
+import { selectionOf } from "@/lib/api/models/app/contacts/ContactSelection";
 
 export default function SegmentPage() {
     const canView = usePermission("VIEW_CONTACTS");
@@ -180,7 +181,7 @@ function OverridesPanel({ segment }: { segment: Segment }) {
     async function clear(o: SegmentOverride) {
         setBusyId(o.contact_id);
         try {
-            await set.mutateAsync({ id: segment.id, contacts: [o.contact_id], mode: "auto" });
+            await set.mutateAsync({ id: segment.id, selection: selectionOf(o.contact_id), mode: "auto" });
             toast.success("Back to automatic");
         } catch (err) {
             toast.error(buildError(err as AppError));

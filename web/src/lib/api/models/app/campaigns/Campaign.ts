@@ -67,6 +67,10 @@ export default interface Campaign {
     max_new_leads_per_day: number;
     prioritize_new_leads: boolean;
 
+    // Delay before a contact's FIRST email, in minutes, counted from when they
+    // entered the campaign. 0 sends it as soon as the schedule allows.
+    entry_delay_minutes: number;
+
     // Keep running for new leads: out of leads, the campaign waits (idle_since
     // set) instead of finishing. Linking a segment turns it on.
     continuous: boolean;

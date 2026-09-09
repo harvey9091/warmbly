@@ -25,6 +25,7 @@ import {
 import toast from "react-hot-toast";
 import { TextInput } from "@/components/ui/field";
 import useUpdateContactsBulk from "@/lib/api/hooks/app/contacts/useUpdateContactsBulk";
+import type ContactSelection from "@/lib/api/models/app/contacts/ContactSelection";
 import useClickOutside from "@/hooks/useClickOutside";
 import { useConfirm } from "@/hooks/context/confirm";
 import useFlipPlacement from "@/hooks/useFlipPlacement";
@@ -56,17 +57,23 @@ function isComplete(f: Field): boolean {
     return f.type === "DELETE" || f.value.trim().length > 0;
 }
 
-const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+const plural = (n: number, one: string, many: string) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
 export default function ContactsEditBulk({
     active,
     setActive,
-    selected,
+    selection,
+    count,
+    onDone,
     scope,
 }: {
     active: boolean;
     setActive: React.Dispatch<React.SetStateAction<boolean>>;
-    selected: string[];
+    // Either the ticked ids or the filter behind "select all matching"; the
+    // server resolves the second shape.
+    selection: ContactSelection;
+    count: number;
+    onDone?: () => void;
     // Where the selection was made, shown in the header so a bulk write is
     // never applied without knowing which list it came from.
     scope?: { kind: "segment" | "campaign"; name: string };
@@ -127,7 +134,7 @@ export default function ContactsEditBulk({
         try {
             await toast.promise(
                 update.mutateAsync({
-                    contacts: selected,
+                    ...selection,
                     add_campaigns: campaignsAdd,
                     remove_campaigns: campaignsRemove,
                     add_categories: categoriesAdd,
@@ -136,13 +143,14 @@ export default function ContactsEditBulk({
                     subscribe: subscribeMode === "subscribe" ? true : subscribeMode === "unsubscribe" ? false : undefined,
                 }),
                 {
-                    loading: `Updating ${plural(selected.length, "contact", "contacts")}…`,
-                    success: `Updated ${plural(selected.length, "contact", "contacts")}`,
+                    loading: `Updating ${plural(count, "contact", "contacts")}…`,
+                    success: `Updated ${plural(count, "contact", "contacts")}`,
                     error: (err: AppError) => buildError(err),
                 },
             );
             reset();
             setActive(false);
+            onDone?.();
         } catch {
             /* surfaced by toast.promise */
         }
@@ -193,7 +201,7 @@ export default function ContactsEditBulk({
                             <span className="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium shrink-0">Bulk edit</span>
                             <div className="h-4 w-px bg-slate-200 shrink-0" />
                             <span className="text-[12.5px] text-slate-900 font-medium shrink-0">
-                                {plural(selected.length, "contact", "contacts")}
+                                {plural(count, "contact", "contacts")}
                             </span>
                             {scope && (
                                 <span className="inline-flex items-center h-5 px-1.5 rounded bg-sky-50 text-sky-700 text-[10px] font-medium min-w-0">
@@ -353,8 +361,8 @@ export default function ContactsEditBulk({
                             >
                                 {update.isPending ? <Loader2Icon className="w-3 h-3 animate-spin" /> : <CheckIcon className="w-3 h-3" />}
                                 {applicable
-                                    ? `Apply ${plural(changes.length, "change", "changes")} to ${selected.length}`
-                                    : `Apply to ${selected.length}`}
+                                    ? `Apply ${plural(changes.length, "change", "changes")} to ${count.toLocaleString()}`
+                                    : `Apply to ${count.toLocaleString()}`}
                             </button>
                         </footer>
                     </motion.aside>

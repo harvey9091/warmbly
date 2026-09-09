@@ -148,14 +148,14 @@ export default function FilterBar({
     }
 
     function addCustom() {
-        setFilters((s) => ({ ...s, filters: [...s.filters, { name: "", value: "", type: "contains" }] }));
-        setOpenKey(`custom:${filters.filters.length}`);
+        setFilters((s) => ({ ...s, custom_field_filters: [...s.custom_field_filters, { name: "", value: "", type: "contains" }] }));
+        setOpenKey(`custom:${filters.custom_field_filters.length}`);
     }
     function setCustom(i: number, next: SearchContactsFilter) {
-        setFilters((s) => ({ ...s, filters: s.filters.map((f, j) => (j === i ? next : f)) }));
+        setFilters((s) => ({ ...s, custom_field_filters: s.custom_field_filters.map((f, j) => (j === i ? next : f)) }));
     }
     function removeCustom(i: number) {
-        setFilters((s) => ({ ...s, filters: s.filters.filter((_, j) => j !== i) }));
+        setFilters((s) => ({ ...s, custom_field_filters: s.custom_field_filters.filter((_, j) => j !== i) }));
         setOpenKey(null);
     }
 
@@ -171,7 +171,7 @@ export default function FilterBar({
         setOpenKey(null);
         setFilters((s) => ({
             query: s.query,
-            filters: [],
+            custom_field_filters: [],
             campaign_ids: activeCampaign ? [activeCampaign.id] : [],
             segment_ids: hideSegments ? s.segment_ids : undefined,
             sort_by: s.sort_by,
@@ -245,7 +245,7 @@ export default function FilterBar({
                 />
             )}
 
-            {filters.filters.map((f, i) => (
+            {filters.custom_field_filters.map((f, i) => (
                 <CustomPill
                     key={`custom:${i}`}
                     id={`custom:${i}`}

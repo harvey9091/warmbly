@@ -2,7 +2,8 @@
 // editor). Same floating pill + AIEditPopover as the textarea host; the editor
 // gives us real selection coordinates via coordsAtPos. The rewrite replaces
 // the selected range and stays selected for review; Undo restores a pre-edit
-// HTML snapshot (the step editor runs without a history extension).
+// HTML snapshot, which reverts the whole rewrite in one step rather than
+// unwinding it through the editor's own history.
 
 import React from "react";
 import { createPortal } from "react-dom";

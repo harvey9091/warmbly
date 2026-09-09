@@ -1,9 +1,11 @@
 import PermissionButton from "@/components/ui/PermissionButton";
 import React from "react";
-import { ArrowRightIcon, CalendarClockIcon, CalendarRangeIcon, GlobeIcon } from "lucide-react";
+import { ArrowRightIcon, CalendarClockIcon, CalendarRangeIcon, GlobeIcon, HourglassIcon } from "lucide-react";
 import { addDays, differenceInCalendarDays, format } from "date-fns";
 import DateSelect from "@/components/app/campaigns/schedule/ScheduleDateSelect";
 import WeekScheduleGrid, { type Interval } from "@/components/app/campaigns/schedule/WeekScheduleGrid";
+import EntryDelayPicker from "@/components/app/campaigns/schedule/EntryDelay";
+import { entryDelayLabel } from "@/components/app/campaigns/schedule/entryDelay";
 import { Loading } from "@/components/loader";
 import {
     PopoverMenu,
@@ -99,6 +101,9 @@ export default function CampaignSchedule() {
         ...(newData.start_date !== campaign.start_date && { start_date: newData.start_date }),
         ...(newData.end_date !== campaign.end_date && { end_date: newData.end_date }),
         ...(newData.timezone !== campaign.timezone && { timezone: newData.timezone }),
+        ...(newData.entry_delay_minutes !== campaign.entry_delay_minutes && {
+            entry_delay_minutes: newData.entry_delay_minutes,
+        }),
     });
 
     const hasChanges = windowsChanged || Object.keys(fieldChanges()).length > 0;
@@ -224,6 +229,28 @@ export default function CampaignSchedule() {
                         are scheduled in {tzLabel}; worker IPs spread distribution naturally.
                     </p>
                 </div>
+            </section>
+
+            {/* Delay before the first email */}
+            <section className="rounded-lg border border-slate-200 bg-white px-4 pt-3 pb-4">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-2.5">
+                    <HourglassIcon className="w-3.5 h-3.5 text-slate-400" />
+                    <span className="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">
+                        Before the first email
+                    </span>
+                    <span className="ml-auto inline-flex items-center h-5 px-1.5 rounded border border-slate-200 bg-slate-50 text-[11px] text-slate-600">
+                        {entryDelayLabel(newData.entry_delay_minutes)}
+                    </span>
+                </div>
+                <EntryDelayPicker
+                    value={newData.entry_delay_minutes}
+                    onChange={(v) => setNewData((b) => ({ ...b, entry_delay_minutes: v }))}
+                />
+                <p className="text-[11px] text-slate-400 mt-3">
+                    Counted from the moment a contact enters this campaign, so a contact who joins a linked segment next
+                    week waits the same amount from their own start. The email then goes out in the first sending window
+                    after the delay. Follow-up waits are set on the steps and are not affected.
+                </p>
             </section>
 
             {/* Run dates */}

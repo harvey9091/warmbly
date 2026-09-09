@@ -148,7 +148,7 @@ const CAMPAIGN_SELECT = `id, name, description, status,
 		  updated_at, created_at,
 		  sender_strategy, rotation_mode,
 		  ramp_enabled, ramp_start, ramp_increment, ramp_ceiling, ramp_level, ramp_level_date,
-		  esp_match_mode, max_new_leads_per_day, prioritize_new_leads,
+		  esp_match_mode, max_new_leads_per_day, prioritize_new_leads, entry_delay_minutes,
 		  tracking_domain, tracking_domain_verified, tracking_domain_verified_at,
 		  schedule_windows,
 		  guardrail_enabled, guardrail_bounce_rate_max, guardrail_complaint_rate_max,
@@ -170,7 +170,7 @@ func getCampaign(rows db.Scannable, campaign *models.Campaign, extra ...any) err
 		&campaign.UpdatedAt, &campaign.CreatedAt,
 		&campaign.SenderStrategy, &campaign.RotationMode,
 		&campaign.RampEnabled, &campaign.RampStart, &campaign.RampIncrement, &campaign.RampCeiling, &campaign.RampLevel, &campaign.RampLevelDate,
-		&campaign.ESPMatchMode, &campaign.MaxNewLeadsPerDay, &campaign.PrioritizeNewLeads,
+		&campaign.ESPMatchMode, &campaign.MaxNewLeadsPerDay, &campaign.PrioritizeNewLeads, &campaign.EntryDelayMinutes,
 		&campaign.TrackingDomain, &campaign.TrackingDomainVerified, &campaign.TrackingDomainVerifiedAt,
 		&campaign.ScheduleWindows,
 		&campaign.GuardrailEnabled, &campaign.GuardrailBounceRateMax, &campaign.GuardrailComplaintRateMax,
@@ -197,7 +197,7 @@ const CAMPAIGN_SELECT_FULL = `
 	c.updated_at, c.created_at,
 	c.sender_strategy, c.rotation_mode,
 	c.ramp_enabled, c.ramp_start, c.ramp_increment, c.ramp_ceiling, c.ramp_level, c.ramp_level_date,
-	c.esp_match_mode, c.max_new_leads_per_day, c.prioritize_new_leads,
+	c.esp_match_mode, c.max_new_leads_per_day, c.prioritize_new_leads, c.entry_delay_minutes,
 	c.tracking_domain, c.tracking_domain_verified, c.tracking_domain_verified_at,
 	c.schedule_windows,
 	c.guardrail_enabled, c.guardrail_bounce_rate_max, c.guardrail_complaint_rate_max,
@@ -437,6 +437,13 @@ func (r *campaignRepository) Create(ctx context.Context, userID string, orgID *u
 	if data.PrioritizeNewLeads != nil {
 		prioritizeNewLeads = *data.PrioritizeNewLeads
 	}
+	entryDelay := 0
+	if data.EntryDelayMinutes != nil {
+		if err := validate.CampaignEntryDelay(*data.EntryDelayMinutes); err != nil {
+			return nil, err
+		}
+		entryDelay = *data.EntryDelayMinutes
+	}
 	continuous := false
 	if data.Continuous != nil {
 		continuous = *data.Continuous
@@ -483,7 +490,7 @@ func (r *campaignRepository) Create(ctx context.Context, userID string, orgID *u
 			esp_match_mode, max_new_leads_per_day, prioritize_new_leads,
 			tracking_domain, kind,
 			utm_tracking, utm_source, utm_medium, utm_campaign,
-			unsubscribe_mode, continuous,
+			unsubscribe_mode, continuous, entry_delay_minutes,
 			created_at, updated_at
 		) VALUES (
 			gen_random_uuid(), $1, $2, $3, $4,
@@ -496,7 +503,7 @@ func (r *campaignRepository) Create(ctx context.Context, userID string, orgID *u
 			$27, $28, $29,
 			$30, $31,
 			$32, $33, $34, $35,
-			$36, $37,
+			$36, $37, $38,
 			NOW(), NOW()
 		)
 		RETURNING %s
@@ -540,6 +547,7 @@ func (r *campaignRepository) Create(ctx context.Context, userID string, orgID *u
 		utmCampaign,        // $35
 		unsubMode,          // $36
 		continuous,         // $37
+		entryDelay,         // $38
 	}
 
 	row := tx.QueryRow(ctx, insertSQL, params...)
@@ -1180,6 +1188,14 @@ func (r *campaignRepository) Update(ctx context.Context, userID, campaignID stri
 		args = append(args, *data.PrioritizeNewLeads)
 		argPos++
 	}
+	if data.EntryDelayMinutes != nil {
+		if err := validate.CampaignEntryDelay(*data.EntryDelayMinutes); err != nil {
+			return nil, err
+		}
+		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "entry_delay_minutes", argPos))
+		args = append(args, *data.EntryDelayMinutes)
+		argPos++
+	}
 	if data.Continuous != nil {
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "continuous", argPos))
 		args = append(args, *data.Continuous)
@@ -1373,7 +1389,7 @@ func (r *campaignRepository) GetByID(ctx context.Context, campaignID uuid.UUID) 
 		&campaign.UpdatedAt, &campaign.CreatedAt,
 		&campaign.SenderStrategy, &campaign.RotationMode,
 		&campaign.RampEnabled, &campaign.RampStart, &campaign.RampIncrement, &campaign.RampCeiling, &campaign.RampLevel, &campaign.RampLevelDate,
-		&campaign.ESPMatchMode, &campaign.MaxNewLeadsPerDay, &campaign.PrioritizeNewLeads,
+		&campaign.ESPMatchMode, &campaign.MaxNewLeadsPerDay, &campaign.PrioritizeNewLeads, &campaign.EntryDelayMinutes,
 		&campaign.TrackingDomain, &campaign.TrackingDomainVerified, &campaign.TrackingDomainVerifiedAt,
 		&campaign.ScheduleWindows,
 		&campaign.GuardrailEnabled, &campaign.GuardrailBounceRateMax, &campaign.GuardrailComplaintRateMax,

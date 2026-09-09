@@ -73,9 +73,21 @@ See [Personalization & expressions](/guides/expressions/) for the full templatin
 
 A filter bar sits above the contact list. **Category**, **Segment**, **Status** and **Campaign** are always there; open one, tick values, and the list updates immediately with the matching count next to the bar. **Add filter** adds a custom-field condition (field, contains/is/starts with/ends with, value), a date-added or last-updated range, a number-of-campaigns range, the address verification verdict and, on a campaign's Leads tab, lead status and engagement. Each active filter is a pill you can reopen to change or remove with its cross; **Clear** drops them all, and **Save as segment** turns the current set into a [segment](/guides/segments/). Free-text search and sort stay in the toolbar.
 
+## Selecting rows
+
+Tick a row's checkbox to select it, or the one in the table header to select every row loaded so far. Contact lists load in pages as you scroll, so the header checkbox on its own only ever covers what is on screen.
+
+When more contacts match than are loaded, a bar appears under the header: **Select all N matching**. Clicking it hands the whole filtered set to the next action, however many pages that is, and the selection bar counts the full number rather than the loaded rows. Unticking a row afterwards takes just that contact out and the count follows. **Clear selection** in the bar, or the header checkbox, drops back to nothing.
+
+The set is the one the list is showing: search, filters, the subscription facet, and the campaign or segment the list is scoped to all narrow it. Changing any of them clears the selection, because it would no longer mean what it did when you made it. A selection past `50,000` contacts is refused rather than half-applied; add a filter and work through it in parts.
+
+Every bulk action reads the selection: **Edit**, **Segment**, **Remove from segment**, **Remove from campaign**, **Research**, **Verify**, **Mark deliverable** and **Delete**. **Push to CRM** is the exception: it calls the CRM once per contact while you wait, so it stays capped at `500` at a time.
+
+**Select all matching** is in the **From contacts** picker too, on a campaign's Leads tab and a segment page, so a whole search can be added as leads or members in one step.
+
 ## Editing many contacts at once
 
-Tick rows in any contact list, a segment's members or a campaign's leads, and the selection bar's **Edit** opens a bulk panel. It can add or remove campaigns, add or remove categories, force a subscription state, and queue custom-field operations (add, edit, delete, rename) that run on every selected contact.
+Tick rows in any contact list, a segment's members or a campaign's leads, and the selection bar's **Edit** opens a bulk panel. It can add or remove campaigns, add or remove categories, force a subscription state, and queue custom-field operations (add, edit, delete, rename) that run on every selected contact, including a **Select all matching** selection that reaches past the loaded pages.
 
 Nothing is applied while you build it up. The header names the list the selection came from, and a **Will apply** strip above the buttons lists every queued change as a chip you can take back one at a time before pressing Apply. A field operation missing its key, or its value where one is needed, is marked and skipped rather than sent half-finished.
 

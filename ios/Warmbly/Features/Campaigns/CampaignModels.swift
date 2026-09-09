@@ -44,6 +44,8 @@ struct Campaign: Codable, Identifiable, Hashable, Sendable {
     var espMatchMode: String?
     var maxNewLeadsPerDay: Int?
     var prioritizeNewLeads: Bool?
+    /// Minutes a contact's first email waits after they entered the campaign.
+    var entryDelayMinutes: Int?
     var trackingDomain: String?
     var trackingDomainVerified: Bool?
     var lastStatusChangeAt: Date?
@@ -78,6 +80,7 @@ struct Campaign: Codable, Identifiable, Hashable, Sendable {
         case espMatchMode = "esp_match_mode"
         case maxNewLeadsPerDay = "max_new_leads_per_day"
         case prioritizeNewLeads = "prioritize_new_leads"
+        case entryDelayMinutes = "entry_delay_minutes"
         case trackingDomain = "tracking_domain"
         case trackingDomainVerified = "tracking_domain_verified"
         case lastStatusChangeAt = "last_status_change_at"
@@ -157,6 +160,7 @@ struct CampaignUpdateBody: Encodable {
     var espMatchMode: String? = nil
     var maxNewLeadsPerDay: Int? = nil
     var prioritizeNewLeads: Bool? = nil
+    var entryDelayMinutes: Int? = nil
     var rampEnabled: Bool? = nil
     var rampStart: Int? = nil
     var rampIncrement: Int? = nil
@@ -177,6 +181,7 @@ struct CampaignUpdateBody: Encodable {
         case espMatchMode = "esp_match_mode"
         case maxNewLeadsPerDay = "max_new_leads_per_day"
         case prioritizeNewLeads = "prioritize_new_leads"
+        case entryDelayMinutes = "entry_delay_minutes"
         case rampEnabled = "ramp_enabled"
         case rampStart = "ramp_start"
         case rampIncrement = "ramp_increment"

@@ -367,6 +367,13 @@ var Tables = []Table{
 		Blobs: []BlobColumn{{Column: "s3_key", Kind: BlobKindKey}},
 	},
 	{
+		Name: "email_images", Group: models.OrgDataGroupCampaigns,
+		Scope: scopeOrg,
+		Note: "The workspace's image library for email bodies. Bytes travel, are restored public-read under the same key, and " +
+			"the url is repointed at the destination; mail already sent keeps the address it was written with, so those images still load from the source.",
+		Blobs: []BlobColumn{{Column: "storage_key", Kind: BlobKindKey}},
+	},
+	{
 		Name: "campaign_senders", Group: models.OrgDataGroupCampaigns,
 		Scope: `campaign_id IN ` + orgCampaigns,
 	},

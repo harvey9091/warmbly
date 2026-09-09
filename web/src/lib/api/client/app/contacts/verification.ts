@@ -2,6 +2,7 @@
 // actions on a selection (re-verify, mark deliverable / undeliverable).
 
 import Request from "../../Request";
+import type ContactSelection from "@/lib/api/models/app/contacts/ContactSelection";
 import type { ContactVerificationCounts } from "@/lib/api/models/app/contacts/SearchContactsResult";
 
 export interface VerificationOverview {
@@ -18,8 +19,7 @@ export interface VerificationOverview {
 
 export type VerificationAction = "verify" | "mark_deliverable" | "mark_undeliverable";
 
-export interface VerificationRequest {
-    contacts?: string[];
+export interface VerificationRequest extends Partial<ContactSelection> {
     // Every lead of this campaign that verification refused.
     campaign_id?: string;
     action: VerificationAction;

@@ -12,6 +12,13 @@ export { VARIABLES, SAMPLE };
 // Derive plain text from the editor HTML so both alternatives ship populated.
 export function htmlToPlain(html: string): string {
     const withBreaks = html
+        // An image has no text of its own, so the plain-text alternative would
+        // silently lose whatever it carried. Its alt text stands in for it.
+        .replace(/<img\b[^>]*>/gi, (tag) => {
+            const alt = tag.match(/\balt\s*=\s*"([^"]*)"/i) ?? tag.match(/\balt\s*=\s*'([^']*)'/i);
+            const text = (alt?.[1] ?? "").trim();
+            return text ? `[${text}]` : "";
+        })
         .replace(/<\s*br\s*\/?>/gi, "\n")
         .replace(/<\/\s*(p|div|h[1-6]|li|tr)\s*>/gi, "\n");
     if (typeof document === "undefined") return withBreaks.replace(/<[^>]+>/g, "");

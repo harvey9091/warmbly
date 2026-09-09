@@ -339,12 +339,12 @@ A `403` whose `code` is `mailbox_allowance_reached` comes from every path that c
 
 #### `storage_limit_reached`
 
-A `400` whose `code` is `storage_limit_reached` comes from `POST /campaigns/:id/attachments` and from a campaign duplicate that would copy attachments. The workspace's attachment storage, summed across every campaign, would pass its quota. The check and the write happen together under a per-workspace lock, so two uploads racing for the last of the quota cannot both get in. Nothing was stored.
+A `400` whose `code` is `storage_limit_reached` comes from `POST /campaigns/:id/attachments`, from `POST /email-images`, and from a campaign duplicate that would copy attachments. The workspace's stored bytes, its attachments across every campaign plus its email image library, would pass the quota. The check and the write happen together under one per-workspace lock shared by both, so two uploads racing for the last of the quota cannot both get in. Nothing was stored.
 
 ```json
 {
   "error": "Bad Request",
-  "message": "Storage limit reached: 51190 MB of 51200 MB used, 12 MB to add. Remove attachments or upgrade your plan.",
+  "message": "Storage limit reached: 51190 MB of 51200 MB used, 12 MB to add. Remove attachments or images, or upgrade your plan.",
   "code": "storage_limit_reached",
   "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
 }
@@ -352,7 +352,7 @@ A `400` whose `code` is `storage_limit_reached` comes from `POST /campaigns/:id/
 
 **How to fix:**
 - `GET /organization/current/limits` reports `storage.used_bytes` and `storage.limit_bytes`, and `storage.over_quota` when a plan change left the workspace above the quota. Existing attachments keep sending either way
-- Delete attachments you no longer need (`DELETE /campaigns/:id/attachments/:attachmentId`), or move to a paid plan for the larger quota
+- Delete attachments you no longer need (`DELETE /campaigns/:id/attachments/:attachmentId`) or images (`DELETE /email-images/:id`), or move to a paid plan for the larger quota
 
 #### `mailbox_worker_unreachable`
 

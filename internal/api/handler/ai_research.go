@@ -15,6 +15,7 @@ import (
 	"github.com/warmbly/warmbly/internal/api/middleware"
 	"github.com/warmbly/warmbly/internal/app/aitools"
 	"github.com/warmbly/warmbly/internal/errx"
+	"github.com/warmbly/warmbly/internal/models"
 )
 
 // aiActorInvocation builds a minimal invocation for AI feature endpoints. The
@@ -107,14 +108,37 @@ func (h *Handler) BatchResearch(c *gin.Context) {
 		return
 	}
 	var req struct {
-		ContactIDs []uuid.UUID `json:"contact_ids" binding:"required"`
+		models.ContactSelection
+		// contact_ids is the original field name; the selection's `contacts`,
+		// `all` and `filters` are the "select all matching" form.
+		ContactIDs []uuid.UUID `json:"contact_ids"`
 		Objective  string      `json:"objective"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
 		return
 	}
-	queued, rerr := h.ResearchService.Batch(c.Request.Context(), inv, req.ContactIDs, req.Objective)
+	sel := req.ContactSelection
+	if !sel.All && len(sel.Contacts) == 0 {
+		for _, id := range req.ContactIDs {
+			sel.Contacts = append(sel.Contacts, id.String())
+		}
+	}
+	resolved, ok := h.resolveContactSelection(c, inv.OrgID, sel)
+	if !ok {
+		return
+	}
+	contactIDs := make([]uuid.UUID, 0, len(resolved))
+	for _, raw := range resolved {
+		id, perr := uuid.Parse(raw)
+		if perr != nil {
+			errx.JSON(c, errx.ErrUuid)
+			return
+		}
+		contactIDs = append(contactIDs, id)
+	}
+
+	queued, rerr := h.ResearchService.Batch(c.Request.Context(), inv, contactIDs, req.Objective)
 	if rerr != nil {
 		errx.JSON(c, rerr)
 		return

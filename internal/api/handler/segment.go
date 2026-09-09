@@ -153,6 +153,14 @@ func (h *Handler) SetSegmentMembers(c *gin.Context) {
 		errx.Handle(c, errx.ErrInvalid)
 		return
 	}
+	// "Select all matching" names a filter instead of listing ids; resolve it
+	// here so the segment service only ever sees a concrete batch.
+	ids, ok := h.resolveContactSelection(c, orgID, in.ContactSelection)
+	if !ok {
+		return
+	}
+	in.ContactSelection = models.ContactSelection{Contacts: ids}
+
 	n, xerr := h.SegmentService.SetMembers(c.Request.Context(), orgID, id, &in)
 	if xerr != nil {
 		errx.Handle(c, xerr)

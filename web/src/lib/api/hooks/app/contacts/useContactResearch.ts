@@ -4,6 +4,7 @@ import {
     researchContact,
     batchResearch,
 } from "@/lib/api/client/app/contacts/research";
+import type ContactSelection from "@/lib/api/models/app/contacts/ContactSelection";
 
 // A contact's research history. Refreshed live by the AI_RESEARCH_PROGRESS
 // realtime event (see useRealtimeEvents).
@@ -29,7 +30,7 @@ export function useRunContactResearch(contactId: string | undefined) {
 
 export function useBatchResearch() {
     return useMutation({
-        mutationFn: (input: { contactIds: string[]; objective: string }) =>
-            batchResearch(input.contactIds, input.objective),
+        mutationFn: (input: { selection: ContactSelection; objective: string }) =>
+            batchResearch(input.selection, input.objective),
     });
 }

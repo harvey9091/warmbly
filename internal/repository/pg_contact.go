@@ -66,6 +66,11 @@ type ContactRepository interface {
 	// Keys of the returned map are the lowercased titles.
 	ResolveCategoryNames(ctx context.Context, userID uuid.UUID, names []string) (map[string]uuid.UUID, *errx.Error)
 	Search(ctx context.Context, userID string, category *string, cursor *paging.SortCursor, filters models.SearchContacts, limit int32) (*models.ContactsResult, *errx.Error)
+	// SearchIDs returns the ids of every contact matching the same request
+	// Search runs, capped at max+1 rows so the caller can tell "exactly max"
+	// from "more than max". Backs the dashboard's "select all matching" bulk
+	// actions, which name a filter instead of listing ids.
+	SearchIDs(ctx context.Context, orgID string, filters models.SearchContacts, max int) ([]uuid.UUID, *errx.Error)
 	// SearchCounts returns org-wide contact facet totals for the browse
 	// sidebar (independent of any search filters), mirroring campaigns-overview.
 	SearchCounts(ctx context.Context, orgID string) (*models.ContactsCounts, *errx.Error)
@@ -682,6 +687,9 @@ type VerificationCandidate struct {
 // verdicts older than their shelf life: an unknown verdict is retried after
 // config.VerificationUnknownRecheckDays, everything else after
 // config.VerificationRecheckDays. Manual verdicts are never re-checked.
+//
+// A built-in verdict that predates a connected verifier is reopened once, so
+// connecting one actually reaches the addresses it was connected for.
 func (r *contactRepository) ListVerificationCandidates(ctx context.Context, limit int) ([]VerificationCandidate, *errx.Error) {
 	if limit <= 0 {
 		limit = 100
@@ -697,11 +705,34 @@ func (r *contactRepository) ListVerificationCandidates(ctx context.Context, limi
 		    c.verification_checked_at IS NULL
 		    OR (c.verification_status = 'unknown' AND c.verification_checked_at < NOW() - make_interval(days => $2))
 		    OR c.verification_checked_at < NOW() - make_interval(days => $3)
+		    -- A built-in verdict reached before the workspace connected a
+		    -- verifier was reached without it; re-check once rather than after
+		    -- the shelf life. Only the built-in probe's verdicts: one a paid
+		    -- verifier already produced is a real answer, and re-checking it
+		    -- because another verifier was connected spends a credit for
+		    -- nothing.
+		    OR (
+		      c.verification_provider = $6
+		      AND EXISTS (
+		        SELECT 1 FROM integration_connections ic
+		        WHERE ic.organization_id = c.organization_id
+		          AND ic.provider = ANY($5)
+		          AND ic.status <> 'disconnected'
+		          AND c.verification_checked_at < ic.created_at
+		      )
+		    )
 		  )
 		ORDER BY c.verification_checked_at ASC NULLS FIRST, c.created_at ASC
 		LIMIT $1
 	`
-	params := []any{limit, config.VerificationUnknownRecheckDays, config.VerificationRecheckDays, config.VerificationEvidenceFreshDays}
+	providers := make([]string, 0, len(models.VerificationProviders))
+	for _, p := range models.VerificationProviders {
+		providers = append(providers, string(p))
+	}
+	params := []any{
+		limit, config.VerificationUnknownRecheckDays, config.VerificationRecheckDays,
+		config.VerificationEvidenceFreshDays, providers, emailverify.ProviderBuiltin,
+	}
 	rows, err := r.DB.Query(ctx, query, params...)
 	if err != nil {
 		db.CaptureError(err, query, params, "query")
@@ -997,14 +1028,20 @@ var contactSorts = map[string]contactSort{
 	"campaign_count": {expr: "COALESCE(cl.campaign_count,0)", kind: sortNumber},
 }
 
-func (r *contactRepository) Search(
-	ctx context.Context,
-	orgID string,
-	category *string,
-	cursor *paging.SortCursor,
-	filters models.SearchContacts,
-	limit int32,
-) (*models.ContactsResult, *errx.Error) {
+// contactFilter is a compiled contact search: the WHERE terms, the args they
+// bind, the next free placeholder, and (single-campaign Leads view only) the
+// placeholder the lead-progress subquery reuses.
+type contactFilter struct {
+	clauses        []string
+	args           []any
+	nextArg        int
+	singleCampaign string
+}
+
+// buildContactFilter compiles a search request into WHERE terms. Search and
+// SearchIDs share it so a "select all" bulk action resolves exactly the rows
+// the list was showing, filter for filter.
+func (r *contactRepository) buildContactFilter(ctx context.Context, orgID string, filters models.SearchContacts) (*contactFilter, *errx.Error) {
 	var whereClauses []string
 	var args []any
 	argIndex := 1
@@ -1193,6 +1230,45 @@ func (r *contactRepository) Search(
 	}
 
 	// -----------------------------
+	// Campaign count filters (min/max)
+	// -----------------------------
+	if filters.MinCampaigns != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("COALESCE(cl.campaign_count,0) >= $%d", argIndex))
+		args = append(args, *filters.MinCampaigns)
+		argIndex++
+	}
+	if filters.MaxCampaigns != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("COALESCE(cl.campaign_count,0) <= $%d", argIndex))
+		args = append(args, *filters.MaxCampaigns)
+		argIndex++
+	}
+
+	return &contactFilter{
+		clauses:        whereClauses,
+		args:           args,
+		nextArg:        argIndex,
+		singleCampaign: singleCampaignPlaceholder,
+	}, nil
+}
+
+func (r *contactRepository) Search(
+	ctx context.Context,
+	orgID string,
+	category *string,
+	cursor *paging.SortCursor,
+	filters models.SearchContacts,
+	limit int32,
+) (*models.ContactsResult, *errx.Error) {
+	fq, ferr := r.buildContactFilter(ctx, orgID, filters)
+	if ferr != nil {
+		return nil, ferr
+	}
+	whereClauses := fq.clauses
+	args := fq.args
+	argIndex := fq.nextArg
+	singleCampaignPlaceholder := fq.singleCampaign
+
+	// -----------------------------
 	// Sort logic
 	// -----------------------------
 	// campaign_count is a computed column, so the cursor compares against the
@@ -1262,33 +1338,11 @@ func (r *contactRepository) Search(
 	}
 
 	// -----------------------------
-	// Campaign count filters (min/max)
-	// -----------------------------
-	campaignCountClauses := []string{}
-	if filters.MinCampaigns != nil {
-		campaignCountClauses = append(campaignCountClauses, fmt.Sprintf("COALESCE(cl.campaign_count,0) >= $%d", argIndex))
-		args = append(args, *filters.MinCampaigns)
-		argIndex++
-	}
-	if filters.MaxCampaigns != nil {
-		campaignCountClauses = append(campaignCountClauses, fmt.Sprintf("COALESCE(cl.campaign_count,0) <= $%d", argIndex))
-		args = append(args, *filters.MaxCampaigns)
-		argIndex++
-	}
-
-	// -----------------------------
 	// Build WHERE SQL
 	// -----------------------------
 	whereSQL := ""
 	if len(whereClauses) > 0 {
 		whereSQL = "WHERE " + strings.Join(whereClauses, " AND ")
-	}
-	if len(campaignCountClauses) > 0 {
-		if whereSQL == "" {
-			whereSQL = "WHERE " + strings.Join(campaignCountClauses, " AND ")
-		} else {
-			whereSQL += " AND " + strings.Join(campaignCountClauses, " AND ")
-		}
 	}
 
 	// Per-campaign lead progress. Only computed in the single-campaign (Leads
@@ -1588,6 +1642,80 @@ func (r *contactRepository) Search(
 // campaign membership derived from the campaign_leads count), and per-category
 // contact counts joined through the org's contacts. Independent of any search
 // filter, like the campaigns-overview drawer counts.
+// SearchIDs resolves a search request to the matching contact ids. It shares
+// buildContactFilter with Search, so the set is exactly the one the list
+// showed; ordering follows the same sort so a capped result is the first max
+// rows the user was looking at rather than an arbitrary slice.
+func (r *contactRepository) SearchIDs(ctx context.Context, orgID string, filters models.SearchContacts, max int) ([]uuid.UUID, *errx.Error) {
+	if _, err := uuid.Parse(orgID); err != nil {
+		return nil, errx.ErrUuid
+	}
+	if max <= 0 {
+		max = models.MaxContactBulkSelection
+	}
+
+	fq, ferr := r.buildContactFilter(ctx, orgID, filters)
+	if ferr != nil {
+		return nil, ferr
+	}
+	args := fq.args
+
+	sortName := "created_at"
+	if _, ok := contactSorts[filters.SortBy]; ok {
+		sortName = filters.SortBy
+	}
+	spec := contactSorts[sortName]
+	direction, nulls := "DESC", "NULLS FIRST"
+	if filters.Reverse {
+		direction, nulls = "ASC", "NULLS LAST"
+	}
+	// Same rule as Search: the count lateral costs a scan, so it is joined only
+	// when a filter or the sort actually reads it.
+	campaignCountJoin := ""
+	if filters.MinCampaigns != nil || filters.MaxCampaigns != nil || sortName == "campaign_count" {
+		campaignCountJoin = campaignCountLateral
+	}
+
+	whereSQL := ""
+	if len(fq.clauses) > 0 {
+		whereSQL = "WHERE " + strings.Join(fq.clauses, " AND ")
+	}
+
+	// max+1 so the caller can report "more than max match" instead of silently
+	// acting on a truncated set.
+	query := fmt.Sprintf(`
+		SELECT c.id
+		FROM contacts c
+		%s
+		%s
+		ORDER BY %s %s %s, c.id %s
+		LIMIT $%d
+	`, campaignCountJoin, whereSQL, spec.expr, direction, nulls, direction, fq.nextArg)
+	args = append(args, max+1)
+
+	rows, err := r.DB.Query(ctx, query, args...)
+	if err != nil {
+		db.CaptureError(err, query, args, "query")
+		return nil, errx.InternalError()
+	}
+	defer rows.Close()
+
+	ids := make([]uuid.UUID, 0, 256)
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			db.CaptureError(err, "", nil, "scan")
+			return nil, errx.InternalError()
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		db.CaptureError(err, query, args, "rows")
+		return nil, errx.InternalError()
+	}
+	return ids, nil
+}
+
 func (r *contactRepository) SearchCounts(ctx context.Context, orgID string) (*models.ContactsCounts, *errx.Error) {
 	counts := &models.ContactsCounts{Categories: []models.ContactCategoryCount{}}
 
@@ -2989,6 +3117,11 @@ func (r *contactRepository) GetDetail(ctx context.Context, userID uuid.UUID, org
 // We deliberately scope by the contact's owning user via the
 // campaign join — this keeps multi-tenant safety even though the
 // tasks table itself has no user_id column.
+//
+// opened_at is a person's open, as it is in campaign analytics and the
+// contact's engagement summary: a fetch by a mail client's prefetch or a
+// security gateway is reported separately as machine_opened_at, so this list
+// never claims a recipient read mail they never opened (issue #392).
 func (r *contactRepository) ListSentEmails(ctx context.Context, userID, contactID uuid.UUID, limit int, beforeSentAt *time.Time, beforeTaskID *uuid.UUID) (*models.ContactSentEmailsResult, *errx.Error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
@@ -3009,7 +3142,9 @@ func (r *contactRepository) ListSentEmails(ctx context.Context, userID, contactI
 			cam.id, cam.name,
 			seq.id, seq.name,
 			COALESCE(et.subject, seq.subject, '') AS subject,
-			ccp.opened_at, ccp.clicked_at, ccp.replied_at, ccp.bounced_at
+			CASE WHEN ccp.opened_machine THEN NULL ELSE ccp.opened_at END AS opened_at,
+			CASE WHEN ccp.opened_machine THEN ccp.opened_at END AS machine_opened_at,
+			ccp.clicked_at, ccp.replied_at, ccp.bounced_at
 		FROM tasks t
 		JOIN campaign_tasks ct ON ct.task_id = t.id
 		LEFT JOIN email_accounts ea ON ea.id = t.email_account_id
@@ -3043,7 +3178,7 @@ func (r *contactRepository) ListSentEmails(ctx context.Context, userID, contactI
 			&e.CampaignID, &e.CampaignName,
 			&e.SequenceID, &e.SequenceName,
 			&e.Subject,
-			&e.OpenedAt, &e.ClickedAt, &e.RepliedAt, &e.BouncedAt,
+			&e.OpenedAt, &e.MachineOpenedAt, &e.ClickedAt, &e.RepliedAt, &e.BouncedAt,
 		); err != nil {
 			db.CaptureError(err, "", nil, "ListSentEmails scan")
 			return nil, errx.InternalError()
@@ -3166,7 +3301,11 @@ func (r *contactRepository) ListTimeline(ctx context.Context, userID uuid.UUID, 
 			WHERE  ct.campaign_id = ccp.campaign_id
 			  AND  ct.contact_id  = ccp.contact_id
 			  AND  ct.sequence_id = ccp.sequence_id
-			ORDER  BY t.created_at DESC
+			-- The task holding the step's reservation is the one that put the
+			-- email on the wire; a step can carry several task rows (a retry, a
+			-- tick that skipped as a duplicate) and only that one names the
+			-- mailbox the recipient saw.
+			ORDER  BY COALESCE(t.id = ccp.dispatch_task_id, false) DESC, t.created_at DESC
 			LIMIT  1
 		) ea ON TRUE
 		WHERE ccp.contact_id = $1

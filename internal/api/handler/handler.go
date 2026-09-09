@@ -294,6 +294,7 @@ type Handler struct {
 	UserRepo                 repository.UserRepository
 	OrgRepo                  repository.OrganizationRepository
 	AttachmentRepo           repository.AttachmentRepository
+	EmailImageRepo           repository.EmailImageRepository
 	StorageBackendRepo       repository.StorageBackendRepository
 	CloudCredentialRepo      repository.CloudCredentialRepository
 	ProvisioningTemplateRepo repository.ProvisioningTemplateRepository

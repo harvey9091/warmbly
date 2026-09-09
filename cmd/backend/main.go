@@ -316,6 +316,7 @@ func main() {
 	var twofaService twofa.Service
 	var contactRepoForHandler repository.ContactRepository
 	var attachmentRepoForHandler repository.AttachmentRepository
+	var emailImageRepoForHandler repository.EmailImageRepository
 	var leadSyncServiceForHandler leadsync.Service
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -600,6 +601,7 @@ func main() {
 		sequenceRepostory := repository.NewSequenceRepostory(primaryDB)
 		contactRepostory := repository.NewContactRepostory(primaryDB)
 		attachmentRepoForHandler = repository.NewAttachmentRepository(primaryDB)
+		emailImageRepoForHandler = repository.NewEmailImageRepository(primaryDB)
 		uniboxRepository := repository.NewUniboxRepository(primaryDB)
 		encryptedKeys, err = encryptedkeys.FromEnv(
 			encryptedkeys.Deps{DB: primaryDB},
@@ -2094,6 +2096,7 @@ func main() {
 		UserRepo:                 userRepoForHandler,
 		OrgRepo:                  organizationRepoForHandler,
 		AttachmentRepo:           attachmentRepoForHandler,
+		EmailImageRepo:           emailImageRepoForHandler,
 		StorageBackendRepo:       storageBackendRepo,
 		CloudCredentialRepo:      cloudCredentialRepo,
 		ProvisioningTemplateRepo: provisioningTemplateRepo,

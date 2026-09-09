@@ -161,8 +161,8 @@ func (a Adapter) AddToCampaign(ctx context.Context, orgID, actorID, contactID, c
 		return fmt.Errorf("contact writes are not available")
 	}
 	if _, xerr := a.ContactSvc.BulkUpdate(ctx, actorID.String(), orgID, &models.BulkEditContactsData{
-		Contacts:     []string{contactID.String()},
-		AddCampaigns: []string{campaignID.String()},
+		ContactSelection: models.ContactSelection{Contacts: []string{contactID.String()}},
+		AddCampaigns:     []string{campaignID.String()},
 	}); xerr != nil {
 		return xerr
 	}

@@ -368,7 +368,15 @@ func (h *Handler) ListConnectionSyncRuns(c *gin.Context) {
 
 // --- Synchronous contact push -----------------------------------------------
 
+// maxIntegrationPushSize bounds one synchronous CRM push: every contact is a
+// live call against the provider's API, so a filter-shaped selection past this
+// is refused rather than run for minutes.
+const maxIntegrationPushSize = 500
+
 type pushContactsPayload struct {
+	models.ContactSelection
+	// contact_ids is the original field name; the selection's `contacts`,
+	// `all` and `filters` are the "select all matching" form.
 	ContactIDs []string `json:"contact_ids"`
 }
 
@@ -398,10 +406,20 @@ func (h *Handler) PushContactsToIntegration(c *gin.Context) {
 		return
 	}
 
+	// "Select all matching" names a filter; anything else is the id list.
+	sel := p.ContactSelection
+	if !sel.All && len(sel.Contacts) == 0 {
+		sel.Contacts = p.ContactIDs
+	}
+	resolved, ok := h.resolveContactSelection(c, orgID, sel)
+	if !ok {
+		return
+	}
+
 	// Parse + dedupe the requested contact IDs.
-	seen := make(map[uuid.UUID]struct{}, len(p.ContactIDs))
-	ids := make([]uuid.UUID, 0, len(p.ContactIDs))
-	for _, raw := range p.ContactIDs {
+	seen := make(map[uuid.UUID]struct{}, len(resolved))
+	ids := make([]uuid.UUID, 0, len(resolved))
+	for _, raw := range resolved {
 		id, perr := uuid.Parse(strings.TrimSpace(raw))
 		if perr != nil {
 			errx.JSON(c, errx.New(errx.BadRequest, "invalid contact id: "+raw))
@@ -417,8 +435,11 @@ func (h *Handler) PushContactsToIntegration(c *gin.Context) {
 		errx.JSON(c, errx.New(errx.BadRequest, "no contacts provided"))
 		return
 	}
-	if len(ids) > 500 {
-		errx.JSON(c, errx.New(errx.BadRequest, "too many contacts in one push (max 500)"))
+	// The push is synchronous against the CRM's API, so it stays a batch
+	// operation even when the selection came from a filter.
+	if len(ids) > maxIntegrationPushSize {
+		errx.JSON(c, errx.NewWithIdentifier(errx.BadRequest, "too_many_contacts",
+			"too many contacts in one push (max "+itoa(maxIntegrationPushSize)+")"))
 		return
 	}
 	if h.ContactRepo == nil {

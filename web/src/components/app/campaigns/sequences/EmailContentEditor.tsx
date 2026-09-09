@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 import RichTextEditor, { VariableMenu } from "./RichTextEditor";
+import EmailBody from "@/components/app/unibox/EmailBody";
 import { useTemplatePreview } from "@/lib/api/hooks/app/campaigns/useTemplatePreview";
 import type { TemplatePreview } from "@/lib/api/client/app/campaigns/previewTemplate";
 import type Contact from "@/lib/api/models/app/contacts/Contact";
@@ -285,16 +286,20 @@ export default function EmailContentEditor({
                             <span className="text-slate-400">Subject: </span>
                             <span className="text-slate-800">{(serverPreview?.subject ?? renderPreview(subject)) || "—"}</span>
                         </div>
-                        <div
-                            className="tiptap-body min-h-[200px] px-3 py-2.5 text-[13px] leading-relaxed text-slate-800"
-                            dangerouslySetInnerHTML={{
-                                __html:
-                                    (serverPreview?.body_html ?? linkifyUnsubscribe(renderPreview(bodyHtml))) ||
-                                    (serverPreview?.body_plain
-                                        ? `<pre class="whitespace-pre-wrap font-sans">${escapeHtml(serverPreview.body_plain)}</pre>`
-                                        : '<p class="text-slate-300">Nothing to preview yet.</p>'),
-                            }}
-                        />
+                        {/* The body renders in the same sandboxed frame the
+                            inbox uses. The HTML source view lets an author put
+                            anything in a body, so dropping it into the
+                            dashboard DOM would let one member's markup restyle
+                            the app, or run, for every teammate who opens the
+                            preview. The frame carries no allow-scripts, and it
+                            also makes the preview read the way a mail client
+                            renders it rather than the way our editor does. */}
+                        <div className="min-h-[200px] px-3 py-2.5">
+                            <EmailBody
+                                html={serverPreview?.body_html ?? linkifyUnsubscribe(renderPreview(bodyHtml))}
+                                plain={serverPreview?.body_plain}
+                            />
+                        </div>
                         {(serverPreview?.attachments?.length ?? 0) > 0 && (
                             <ul className="flex flex-wrap gap-1.5 border-t border-slate-200/70 px-3 py-2">
                                 {serverPreview!.attachments!.map((a) => (
@@ -354,10 +359,6 @@ export default function EmailContentEditor({
             <ContentScore subject={subject} bodyHtml={bodyHtml} bodyPlain={htmlToPlain(bodyHtml)} />
         </div>
     );
-}
-
-function escapeHtml(s: string): string {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function TabBtn({

@@ -1023,6 +1023,17 @@ func Run(
 				templates.POST("/score", m.RequireAccess(models.PermViewCampaigns, models.APIPermReadTemplates), h.ScoreTemplateContent)
 			}
 
+			// Workspace image library for email bodies. The bytes are public
+			// objects (a recipient's mail client fetches them with no session),
+			// so these routes only manage the library, not the reads.
+			emailImages := protected.Group("/email-images")
+			emailImages.Use(m.RequireOrganization(), m.RateLimitMiddleware(models.RateLimitWrite))
+			{
+				emailImages.GET("", m.RequireAccess(models.PermViewCampaigns, models.APIPermReadCampaigns), h.ListEmailImages)
+				emailImages.POST("", m.RequireAccess(models.PermManageCampaigns, models.APIPermWriteCampaigns), h.UploadEmailImage)
+				emailImages.DELETE("/:id", m.RequireAccess(models.PermManageCampaigns, models.APIPermWriteCampaigns), h.DeleteEmailImage)
+			}
+
 			// CRM routes (require org)
 			crmGroup := protected.Group("/crm")
 			crmGroup.Use(m.RequireOrganization(), m.RateLimitMiddleware(models.RateLimitWrite))

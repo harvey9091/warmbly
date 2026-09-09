@@ -67,6 +67,11 @@ type ContactSequencePair struct {
 	// IsNewLead is true when this pair is the contact's first step (sequence
 	// position 1). Drives the per-day new-lead counter and cap.
 	IsNewLead bool
+	// NotBefore is the earliest instant routing allows the step: the entry
+	// delay for a new lead, the previous step's wait for a follow-up. Nil means
+	// "due now". The placer floors its base time with it, so a wait routing
+	// honours can never be dropped by the placement pass.
+	NotBefore *time.Time
 }
 
 type CampaignSequencePair struct {
@@ -902,10 +907,11 @@ func undeliverableClause(cp string) string {
 // whose next step isn't decidable yet (an engagement window still open) is not
 // returned.
 //
-// Only a pair that is DUE is returned: a new lead is due now; a routed step is
-// due wait_after days after the contact's last step (plus a wait node's
-// minutes). The first due contact in list order wins. Contacts whose next step
-// is due later never block the ones behind them: without this, the one lead
+// Only a pair that is DUE is returned: a new lead is due once the campaign's
+// entry delay has elapsed since they entered it (immediately when there is
+// none); a routed step is due wait_after days after the contact's last step
+// (plus a wait node's minutes). The first due contact in list order wins.
+// Contacts whose next step is due later never block the ones behind them: without this, the one lead
 // routed to a "wait 3 days" follow-up parks the whole campaign for 3 days while
 // every other lead's first email sits queued. When nothing is due, the second
 // value is the soonest moment something will be (a step becoming due or a
@@ -949,7 +955,7 @@ func (r *campaignProgressRepository) FindNextRoutedPair(ctx context.Context, cam
 	}
 
 	query := `
-		SELECT cl.contact_id,
+		SELECT cl.contact_id, cl.added_at,
 		       lp.sequence_id, lp.sent_at, lp.opened_at, lp.clicked_at, lp.replied_at, COALESCE(lp.reply_class, ''), COALESCE(lp.ai_label, ''),
 		       COALESCE(ss.ids, '{}') AS sent_ids,
 		       EXISTS (
@@ -1015,7 +1021,7 @@ func (r *campaignProgressRepository) FindNextRoutedPair(ctx context.Context, cam
 	for rows.Next() {
 		var in routeInput
 		var contactID uuid.UUID
-		if serr := rows.Scan(&contactID, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.sentIDs, &in.hasReplied); serr != nil {
+		if serr := rows.Scan(&contactID, &in.addedAt, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.sentIDs, &in.hasReplied); serr != nil {
 			return nil, nil, serr
 		}
 		if in.lastSeq == nil && excludeNewLeads {
@@ -1037,7 +1043,7 @@ func (r *campaignProgressRepository) FindNextRoutedPair(ctx context.Context, cam
 			noteDue(*res.DueAt)
 			continue
 		}
-		return &ContactSequencePair{ContactID: contactID, SequenceID: *res.Target, IsNewLead: res.IsNewLead}, nil, nil
+		return &ContactSequencePair{ContactID: contactID, SequenceID: *res.Target, IsNewLead: res.IsNewLead, NotBefore: res.DueAt}, nil, nil
 	}
 	if rerr := rows.Err(); rerr != nil {
 		return nil, nil, rerr
@@ -1054,8 +1060,9 @@ type ContactRoute struct {
 	// condition window is still open (WaitUntil set).
 	Target    *uuid.UUID
 	IsNewLead bool
-	// DueAt is when the target's wait (the step's wait_after, plus a preceding
-	// wait node) elapses. Nil means due now.
+	// DueAt is when the target's wait elapses: the campaign's entry delay after
+	// the contact entered for a first step, otherwise the step's wait_after plus
+	// a preceding wait node. Nil means due now.
 	DueAt *time.Time
 	// WaitUntil is when an undecided condition window closes.
 	WaitUntil *time.Time
@@ -1077,7 +1084,7 @@ func (r *campaignProgressRepository) RouteContact(ctx context.Context, campaignI
 		return nil, err
 	}
 	query := `
-		SELECT
+		SELECT cl.added_at,
 		       lp.sequence_id, lp.sent_at, lp.opened_at, lp.clicked_at, lp.replied_at, COALESCE(lp.reply_class, ''), COALESCE(lp.ai_label, ''),
 		       COALESCE(ss.ids, '{}') AS sent_ids,
 		       EXISTS (
@@ -1118,7 +1125,7 @@ func (r *campaignProgressRepository) RouteContact(ctx context.Context, campaignI
 	var in routeInput
 	var bounced, failed, suppressed, undeliverable bool
 	err = r.db.QueryRow(ctx, query, campaignID, config.CampaignSendMaxAttempts, contactID).Scan(
-		&in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.sentIDs, &in.hasReplied,
+		&in.addedAt, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.sentIDs, &in.hasReplied,
 		&bounced, &failed, &suppressed, &undeliverable,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1150,9 +1157,12 @@ func (r *campaignProgressRepository) RouteContact(ctx context.Context, campaignI
 type routeInput struct {
 	lastSeq                                *uuid.UUID
 	sentAt, openedAt, clickedAt, repliedAt *time.Time
-	replyClass, aiLabel                    string
-	sentIDs                                []uuid.UUID
-	hasReplied                             bool
+	// addedAt is when the contact entered the campaign; the anchor the entry
+	// delay counts from. Nil for a lead added before the column existed.
+	addedAt             *time.Time
+	replyClass, aiLabel string
+	sentIDs             []uuid.UUID
+	hasReplied          bool
 }
 
 // campaignRouter is a campaign's flow graph loaded once per pass, with the
@@ -1167,6 +1177,12 @@ type campaignRouter struct {
 	dueBy          time.Time
 	stopOnReply    bool
 	replyFlowSteps map[uuid.UUID]bool
+	// entryDelay holds a new lead's first email back for this long after they
+	// entered the campaign; zero means the first step is due immediately.
+	entryDelay time.Duration
+	// campaignCreatedAt stands in as the entry time for a lead added before
+	// campaign_leads.added_at existed (the column is nullable and unbackfilled).
+	campaignCreatedAt time.Time
 }
 
 type routeStep struct {
@@ -1231,9 +1247,13 @@ func (r *campaignProgressRepository) loadRouter(ctx context.Context, campaignID 
 	// of the cold sequence. The normal / fall-through cold sequence stops; the
 	// reply branch's path (its actions AND any follow-up emails) runs to
 	// completion. Compute the reply-flow step set once and load the flag.
-	if serr := r.db.QueryRow(ctx, `SELECT stop_on_reply FROM campaigns WHERE id = $1`, campaignID).Scan(&cr.stopOnReply); serr != nil {
+	var entryDelayMinutes int
+	if serr := r.db.QueryRow(ctx,
+		`SELECT stop_on_reply, entry_delay_minutes, created_at FROM campaigns WHERE id = $1`,
+		campaignID).Scan(&cr.stopOnReply, &entryDelayMinutes, &cr.campaignCreatedAt); serr != nil {
 		return nil, serr
 	}
+	cr.entryDelay = time.Duration(entryDelayMinutes) * time.Minute
 	if cr.stopOnReply {
 		steps := cr.steps
 		idxByID := cr.idxByID
@@ -1415,7 +1435,18 @@ func (cr *campaignRouter) route(campaignID, contactID uuid.UUID, in routeInput) 
 		}
 	}
 	out.Target = res.target
-	if !out.IsNewLead && in.sentAt != nil {
+	if out.IsNewLead {
+		// The entry delay: a contact's first email waits this long after they
+		// entered the campaign. Anchored on when they entered, not on when the
+		// campaign started, so a contact who joins a linked segment weeks later
+		// gets the same delay.
+		if cr.entryDelay > 0 {
+			due := cr.enteredAt(in.addedAt).Add(cr.entryDelay)
+			out.DueAt = &due
+		}
+		return out
+	}
+	if in.sentAt != nil {
 		due := in.sentAt.Add(24 * time.Hour * time.Duration(cr.steps[cr.idxByID[*res.target]].waitAfter))
 		if last, ok := cr.idxByID[*in.lastSeq]; ok && cr.steps[last].waitMinutes > 0 {
 			due = due.Add(time.Duration(cr.steps[last].waitMinutes) * time.Minute)
@@ -1423,6 +1454,17 @@ func (cr *campaignRouter) route(campaignID, contactID uuid.UUID, in routeInput) 
 		out.DueAt = &due
 	}
 	return out
+}
+
+// enteredAt is when a lead entered the campaign. campaign_leads.added_at is
+// nullable and deliberately not backfilled, so a lead that predates the column
+// falls back to the campaign's own creation time — which keeps turning an entry
+// delay on from re-delaying leads that have been in the campaign for weeks.
+func (cr *campaignRouter) enteredAt(addedAt *time.Time) time.Time {
+	if addedAt != nil {
+		return *addedAt
+	}
+	return cr.campaignCreatedAt
 }
 
 // branchHasPositiveReplyCondition reports whether a branch is a "reply branch":
@@ -1455,7 +1497,7 @@ func (r *campaignProgressRepository) CountUndeliverableLeads(ctx context.Context
 		return 0, nil
 	}
 	query := `
-		SELECT cl.contact_id,
+		SELECT cl.contact_id, cl.added_at,
 		       lp.sequence_id, lp.sent_at, lp.opened_at, lp.clicked_at, lp.replied_at, COALESCE(lp.reply_class, ''), COALESCE(lp.ai_label, ''),
 		       COALESCE(ss.ids, '{}') AS sent_ids,
 		       EXISTS (
@@ -1505,7 +1547,7 @@ func (r *campaignProgressRepository) CountUndeliverableLeads(ctx context.Context
 	for rows.Next() {
 		var in routeInput
 		var contactID uuid.UUID
-		if serr := rows.Scan(&contactID, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.sentIDs, &in.hasReplied); serr != nil {
+		if serr := rows.Scan(&contactID, &in.addedAt, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.sentIDs, &in.hasReplied); serr != nil {
 			return 0, serr
 		}
 		res := router.route(campaignID, contactID, in)

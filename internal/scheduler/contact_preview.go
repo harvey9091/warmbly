@@ -17,6 +17,7 @@ type ContactSendConstraint string
 const (
 	ConstraintNone             ContactSendConstraint = ""
 	ConstraintStepWait         ContactSendConstraint = "step_wait"
+	ConstraintEntryDelay       ContactSendConstraint = "entry_delay"
 	ConstraintConditionWindow  ContactSendConstraint = "condition_window"
 	ConstraintStartDate        ContactSendConstraint = "start_date"
 	ConstraintSendingWindow    ContactSendConstraint = "sending_window"
@@ -84,7 +85,7 @@ func (s *schedulerService) PreviewContactSend(ctx context.Context, campaignID, c
 		return pv, nil
 	}
 
-	pair := &repository.ContactSequencePair{ContactID: contactID, SequenceID: *route.Target, IsNewLead: route.IsNewLead}
+	pair := &repository.ContactSequencePair{ContactID: contactID, SequenceID: *route.Target, IsNewLead: route.IsNewLead, NotBefore: route.DueAt}
 	at, sendable, _, perr := s.placeCampaignSend(ctx, campaign, accounts, meta, pair, true)
 	switch {
 	case perr == nil && sendable != nil:
@@ -118,12 +119,18 @@ func (s *schedulerService) PreviewContactSend(ctx context.Context, campaignID, c
 }
 
 // deferralConstraint picks the gate that explains a deferred placement, in
-// the order the send path applies them: the step's own wait, the campaign
-// start date, the sending window, today's new-lead cap, and otherwise the
-// mailbox pool (daily caps, spacing, health, rest).
+// the order the send path applies them: the step's own wait (or, for a first
+// step, the campaign's entry delay), the campaign start date, the sending
+// window, today's new-lead cap, and otherwise the mailbox pool (daily caps,
+// spacing, health, rest).
 func (s *schedulerService) deferralConstraint(ctx context.Context, campaign *models.Campaign, route *repository.ContactRoute) ContactSendConstraint {
 	grace := time.Now().Add(config.CampaignNotDueGraceSeconds * time.Second)
 	if route.DueAt != nil && route.DueAt.After(grace) {
+		// A first step's wait is the campaign's entry delay, not a step wait —
+		// the drawer words the two differently.
+		if route.IsNewLead {
+			return ConstraintEntryDelay
+		}
 		return ConstraintStepWait
 	}
 	if campaign.StartDate != nil && campaign.StartDate.After(grace) {

@@ -39,6 +39,8 @@ import { SelectMenu, type SelectOption } from "@/components/ui/select-menu";
 import { TimePicker } from "@/components/ui/TimePicker";
 import { DateTimePicker } from "@/components/ui/DateTimePicker";
 import WeekdayBitmask from "@/components/app/campaigns/schedule/WeekdayBitmask";
+import EntryDelayPicker from "@/components/app/campaigns/schedule/EntryDelay";
+import { entryDelayLabel } from "@/components/app/campaigns/schedule/entryDelay";
 import TagSelector from "@/components/app/popup/select/TagSelector";
 import { SegmentMultiPicker } from "@/components/app/segments/SegmentPickers";
 import { Toggle } from "@/components/app/campaigns/preferences/components/CampaignPreferenceBoolBox";
@@ -109,6 +111,8 @@ type Draft = {
     days: number;
     startTime: string;
     endTime: string;
+    // Minutes to hold a contact's first email after they enter the campaign.
+    entryDelayMinutes: number;
     emailTagIds: string[];
     dailyLimit: number;
     stopOnReply: boolean;
@@ -132,6 +136,7 @@ const initialDraft = (timezone: string): Draft => ({
     days: WEEKDAYS_MASK,
     startTime: "08:00",
     endTime: "18:00",
+    entryDelayMinutes: 0,
     emailTagIds: [],
     dailyLimit: 50,
     stopOnReply: true,
@@ -378,6 +383,7 @@ export function NewCampaignDialog({ open, onClose }: Props) {
             days: draft.days,
             start_time: draft.startTime,
             end_time: draft.endTime,
+            entry_delay_minutes: draft.entryDelayMinutes,
             daily_limit: draft.dailyLimit,
             open_tracking: draft.openTracking,
             link_tracking: draft.linkTracking,
@@ -951,6 +957,24 @@ function ScheduleStep({ draft, patch }: { draft: Draft; patch: (p: Partial<Draft
             <div className="space-y-5">
                 <TimezoneField draft={draft} patch={patch} />
                 <SendingWindowFields draft={draft} patch={patch} />
+                <div>
+                    <div className="flex items-baseline justify-between">
+                        <Label>Wait before the first email</Label>
+                        <span className="text-[10.5px] text-slate-400">
+                            {entryDelayLabel(draft.entryDelayMinutes)}
+                        </span>
+                    </div>
+                    <div className="mt-1">
+                        <EntryDelayPicker
+                            value={draft.entryDelayMinutes}
+                            onChange={(v) => patch({ entryDelayMinutes: v })}
+                        />
+                    </div>
+                    <p className="mt-2 text-[11.5px] leading-relaxed text-slate-500">
+                        Counted from when a contact enters the campaign, so someone who joins a linked segment later
+                        waits the same amount from their own start. Follow-up waits are set on the steps.
+                    </p>
+                </div>
             </div>
         </div>
     );
@@ -1089,6 +1113,9 @@ function EmailsStep({
                 <div className="mb-4 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-slate-500">
                     <button type="button" onClick={() => goToKey("schedule")} className="hover:text-slate-900 hover:underline underline-offset-2">
                         {daysLabel(draft.days)}, {fmt12(draft.startTime)} to {fmt12(draft.endTime)}
+                        {draft.entryDelayMinutes > 0
+                            ? `, first email after ${entryDelayLabel(draft.entryDelayMinutes).toLowerCase()}`
+                            : ""}
                     </button>
                     <span className="text-slate-300">·</span>
                     <button type="button" onClick={() => goToKey("sending")} className="hover:text-slate-900 hover:underline underline-offset-2">

@@ -49,6 +49,8 @@ export interface CreateCampaignInput {
     esp_match_mode?: 'off' | 'prefer' | 'strict';
     max_new_leads_per_day?: number;
     prioritize_new_leads?: boolean;
+    // Minutes to hold a contact's first email after they enter the campaign.
+    entry_delay_minutes?: number;
     continuous?: boolean;
     tracking_domain?: string;
 

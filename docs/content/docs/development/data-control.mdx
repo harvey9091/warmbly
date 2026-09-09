@@ -20,7 +20,7 @@ Every store's location is one variable in `.env`. Compose reads a source startin
 | Variable | Holds | Default |
 |---|---|---|
 | `WARMBLY_PG_DATA` | Postgres: organizations, users, mailboxes (credentials sealed), contacts, campaigns, the audit trail | `<data root>/postgres` |
-| `WARMBLY_BLOBS` | Message bodies, attachments, avatars and logos | `<data root>/blobs` |
+| `WARMBLY_BLOBS` | Message bodies, attachments, avatars, logos and email body images | `<data root>/blobs` |
 | `WARMBLY_NATS_DATA` | The event bus's JetStream state | `<data root>/nats` |
 | `WARMBLY_REDIS_DATA` | Cache and rate-limit counters. Disposable | `<data root>/redis` |
 | `WARMBLY_WORKER_STATE` | A worker's own id and sync cursors. Disposable | `<data root>/worker` |

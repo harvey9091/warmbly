@@ -236,8 +236,8 @@ func TestLiveContactBulkAddToATeammatesCampaign(t *testing.T) {
 	ctx := context.Background()
 
 	updated, xerr := repo.BulkUpdate(ctx, f.mate.String(), f.org, &models.BulkEditContactsData{
-		Contacts:     []string{f.contact.String()},
-		AddCampaigns: []string{f.campaign.String()},
+		ContactSelection: models.ContactSelection{Contacts: []string{f.contact.String()}},
+		AddCampaigns:     []string{f.campaign.String()},
 	})
 	if xerr != nil {
 		t.Fatalf("bulk update: %v", xerr)

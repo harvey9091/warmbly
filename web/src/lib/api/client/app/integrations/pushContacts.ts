@@ -1,8 +1,8 @@
+import type ContactSelection from "@/lib/api/models/app/contacts/ContactSelection";
 import Request from "../../Request";
 
-export interface PushContactsInput {
+export interface PushContactsInput extends ContactSelection {
     connectionId: string;
-    contact_ids: string[];
 }
 
 export interface PushRecordResult {

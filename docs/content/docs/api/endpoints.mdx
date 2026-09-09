@@ -73,8 +73,13 @@ All paths below are relative to the versioned base URL `https://api.warmbly.com/
 | POST | `/generation/write` | `WRITE_CAMPAIGNS` |
 | POST | `/generation/edit` | `WRITE_CAMPAIGNS` |
 | POST | `/generation/ai-variable` | `WRITE_CAMPAIGNS` |
+| GET | `/email-images` | `READ_CAMPAIGNS` |
+| POST | `/email-images` | `WRITE_CAMPAIGNS` |
+| DELETE | `/email-images/:id` | `WRITE_CAMPAIGNS` |
 
 `GET /campaigns/:id/forms` reports the forms this campaign links to and what its recipients did with them: personalized links handed out, who opened one, who started filling it in and who submitted. See the [forms guide](/guides/forms/).
+
+`/email-images` is the workspace's image library for email bodies. `POST` takes a multipart `file` field (PNG, JPG, GIF or WebP, up to 5 MB) and returns the row with the public `url` you put in an `<img src>`; those bytes count against the same storage quota as campaign attachments. `GET` is keyset-paginated newest first (`?limit=` 1 to 100, `?cursor=` the opaque `pagination.next_cursor`). `DELETE` removes the object before the row and refuses with a `503` if storage will not take the delete, so a failed call changes nothing and can be retried; once it succeeds, an image in mail already sent stops loading.
 
 ### Contacts
 

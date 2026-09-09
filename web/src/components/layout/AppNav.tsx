@@ -65,7 +65,7 @@ import { cn } from "@/lib/utils";
 // limit 1 keeps the payload tiny — we only read pagination.total.
 const CONTACTS_COUNT_SEARCH: SearchContacts = {
     query: "",
-    filters: [],
+    custom_field_filters: [],
     campaign_ids: [],
     sort_by: "created_at",
     reverse: false,

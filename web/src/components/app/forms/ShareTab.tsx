@@ -98,7 +98,7 @@ function PersonalizedLinksCard({ form }: { form: Form }) {
     const search = useSearchContacts({
         options: {
             query: debouncedQuery.trim(),
-            filters: [],
+            custom_field_filters: [],
             campaign_ids: [],
             sort_by: "updated_at",
             reverse: false,

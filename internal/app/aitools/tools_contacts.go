@@ -220,7 +220,7 @@ func (d Deps) bulkEditContacts(ctx context.Context, inv Invocation, args json.Ra
 		return "", ErrInvalidArgs
 	}
 	data := &models.BulkEditContactsData{
-		Contacts:         in.ContactIDs,
+		ContactSelection: models.ContactSelection{Contacts: in.ContactIDs},
 		AddCategories:    in.AddCategories,
 		RemoveCategories: in.RemoveCategories,
 		Subscribe:        in.Subscribe,

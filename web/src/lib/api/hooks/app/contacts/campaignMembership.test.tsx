@@ -62,7 +62,7 @@ function page(data: Contact[]): SearchContactsResult {
 // The Leads tab's search: every contact in this one campaign.
 const leadsOptions: SearchContacts = {
     query: "",
-    filters: [],
+    custom_field_filters: [],
     campaign_ids: [CAMPAIGN.id],
     sort_by: "created_at",
     reverse: false,

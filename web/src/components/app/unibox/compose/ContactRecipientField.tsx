@@ -129,7 +129,7 @@ export default function ContactRecipientField({
     const search = useSearchContacts({
         options: {
             query: debouncedQuery,
-            filters: [],
+            custom_field_filters: [],
             campaign_ids: [],
             category_ids: catFilter ? [catFilter.id] : undefined,
             sort_by: "updated_at",
@@ -166,7 +166,7 @@ export default function ContactRecipientField({
     const browseSearch = useSearchContacts({
         options: {
             query: debouncedBrowseQuery,
-            filters: [],
+            custom_field_filters: [],
             campaign_ids: [],
             category_ids: browseCat ? [browseCat] : undefined,
             sort_by: browseSort,

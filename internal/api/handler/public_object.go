@@ -11,13 +11,15 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/warmbly/warmbly/internal/infrastructure/storage"
+	"github.com/warmbly/warmbly/internal/models"
 )
 
-// ServePublicObject streams a publicly-readable blob (avatar, org logo) from the
-// active storage backend. It exists for the filesystem backend, which has no
-// authority to serve objects itself; the S3 backend returns object-storage URLs
-// from PutPublic and never routes through here. Only the fixed public key
-// prefixes are served so this can't be used to read arbitrary stored objects.
+// ServePublicObject streams a publicly-readable blob (avatar, org logo, form
+// asset, email-body image) from the active storage backend. It exists for the
+// filesystem backend, which has no authority to serve objects itself; the S3
+// backend returns object-storage URLs from PutPublic and never routes through
+// here. Only the fixed public key prefixes are served so this can't be used to
+// read arbitrary stored objects.
 func (h *Handler) ServePublicObject(c *gin.Context) {
 	key := strings.TrimPrefix(c.Param("key"), "/")
 	if key == "" || !isPublicKey(key) {
@@ -43,6 +45,9 @@ func (h *Handler) ServePublicObject(c *gin.Context) {
 	if ct := mime.TypeByExtension(filepath.Ext(key)); ct != "" {
 		c.Header("Content-Type", ct)
 	}
+	// These are user uploads served from our own origin, so the browser must
+	// not be free to decide they are something executable.
+	c.Header("X-Content-Type-Options", "nosniff")
 	// Keys are content-addressed (they carry an epoch suffix), so they're safe
 	// to cache immutably.
 	c.Header("Cache-Control", "public, max-age=31536000, immutable")
@@ -57,5 +62,5 @@ func isPublicKey(key string) bool {
 		return false
 	}
 	return strings.HasPrefix(key, "avatars/") || strings.HasPrefix(key, "oauth-app-logos/") ||
-		strings.HasPrefix(key, "form-assets/")
+		strings.HasPrefix(key, "form-assets/") || strings.HasPrefix(key, models.EmailImageKeyPrefix)
 }

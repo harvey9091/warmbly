@@ -14,6 +14,9 @@ struct CampaignSchedulePage: View {
     @State private var baseline: [[ScheduleInterval]] = Array(repeating: [], count: 7)
     @State private var timezone: String = TimeZone.current.identifier
     @State private var baselineTZ: String = TimeZone.current.identifier
+    /// Minutes a contact's first email waits after they entered the campaign.
+    @State private var entryDelay: Int = 0
+    @State private var baselineEntryDelay: Int = 0
     @State private var seeded = false
     @State private var isSaving = false
     @State private var saveError: String?
@@ -23,7 +26,7 @@ struct CampaignSchedulePage: View {
 
     private var totalWindows: Int { windows.reduce(0) { $0 + $1.count } }
     private var activeDays: Int { windows.filter { !$0.isEmpty }.count }
-    private var dirty: Bool { windows != baseline || timezone != baselineTZ }
+    private var dirty: Bool { windows != baseline || timezone != baselineTZ || entryDelay != baselineEntryDelay }
 
     var body: some View {
         ScrollView {
@@ -43,6 +46,7 @@ struct CampaignSchedulePage: View {
                     )
                     .padding(.horizontal, 12)
                     .padding(.top, 4)
+                entryDelayBar
                 footer
             }
         }
@@ -160,6 +164,63 @@ struct CampaignSchedulePage: View {
         (0..<7).map { $0 < 5 ? [ScheduleInterval(start: start, end: end)] : [] }
     }
 
+    /// The wait before a contact's FIRST email, counted from when they entered
+    /// the campaign. Presets only on mobile; a custom amount is set on the web.
+    private var entryDelayBar: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                EyebrowLabel("Before the first email")
+                Text("Counted from when the contact entered this campaign.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Menu {
+                Picker("Delay", selection: $entryDelay) {
+                    ForEach(entryDelayChoices, id: \.self) { minutes in
+                        Text(CampaignSchedulePage.entryDelayLabel(minutes)).tag(minutes)
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "hourglass")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(CampaignSchedulePage.entryDelayLabel(entryDelay))
+                        .font(.subheadline)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .foregroundStyle(WTheme.accent)
+            }
+            .disabled(!canManage)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 16)
+    }
+
+    /// The presets, with the stored value folded in so a custom delay set on the
+    /// web is shown (and kept) rather than silently snapped to a preset.
+    private var entryDelayChoices: [Int] {
+        var list = [0, 60, 240, 1440, 2880, 4320, 10080]
+        if !list.contains(entryDelay) { list.append(entryDelay) }
+        return list.sorted()
+    }
+
+    static func entryDelayLabel(_ minutes: Int) -> String {
+        if minutes <= 0 { return "Immediately" }
+        if minutes % 1440 == 0 {
+            let days = minutes / 1440
+            if days == 7 { return "1 week" }
+            return "\(days) day\(days == 1 ? "" : "s")"
+        }
+        if minutes % 60 == 0 {
+            let hours = minutes / 60
+            return "\(hours) hour\(hours == 1 ? "" : "s")"
+        }
+        return "\(minutes) minute\(minutes == 1 ? "" : "s")"
+    }
+
     private var footer: some View {
         Text("Each day is independent — tap an empty stretch to add a window there (several a day is fine, e.g. morning and afternoon), drag a bar to move it, tap it to set exact times. Drag two bars together and they merge into one. In \(CampaignSchedulePage.cityName(timezone)) time; run dates are set on the web.")
             .font(.caption)
@@ -182,6 +243,8 @@ struct CampaignSchedulePage: View {
             timezone = tz
             baselineTZ = tz
         }
+        entryDelay = campaign.entryDelayMinutes ?? 0
+        baselineEntryDelay = entryDelay
     }
 
     private func save() async {
@@ -189,13 +252,15 @@ struct CampaignSchedulePage: View {
         defer { isSaving = false }
         let wire = Campaign.wireWindows(fromDisplay: windows)
         let tz = timezone
+        let delay = entryDelay
         let previous = store.campaign
         await store.update(
             env.api,
-            body: CampaignUpdateBody(timezone: tz, scheduleWindows: wire)
+            body: CampaignUpdateBody(timezone: tz, scheduleWindows: wire, entryDelayMinutes: delay)
         ) {
             $0.timezone = tz
             $0.scheduleWindows = wire.map { Optional($0) }
+            $0.entryDelayMinutes = delay
         }
         if store.actionError != nil {
             saveError = store.actionError
@@ -203,6 +268,7 @@ struct CampaignSchedulePage: View {
         } else if store.campaign.updatedAt != previous.updatedAt || store.campaign.timezone == tz {
             baseline = windows
             baselineTZ = tz
+            baselineEntryDelay = delay
         }
     }
 

@@ -1,13 +1,14 @@
 import deleteContacts from "@/lib/api/client/app/contacts/deleteContacts";
+import type ContactSelection from "@/lib/api/models/app/contacts/ContactSelection";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 export default function useDeleteContacts() {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: (contact_ids: string[]) => deleteContacts(contact_ids),
-        onSuccess: (_, contact_ids) => {
-            contact_ids.forEach(id => {
+        mutationFn: (selection: ContactSelection) => deleteContacts(selection),
+        onSuccess: (_, selection) => {
+            selection.contacts.forEach(id => {
                 queryClient.invalidateQueries({
                     queryKey: ["contacts", id]
                 });

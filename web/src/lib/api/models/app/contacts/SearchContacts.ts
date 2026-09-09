@@ -4,7 +4,7 @@ import type { LeadEngagement, LeadStatus, VerificationStatus } from "./Contact";
 
 export default interface SearchContacts {
     query: string;
-    filters: SearchContactsFilter[];
+    custom_field_filters: SearchContactsFilter[];
     campaign_ids: string[];
     // Campaign Leads view only (exactly one campaign_id): narrow to one derived
     // lead status and/or one engagement bucket. The server ANDs the two.

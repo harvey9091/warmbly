@@ -38,6 +38,7 @@ import {
     SplitIcon,
     TagIcon,
     LayersIcon,
+    LogInIcon,
     TagsIcon,
     Trash2Icon,
     UnlinkIcon,
@@ -94,6 +95,8 @@ import { SelectMenu, type SelectOption } from "@/components/ui/select-menu";
 import { PopoverMenu, PopoverMenuContent, PopoverMenuTrigger } from "@/components/ui/popover-menu";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
+import EntryDelayPicker from "@/components/app/campaigns/schedule/EntryDelay";
+import { entryDelayLabel } from "@/components/app/campaigns/schedule/entryDelay";
 import StepEmailArms from "./StepEmailArms";
 import CategoryPicker from "@/components/app/contacts/CategoryPicker";
 import { SegmentMultiPicker } from "@/components/app/segments/SegmentPickers";
@@ -110,6 +113,9 @@ import DealStagePicker from "@/components/app/crm/DealStagePicker";
 const DEAL_NAME_VARIABLES = ["{{.FirstName}}", "{{.LastName}}", "{{.Company}}", "{{.Email}}"];
 
 const STOP_ID = "__stop__";
+// The trigger card at the top of the flow. It is synthetic: no `sequences` row
+// backs it, and what it edits is the CAMPAIGN's entry delay, not a step.
+const ENTRY_ID = "__entry__";
 const IF_PREFIX = "if-";
 const NODE_W = 248;
 const NODE_H = 92;
@@ -429,6 +435,101 @@ function IfNode({ data, selected }: NodeProps) {
     );
 }
 
+// TriggerNode — where every contact enters the flow, and the one place on the
+// canvas that shows (and sets) how long their FIRST email waits after they
+// entered. It edits campaigns.entry_delay_minutes, the same value the Schedule
+// tab writes, so the two can never disagree. Self-contained on purpose: it reads
+// the campaign itself rather than taking the delay through node data, which keeps
+// the layout effect from re-running on every save.
+function TriggerNode({ data }: NodeProps) {
+    const { campaignId } = data as { campaignId: string };
+    const { data: campaign } = useCampaign(campaignId);
+    const updateCampaign = useUpdateCampaign(campaignId);
+    const canEdit = usePermission("MANAGE_CAMPAIGNS");
+    const qc = useQueryClient();
+    const minutes = campaign?.entry_delay_minutes ?? 0;
+
+    // Commits are chained rather than fired in parallel: two clicks inside one
+    // request round-trip would otherwise race, and the PATCH has no revision
+    // check, so the older response could land last and win.
+    const inFlight = React.useRef<Promise<unknown>>(Promise.resolve());
+    const save = (next: number) => {
+        if (next === minutes) return;
+        qc.setQueryData(["campaigns", campaignId], (old: unknown) =>
+            old ? { ...(old as object), entry_delay_minutes: next } : old,
+        );
+        inFlight.current = inFlight.current
+            .catch(() => {})
+            .then(() => updateCampaign.mutateAsync({ entry_delay_minutes: next }))
+            .catch(async (err) => {
+                toast.error(buildError(err as AppError));
+                // Put the optimistic value back where the server left it, so a
+                // refused save does not leave the card claiming a delay it never
+                // got. Awaited so the recovery refetch stays INSIDE the chain: a
+                // detached one could land after the next commit's optimistic
+                // write and put the stale value back on the card.
+                await qc.invalidateQueries({ queryKey: ["campaigns", campaignId] });
+            });
+    };
+
+    return (
+        <div className="w-[248px] rounded-xl border border-violet-200 bg-white shadow-sm">
+            <div className="flex items-center gap-2 rounded-t-xl border-b border-violet-200/70 bg-gradient-to-r from-violet-50/80 to-white px-2.5 py-1.5">
+                <span className="inline-flex size-5 shrink-0 items-center justify-center rounded-md bg-violet-100 text-violet-600 ring-1 ring-violet-200/70">
+                    <LogInIcon className="w-3 h-3" />
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-slate-800">
+                    Contact enters
+                </span>
+                <span className="shrink-0 rounded bg-violet-600 px-1.5 py-px text-[9px] font-semibold uppercase tracking-[0.12em] text-white">
+                    Trigger
+                </span>
+            </div>
+            <div className="px-2.5 py-2">
+                <div className="text-[9.5px] font-semibold uppercase tracking-[0.12em] text-slate-300">
+                    Send the first email
+                </div>
+                <PopoverMenu>
+                    <PopoverMenuTrigger asChild>
+                        <button
+                            type="button"
+                            title="How long to wait before this contact's first email"
+                            className="nodrag mt-0.5 inline-flex h-6 items-center gap-1 rounded-md border border-slate-200 px-1.5 text-[11.5px] text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900"
+                        >
+                            <ClockIcon className="w-3 h-3 text-slate-400" />
+                            {minutes > 0 ? `after ${entryDelayLabel(minutes).toLowerCase()}` : "immediately"}
+                            <ChevronDownIcon className="w-3 h-3 text-slate-400" />
+                        </button>
+                    </PopoverMenuTrigger>
+                    <PopoverMenuContent minWidth={280} className="p-2.5">
+                        <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.14em] text-slate-400">
+                            Wait before the first email
+                        </div>
+                        {/* The popover is portaled to <body> but is still a React
+                            child of this node, so its clicks would otherwise bubble
+                            up the React tree into the canvas's node handler. */}
+                        <div onClick={(e) => e.stopPropagation()}>
+                            {/* onCommit, not onChange: this saves at once, so a
+                                typed custom amount must land on blur / Enter
+                                rather than once per keystroke. */}
+                            <EntryDelayPicker value={minutes} onCommit={save} disabled={!canEdit} />
+                        </div>
+                        <p className="mt-2 text-[11px] leading-snug text-slate-400">
+                            Counted from when the contact entered this campaign.
+                        </p>
+                    </PopoverMenuContent>
+                </PopoverMenu>
+            </div>
+            <Handle
+                type="source"
+                position={Position.Bottom}
+                isConnectable={false}
+                className="!h-2 !w-2 !border-2 !border-white !bg-violet-300"
+            />
+        </div>
+    );
+}
+
 function StopNode() {
     return (
         <div className="inline-flex items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-3 py-1.5 text-[11.5px] font-medium text-rose-600">
@@ -720,7 +821,7 @@ function SwitchNode({ id, data, selected }: NodeProps) {
     );
 }
 
-const nodeTypes = { step: StepNode, ifcond: IfNode, stop: StopNode, action: ActionNode, condition: ConditionNode, switch: SwitchNode };
+const nodeTypes = { step: StepNode, ifcond: IfNode, stop: StopNode, action: ActionNode, condition: ConditionNode, switch: SwitchNode, trigger: TriggerNode };
 
 // Convergent edge.
 // Several branches can route to the same next step (many in -> one node). They
@@ -898,7 +999,7 @@ export default function CampaignFlow({ campaignId }: { campaignId: string }) {
     // no updated_at bump.
     const persistLayout = React.useCallback(() => {
         const positions = nodesRef.current
-            .filter((n) => !isIfId(n.id) && n.id !== STOP_ID)
+            .filter((n) => !isIfId(n.id) && n.id !== STOP_ID && n.id !== ENTRY_ID)
             .map((n) => ({ id: n.id, x: Math.round(n.position.x), y: Math.round(n.position.y) }));
         if (positions.length) void updateSequenceLayout(campaignId, positions);
     }, [campaignId]);
@@ -1573,6 +1674,31 @@ export default function CampaignFlow({ campaignId }: { campaignId: string }) {
         });
         ifMetaRef.current = ifMeta;
 
+        // The trigger card: where contacts enter the flow, carrying the
+        // campaign's entry delay. Synthetic (no sequences row), so it is skipped
+        // by layout persistence, selection and click-to-edit, and it cannot be
+        // dragged, deleted or connected from.
+        if (sequences[0]) {
+            allNodes.push({
+                id: ENTRY_ID,
+                type: "trigger",
+                position: { x: 0, y: 0 },
+                data: { campaignId },
+                draggable: false,
+                selectable: false,
+                deletable: false,
+                connectable: false,
+            });
+            flowEdges.push({
+                id: "entry-edge",
+                source: ENTRY_ID,
+                target: sequences[0].id,
+                deletable: false,
+                reconnectable: false,
+                style: { stroke: "#c4b5fd", strokeWidth: 2 },
+            });
+        }
+
         // Show STOP only when an edge actually routes there (a deliberate
         // "otherwise → end"), never for a condition whose THEN is still open.
         const anyStop = flowEdges.some((e) => e.target === STOP_ID);
@@ -1639,6 +1765,12 @@ export default function CampaignFlow({ campaignId }: { campaignId: string }) {
             const laidPos = new Map(laid.map((n) => [n.id, n.position]));
             return laid.map((n) => {
                 if (pos.has(n.id)) return { ...n, position: pos.get(n.id)! };
+                // The trigger card has no saved position and nothing routes into
+                // it, so hang it directly above the entry step wherever that sits.
+                if (n.id === ENTRY_ID) {
+                    const first = sequences[0] ? pos.get(sequences[0].id) : undefined;
+                    if (first) return { ...n, position: { x: first.x, y: first.y - 170 } };
+                }
                 const inc = sourceOf.get(n.id);
                 const srcPos = inc ? pos.get(inc.source) : undefined;
                 if (srcPos) {
@@ -1655,7 +1787,7 @@ export default function CampaignFlow({ campaignId }: { campaignId: string }) {
             });
         });
         setEdges(smoothEdges);
-    }, [sequences, seqById, setNodes, setEdges]);
+    }, [sequences, seqById, campaignId, setNodes, setEdges]);
 
     // Subtree highlight: select a step/if → light up what's reachable, dim rest.
     React.useEffect(() => {
@@ -1670,7 +1802,7 @@ export default function CampaignFlow({ campaignId }: { campaignId: string }) {
         const hl = root ? reachableFrom(root) : null;
         const stepIn = (id: string) => {
             if (!hl) return true;
-            if (id === STOP_ID) return true;
+            if (id === STOP_ID || id === ENTRY_ID) return true;
             if (isIfId(id)) {
                 const m = ifMetaRef.current[id];
                 return m ? hl.has(m.sourceId) : true;
@@ -1888,7 +2020,7 @@ export default function CampaignFlow({ campaignId }: { campaignId: string }) {
                     if (node.type === "ifcond") {
                         const m = ifMetaRef.current[node.id];
                         if (m) openCondition(m.sourceId, m.branchId);
-                    } else if (node.id !== STOP_ID) {
+                    } else if (node.id !== STOP_ID && node.id !== ENTRY_ID) {
                         openEditStep(node.id);
                     }
                 }}

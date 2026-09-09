@@ -219,8 +219,8 @@ type SegmentPreview struct {
 
 // SegmentMembersWrite sets a manual override on a batch of contacts.
 type SegmentMembersWrite struct {
-	Contacts []string          `json:"contacts"`
-	Mode     SegmentMemberMode `json:"mode"`
+	ContactSelection
+	Mode SegmentMemberMode `json:"mode"`
 }
 
 // SegmentAddToCampaign enrols the segment's current members as leads.

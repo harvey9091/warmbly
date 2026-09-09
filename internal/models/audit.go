@@ -72,17 +72,21 @@ const (
 	AuditEntityOrganizationMember AuditEntityType = "organization_member"
 	AuditEntityInvitation         AuditEntityType = "invitation"
 	AuditEntityTemplate           AuditEntityType = "template"
-	AuditEntityWebhook            AuditEntityType = "webhook"
-	AuditEntityIntegration        AuditEntityType = "integration"
-	AuditEntityWarmupRoutingRule  AuditEntityType = "warmup_routing_rule"
-	AuditEntityFolder             AuditEntityType = "folder"
-	AuditEntityTag                AuditEntityType = "tag"
-	AuditEntityCategory           AuditEntityType = "category"
-	AuditEntitySegment            AuditEntityType = "segment"
-	AuditEntityForm               AuditEntityType = "form"
-	AuditEntitySubscription       AuditEntityType = "subscription"
-	AuditEntitySettings           AuditEntityType = "settings"
-	AuditEntitySuppression        AuditEntityType = "suppression"
+	// AuditEntityEmailImage is one image in the workspace's library for email
+	// bodies. Audited so a teammate's upload or removal reaches every open
+	// composer through the spine.
+	AuditEntityEmailImage        AuditEntityType = "email_image"
+	AuditEntityWebhook           AuditEntityType = "webhook"
+	AuditEntityIntegration       AuditEntityType = "integration"
+	AuditEntityWarmupRoutingRule AuditEntityType = "warmup_routing_rule"
+	AuditEntityFolder            AuditEntityType = "folder"
+	AuditEntityTag               AuditEntityType = "tag"
+	AuditEntityCategory          AuditEntityType = "category"
+	AuditEntitySegment           AuditEntityType = "segment"
+	AuditEntityForm              AuditEntityType = "form"
+	AuditEntitySubscription      AuditEntityType = "subscription"
+	AuditEntitySettings          AuditEntityType = "settings"
+	AuditEntitySuppression       AuditEntityType = "suppression"
 
 	// CRM entities
 	AuditEntityCRMPipeline AuditEntityType = "crm_pipeline"

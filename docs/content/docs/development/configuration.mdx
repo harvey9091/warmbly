@@ -250,9 +250,9 @@ An empty `CREDENTIALS_ENCRYPTION_KEY` does not fail at boot. It disables sealing
 | Variable | What it does | Default | Restart needed |
 |---|---|---|---|
 | `BLOB_PROVIDER` | `filesystem` or `s3` | `filesystem` under compose, `s3` for a bare binary | yes |
-| `BLOB_FS_ROOT` | Directory for stored bodies, attachments and avatars. The backend, the consumer and every worker on the host must share it | `/data/blobs` | yes |
+| `BLOB_FS_ROOT` | Directory for stored bodies, attachments, avatars and email body images. The backend, the consumer and every worker on the host must share it | `/data/blobs` | yes |
 | `BLOB_BUCKET` | Bucket name when `BLOB_PROVIDER=s3` | unset | yes |
-| `BLOB_PUBLIC_BASE_URL` | Public base for the backend's `/public` route | derived | yes |
+| `BLOB_PUBLIC_BASE_URL` | Public base for the backend's `/public` route. Images placed in an email body are served from here, so it has to be an address a recipient's mail client can reach | derived | yes |
 | `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Credentials for S3 or SES | unset | yes |
 | `AWS_ENDPOINT_URL_S3` | Non-AWS S3 endpoint (MinIO, R2, B2) | unset | yes |
 | `AWS_CONFIG_ENABLED` | `true` reads secrets from AWS SSM or Secrets Manager | `false` | yes |

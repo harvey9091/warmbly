@@ -505,7 +505,8 @@ Auth: **Scope** `INTEGRATIONS` · **Org permission** `use_integrations`.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `contact_ids` | string[] | Yes | Contact ids to push. Deduplicated server-side. At least 1, at most 500. |
+| `contact_ids` | string[] | Yes, unless `all` | Contact ids to push. Deduplicated server-side. At least 1, at most 500. |
+| `all`, `filters`, `exclude` | — | No | A [filter selection](/api/reference/contacts/#selecting-contacts-for-a-bulk-action) instead of a list. It still has to resolve to 500 contacts or fewer: the push calls the CRM once per contact inside the request. |
 
 ```json
 {

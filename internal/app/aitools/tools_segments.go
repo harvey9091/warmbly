@@ -370,8 +370,8 @@ func (d Deps) setSegmentMembers(ctx context.Context, inv Invocation, args json.R
 		return "", ErrInvalidArgs
 	}
 	n, xerr := d.Segments.SetMembers(ctx, inv.OrgID, id, &models.SegmentMembersWrite{
-		Contacts: in.Contacts,
-		Mode:     mode,
+		ContactSelection: models.ContactSelection{Contacts: in.Contacts},
+		Mode:             mode,
 	})
 	if xerr != nil {
 		return "", fromErrx(xerr)

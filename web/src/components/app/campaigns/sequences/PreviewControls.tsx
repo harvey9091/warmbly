@@ -45,7 +45,7 @@ export function PreviewContactPicker({
     const search = useSearchContacts({
         options: {
             query: debounced,
-            filters: [],
+            custom_field_filters: [],
             campaign_ids: searching ? [] : [campaignId],
             sort_by: "updated_at",
             reverse: false,

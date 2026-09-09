@@ -326,18 +326,33 @@ func (w *WMail) imapApply(ctx context.Context, fetched []*imap.Fetched, backfill
 	return all, nil
 }
 
+// threadParentID is the message this one answers, and the key its thread is
+// built on. Only In-Reply-To carries that.
+//
+// Reply-To must not be used here. It is an address header -- "send replies to
+// this mailbox" -- not a message identifier, so keying a thread on it puts
+// every message a sender ever sent into one strand. On a production instance
+// that collapsed 484 of 1431 stored messages into 62 threads: 76 unrelated
+// DMARC aggregate reports from one reporter arrived as a single 76-message
+// conversation, and a mailbox's own test sends and live outreach merged
+// together.
+//
+// A message that answers nothing has no parent, and the caller roots its
+// thread on its own Message-ID.
+func threadParentID(msg *models.EmailMessageData) string {
+	if msg == nil || len(msg.InReplyTo) == 0 {
+		return ""
+	}
+	return msg.InReplyTo[len(msg.InReplyTo)-1]
+}
+
 // imapStore threads a new message and hands it to storeNew.
 func (w *WMail) imapStore(ctx context.Context, msg *models.EmailMessageData) error {
 	msg.ID = uuid.New()
 	now := time.Now()
 
 	var threadID string
-	var parentID string
-	if len(msg.InReplyTo) > 0 {
-		parentID = msg.InReplyTo[len(msg.InReplyTo)-1]
-	} else if len(msg.ReplyTo) > 0 {
-		parentID = msg.ReplyTo[len(msg.ReplyTo)-1]
-	}
+	parentID := threadParentID(msg)
 
 	if parentID != "" {
 		internalParent, _ := w.EmailMessageMapRepository.Get(ctx, w.UserID, w.ID, parentID)

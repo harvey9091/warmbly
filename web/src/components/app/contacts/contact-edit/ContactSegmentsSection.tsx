@@ -12,6 +12,7 @@ import type { ContactSegment, SegmentMemberMode } from "@/lib/api/models/app/seg
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
 import { cn } from "@/lib/utils";
+import { selectionOf } from "@/lib/api/models/app/contacts/ContactSelection";
 
 export function ContactSegmentsSection({ contactId }: { contactId: string }) {
     const segments = useContactSegments(contactId);
@@ -23,7 +24,7 @@ export function ContactSegmentsSection({ contactId }: { contactId: string }) {
         if (set.isPending) return;
         setBusyId(seg.id);
         try {
-            await set.mutateAsync({ id: seg.id, contacts: [contactId], mode });
+            await set.mutateAsync({ id: seg.id, selection: selectionOf(contactId), mode });
             toast.success(
                 mode === "include" ? `Pinned into ${seg.name}` : mode === "exclude" ? `Pinned out of ${seg.name}` : `${seg.name} is automatic again`,
             );

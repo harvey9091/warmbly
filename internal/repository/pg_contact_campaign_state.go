@@ -137,7 +137,12 @@ func (r *contactRepository) ListCampaignStates(ctx context.Context, orgID, conta
 func (r *contactRepository) campaignStepsForContact(ctx context.Context, campaignID, contactID uuid.UUID) ([]models.ContactCampaignStep, string, *errx.Error) {
 	stepQuery := `
 		SELECT s.id, s.name, s.subject, s.kind, s.action, s.position,
-		       p.sent_at, p.opened_at, p.clicked_at, p.replied_at, p.bounced_at, p.failed_at,
+		       p.sent_at,
+		       -- A person's open, as in the Leads list this mirrors: a client
+		       -- prefetch or a gateway scan must not read as the recipient
+		       -- having opened the step.
+		       CASE WHEN p.opened_machine THEN NULL ELSE p.opened_at END,
+		       p.clicked_at, p.replied_at, p.bounced_at, p.failed_at,
 		       COALESCE(p.send_attempts, 0), p.dispatched_at, COALESCE(p.failure_reason, '')
 		FROM sequences s
 		LEFT JOIN campaign_contact_progress p

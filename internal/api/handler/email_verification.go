@@ -90,10 +90,14 @@ func (h *Handler) RequestContactVerification(c *gin.Context) {
 		errx.JSON(c, errx.ErrInvalid)
 		return
 	}
-	if len(req.Contacts) > maxBulkOperationSize {
-		errx.JSON(c, errx.NewWithIdentifier(errx.BadRequest, "too_many_contacts",
-			"too many contacts, maximum is "+itoa(maxBulkOperationSize)+" per request"))
-		return
+	// A campaign-scoped re-verify carries no ids of its own, so only resolve a
+	// selection that actually names contacts.
+	if req.All || len(req.Contacts) > 0 {
+		ids, ok := h.resolveContactSelection(c, orgID, req.ContactSelection)
+		if !ok {
+			return
+		}
+		req.ContactSelection = models.ContactSelection{Contacts: ids}
 	}
 	resp, xerr := h.EmailVerifyService.Request(c.Request.Context(), orgID, req)
 	if xerr != nil {

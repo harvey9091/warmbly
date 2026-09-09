@@ -157,7 +157,7 @@ func (s *service) ImportFrom(
 	}
 
 	report(93, "restoring attachments")
-	if warn := s.restoreBlobs(ctx, entries, manifest); len(warn) > 0 {
+	if warn := s.restoreBlobs(ctx, tx, orgID, entries, manifest); len(warn) > 0 {
 		result.Warnings = append(result.Warnings, warn...)
 	}
 
@@ -651,7 +651,7 @@ func (s *service) buildUserMap(ctx context.Context, m *Manifest, actor uuid.UUID
 
 // restoreBlobs writes the archive's objects back into this instance's storage
 // under their original keys, so the rows that reference them resolve.
-func (s *service) restoreBlobs(ctx context.Context, entries map[string]*zip.File, m *Manifest) []string {
+func (s *service) restoreBlobs(ctx context.Context, tx pgx.Tx, orgID uuid.UUID, entries map[string]*zip.File, m *Manifest) []string {
 	if len(m.Blobs) == 0 {
 		return nil
 	}
@@ -661,6 +661,7 @@ func (s *service) restoreBlobs(ctx context.Context, entries map[string]*zip.File
 	}
 
 	var failed int
+	var imageKeys, imageURLs []string
 	for _, b := range m.Blobs {
 		entry, ok := entries[b.Path]
 		if !ok {
@@ -672,16 +673,42 @@ func (s *service) restoreBlobs(ctx context.Context, entries map[string]*zip.File
 			failed++
 			continue
 		}
-		err = s.blobs.Put(ctx, b.Key, rc, "")
+		// A key under a public prefix has to be written public-read again, or
+		// the avatars, form assets and email-body images that reference it by
+		// URL resolve to a 403 on an S3 backend after the move.
+		if isPublicBlobKey(b.Key) {
+			var url string
+			url, err = s.blobs.PutPublic(ctx, b.Key, rc, "")
+			if err == nil && url != "" && strings.HasPrefix(b.Key, models.EmailImageKeyPrefix) {
+				imageKeys = append(imageKeys, b.Key)
+				imageURLs = append(imageURLs, url)
+			}
+		} else {
+			err = s.blobs.Put(ctx, b.Key, rc, "")
+		}
 		_ = rc.Close()
 		if err != nil {
 			failed++
 		}
 	}
-	if failed > 0 {
-		return []string{fmt.Sprintf("%d attachment(s) could not be restored to object storage.", failed)}
+
+	warnings := make([]string, 0, 2)
+	// An imported image row still carries the URL the source instance served
+	// it from, so a body composed here would point every recipient at the old
+	// host. The bytes now live here, so the row is repointed at this one.
+	if len(imageKeys) > 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE email_images SET url = fresh.url
+			FROM (SELECT unnest($2::text[]) AS storage_key, unnest($3::text[]) AS url) AS fresh
+			WHERE email_images.organization_id = $1 AND email_images.storage_key = fresh.storage_key
+		`, orgID, imageKeys, imageURLs); err != nil {
+			warnings = append(warnings, "Email images were restored but still name the instance they came from; re-upload them if that host goes away.")
+		}
 	}
-	return nil
+	if failed > 0 {
+		warnings = append(warnings, fmt.Sprintf("%d attachment(s) could not be restored to object storage.", failed))
+	}
+	return warnings
 }
 
 // resolveArchiveKey derives the archive key when the archive has secrets and a

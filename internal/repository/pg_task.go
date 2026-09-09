@@ -145,6 +145,10 @@ type TaskRepository interface {
 	DirectPendingWarmupTask(ctx context.Context, accountID, targetAccountID uuid.UUID, at time.Time) (bool, error)
 	UpdateTaskStatusWithLock(ctx context.Context, taskID uuid.UUID, status string) error
 	UpdateTaskMessageID(ctx context.Context, taskID uuid.UUID, messageID string) error
+	// UpdateTaskEmailAccount repoints a task at the mailbox it is actually
+	// sending from. A campaign task is created before its mailbox is known, so
+	// the send path stamps the rotation's real pick before dispatching.
+	UpdateTaskEmailAccount(ctx context.Context, taskID, accountID uuid.UUID) error
 
 	// Update campaign task with contact/sequence IDs (for tracking)
 	UpdateCampaignTaskTracking(ctx context.Context, taskID, contactID, sequenceID uuid.UUID) error
@@ -915,6 +919,20 @@ func (r *taskRepository) UpdateTaskMessageID(ctx context.Context, taskID uuid.UU
 	_, err := r.db.Exec(ctx,
 		`UPDATE tasks SET message_id = $1, updated_at = NOW() WHERE id = $2`,
 		messageID, taskID)
+	return err
+}
+
+// UpdateTaskEmailAccount records the mailbox a task is sending from. A campaign
+// chain creates its successor before rotation has chosen a mailbox for it, so
+// the row is seeded with the previous tick's pick and corrected here. Everything
+// that attributes a send to a mailbox reads tasks.email_account_id — the daily
+// budget, the min-gap clock, rotation's last-send fallback, bounce and complaint
+// rates, the contact's activity feed — so a stale value charges one mailbox for
+// another's mail (issue #392).
+func (r *taskRepository) UpdateTaskEmailAccount(ctx context.Context, taskID, accountID uuid.UUID) error {
+	_, err := r.db.Exec(ctx,
+		`UPDATE tasks SET email_account_id = $1, updated_at = NOW() WHERE id = $2`,
+		accountID, taskID)
 	return err
 }
 

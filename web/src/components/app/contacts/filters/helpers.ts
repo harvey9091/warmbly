@@ -10,7 +10,7 @@ export function isCompleteCustomFilter(f: SearchContactsFilter): boolean {
 
 export function countActiveFilters(f: SearchContacts, campaignContext: boolean): number {
     let n = 0;
-    n += f.filters.filter(isCompleteCustomFilter).length;
+    n += f.custom_field_filters.filter(isCompleteCustomFilter).length;
     if (f.category_ids?.length) n++;
     if (f.segment_ids?.length) n++;
     if (!campaignContext && f.campaign_ids.length > 0) n++;
@@ -31,7 +31,7 @@ export function hasNarrowingFilters(f: SearchContacts, base?: SearchContacts): b
     const same = (a?: string[], b?: string[]) => (a ?? []).join(",") === (b ?? []).join(",");
     return (
         !!f.query ||
-        f.filters.some(isCompleteCustomFilter) ||
+        f.custom_field_filters.some(isCompleteCustomFilter) ||
         !same(f.campaign_ids, base?.campaign_ids) ||
         !same(f.segment_ids, base?.segment_ids) ||
         (f.category_ids?.length ?? 0) > 0 ||
@@ -52,7 +52,7 @@ export function hasNarrowingFilters(f: SearchContacts, base?: SearchContacts): b
 export function scopeSearch(scope: { campaignId?: string; segmentId?: string }): SearchContacts {
     return {
         query: "",
-        filters: [],
+        custom_field_filters: [],
         campaign_ids: scope.campaignId ? [scope.campaignId] : [],
         segment_ids: scope.segmentId ? [scope.segmentId] : undefined,
         sort_by: "created_at",

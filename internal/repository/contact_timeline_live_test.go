@@ -126,9 +126,9 @@ func TestLiveContactTimelineLifecycleEvents(t *testing.T) {
 
 	// Bulk edit: the other direction for both link kinds.
 	if _, xerr := repo.BulkUpdate(ctx, f.owner.String(), f.org, &models.BulkEditContactsData{
-		Contacts:        []string{id.String()},
-		RemoveCampaigns: []string{f.other.String()},
-		AddCategories:   []string{category.String()},
+		ContactSelection: models.ContactSelection{Contacts: []string{id.String()}},
+		RemoveCampaigns:  []string{f.other.String()},
+		AddCategories:    []string{category.String()},
 	}); xerr != nil {
 		t.Fatalf("bulk update: %v", xerr)
 	}
@@ -141,7 +141,7 @@ func TestLiveContactTimelineLifecycleEvents(t *testing.T) {
 	}
 	// A no-op bulk edit (already linked) writes nothing.
 	if _, xerr := repo.BulkUpdate(ctx, f.owner.String(), f.org, &models.BulkEditContactsData{
-		Contacts: []string{id.String()}, AddCategories: []string{category.String()},
+		ContactSelection: models.ContactSelection{Contacts: []string{id.String()}}, AddCategories: []string{category.String()},
 	}); xerr != nil {
 		t.Fatalf("bulk no-op: %v", xerr)
 	}
