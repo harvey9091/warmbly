@@ -90,7 +90,7 @@ From then on, every lifecycle operation (restart, update image, uninstall, rotat
 
 ### Why per-VPS instead of a Kubernetes DaemonSet
 
-A k8s `DaemonSet` was the previous shape. It was removed because k8s nodes typically NAT all pods through a small set of egress IPs, defeating the IP-diversity goal. Pods churn but IPs accumulate reputation, so the unit of identity needs to be the IP, not the pod. The worker also has no Postgres dependency, so cluster-level service discovery and RBAC buy us nothing.
+A k8s `DaemonSet` was the previous shape. It was removed because k8s nodes typically NAT all pods through a small set of egress IPs, and pods churn while IPs do not. What a mailbox provider remembers is the address an account signs in from, so the unit of identity has to be the IP, not the pod: a mailbox whose client address changes every deploy collects sign-in risk challenges for no reason. The worker also has no Postgres dependency, so cluster-level service discovery and RBAC buy us nothing.
 
 ### Identity from IP
 
@@ -99,6 +99,46 @@ Worker UUID is `UUIDv5(URL_namespace, public_ipv4)`. Properties:
 - same IP → same worker (reputation persists across reinstalls)
 - new IP → new worker (fresh identity, no inherited history)
 - deterministic, no state needed at the control plane to recover it
+
+## Worker placement
+
+There is one kind of worker. You install it, it heartbeats, and the control plane decides what runs on it. Workers carry no tier, type, risk pool or egress category, and nothing about a mailbox has to match anything about a machine.
+
+That follows from where the sending identity actually lives. A worker never talks to a recipient's MX. It authenticates to the customer's own mailbox provider (Gmail, Microsoft Graph, or a customer SMTP host) and that provider delivers the message from its own outbound pool. Two consequences shape the whole model:
+
+- **The worker's IP is invisible to recipient spam filtering.** Google strips the submitting client's IP from outgoing messages and Microsoft dropped `X-Originating-IP` years ago. So co-locating a spam-prone mailbox next to a healthy one cannot contaminate the healthy one's sending reputation, and segregating workers by customer tier buys nothing.
+- **The worker's IP is very visible to the mailbox provider.** It is what drives sign-in risk challenges, per-IP authentication throttles (`454 4.7.0`) and per-IP rate limits (`421 4.7.28`).
+
+So the levers invert: IP *stability* per mailbox beats IP diversity, and a migration is a cost rather than a win.
+
+### Choosing a worker
+
+Placement scores every live worker and takes the best (`internal/app/worker/placement.go`). Hard constraints are only about whether the work can be done at all: the worker has to be heartbeating, in `healthy` or `watch`, and have capacity headroom for the mailbox's weight. Everything else is a preference:
+
+| Term | Why |
+|---|---|
+| Capacity headroom | Fill the fleet evenly |
+| Incumbency | Staying put keeps one client IP in front of the provider. Weighted highest |
+| Region match | Sign-ins from where the provider expects them raise fewer challenges |
+| Tenant blast radius | Spread one customer across workers so a single failure does not stop their sending |
+| Provider crowding | Many accounts of one provider signing in from one address is what earns a per-IP throttle |
+| Foreign tenants | Only for organizations entitled to isolated egress |
+
+Capacity is one number for every worker, in cold-mailbox equivalents, because each mailbox already declares its own cost: an `smtp_imap` mailbox weighs `1.0`, a Gmail or Outlook API mailbox `0.05`, and a warmup-only assignment `0.4`.
+
+### Moving a mailbox
+
+Rotation (`internal/app/worker/rotation.go`) is deliberately reluctant, and a fleet where nothing moves is a healthy one. Only mailboxes whose worker is dead, degraded, over capacity, or on the wrong side of an isolated-egress reservation are considered at all:
+
+| Urgency | Trigger | Residency floor | Destination bar |
+|---|---|---|---|
+| Immediate | Worker inactive, not heartbeating, blocked or quarantined | none | anything eligible |
+| Elevated | Worker throttled | 6 hours | anything eligible |
+| Opportunistic | Worker over 85% utilization, or isolated-egress drift | 72 hours | must score materially better |
+
+### Isolated egress
+
+Plans that reserve egress bind an organization to a worker (`dedicated_worker_assignments`). It is a strong placement preference, not a pin: the worker carries no marking, so if it dies the organization's mailboxes place normally instead of stranding, and the rotation loop pulls them onto a replacement once one exists. Mailboxes belonging to other tenants drift off a reserved worker on the same loop.
 
 ## Credentials and profiles
 
@@ -141,7 +181,7 @@ Cold-email throughput is mailbox-first, not worker-first. A worker's safe outbou
 - default warmup ceiling per mailbox: 40/day
 - default warmup ramp: +1/day
 
-Pool model: warmup traffic is segregated into `free` and `premium` pools (the `warmup_pools` tables in `internal/infrastructure/db/migrations/000001_baseline.up.sql`). Dedicated-worker customers still pick a pool explicitly; tier and pool are orthogonal.
+Pool model: warmup traffic is segregated into `free` and `premium` pools (the `warmup_pools` tables in `internal/infrastructure/db/migrations/000001_baseline.up.sql`). Pool membership is a property of the mailbox, independent of which worker happens to be sending for it.
 
 Warmup content generation is an offline control-plane workload. The autonomous controller runs every six hours, derives a shared-bank target from seven-day send demand, maintains a 200-thread floor, scales up to 5,000 threads, and submits at most 250 replacements per batch within a 1,000-thread daily cap. It deliberately does not split generation by customer mailbox tags, which would create unbounded queues and smaller, more repetitive content cohorts. Scheduled top-ups use `gpt-5-mini` through durable provider batch jobs rather than synchronous model calls, with a database uniqueness guard that prevents duplicate in-flight scheduled batches when several backend replicas are running. Content with at least 20 sampled sends is automatically archived when it has at least 3 spam placements and a placement rate of 15% or more. The send path atomically selects and increments a least-used active conversation through an indexed query, then falls back to the static reviewed library if no generated content is available. Model availability therefore never gates a warmup send.
 

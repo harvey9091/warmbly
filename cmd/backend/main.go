@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -55,6 +54,7 @@ import (
 	emailverifyapp "github.com/warmbly/warmbly/internal/app/emailverify"
 	"github.com/warmbly/warmbly/internal/app/feature"
 	"github.com/warmbly/warmbly/internal/app/fleet"
+	"github.com/warmbly/warmbly/internal/app/fleetnode"
 	"github.com/warmbly/warmbly/internal/app/form"
 	"github.com/warmbly/warmbly/internal/app/group"
 	"github.com/warmbly/warmbly/internal/app/guardrail"
@@ -77,7 +77,6 @@ import (
 	"github.com/warmbly/warmbly/internal/app/passkey"
 	"github.com/warmbly/warmbly/internal/app/placement"
 	"github.com/warmbly/warmbly/internal/app/poollink"
-	"github.com/warmbly/warmbly/internal/app/provisioning"
 	"github.com/warmbly/warmbly/internal/app/ratelimit"
 	"github.com/warmbly/warmbly/internal/app/referral"
 	"github.com/warmbly/warmbly/internal/app/releases"
@@ -106,13 +105,10 @@ import (
 	"github.com/warmbly/warmbly/internal/app/webhook"
 	"github.com/warmbly/warmbly/internal/app/websitetracking"
 	"github.com/warmbly/warmbly/internal/app/worker"
-	"github.com/warmbly/warmbly/internal/app/worker_orchestrator"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/events"
 	"github.com/warmbly/warmbly/internal/infrastructure/apns"
 	"github.com/warmbly/warmbly/internal/infrastructure/cache"
-	"github.com/warmbly/warmbly/internal/infrastructure/cloudprovider"
-	"github.com/warmbly/warmbly/internal/infrastructure/cloudprovider/hetzner"
 	"github.com/warmbly/warmbly/internal/infrastructure/codec"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/infrastructure/encryptedkeys"
@@ -181,10 +177,9 @@ func main() {
 	var passkeyService passkey.Service
 	var encryptedKeys encryptedkeys.Store
 	var storageBackendRepo repository.StorageBackendRepository
-	var cloudCredentialRepo repository.CloudCredentialRepository
-	var provisioningTemplateRepo repository.ProvisioningTemplateRepository
-	var provisioningJobRepo repository.ProvisioningJobRepository
-	var provisioningPolicyRepo repository.ProvisioningPolicyRepository
+	var fleetNodeRepo repository.FleetNodeRepository
+	var fleetSettingsRepo repository.FleetSettingsRepository
+	var fleetNodeService *fleetnode.Service
 	var tasksService tasks.TasksService
 	var advancedService advanced.Service
 	var unsubSigner *unsublink.Signer
@@ -237,9 +232,7 @@ func main() {
 	var dailyThrottleService dailythrottle.Service
 
 	// Worker orchestrator (SSH-driven admin worker lifecycle)
-	var workerOrchestrator *worker_orchestrator.Orchestrator
 	var workerRepoForHandler repository.WorkerRepository
-	var credentialsRepository repository.CredentialsRepository
 	var releasesService *releases.Service
 	var updatesService *updates.Service
 
@@ -1031,10 +1024,9 @@ func main() {
 		// were chosen via env vars and changing them at runtime would orphan
 		// existing ciphertext / DEKs.
 		storageBackendRepo = repository.NewStorageBackendRepository(primaryDB)
-		cloudCredentialRepo = repository.NewCloudCredentialRepository(primaryDB)
-		provisioningTemplateRepo = repository.NewProvisioningTemplateRepository(primaryDB)
-		provisioningJobRepo = repository.NewProvisioningJobRepository(primaryDB)
-		provisioningPolicyRepo = repository.NewProvisioningPolicyRepository(primaryDB)
+		fleetNodeRepo = repository.NewFleetNodeRepository(primaryDB)
+		fleetSettingsRepo = repository.NewFleetSettingsRepository(primaryDB)
+		fleetNodeService = fleetnode.New(fleetNodeRepo, workerRepository, fleetSettingsRepo)
 		settingsRegistrar := settings.NewRegistrar(storageBackendRepo)
 		if err := settingsRegistrar.RegisterAll(ctx, []settings.Backend{
 			{Kind: "kms", Provider: kms.Name(), Display: kms.Name(), ReadOnly: true},
@@ -1051,123 +1043,26 @@ func main() {
 		// the root context on shutdown.
 		decisionLogRepo := repository.NewDecisionLogRepository(primaryDB)
 
-		// Refresh worker_capacity_view every minute so the assignment loop +
-		// rebalance + scale + quarantine evaluators see fresh rolling
-		// metrics. The materialized view is what aggregates the 1h windows
-		// across all workers.
+		// Refresh worker_capacity_view every minute so placement, rotation,
+		// scale and quarantine all see fresh rolling metrics. The materialized
+		// view is what aggregates the 1h windows across all workers.
 		go jobrun.Loop(ctx, "worker_capacity_refresh", time.Minute, false, workerRepository.RefreshWorkerCapacityView)
 
-		go (&fleet.Rebalancer{
+		go (&fleet.Rotator{
 			WorkerRepo: workerRepository,
+			Assignment: workerAssignmentService,
 			Decisions:  decisionLogRepo,
 		}).Run(ctx)
 		go (&fleet.Scaler{
-			WorkerRepo:   workerRepository,
-			PolicyRepo:   provisioningPolicyRepo,
-			TemplateRepo: provisioningTemplateRepo,
-			JobRepo:      provisioningJobRepo,
-			Decisions:    decisionLogRepo,
+			WorkerRepo: workerRepository,
+			Decisions:  decisionLogRepo,
 		}).Run(ctx)
 		go (&fleet.QuarantineEvaluator{
 			WorkerRepo: workerRepository,
 			Decisions:  decisionLogRepo,
 		}).Run(ctx)
 
-		// Provisioning runner. Drives provisioning_jobs rows to completion —
-		// without it a job created from the admin UI sits in "pending" forever.
-		//
-		// Real Hetzner calls only happen when PROVISIONING_DRY_RUN=false. A real
-		// SSH installer adapter (over worker_orchestrator) is not wired yet, so
-		// until it is we force dry-run: real-mode would otherwise create servers
-		// it could not provision, leaving orphaned, billed machines. Dry-run runs
-		// the full state machine against a simulated provider so the admin flow
-		// works end-to-end in dev without spending money.
-		if getenvDefault("PROVISIONING_RUNNER_ENABLED", "true") == "true" {
-			provDryRun := getenvDefault("PROVISIONING_DRY_RUN", "true") != "false"
-			if !provDryRun {
-				log.Printf("PROVISIONING_DRY_RUN=false but no real installer is wired; forcing dry-run to avoid orphaned servers")
-				provDryRun = true
-			}
-			credRepoForResolver := cloudCredentialRepo
-			provService := &provisioning.Service{
-				Jobs:      provisioningJobRepo,
-				Installer: &provisioning.StubInstaller{},
-				ProviderResolver: func(rctx context.Context, job *repository.ProvisioningJob) (cloudprovider.Provider, error) {
-					if provDryRun {
-						return provisioning.DryRunProvider{}, nil
-					}
-					if credRepoForResolver == nil {
-						return nil, fmt.Errorf("no cloud credential repo configured")
-					}
-					cred, err := credRepoForResolver.GetByProvider(rctx, job.Provider)
-					if err != nil {
-						return nil, err
-					}
-					if cred == nil {
-						return nil, fmt.Errorf("no cloud credential for provider %q", job.Provider)
-					}
-					switch cred.Provider {
-					case "hetzner":
-						return hetzner.New(cred.EncryptedToken)
-					default:
-						return nil, fmt.Errorf("unsupported provider %q", cred.Provider)
-					}
-				},
-			}
-			go (&provisioning.Runner{
-				Jobs:   provisioningJobRepo,
-				Svc:    provService,
-				DryRun: provDryRun,
-			}).Run(ctx)
-		}
-
-		// Worker orchestrator. The env config below is the FALLBACK that gets
-		// written into /etc/warmbly/worker.env when a worker has no profile
-		// assigned. Production workers should reference a worker_profile row;
-		// dev/sim can rely on the fallback so docker-compose still works.
 		workerRepoForHandler = workerRepository
-		credentialsRepository = repository.NewCredentialsRepository(primaryDB.Pool)
-		workerOrchestrator = worker_orchestrator.New(
-			workerRepository,
-			credentialsRepository,
-			cipherService,
-			worker_orchestrator.WorkerEnvConfig{
-				AppEnv:               os.Getenv("APP_ENV"),
-				WorkerImage:          getenvDefault("WORKER_IMAGE", "ghcr.io/warmbly/worker:latest"),
-				KafkaBootstrap:       os.Getenv("KAFKA_BOOTSTRAP_SERVERS"),
-				KafkaSASLUsername:    os.Getenv("KAFKA_SASL_USERNAME"),
-				KafkaSASLPassword:    os.Getenv("KAFKA_SASL_PASSWORD"),
-				SchemaRegistryURL:    os.Getenv("SCHEMA_REGISTRY_URL"),
-				SchemaRegistryKey:    os.Getenv("SCHEMA_REGISTRY_KEY"),
-				SchemaRegistrySecret: os.Getenv("SCHEMA_REGISTRY_SECRET"),
-				RedisURL:             os.Getenv("REDIS"),
-				AWSRegion:            os.Getenv("AWS_REGION"),
-				AWSAccessKeyID:       os.Getenv("WORKER_AWS_ACCESS_KEY_ID"),
-				AWSSecretAccessKey:   os.Getenv("WORKER_AWS_SECRET_ACCESS_KEY"),
-				// A remote worker reaches the internal API over the network, so
-				// fall back to the public API URL. ENCRYPTED_KEYS_BACKEND_URL is
-				// typically only set on workers themselves (compose points it at
-				// the in-network hostname), leaving it empty here and shipping a
-				// config the worker cannot use.
-				EncryptedKeysBackendURL:  getenvDefault("ENCRYPTED_KEYS_BACKEND_URL", os.Getenv("API_PUBLIC_URL")),
-				EncryptedKeysWorkerToken: os.Getenv("INTERNAL_API_TOKEN"),
-				KMSProvider:              getenvDefault("KMS_PROVIDER", "local"),
-				KMSLocalMasterKey:        os.Getenv("KMS_LOCAL_MASTER_KEY"),
-				KMSAWSKeyID:              os.Getenv("KMS_AWS_KEY_ID"),
-				CredentialsEncryptionKey: os.Getenv("CREDENTIALS_ENCRYPTION_KEY"),
-				BlobProvider:             getenvDefault("BLOB_PROVIDER", "filesystem"),
-				BlobBucket:               os.Getenv("BLOB_BUCKET"),
-				BlobFSRoot:               os.Getenv("BLOB_FS_ROOT"),
-				EventBusProvider:         os.Getenv("EVENTBUS_PROVIDER"),
-				NATSURL:                  os.Getenv("NATS_URL"),
-				CodecProvider:            os.Getenv("CODEC_PROVIDER"),
-				BoxGoogleClientID:        os.Getenv("BOX_GOOGLE_CLIENT_ID"),
-				BoxGoogleClientSecret:    os.Getenv("BOX_GOOGLE_CLIENT_SECRET"),
-				BoxOutlookClientID:       os.Getenv("BOX_OUTLOOK_CLIENT_ID"),
-				BoxOutlookClientSecret:   os.Getenv("BOX_OUTLOOK_CLIENT_SECRET"),
-			},
-			getenvDefault("WORKER_INSTALLER_PATH", "/app/scripts/install-worker.sh"),
-		)
 
 		// Releases service. Off by default for self-host (no vendor image
 		// auto-roll, no GitHub polling on boot); set RELEASES_ENABLED=true to
@@ -1180,9 +1075,7 @@ func main() {
 				WebhookSecret:   os.Getenv("RELEASES_WEBHOOK_SECRET"),
 				GithubToken:     os.Getenv("RELEASES_GITHUB_TOKEN"),
 			},
-			credentialsRepository,
-			workerRepository,
-			workerOrchestrator,
+			fleetSettingsRepo,
 		)
 		releasesService.RunBootCheck(ctx)
 
@@ -2028,10 +1921,8 @@ func main() {
 		AdminOutreachService: adminOutreachService,
 
 		// SSH-managed worker lifecycle
-		WorkerOrchestrator: workerOrchestrator,
-		WorkerRepo:         workerRepoForHandler,
-		CredentialsRepo:    credentialsRepository,
-		UpdatesService:     updatesService,
+		WorkerRepo:     workerRepoForHandler,
+		UpdatesService: updatesService,
 
 		// Notifications
 		EmailNotificationService: emailNotificationService,
@@ -2087,21 +1978,20 @@ func main() {
 
 		// Object storage + direct repository handles for handlers
 		// without a dedicated service layer (avatars, etc.).
-		Storage:                  s3ForHandler,
-		EncryptedKeys:            encryptedKeys,
-		EmailMessageMap:          emailMessageMapForHandler,
-		EmailSyncState:           emailSyncStateRepository,
-		TrackedLinks:             trackedLinkRepository,
-		WebsiteTrackingService:   websiteTrackingService,
-		UserRepo:                 userRepoForHandler,
-		OrgRepo:                  organizationRepoForHandler,
-		AttachmentRepo:           attachmentRepoForHandler,
-		EmailImageRepo:           emailImageRepoForHandler,
-		StorageBackendRepo:       storageBackendRepo,
-		CloudCredentialRepo:      cloudCredentialRepo,
-		ProvisioningTemplateRepo: provisioningTemplateRepo,
-		ProvisioningJobRepo:      provisioningJobRepo,
-		ProvisioningPolicyRepo:   provisioningPolicyRepo,
+		Storage:                s3ForHandler,
+		EncryptedKeys:          encryptedKeys,
+		EmailMessageMap:        emailMessageMapForHandler,
+		EmailSyncState:         emailSyncStateRepository,
+		TrackedLinks:           trackedLinkRepository,
+		WebsiteTrackingService: websiteTrackingService,
+		UserRepo:               userRepoForHandler,
+		OrgRepo:                organizationRepoForHandler,
+		AttachmentRepo:         attachmentRepoForHandler,
+		EmailImageRepo:         emailImageRepoForHandler,
+		StorageBackendRepo:     storageBackendRepo,
+		FleetNodeRepo:          fleetNodeRepo,
+		FleetSettingsRepo:      fleetSettingsRepo,
+		FleetNodes:             fleetNodeService,
 
 		// Danger zone
 		DangerZoneService:  dangerZoneService,

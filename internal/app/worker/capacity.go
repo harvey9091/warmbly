@@ -24,9 +24,7 @@ import (
 // worker_capacity_view. Loaded by the repository; fed into ComputeCapacity.
 type WorkerCapacityRow struct {
 	WorkerID         uuid.UUID
-	WorkerType       models.WorkerType
-	FreeTier         bool
-	EgressKind       models.WorkerEgressKind
+	Region           string
 	HealthState      models.WorkerHealthState
 	LoadScore        float64
 	BaseCapacity     float64
@@ -87,29 +85,34 @@ func clampUnit(x float64) float64 {
 	return x
 }
 
-// MailboxWeight is the per-mailbox load contribution. The numbers are
-// deliberately on different scales:
+// MailboxWeight is the per-mailbox load contribution, in cold-mailbox
+// equivalents. It is the reason a worker no longer declares an egress
+// category: each mailbox states its own cost, so one base capacity covers a
+// worker carrying any mix.
 //
-//   - Cold SMTP mailboxes are the bottleneck (one inbox, one IP-facing
-//     conversation, a hard ~50/day ceiling per CLAUDE.md sending policy).
-//     Weight = 1.0 so a cold_smtp worker with Base=16 caps at ~16 cold
-//     mailboxes.
+//   - smtp_imap mailboxes hold a real SMTP and IMAP conversation from the
+//     worker's own address, and Exchange Online caps SMTP AUTH at ~3
+//     concurrent connections and ~30 msg/min per mailbox. They are the
+//     bottleneck. Weight = 1.0, so a worker with Base=16 carries ~16 of them.
 //
-//   - OAuth API mailboxes (Gmail API, Microsoft Graph) push through the
-//     provider's own infrastructure and don't bottleneck on a single
-//     IMAP/SMTP conversation. Weight = 0.05 so an oauth_api worker with
-//     Base=400 can carry hundreds of API mailboxes.
+//   - gmail and outlook mailboxes go through the Google and Microsoft Graph
+//     APIs. The provider absorbs the connection cost and the per-mailbox
+//     ceiling is its own quota, not ours. Weight = 0.05.
 //
-//   - Warmup-only assignments are the cheapest because warmup volume is
-//     small and bursty by design. Weight = 0.4 regardless of provider so
-//     warmup-only workers don't get crowded out by their own cold-style
-//     mailbox accounting.
+//   - Warmup-only assignments are cheapest: warmup volume is small and bursty
+//     by design. Weight = 0.4 regardless of provider so warmup-only workers
+//     are not crowded out by their own cold-style accounting.
+//
+// The provider strings are the email_provider enum values as stored. An
+// earlier version of this function switched on "gmail-api" and "graph-api",
+// which no caller ever produced, so every non-warmup mailbox silently weighed
+// 1.0 and the API-backed ones were over-accounted by 20x.
 func MailboxWeight(provider string, isWarmup bool) float64 {
 	if isWarmup {
 		return 0.4
 	}
-	switch provider {
-	case "gmail-api", "graph-api":
+	switch models.InboxProvider(provider) {
+	case models.InboxProviderGoogle, models.InboxProviderOutlook:
 		return 0.05
 	default:
 		return 1.0

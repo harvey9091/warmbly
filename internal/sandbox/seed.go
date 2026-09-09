@@ -406,15 +406,16 @@ func seedIdentity(ctx context.Context, pool *pgxpool.Pool) error {
 // placement and the reconciler treat it as live; the real worker process adopts
 // the row on its first heartbeat.
 func seedWorker(ctx context.Context, pool *pgxpool.Pool) error {
-	// The conflict branch must also assert the tier tuple: `make seed` upserts
-	// this same UUID as free-tier, and the sandbox org is on a paid plan, so a
-	// leftover free-tier row gets its mailboxes unassigned by placement and
-	// every send fails with "no available workers".
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO fleet_nodes (id, role, name, notes, address, active, last_seen_at)
+		VALUES ($1, 'worker', 'worker-sandbox-1', 'Sandbox worker (make sandbox / make worker)', '127.0.0.1', TRUE, now())
+		ON CONFLICT (id) DO UPDATE SET active = TRUE, last_seen_at = now(), updated_at = now()`,
+		sandboxWorker); err != nil {
+		return err
+	}
 	_, err := pool.Exec(ctx, `
-		INSERT INTO workers (id, name, notes, ip_addr, active, worker_type, account_count, free_tier)
-		VALUES ($1, 'worker-sandbox-1', 'Sandbox worker (make sandbox / make worker)', '127.0.0.1', TRUE, 'shared', 0, FALSE)
-		ON CONFLICT (id) DO UPDATE SET active = TRUE, worker_type = 'shared', free_tier = FALSE, updated_at = NOW()`,
-		sandboxWorker)
+		INSERT INTO workers (id, account_count) VALUES ($1, 0)
+		ON CONFLICT (id) DO NOTHING`, sandboxWorker)
 	return err
 }
 
@@ -816,8 +817,8 @@ func repairContactVerification(ctx context.Context, pool *pgxpool.Pool) error {
 // an assignment ping-pong that strands mailboxes mid-send.
 func deactivateIdleFixtureWorkers(ctx context.Context, pool *pgxpool.Pool) error {
 	tag, err := pool.Exec(ctx, `
-		UPDATE workers SET active = FALSE, updated_at = NOW()
-		WHERE active AND id <> $1`,
+		UPDATE fleet_nodes SET active = FALSE, updated_at = NOW()
+		WHERE active AND role = 'worker' AND id <> $1`,
 		sandboxWorker)
 	if err != nil {
 		return err

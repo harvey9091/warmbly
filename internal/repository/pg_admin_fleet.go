@@ -36,10 +36,10 @@ func NewAdminFleetRepository(d *db.DB) AdminFleetRepository {
 // only carries active workers, so inactive ones come back with zeroed metrics.
 func (r *adminFleetRepository) Capacity(ctx context.Context) ([]models.AdminFleetWorkerRow, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT w.id, w.name, w.ip_addr, COALESCE(w.active, false), w.free_tier, w.worker_type,
-		       w.risk_pool, w.egress_kind, w.health_state, w.install_state,
-		       w.last_seen_at,
-		       (COALESCE(w.active, false) AND w.last_seen_at > now() - $1::interval) AS live,
+		SELECT w.id, n.name, n.address, n.active, n.region,
+		       w.health_state, n.version,
+		       n.last_seen_at,
+		       (n.active AND n.last_seen_at > now() - $1::interval) AS live,
 		       w.account_count,
 		       COALESCE(t.tags, '{}'::text[]) AS tags,
 		       COALESCE(v.load_score, w.load_score, 0)::float8,
@@ -50,6 +50,7 @@ func (r *adminFleetRepository) Capacity(ctx context.Context) ([]models.AdminFlee
 		       COALESCE(v.bounces_hard_1h, 0), COALESCE(v.bounces_soft_1h, 0),
 		       COALESCE(v.complaints_1h, 0), COALESCE(v.auth_errors_1h, 0)
 		  FROM workers w
+		  JOIN fleet_nodes n ON n.id = w.id
 		  LEFT JOIN worker_capacity_view v ON v.worker_id = w.id
 		  LEFT JOIN (
 		       SELECT worker_id, array_agg(tag::text ORDER BY tag) AS tags
@@ -66,8 +67,8 @@ func (r *adminFleetRepository) Capacity(ctx context.Context) ([]models.AdminFlee
 		var row models.AdminFleetWorkerRow
 		var live *bool
 		if err := rows.Scan(
-			&row.WorkerID, &row.Name, &row.IPAddr, &row.Active, &row.FreeTier, &row.WorkerType,
-			&row.RiskPool, &row.EgressKind, &row.HealthState, &row.InstallState,
+			&row.WorkerID, &row.Name, &row.IPAddr, &row.Active, &row.Region,
+			&row.HealthState, &row.Version,
 			&row.LastSeenAt, &live, &row.AccountCount, &row.Tags,
 			&row.LoadScore, &row.BaseCapacity, &row.HealthMultiplier, &row.AgeMultiplier,
 			&row.SendsAttempted1h, &row.SendsSucceeded1h,
@@ -107,7 +108,7 @@ func (r *adminFleetRepository) Decisions(ctx context.Context, kind string, worke
 		SELECT d.id, d.kind, d.worker_id, COALESCE(w.name, ''), d.mailbox_id,
 		       d.before, d.after, COALESCE(d.reason, ''), COALESCE(d.triggered_by, ''), d.created_at
 		  FROM decision_log d
-		  LEFT JOIN workers w ON w.id = d.worker_id
+		  LEFT JOIN fleet_nodes w ON w.id = d.worker_id
 		 WHERE ($1 = '' OR d.kind = $1)
 		   AND ($2::uuid IS NULL OR d.worker_id = $2)
 		 ORDER BY d.created_at DESC, d.id DESC
@@ -145,7 +146,7 @@ func (r *adminFleetRepository) DedicatedAssignments(ctx context.Context) ([]mode
 		       a.subscription_id, a.assigned_at, a.released_at,
 		       (SELECT count(*) FROM email_accounts e WHERE e.worker_id = a.worker_id)
 		  FROM dedicated_worker_assignments a
-		  LEFT JOIN workers w ON w.id = a.worker_id
+		  LEFT JOIN fleet_nodes w ON w.id = a.worker_id
 		  LEFT JOIN organizations o ON o.id = a.organization_id
 		 WHERE a.released_at IS NULL
 		 ORDER BY a.assigned_at DESC

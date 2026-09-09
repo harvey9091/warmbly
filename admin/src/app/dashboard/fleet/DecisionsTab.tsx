@@ -11,7 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/components/ErrorState";
 import { SelectFilter } from "@/components/data/Explorer";
 import { listFleetDecisions, type AdminFleetDecision } from "@/lib/api/client/admin/fleet";
-import { listManagedWorkers } from "@/lib/api/client/admin/workers";
+import { listFleetNodes, type FleetNode } from "@/lib/api/client/admin/fleetNodes";
 import { fmtAgo, fmtDateTime, shortId } from "./format";
 
 const LIMIT = 200;
@@ -110,7 +110,7 @@ export function DecisionsTab() {
 
     const workersQ = useQuery({
         queryKey: ["admin", "workers", "managed"],
-        queryFn: listManagedWorkers,
+        queryFn: () => listFleetNodes("worker"),
         staleTime: 60_000,
     });
     const workers = workersQ.data?.data ?? [];

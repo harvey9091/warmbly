@@ -80,17 +80,22 @@ func (h *Handler) AdminFleetDedicated(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": rows})
 }
 
-// AdminFleetReleaseDedicated is the inverse of AdminConvertWorkerToDedicated:
-// the org's mailboxes go back to shared premium workers, the binding is
-// released, and the worker re-enters the shared pool once nothing binds it.
+// AdminFleetReleaseIsolatedEgress releases an organization's reserved worker
+// back to the fleet.
+//
+// It only deletes the binding. Nothing migrates: the worker carries no
+// category to reset, and the org's mailboxes stay where they are until the
+// rotation loop finds them a better home on its own schedule. Forcing them to
+// move here would re-authenticate every one of them from a new address for no
+// deliverability gain.
 //
 // POST /admin/fleet/dedicated/:orgId/release
-func (h *Handler) AdminFleetReleaseDedicated(c *gin.Context) {
+func (h *Handler) AdminFleetReleaseIsolatedEgress(c *gin.Context) {
 	orgID, ok := parseUUIDParam(c, "orgId")
 	if !ok {
 		return
 	}
-	if h.WorkerAssignmentService == nil || h.WorkerRepo == nil {
+	if h.WorkerRepo == nil {
 		errx.JSON(c, errx.New(errx.NotImplemented, "worker placement is not available on this instance"))
 		return
 	}
@@ -102,77 +107,34 @@ func (h *Handler) AdminFleetReleaseDedicated(c *gin.Context) {
 		return
 	}
 	if assignment == nil {
-		errx.JSON(c, errx.New(errx.NotFound, "organization has no active dedicated worker"))
+		errx.JSON(c, errx.New(errx.NotFound, "organization has no reserved worker"))
 		return
 	}
 	workerID := assignment.WorkerID
 
-	before, err := h.WorkerRepo.GetEmailAccountsByWorkerID(ctx, workerID)
+	// Release the exact row read above by id, so a reservation created
+	// meanwhile is never touched.
+	released, err := h.WorkerRepo.ReleaseDedicatedAssignmentByID(ctx, assignment.ID)
 	if err != nil {
-		errx.JSON(c, errx.New(errx.Internal, "list accounts: "+err.Error()))
-		return
-	}
-
-	// Moves every org mailbox onto a live shared premium worker and releases
-	// the binding; a mailbox with no shared target stays put rather than failing.
-	if err := h.WorkerAssignmentService.MigrateOrgToShared(ctx, orgID); err != nil {
-		errx.JSON(c, errx.New(errx.Internal, "migrate to shared: "+err.Error()))
-		return
-	}
-	// MigrateOrgToShared swallows its own release error, so release the exact
-	// row read above by id: a binding created meanwhile is never touched.
-	if _, err := h.WorkerRepo.ReleaseDedicatedAssignmentByID(ctx, assignment.ID); err != nil {
 		errx.JSON(c, errx.New(errx.Internal, "release assignment: "+err.Error()))
 		return
 	}
 
-	after, err := h.WorkerRepo.GetEmailAccountsByWorkerID(ctx, workerID)
+	remaining, err := h.WorkerRepo.GetEmailAccountsByWorkerID(ctx, workerID)
 	if err != nil {
 		errx.JSON(c, errx.New(errx.Internal, "list accounts: "+err.Error()))
 		return
 	}
-	moved := len(before) - len(after)
-	if moved < 0 {
-		moved = 0
-	}
 
-	// The worker only returns to the shared pool when no other org binds it.
-	stillBound := false
-	if h.AdminFleetRepo != nil {
-		active, err := h.AdminFleetRepo.DedicatedAssignments(ctx)
-		if err != nil {
-			errx.JSON(c, errx.New(errx.Internal, "list assignments: "+err.Error()))
-			return
-		}
-		for _, a := range active {
-			if a.WorkerID == workerID {
-				stillBound = true
-				break
-			}
-		}
-	}
-	returnedToShared := false
-	if !stillBound {
-		if err := h.WorkerRepo.SetWorkerType(ctx, workerID, models.WorkerTypeShared); err != nil {
-			errx.JSON(c, errx.New(errx.Internal, "set type: "+err.Error()))
-			return
-		}
-		returnedToShared = true
-	}
-
-	h.audit(c, "release_dedicated", models.AuditEntityWorker, &workerID, map[string]string{
+	h.audit(c, "release_isolated_egress", models.AuditEntityWorker, &workerID, map[string]string{
 		"organization_id":    orgID.String(),
 		"subscription_id":    assignment.SubscriptionID.String(),
 		"assignment_id":      assignment.ID.String(),
-		"accounts_moved":     itoa(moved),
-		"accounts_remaining": itoa(len(after)),
-		"returned_to_shared": boolStr(returnedToShared),
+		"accounts_remaining": itoa(len(remaining)),
 	})
 	c.JSON(http.StatusOK, gin.H{
-		"ok":                 true,
+		"ok":                 released,
 		"worker_id":          workerID,
-		"accounts_moved":     moved,
-		"accounts_remaining": len(after),
-		"returned_to_shared": returnedToShared,
+		"accounts_remaining": len(remaining),
 	})
 }

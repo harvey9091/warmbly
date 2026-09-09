@@ -2,8 +2,10 @@ package models
 
 // EmailRiskBand classifies a mailbox by reputation risk. The rebalancer
 // derives this from WarmupHealthState and writes it into
-// email_accounts.risk_band; nothing else should set it. Workers pick up
-// mailboxes whose band matches their risk_pool.
+// email_accounts.risk_band; nothing else should set it. It drives warmup
+// partner selection and per-mailbox pacing, not worker placement: a mailbox
+// landing in spam does not contaminate the machine it sends from, because the
+// machine is not the sending identity.
 type EmailRiskBand string
 
 const (
@@ -13,7 +15,7 @@ const (
 )
 
 // RiskBandFromHealth maps the warmup health state machine into the simpler
-// three-bucket risk_band that workers cluster by. The mapping is one-way
+// three-bucket risk_band. The mapping is one-way
 // (collapses watch/throttled/quarantined into the recovery pool) — the
 // reverse direction is meaningless.
 //
@@ -32,19 +34,5 @@ func RiskBandFromHealth(s WarmupHealthState) EmailRiskBand {
 		return EmailRiskBandQuarantine
 	default:
 		return EmailRiskBandClean
-	}
-}
-
-// MatchingRiskPool returns the worker risk_pool that should host mailboxes
-// of this band. The naming intentionally mirrors so a band of X always
-// goes to a pool of X — keeps the rebalancer trivial.
-func (b EmailRiskBand) MatchingRiskPool() WorkerRiskPool {
-	switch b {
-	case EmailRiskBandRisky:
-		return WorkerRiskPoolRisky
-	case EmailRiskBandQuarantine:
-		return WorkerRiskPoolQuarantine
-	default:
-		return WorkerRiskPoolClean
 	}
 }

@@ -4,32 +4,6 @@
 
 import type { LegendEntry } from "@/components/StateLegend";
 
-// Shared workers are bucketed by acceptable mailbox risk so one bad tenant
-// can't burn the IP reputation healthy senders depend on.
-export const WORKER_RISK_POOL_LEGEND: LegendEntry[] = [
-    {
-        term: "clean",
-        tone: "border-emerald-300 bg-emerald-50 text-emerald-700",
-        description:
-            "Carries only mailboxes with healthy reputation. Protect this pool's IPs first.",
-    },
-    {
-        term: "risky",
-        tone: "border-amber-300 bg-amber-50 text-amber-700",
-        description:
-            "Accepts unproven or recovering mailboxes. Expect noisier deliverability here.",
-    },
-    {
-        term: "quarantine",
-        tone: "border-red-300 bg-red-50 text-red-700",
-        description:
-            "Isolation pool after abuse or deliverability incidents. Never place healthy traffic here.",
-    },
-];
-
-// Worker health is the rolled-up label maintained by the assignment loop.
-// It gates whether a worker can accept new mailboxes; it mirrors the mailbox
-// health vocabulary but applies to the whole machine.
 export const WORKER_HEALTH_LEGEND: LegendEntry[] = [
     {
         term: "healthy",

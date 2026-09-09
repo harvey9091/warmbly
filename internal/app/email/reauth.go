@@ -149,12 +149,9 @@ func (s *emailService) UpdateSMTPIMAPCredentials(ctx context.Context, orgID *uui
 	if s.workerAssignment == nil {
 		return nil, errx.ErrEmailOnboardNoWorker
 	}
-	// Any healthy worker can run the one-shot validation handshake, same as at
-	// connect time; tier only matters for placement.
-	w, werr := s.workerAssignment.SelectSharedWorker(ctx, false)
-	if werr != nil || w == nil {
-		w, werr = s.workerAssignment.SelectSharedWorker(ctx, true)
-	}
+	// Any live worker can run the one-shot validation handshake, same as at
+	// connect time.
+	w, werr := s.workerAssignment.SelectValidationWorker(ctx)
 	if werr != nil || w == nil {
 		return nil, errx.ErrEmailOnboardNoWorker
 	}

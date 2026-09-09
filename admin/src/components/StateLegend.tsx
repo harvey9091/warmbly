@@ -1,5 +1,5 @@
-// Inline "what do these states mean?" legend for enum badges (risk pools,
-// health states, job statuses). Renders a small help trigger that reveals a
+// Inline "what do these states mean?" legend for enum badges (health states,
+// job statuses). Renders a small help trigger that reveals a
 // term → definition list on hover/focus, so tables stay compact but no state
 // name is ever left unexplained.
 

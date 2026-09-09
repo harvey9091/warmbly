@@ -15,6 +15,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconf "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/app/advanced"
 	"github.com/warmbly/warmbly/internal/app/cipher"
 	jobs "github.com/warmbly/warmbly/internal/app/consumer"
@@ -52,6 +53,7 @@ import (
 	"github.com/warmbly/warmbly/internal/pkg/encrypt"
 	"github.com/warmbly/warmbly/internal/pkg/generation"
 	"github.com/warmbly/warmbly/internal/pkg/geo"
+	"github.com/warmbly/warmbly/internal/pkg/nodeagent"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -423,6 +425,7 @@ func main() {
 		WarmupEngagementRepo:        repository.NewWarmupEngagementRepository(primaryDB.Pool),
 		WarmupService:               warmupService,
 		WorkerRepo:                  workerRepo,
+		FleetNodeRepo:               repository.NewFleetNodeRepository(primaryDB),
 		LifecycleRepo:               repository.NewSendLifecycleRepository(primaryDB),
 		Publisher:                   eventsPublisher,
 		StreamingPublisher:          streamingPublisher,
@@ -478,11 +481,11 @@ func main() {
 	// so the admin dashboard can render liveness without touching Redis.
 	go jobsService.StartWorkerHeartbeatSync(ctx, 60*time.Second)
 
-	// Re-evaluate per-mailbox risk bands hourly and migrate to a matching
-	// risk_pool worker when the band changes. Skipped if AssignmentService
-	// or WorkerRepo are nil.
+	// Re-evaluate per-mailbox risk bands hourly. The band feeds warmup partner
+	// selection and pacing; it does not move mailboxes between workers, because
+	// the worker is not the sending identity.
 	go jobsService.StartRiskRebalancer(ctx, 1*time.Hour)
-	// Same cadence, different question: risk_band picks the worker, the
+	// Same cadence, different question: the band describes reputation, the
 	// lifecycle picks whether the mailbox is in cold rotation at all.
 	go jobsService.StartLifecycleRebalancer(ctx, 1*time.Hour)
 	// The abuse sweep: cross-account shape, plus what each organization's mail
@@ -544,7 +547,68 @@ func main() {
 		log.Println("Tracking consumer started, listening on", trackingCfg.Topic)
 	}
 
+	// The consumer is a fleet node like any other: it enrols, heartbeats,
+	// reports what it is running and what it is using, and picks up the
+	// version the control plane wants. Before this it was anonymous, so a
+	// dead one stayed invisible until work started backing up.
+	agentDone := make(chan struct{})
+	go func() {
+		defer close(agentDone)
+		newConsumerAgent().Run(ctx)
+	}()
+
 	log.Println("Consumer started, listening on", kafka.TopicWorkerEvents)
 	jobsService.Start(ctx)
+
+	// Give the farewell beat a moment to land, bounded so a wedged backend
+	// cannot stop the consumer exiting.
+	select {
+	case <-agentDone:
+	case <-time.After(8 * time.Second):
+		log.Println("timed out waiting for the shutdown heartbeat")
+	}
 	log.Println("Consumer stopped")
+}
+
+// newConsumerAgent builds the fleet agent for this consumer.
+//
+// Identity resolution mirrors the worker's: an explicit WARMBLY_NODE_ID wins,
+// otherwise it is derived from the hostname so a container recreate keeps the
+// same identity instead of leaving a dead row behind on every restart.
+func newConsumerAgent() *nodeagent.Agent {
+	id := resolveConsumerID()
+	return nodeagent.New(nodeagent.Config{
+		NodeID:            id,
+		Role:              models.NodeRoleConsumer,
+		Name:              os.Getenv("WARMBLY_NODE_NAME"),
+		Region:            os.Getenv("WARMBLY_NODE_REGION"),
+		Version:           os.Getenv("WARMBLY_VERSION"),
+		BaseURL:           consumerBackendURL(),
+		Token:             os.Getenv("INTERNAL_API_TOKEN"),
+		TargetVersionPath: os.Getenv("WARMBLY_TARGET_VERSION_PATH"),
+	})
+}
+
+func resolveConsumerID() uuid.UUID {
+	if raw := os.Getenv("WARMBLY_NODE_ID"); raw != "" {
+		if id, err := uuid.Parse(raw); err == nil {
+			return id
+		}
+		log.Printf("WARMBLY_NODE_ID is not a valid uuid; deriving one from the hostname instead")
+	}
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		// Last resort. A random id means this process shows up as a new node
+		// on every restart, which is visible in the dashboard rather than
+		// silent, so it is a better failure than refusing to start.
+		return uuid.New()
+	}
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("warmbly-consumer:"+host))
+}
+
+func consumerBackendURL() string {
+	if v := os.Getenv("WARMBLY_BACKEND_URL"); v != "" {
+		return v
+	}
+	return os.Getenv("ENCRYPTED_KEYS_BACKEND_URL")
 }

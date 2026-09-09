@@ -83,8 +83,12 @@ func Run(
 	// Public worker enrollment. The one-time enrollment token is the
 	// credential; successful exchange returns a dotenv file for the installer
 	// and consumes the token.
-	r.GET("/worker-install.sh", h.ServeWorkerInstaller)
-	r.POST("/api/v1/workers/enroll", h.EnrollWorker)
+	// Joining the fleet. The script is public (it does nothing without a
+	// token); the enrolment endpoint is the only one reachable with the join
+	// token rather than an operator session, because the machine running it
+	// has no credentials yet.
+	r.GET("/join.sh", h.ServeJoinScript)
+	r.POST("/api/v1/fleet/join", h.FleetJoin)
 
 	// Public OAuth-bouncer pages used by the mailbox onboarding popup.
 	// The provider redirects here; the page postMessages the code/state
@@ -144,7 +148,7 @@ func Run(
 		// on boot (worker_id + bind_ip + tag) and pull their runtime config
 		// instead of carrying it all in the install-time env file.
 		internal.GET("/worker/config", h.InternalWorkerConfig)
-		internal.POST("/worker/heartbeat", h.InternalWorkerHeartbeat)
+		internal.POST("/fleet/heartbeat", h.FleetHeartbeat)
 
 		// Hosted forms: the forms service (cmd/forms) resolves published
 		// forms, forwards deduped funnel events and visitor submissions
@@ -1418,30 +1422,11 @@ func Run(
 		adminRoutes.POST("/workers/:id/reassign", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminReassignEmails)
 
 		// SSH-managed worker lifecycle (admin-driven add / install / restart / logs)
-		adminRoutes.GET("/workers/managed", middleware.RequireAdminPermission(models.AdminPermViewWorkers), h.AdminListSSHWorkers)
-		adminRoutes.POST("/workers", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminCreateWorker)
-		adminRoutes.GET("/workers/:id/managed", middleware.RequireAdminPermission(models.AdminPermViewWorkers), h.AdminGetSSHWorker)
-		adminRoutes.POST("/workers/:id/test", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminTestWorker)
-		adminRoutes.POST("/workers/:id/install", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminInstallWorker)
-		adminRoutes.POST("/workers/:id/restart", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminRestartWorker)
-		adminRoutes.POST("/workers/:id/upgrade", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminUpdateWorkerImage)
-		adminRoutes.POST("/workers/:id/uninstall", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminUninstallWorker)
-		adminRoutes.POST("/workers/:id/rotate-keys", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminRotateWorkerKeys)
-		adminRoutes.GET("/workers/:id/live-status", middleware.RequireAdminPermission(models.AdminPermViewWorkers), h.AdminWorkerStatusLive)
-		adminRoutes.GET("/workers/:id/logs", middleware.RequireAdminPermission(models.AdminPermViewWorkers), h.AdminWorkerLogs)
-		adminRoutes.DELETE("/workers/:id", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminDeleteSSHWorker)
-		adminRoutes.PUT("/workers/:id/profile", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminAssignWorkerProfile)
-		adminRoutes.POST("/workers/:id/apply", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminApplyWorkerConfig)
-		adminRoutes.POST("/workers/:id/system-update", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminSystemUpdate)
-		adminRoutes.POST("/workers/:id/reboot", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminRebootWorker)
-		adminRoutes.POST("/workers/preflight", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminPreflightWorker)
-		adminRoutes.GET("/workers/tags", middleware.RequireAdminPermission(models.AdminPermViewWorkers), h.AdminListWorkerTags)
 		adminRoutes.PUT("/workers/:id/tags", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminSetWorkerTags)
 
-		// Removed for self-host: worker convert-to-dedicated + risk-pool (multi-tenant
-		// IP-reputation fleet constructs), reusable AWS credentials + worker profiles
-		// (cloud-fleet env templating), and GitHub release auto-roll. Attach and manage
-		// machines you own via the SSH worker lifecycle above.
+		// Removed for self-host: reusable AWS credentials + worker profiles
+		// (cloud-fleet env templating) and GitHub release auto-roll. Attach and
+		// manage machines you own via the SSH worker lifecycle above.
 
 		// Warmup Management
 		adminRoutes.GET("/warmup/pools", middleware.RequireAdminPermission(models.AdminPermViewWarmupPool), h.AdminListWarmupPools)
@@ -1543,12 +1528,18 @@ func Run(
 		adminRoutes.POST("/jobs/:name/run", middleware.RequireAdminPermission(models.AdminPermManageSettings), h.AdminRunJob)
 
 		// Fleet placement: capacity per worker, the control loops' decision
-		// log, and dedicated worker bindings.
+		// log, and isolated-egress reservations.
+		adminRoutes.GET("/fleet/nodes", middleware.RequireAdminPermission(models.AdminPermViewWorkers), h.AdminFleetNodes)
+		adminRoutes.POST("/fleet/join-token", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminFleetIssueJoinToken)
+		adminRoutes.PATCH("/fleet/nodes/:id", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminFleetPatchNode)
+		adminRoutes.DELETE("/fleet/nodes/:id", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminFleetDeleteNode)
+		adminRoutes.GET("/fleet/release", middleware.RequireAdminPermission(models.AdminPermViewWorkers), h.AdminFleetRelease)
+		adminRoutes.PUT("/fleet/release", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminFleetSetRelease)
 		adminRoutes.GET("/fleet/capacity", middleware.RequireAdminPermission(models.AdminPermViewWorkers), h.AdminFleetCapacity)
 		adminRoutes.GET("/fleet/decisions", middleware.RequireAdminPermission(models.AdminPermViewWorkers), h.AdminFleetDecisions)
 		adminRoutes.GET("/fleet/dedicated", middleware.RequireAdminPermission(models.AdminPermViewWorkers), h.AdminFleetDedicated)
-		adminRoutes.POST("/fleet/dedicated/:orgId/release", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminFleetReleaseDedicated)
-		adminRoutes.POST("/workers/:id/convert-dedicated", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminConvertWorkerToDedicated)
+		adminRoutes.POST("/fleet/dedicated/:orgId/release", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminFleetReleaseIsolatedEgress)
+		adminRoutes.POST("/workers/:id/reserve", middleware.RequireAdminPermission(models.AdminPermManageWorkers), h.AdminFleetReserveWorker)
 
 		// Workspace transfers: the same archive service the owner uses from
 		// Settings > Data, driven by the operator for any workspace.

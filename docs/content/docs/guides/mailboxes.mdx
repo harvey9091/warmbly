@@ -219,19 +219,23 @@ Everything belonging to that mailbox goes with it: its imported mail in the unib
 
 ## Worker assignment
 
-You never pick a worker. Warmbly assigns each mailbox to a sending worker automatically and can move it later. Workers are the machines that send and sync, so spreading mailboxes across them spreads sending across network identities and IPs.
+You never pick a worker. Warmbly assigns each mailbox to a sending worker automatically and can move it later.
 
-| Workspace | Placement |
-|-----------|-----------|
-| Free / trial | Shared free-tier workers |
-| Paid | Shared premium workers |
-| Plans including dedicated workers | A dedicated worker bound to the workspace, allocated on demand, falling back to shared premium and retrying later |
+Workers are the machines that connect to your mailbox provider. They are not the address your recipients see: your provider delivers the mail from its own infrastructure, and it strips the connecting client's address on the way out. What the worker's address does decide is how your provider sees the sign-in, which is why Warmbly optimises for **keeping a mailbox on the same worker** rather than spreading it around. A mailbox whose connecting address keeps changing collects security challenges and authentication throttles for nothing.
 
-Within a tier, Warmbly picks the least-loaded healthy worker with capacity rather than packing onto the first one. Each mailbox contributes a load weight, so a worker's planned volume tracks the sum of its mailboxes' budgets.
+Every worker is the same kind of worker. There are no tiers to qualify for and no pools to be sorted into. Placement scores the fleet on live signals and picks the best fit:
 
-**Risk is segregated.** A degraded, risky, or quarantined mailbox is never placed on a clean worker beside trusted inboxes, so one struggling mailbox cannot drag down the reputation others depend on.
+- how much capacity a worker has left, so the fleet fills evenly
+- whether the mailbox is already there, which counts for more than anything else
+- whether the worker sits near where your provider expects your sign-ins
+- how much of your workspace is already on that one machine, so a single failure never stops all of your sending
+- how many other mailboxes on the same provider already sign in from that address
 
-Mailboxes migrate automatically when a trial upgrades, a subscription ends, a workspace moves to or from a dedicated worker, or a risk band changes. No action needed.
+Each mailbox contributes a load weight, so a worker's planned volume tracks the sum of its mailboxes' budgets rather than a flat machine limit.
+
+**Mailboxes move only when there is a reason.** A worker going offline, getting blocked, or running out of capacity will move yours. Ordinary rebalancing will not: a settled mailbox has to have been in place for three days before it is even considered, and the alternative has to be meaningfully better. A mailbox that never moves is the ideal, not a stuck one.
+
+Plans that include reserved sending give your workspace a worker no other customer sends from, so your mailboxes always sign in from an address that is yours alone. It is a preference, not a lock: if that machine goes down your mailboxes keep working on the rest of the fleet and return when a replacement is ready.
 
 ## Resting a tired mailbox
 

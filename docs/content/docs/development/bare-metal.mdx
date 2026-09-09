@@ -377,7 +377,7 @@ sudo tee /etc/warmbly/worker.env >/dev/null <<EOF
 APP_ENV=prod
 AWS_CONFIG_ENABLED=false
 WORKER_ID=$(uuidgen)
-WORKER_TIER=shared_premium
+WARMBLY_NODE_REGION=eu-central
 
 EVENTBUS_PROVIDER=nats
 NATS_URL=nats://127.0.0.1:4222
@@ -529,7 +529,7 @@ warmblyctl status
 
 The point of workers is to spread sending across machine identities, so most installs eventually add a worker on another host. Two routes, neither needing Docker on the control plane:
 
-**The enrollment installer**, which is what the admin panel's Add Worker flow produces, runs the worker as a container on the remote host. It needs Docker only there. The backend serves it at `GET /worker-install.sh` from `WORKER_INSTALLER_PATH`, which the shipped unit already points at the checkout.
+**The join script**, which is what the admin panel's Add a machine flow produces, runs the node as a container on the remote host. It needs Docker and systemd only there. The backend serves it at `GET /join.sh`, and it is embedded in the binary, so there is no path to configure.
 
 **A native worker** is the same binary and env file as above, with the addresses changed. The backend renders a complete env file for an enrollment token, so nothing has to be copied by hand:
 
@@ -559,9 +559,9 @@ tls {
 }
 ```
 
-Then set `NATS_URL=tls://<token>@nats.yourdomain.com:4222` in `warmbly.env` and `worker.env`; the token in the URL is what every service authenticates with. Redis gets `requirepass` and `REDIS=redis://:<password>@redis.yourdomain.com:6379`, ideally over a private network or a tunnel. Restrict both ports at the firewall to the worker's address as well. Use `BLOB_PROVIDER=s3` with a bucket both sides can reach; a remote worker on the filesystem provider writes to its own disk. The [self-hosting guide](/development/deployment-guide/#remote-workers) has the same caveats in more detail.
+Then set `NATS_URL=tls://<token>@nats.yourdomain.com:4222` in `warmbly.env` and `worker.env`; the token in the URL is what every service authenticates with. Redis gets `requirepass` and `REDIS=redis://:<password>@redis.yourdomain.com:6379`, ideally over a private network or a tunnel. Restrict both ports at the firewall to the worker's address as well. Use `BLOB_PROVIDER=s3` with a bucket both sides can reach: a worker reads the message body the backend wrote, so the filesystem provider only works when the two share storage and the permissions line up. The [self-hosting guide](/development/deployment-guide/#adding-a-machine) has the same caveats in more detail.
 
-Because the worker is not in a container, the admin panel's SSH-driven day-two actions (pull image, restart container) do not apply to it. Manage it with `systemctl` and the update steps below.
+Because the worker is not in a container, the join script's systemd service and update timer do not apply to it. Manage it with `systemctl` and the update steps below, and set its version by hand rather than through `warmblyctl fleet version`.
 
 ## Upgrading
 

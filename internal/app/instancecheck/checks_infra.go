@@ -39,7 +39,7 @@ func checkNoWorkerHeartbeat(ctx context.Context, d Deps, in Input) *Finding {
 	var lastSeen *time.Time
 	var assigned int
 	err := d.DB.QueryRow(ctx, `
-		SELECT (SELECT max(last_seen_at) FROM workers),
+		SELECT (SELECT max(last_seen_at) FROM fleet_nodes WHERE role = 'worker'),
 		       (SELECT count(*) FROM email_accounts WHERE worker_id IS NOT NULL)
 	`).Scan(&lastSeen, &assigned)
 	if err != nil || assigned == 0 {
@@ -71,7 +71,7 @@ func checkCodecNotJSON(ctx context.Context, d Deps, in Input) *Finding {
 		return nil
 	}
 	var workers int
-	if err := d.DB.QueryRow(ctx, `SELECT count(*) FROM workers`).Scan(&workers); err != nil || workers == 0 {
+	if err := d.DB.QueryRow(ctx, `SELECT count(*) FROM fleet_nodes WHERE role = 'worker'`).Scan(&workers); err != nil || workers == 0 {
 		return nil
 	}
 	return result(CategoryWorkers, SeverityError, "Codec is not JSON",

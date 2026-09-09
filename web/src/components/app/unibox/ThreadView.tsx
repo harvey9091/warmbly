@@ -236,10 +236,11 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
     replyState ? "replying" : "viewing",
   );
 
-  // Opening a thread marks its unseen messages as read. The hook invalidates
-  // ["unibox"], so the unread badge, the collapsed list, and the overview all
-  // refresh. Once everything is seen the id list is empty and this no-ops, so
-  // it self-terminates after the post-mark refetch (no loop).
+  // Opening a thread marks its unseen messages as read. The hook writes the
+  // flip straight into the cached list and thread and refetches only the
+  // counters, so the conversation list the user came from does not re-order
+  // under them. Passing threadId is what lets it find the row. Once everything
+  // is seen the id list is empty and this no-ops, so it self-terminates.
   const markSeen = useMarkSeen();
   const markSeenMutate = markSeen.mutate;
   React.useEffect(() => {
@@ -247,7 +248,7 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
       .filter((m) => !m.seen)
       .map((m) => m.id);
     if (unseenIds.length === 0) return;
-    markSeenMutate({ ids: unseenIds });
+    markSeenMutate({ ids: unseenIds, threadId });
   }, [threadId, q.data, markSeenMutate]);
 
   const snooze = useMutation({
@@ -257,7 +258,7 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
       toast.success("Snoozed");
       queryClient.invalidateQueries({ queryKey: ["unibox", "search"] });
       queryClient.invalidateQueries({ queryKey: ["unibox", "overview"] });
-      queryClient.invalidateQueries({ queryKey: ["unibox", "count"] });
+      queryClient.invalidateQueries({ queryKey: ["unibox", "unseen-count"] });
       setSnoozeOpen(false);
       setCustomMode(false);
     },

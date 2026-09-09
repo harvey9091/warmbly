@@ -16,6 +16,8 @@ import React from "react";
 import { Loader2Icon, SearchIcon, Settings2Icon } from "lucide-react";
 import { ConversationItem } from "./ConversationItem";
 import useUniboxSearch from "@/lib/api/hooks/app/unibox/useUniboxSearch";
+import useDebouncedValue from "@/hooks/useDebouncedValue";
+import { useScrollMemory } from "@/hooks/useScrollMemory";
 import { useAppStore } from "@/stores";
 import { UniboxFilterSheet } from "./UniboxFilterSheet";
 import type { UniboxSearchParams } from "@/lib/api/models/app/unibox/UniboxSearch";
@@ -46,33 +48,82 @@ function bucketFor(d: Date): Bucket {
 }
 
 interface ConversationListProps {
+  /** Identity of the current scope; a change clears the local search. */
+  scopeKey: string;
   scopeLabel: string;
   params: UniboxSearchParams;
   setParams: React.Dispatch<React.SetStateAction<UniboxSearchParams>>;
 }
 
 export function ConversationList({
+  scopeKey,
   scopeLabel,
   params,
   setParams,
 }: ConversationListProps) {
   const [search, setSearch] = React.useState("");
   const [sheetOpen, setSheetOpen] = React.useState(false);
+
+  // The page keeps this component mounted across a scope switch (that is what
+  // holds the scroll offset when a thread opens), so the search box has to be
+  // cleared here or a query typed for one scope would silently filter the next.
+  // Set during render, like the page's own param reset, so the stale query
+  // never reaches the request.
+  const [searchScope, setSearchScope] = React.useState(scopeKey);
+  if (searchScope !== scopeKey) {
+    setSearchScope(scopeKey);
+    setSearch("");
+  }
+
   const searchRef = React.useRef<HTMLInputElement>(null);
   const listRef = React.useRef<HTMLDivElement>(null);
+  const sentinelRef = React.useRef<HTMLDivElement>(null);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const setSelectedThreadId = useAppStore((s) => s.setSelectedThreadId);
   const setSelectedAccountId = useAppStore((s) => s.setSelectedAccountId);
 
+  // Debounced into the query, immediate in the box: the search text is part of
+  // the query key, so a raw binding fires a request and parks a cached page per
+  // keystroke.
+  const debouncedSearch = useDebouncedValue(search);
   const merged: UniboxSearchParams = React.useMemo(() => {
     const next: UniboxSearchParams = { ...params };
-    if (search.trim()) next.query = search.trim();
+    if (debouncedSearch.trim()) next.query = debouncedSearch.trim();
     return next;
-  }, [params, search]);
+  }, [params, debouncedSearch]);
 
   const q = useUniboxSearch(merged);
   const emails = q.emails;
   const totalShown = emails.length;
+
+  // Where this exact list was left. Opening a thread keeps the page mounted
+  // (see the route's stableParams in main.tsx), so this covers what that
+  // cannot: leaving the inbox and coming back, and the mobile pane, which the
+  // browser scrolls to the top while it is display:none.
+  const listKey = React.useMemo(() => JSON.stringify(merged), [merged]);
+  useScrollMemory(listRef, listKey);
+
+  // Infinite scroll: reaching the end of the list loads the next page instead
+  // of asking for a click. The button below stays as the manual fallback, and
+  // isFetchingNextPage is a dependency so a page landing re-arms the observer:
+  // a sentinel still on screen keeps pulling instead of stalling one page in.
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = q;
+  React.useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const root = listRef.current;
+    // A page that failed stays failed until the user asks again; re-arming on
+    // an on-screen sentinel would retry it on a loop.
+    if (!sentinel || !root || !hasNextPage || isFetchNextPageError) return;
+    if (typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) void fetchNextPage();
+      },
+      { root, rootMargin: "400px 0px" },
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
 
   // Group rows by time bucket. The server already orders newest →
   // oldest so a single pass preserves both global order and group
@@ -201,9 +252,9 @@ export function ConversationList({
       </div>
 
       <div ref={listRef} className="flex-1 overflow-y-auto">
-        {q.isPending ? (
+        {q.isPending && emails.length === 0 ? (
           <SkeletonRows />
-        ) : q.isError ? (
+        ) : q.isError && emails.length === 0 ? (
           <div className="px-5 py-12 text-center">
             <p className="text-[12.5px] text-slate-900 font-medium mb-1">
               Couldn't load inbox
@@ -269,22 +320,33 @@ export function ConversationList({
                 </div>
               </section>
             ))}
-            {q.hasNextPage && (
-              <div className="px-3 py-3 flex justify-center border-t border-slate-200/60">
-                <button
-                  onClick={() => q.fetchNextPage()}
-                  disabled={q.isFetchingNextPage}
-                  className="h-7 px-3 rounded-md border border-slate-200 hover:border-slate-300 text-[12px] text-slate-700 hover:text-slate-900 inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
-                >
-                  {q.isFetchingNextPage ? (
-                    <>
-                      <Loader2Icon className="w-3 h-3 animate-spin" />
-                      Loading…
-                    </>
-                  ) : (
-                    `Load more · ${totalShown} shown`
-                  )}
-                </button>
+            {hasNextPage && (
+              <div
+                ref={sentinelRef}
+                className="px-3 py-3 flex flex-col items-center gap-1.5 border-t border-slate-200/60"
+              >
+                {isFetchingNextPage ? (
+                  <span className="h-7 text-[12px] text-slate-400 inline-flex items-center gap-1.5">
+                    <Loader2Icon className="w-3 h-3 animate-spin" />
+                    Loading more…
+                  </span>
+                ) : (
+                  <>
+                    {isFetchNextPageError && (
+                      <span className="text-[11.5px] text-rose-600">
+                        Couldn't load more conversations
+                      </span>
+                    )}
+                    <button
+                      onClick={() => fetchNextPage()}
+                      className="h-7 px-3 rounded-md border border-slate-200 hover:border-slate-300 text-[12px] text-slate-700 hover:text-slate-900 inline-flex items-center gap-1.5 transition-colors"
+                    >
+                      {isFetchNextPageError
+                        ? "Try again"
+                        : `Load more · ${totalShown} shown`}
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </>

@@ -198,16 +198,9 @@ func (s *emailService) OnboardSMTPIMAP(ctx context.Context, userID string, orgID
 		return nil, errx.ErrEmailOnboardNoWorker
 	}
 
-	// Pick any healthy worker for the one-shot validation handshake. Tier is
-	// irrelevant here (nothing is placed yet, the worker just dials the
-	// credentials once), so fall back to the other tier rather than failing:
-	// asking only for free-tier workers made onboarding impossible on any
-	// deployment whose workers all register as premium, which includes a stock
-	// self-host install.
-	w, werr := s.workerAssignment.SelectSharedWorker(ctx, false)
-	if werr != nil || w == nil {
-		w, werr = s.workerAssignment.SelectSharedWorker(ctx, true)
-	}
+	// Any live worker can run the one-shot validation handshake: nothing is
+	// placed yet, the worker just dials the credentials once and reports back.
+	w, werr := s.workerAssignment.SelectValidationWorker(ctx)
 	if werr != nil || w == nil {
 		return nil, errx.ErrEmailOnboardNoWorker
 	}
@@ -225,8 +218,8 @@ func (s *emailService) OnboardSMTPIMAP(ctx context.Context, userID string, orgID
 		return nil, xerr
 	}
 
-	// Assign the long-term worker (free vs paid tier). Failure here is non-fatal:
-	// the scheduler will pick the account up on its next pass.
+	// Place the mailbox for real. Failure here is non-fatal: the scheduler
+	// picks the account up on its next pass.
 	if orgID != nil {
 		if _, err := s.workerAssignment.AssignWorkerToEmail(ctx, acc.ID, *orgID); err != nil {
 			errs.CaptureException(err)

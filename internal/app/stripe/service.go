@@ -12,6 +12,7 @@ import (
 	"github.com/warmbly/warmbly/internal/observability/errs"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"github.com/stripe/stripe-go/v76"
 	portalsession "github.com/stripe/stripe-go/v76/billingportal/session"
 	"github.com/stripe/stripe-go/v76/checkout/session"
@@ -1074,32 +1075,37 @@ func (s *stripeService) handleSubscriptionUpdated(ctx context.Context, event *st
 	if s.workerAssignment != nil {
 		isNowPaid := sub.HasPaidSubscription()
 
-		// Trial user converting to paid - migrate to premium workers.
-		// Use a bounded timeout context since these goroutines outlive the HTTP request.
-		if wasTrialOnly && isNowPaid {
-			go func() {
-				bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-				defer cancel()
-				s.workerAssignment.MigrateOrgToPremiumWorkers(bgCtx, sub.OrganizationID)
-			}()
-		}
+		// Converting a trial to paid no longer moves anything: workers are
+		// interchangeable, so an org's mailboxes are already wherever the
+		// placer thinks they belong.
+		_ = wasTrialOnly
+		_ = isNowPaid
 
-		// Handle dedicated worker migration on plan change
+		// Isolated egress is the only plan change with a placement effect, and
+		// it is a reservation, not a migration: the rotation loop converges the
+		// org's mailboxes onto the reserved worker on its own schedule, which
+		// keeps a plan change from re-authenticating every mailbox at once.
 		if newPlan != nil && newPlan.ID != oldPlanID {
-			hadDedicated := oldPlan != nil && oldPlan.DedicatedWorkers > 0
-			needsDedicated := newPlan.DedicatedWorkers > 0
+			hadIsolation := oldPlan.IsolatedEgress()
+			needsIsolation := newPlan.IsolatedEgress()
 
-			if !hadDedicated && needsDedicated {
+			orgID, subID := sub.OrganizationID, sub.ID
+			switch {
+			case !hadIsolation && needsIsolation:
 				go func() {
 					bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 					defer cancel()
-					s.workerAssignment.MigrateOrgToDedicated(bgCtx, sub.OrganizationID, sub.ID)
+					if err := s.workerAssignment.ReserveIsolatedWorker(bgCtx, orgID, subID); err != nil {
+						log.Warn().Err(err).Str("org_id", orgID.String()).Msg("stripe: reserve isolated worker failed")
+					}
 				}()
-			} else if hadDedicated && !needsDedicated {
+			case hadIsolation && !needsIsolation:
 				go func() {
 					bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 					defer cancel()
-					s.workerAssignment.MigrateOrgToShared(bgCtx, sub.OrganizationID)
+					if err := s.workerAssignment.ReleaseIsolatedWorker(bgCtx, orgID); err != nil {
+						log.Warn().Err(err).Str("org_id", orgID.String()).Msg("stripe: release isolated worker failed")
+					}
 				}()
 			}
 		}
@@ -1119,9 +1125,8 @@ func (s *stripeService) handleSubscriptionDeleted(ctx context.Context, event *st
 		return nil
 	}
 
-	// Check if org had dedicated workers
 	oldPlan, _ := s.planRepo.GetByID(ctx, sub.PlanID)
-	hadDedicated := oldPlan != nil && oldPlan.DedicatedWorkers > 0
+	hadIsolation := oldPlan.IsolatedEgress()
 
 	sub.Status = models.SubscriptionStatusCanceled
 	canceledAt := time.Now()
@@ -1131,21 +1136,17 @@ func (s *stripeService) handleSubscriptionDeleted(ctx context.Context, event *st
 		return errx.New(errx.Internal, "failed to update subscription")
 	}
 
-	// Handle worker migration - move back to free tier workers.
-	// Use bounded timeout context since these goroutines outlive the HTTP request.
-	if s.workerAssignment != nil {
+	// Cancelling releases the reserved worker back to the fleet. Nothing else
+	// moves: a cancelled org's mailboxes keep the workers they are on, which
+	// is both cheaper and better for them than a forced re-authentication.
+	if s.workerAssignment != nil && hadIsolation {
 		orgID := sub.OrganizationID
-		if hadDedicated {
-			go func() {
-				bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-				defer cancel()
-				s.workerAssignment.MigrateOrgToShared(bgCtx, orgID)
-			}()
-		}
 		go func() {
 			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
-			s.workerAssignment.MigrateOrgToFreeWorkers(bgCtx, orgID)
+			if err := s.workerAssignment.ReleaseIsolatedWorker(bgCtx, orgID); err != nil {
+				log.Warn().Err(err).Str("org_id", orgID.String()).Msg("stripe: release isolated worker failed")
+			}
 		}()
 	}
 

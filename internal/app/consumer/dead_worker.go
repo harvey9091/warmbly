@@ -243,7 +243,7 @@ func (s *JobsService) deactivateIfLongDead(ctx context.Context, w models.Worker)
 	if n, herr := s.Cache.Exists(ctx, "worker:heartbeat:"+w.ID.String()).Result(); herr != nil || n > 0 {
 		return
 	}
-	if err := s.WorkerRepo.DeactivateWorker(ctx, w.ID); err != nil {
+	if err := s.FleetNodeRepo.Deactivate(ctx, w.ID); err != nil {
 		log.Warn().Err(err).Str("worker_id", w.ID.String()).Msg("failed to deactivate dead worker")
 		return
 	}
@@ -262,9 +262,7 @@ func (s *JobsService) accountOrgs(ctx context.Context, accountIDs []uuid.UUID) m
 }
 
 func (s *JobsService) findHealthyWorker(ctx context.Context, deadWorker models.Worker) (*models.Worker, error) {
-	// Get workers of the same tier that are alive
-	freeTier := deadWorker.FreeTier
-	workers, err := s.WorkerRepo.GetSharedWorkersByTier(ctx, freeTier)
+	workers, err := s.WorkerRepo.ListPlaceableWorkers(ctx)
 	if err != nil {
 		return nil, err
 	}

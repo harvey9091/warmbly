@@ -732,11 +732,12 @@ func (r *adminRepository) ListWorkers(ctx context.Context, cursor *uuid.UUID, li
 	}
 
 	query := `
-		SELECT w.id, w.name, COALESCE(w.notes, ''), w.ip_addr, w.active,
-			COALESCE(w.free_tier, false), COALESCE(w.worker_type, 'shared'),
+		SELECT w.id, n.name, n.notes, n.address, n.active,
+			n.region,
 			w.created_at, w.updated_at,
 			(SELECT COUNT(*) FROM email_accounts ea WHERE ea.worker_id = w.id) as connected_emails
 		FROM workers w
+		JOIN fleet_nodes n ON n.id = w.id
 		` + whereClause + `
 		ORDER BY w.created_at DESC
 		LIMIT $1
@@ -753,7 +754,7 @@ func (r *adminRepository) ListWorkers(ctx context.Context, cursor *uuid.UUID, li
 		var w models.AdminWorkerDetail
 		err := rows.Scan(
 			&w.ID, &w.Name, &w.Notes, &w.IPAddr, &w.Active,
-			&w.FreeTier, &w.WorkerType,
+			&w.Region,
 			&w.CreatedAt, &w.UpdatedAt,
 			&w.ConnectedEmails,
 		)
@@ -782,19 +783,20 @@ func (r *adminRepository) ListWorkers(ctx context.Context, cursor *uuid.UUID, li
 // GetWorkerDetail gets detailed worker information
 func (r *adminRepository) GetWorkerDetail(ctx context.Context, workerID uuid.UUID) (*models.AdminWorkerDetail, error) {
 	query := `
-		SELECT w.id, w.name, COALESCE(w.notes, ''), w.ip_addr, w.active,
-			COALESCE(w.free_tier, false), COALESCE(w.worker_type, 'shared'),
+		SELECT w.id, n.name, n.notes, n.address, n.active,
+			n.region,
 			w.created_at, w.updated_at,
 			(SELECT COUNT(*) FROM email_accounts ea WHERE ea.worker_id = w.id) as connected_emails,
 			(SELECT COUNT(*) FROM email_accounts ea WHERE ea.worker_id = w.id AND ea.warmup IS NOT NULL) as warmup_emails
 		FROM workers w
+		JOIN fleet_nodes n ON n.id = w.id
 		WHERE w.id = $1
 	`
 
 	var w models.AdminWorkerDetail
 	err := r.db.QueryRow(ctx, query, workerID).Scan(
 		&w.ID, &w.Name, &w.Notes, &w.IPAddr, &w.Active,
-		&w.FreeTier, &w.WorkerType,
+		&w.Region,
 		&w.CreatedAt, &w.UpdatedAt,
 		&w.ConnectedEmails, &w.WarmupEmails,
 	)
@@ -808,8 +810,12 @@ func (r *adminRepository) GetWorkerDetail(ctx context.Context, workerID uuid.UUI
 }
 
 // UpdateWorker updates a worker
+// UpdateWorker applies the handful of things an operator may set on a worker.
+// All of them describe the machine rather than the mail it carries, so all of
+// them live on the node; `workers` holds only derived placement state, which
+// nobody edits by hand.
 func (r *adminRepository) UpdateWorker(ctx context.Context, workerID uuid.UUID, update *models.AdminUpdateWorker) error {
-	setClauses := []string{"updated_at = NOW()"}
+	setClauses := []string{"updated_at = now()"}
 	args := []interface{}{workerID}
 	argNum := 2
 
@@ -823,18 +829,21 @@ func (r *adminRepository) UpdateWorker(ctx context.Context, workerID uuid.UUID, 
 		args = append(args, *update.Notes)
 		argNum++
 	}
+	if update.Region != nil {
+		setClauses = append(setClauses, "region = $"+itoa(argNum))
+		args = append(args, *update.Region)
+		argNum++
+	}
 	if update.Active != nil {
 		setClauses = append(setClauses, "active = $"+itoa(argNum))
 		args = append(args, *update.Active)
 		argNum++
 	}
-	if update.WorkerType != nil {
-		setClauses = append(setClauses, "worker_type = $"+itoa(argNum))
-		args = append(args, *update.WorkerType)
-		argNum++
+	if len(setClauses) == 1 {
+		return nil // nothing to change
 	}
 
-	query := "UPDATE workers SET " + joinStrings(setClauses, ", ") + " WHERE id = $1"
+	query := "UPDATE fleet_nodes SET " + joinStrings(setClauses, ", ") + " WHERE id = $1"
 	_, err := r.db.Exec(ctx, query, args...)
 	return err
 }
@@ -1748,7 +1757,7 @@ func (r *adminRepository) GetPlatformOverview(ctx context.Context) (*models.Plat
 	r.db.QueryRow(ctx, `SELECT COUNT(*) FROM workers`).Scan(&overview.TotalWorkers)
 
 	// Active workers
-	r.db.QueryRow(ctx, `SELECT COUNT(*) FROM workers WHERE active = true`).Scan(&overview.ActiveWorkers)
+	r.db.QueryRow(ctx, `SELECT COUNT(*) FROM fleet_nodes WHERE role = 'worker' AND active`).Scan(&overview.ActiveWorkers)
 
 	// Pending appeals
 	r.db.QueryRow(ctx, `SELECT COUNT(*) FROM warmup_appeals WHERE status = 'pending'`).Scan(&overview.PendingAppeals)

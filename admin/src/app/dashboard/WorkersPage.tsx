@@ -1,8 +1,9 @@
-// Workers explorer — the managed-worker control plane as a faceted browser.
-// Data is fetched all-at-once from /admin/workers/managed (small N), so search,
-// faceting, and sort run client-side; the Explorer rail mirrors the Users /
-// Organizations / Mailboxes browsers. SSH lifecycle (install / restart /
-// uninstall) lives in each worker's detail page.
+// Fleet explorer — every machine running Warmbly, as a faceted browser.
+//
+// Both roles are here: a worker sends and syncs mail, a consumer processes
+// events. They share one lifecycle (enrol, heartbeat, self-update) so they
+// share one table. Data is fetched all-at-once (small N), so search, faceting
+// and sort run client-side, mirroring the Users / Organizations browsers.
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -22,8 +23,7 @@ import {
 } from "@/components/data/Explorer";
 import { DataTable, type Column } from "@/components/data/DataTable";
 import { emptyRange, rangeActive, type DateRange } from "@/lib/dateRange";
-import { listManagedWorkers } from "@/lib/api/client/admin/workers";
-import type { ManagedWorker } from "@/lib/api/models/admin";
+import { listFleetNodes, nodeNeedsUpdate, type FleetNode } from "@/lib/api/client/admin/fleetNodes";
 
 const OFFLINE_MS = 5 * 60_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -43,7 +43,7 @@ function inDateRange(iso: string | undefined, r: DateRange): boolean {
 
 type LiveKey = "online" | "stale" | "offline" | "none";
 
-function liveKey(w: ManagedWorker): LiveKey {
+function liveKey(w: FleetNode): LiveKey {
     if (!w.last_seen_at) return "none";
     const age = Date.now() - new Date(w.last_seen_at).getTime();
     if (age < 90_000) return "online";
@@ -58,7 +58,7 @@ const LIVE_LABEL: Record<LiveKey, { label: string; cls: string }> = {
     none: { label: "no heartbeat", cls: "text-zinc-400" },
 };
 
-const columns: Column<ManagedWorker>[] = [
+const columns: Column<FleetNode>[] = [
     {
         id: "name",
         header: "Worker",
@@ -75,16 +75,28 @@ const columns: Column<ManagedWorker>[] = [
         csv: (w) => w.name || w.id,
     },
     {
-        id: "host",
-        header: "Host",
+        id: "role",
+        header: "Role",
+        sortable: true,
+        sortKey: "role",
         cell: (w) => (
-            <span className="font-mono text-[11px]">
-                {w.ssh_user ? `${w.ssh_user}@` : ""}
-                {w.ssh_host || w.ip_addr}
-                {w.ssh_port ? `:${w.ssh_port}` : ""}
-            </span>
+            <Badge variant="outline" className="text-[10px]">
+                {w.role}
+            </Badge>
         ),
-        csv: (w) => w.ssh_host || w.ip_addr,
+        csv: (w) => w.role,
+    },
+    {
+        id: "address",
+        header: "Address",
+        cell: (w) => <span className="font-mono text-[11px]">{w.address || "—"}</span>,
+        csv: (w) => w.address,
+    },
+    {
+        id: "region",
+        header: "Region",
+        cell: (w) => <span className="font-mono text-[11px]">{w.region || "—"}</span>,
+        csv: (w) => w.region,
     },
     {
         id: "live",
@@ -95,12 +107,48 @@ const columns: Column<ManagedWorker>[] = [
         },
         csv: (w) => LIVE_LABEL[liveKey(w)].label,
     },
-    { id: "mailboxes", header: "Mailboxes", align: "right", sortable: true, sortKey: "mailboxes", cell: (w) => <span className="tabular-nums">{w.account_count}</span>, csv: (w) => w.account_count },
     {
-        id: "image",
-        header: "Image",
-        cell: (w) => (w.image_version ? <span className="font-mono text-xs">{w.image_version}</span> : <span className="text-xs text-muted-foreground">—</span>),
-        csv: (w) => w.image_version || "",
+        id: "mailboxes",
+        header: "Mailboxes",
+        align: "right",
+        sortable: true,
+        sortKey: "mailboxes",
+        cell: (w) =>
+            w.mailbox_count === undefined ? (
+                <span className="text-xs text-muted-foreground">—</span>
+            ) : (
+                <span className="tabular-nums">{w.mailbox_count}</span>
+            ),
+        csv: (w) => w.mailbox_count ?? "",
+    },
+    {
+        // The pending update is shown inline, because "which machines are
+        // behind" is the question this table exists to answer.
+        id: "version",
+        header: "Version",
+        cell: (w) =>
+            nodeNeedsUpdate(w) ? (
+                <span className="font-mono text-xs">
+                    {w.version || "—"}
+                    <span className="text-muted-foreground"> → </span>
+                    <span className="text-amber-600">{w.desired_version}</span>
+                </span>
+            ) : (
+                <span className="font-mono text-xs">{w.version || "—"}</span>
+            ),
+        csv: (w) => w.version || "",
+    },
+    {
+        id: "memory",
+        header: "Memory",
+        align: "right",
+        cell: (w) =>
+            w.usage?.memory_mb === undefined ? (
+                <span className="text-xs text-muted-foreground">—</span>
+            ) : (
+                <span className="tabular-nums text-xs">{w.usage.memory_mb} MB</span>
+            ),
+        csv: (w) => w.usage?.memory_mb ?? "",
         defaultHidden: true,
     },
     {
@@ -140,12 +188,14 @@ const columns: Column<ManagedWorker>[] = [
     },
 ];
 
-function compare(a: ManagedWorker, b: ManagedWorker, by: string): number {
+function compare(a: FleetNode, b: FleetNode, by: string): number {
     switch (by) {
         case "name":
             return (a.name || a.id).localeCompare(b.name || b.id);
+        case "role":
+            return a.role.localeCompare(b.role);
         case "mailboxes":
-            return a.account_count - b.account_count;
+            return (a.mailbox_count ?? -1) - (b.mailbox_count ?? -1);
         case "seen":
             return new Date(a.last_seen_at || 0).getTime() - new Date(b.last_seen_at || 0).getTime();
         case "created":
@@ -159,7 +209,7 @@ export default function WorkersPage() {
     const nav = useNavigate();
     const { data, isLoading, error, refetch } = useQuery({
         queryKey: ["admin", "workers", "managed"],
-        queryFn: listManagedWorkers,
+        queryFn: () => listFleetNodes(),
     });
 
     const [query, setQuery] = useState("");
@@ -179,20 +229,20 @@ export default function WorkersPage() {
         const q = query.trim().toLowerCase();
         if (q) {
             all = all.filter((w) =>
-                `${w.name} ${w.id} ${w.ssh_host ?? ""} ${w.ip_addr} ${w.image_version ?? ""} ${(w.tags || []).join(" ")}`
+                `${w.name} ${w.id} ${w.role} ${w.address} ${w.region} ${w.version} ${(w.tags || []).join(" ")}`
                     .toLowerCase()
                     .includes(q),
             );
         }
         if (live) all = all.filter((w) => liveKey(w) === live);
         if (activeOnly) all = all.filter((w) => w.active);
-        if (hasMailboxes) all = all.filter((w) => w.account_count > 0);
+        if (hasMailboxes) all = all.filter((w) => (w.mailbox_count ?? 0) > 0);
         if (hasError) all = all.filter((w) => !!w.last_error && w.last_error !== "");
         if (hasTags) all = all.filter((w) => (w.tags?.length ?? 0) > 0);
-        if (mbMin !== undefined) all = all.filter((w) => w.account_count >= mbMin);
-        if (mbMax !== undefined) all = all.filter((w) => w.account_count <= mbMax);
+        if (mbMin !== undefined) all = all.filter((w) => (w.mailbox_count ?? 0) >= mbMin);
+        if (mbMax !== undefined) all = all.filter((w) => (w.mailbox_count ?? 0) <= mbMax);
         if (rangeActive(created)) all = all.filter((w) => inDateRange(w.created_at, created));
-        if (rangeActive(lastSeen)) all = all.filter((w) => inDateRange(w.last_seen_at, lastSeen));
+        if (rangeActive(lastSeen)) all = all.filter((w) => inDateRange(w.last_seen_at ?? undefined, lastSeen));
         if (sort.by) {
             all = [...all].sort((a, b) => compare(a, b, sort.by) * (sort.desc ? -1 : 1));
         }
@@ -227,8 +277,8 @@ export default function WorkersPage() {
     return (
         <div>
             <PageHeader
-                title="Workers"
-                description="Physical worker processes managed over SSH. One worker = one machine running the Warmbly worker binary."
+                title="Fleet"
+                description="Every machine running Warmbly. They enrol themselves, report what they are running, and stay on the version you set."
             >
                 <Button size="sm" asChild>
                     <Link to="/workers/new">

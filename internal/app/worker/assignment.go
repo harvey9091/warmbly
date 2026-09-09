@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"errors"
-	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,67 +12,101 @@ import (
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
-// defaultMailboxWeight is the weight applied when AssignWorkerToEmail
-// can't or won't fetch placement hints (e.g. the email account row was
-// just deleted, or the lookup fails). 1.0 lines up with cold_smtp, which
-// is the conservative assumption: better to over-account for the
-// placement than to silently under-count and let a worker over-commit.
+// defaultMailboxWeight is the weight applied when placement can't fetch the
+// mailbox's provider (row just deleted, or the lookup failed). 1.0 lines up
+// with a raw SMTP mailbox, which is the conservative assumption: better to
+// over-account for the placement than to let a worker over-commit.
 const defaultMailboxWeight = 1.0
 
 var (
 	ErrNoAvailableWorkers = errors.New("no available workers")
-	ErrNoDedicatedWorkers = errors.New("no dedicated workers available")
-	ErrOrgAlreadyAssigned = errors.New("organization already has a dedicated worker assigned")
+	ErrNoIdleWorkers      = errors.New("no idle worker available to reserve")
+	ErrOrgAlreadyReserved = errors.New("organization already has a reserved worker")
 )
 
+// WorkerAssignmentService places mailboxes onto workers and keeps them there.
+//
+// There is one kind of worker. Placement is a score over live facts (capacity,
+// health, incumbency, sign-in geography, tenant blast radius, per-provider
+// crowding), never a lookup of matching labels, because the worker is not the
+// sending identity: it authenticates to the customer's mailbox provider, which
+// delivers from its own outbound pool.
 type WorkerAssignmentService interface {
-	// AssignWorkerToEmail assigns an appropriate worker to an email account
-	// based on the organization's subscription status (free tier vs paid)
+	// AssignWorkerToEmail gives a newly connected mailbox a home.
 	AssignWorkerToEmail(ctx context.Context, emailAccountID, orgID uuid.UUID) (*uuid.UUID, error)
 
-	// UnassignWorkerFromEmail releases a mailbox from its worker, returning the
-	// worker's account count and load score.
+	// UnassignWorkerFromEmail releases a mailbox from its worker and refunds
+	// the worker's load score.
 	UnassignWorkerFromEmail(ctx context.Context, emailAccountID uuid.UUID) error
 
-	// IsWorkerLive reports whether a worker can still receive commands: active
-	// and heartbeating inside the liveness window. A mailbox assigned to a
-	// worker that fails this cannot send until it is placed somewhere else.
+	// IsWorkerLive reports whether a worker can still receive commands. A
+	// mailbox on a worker that fails this cannot send until it is re-placed.
 	IsWorkerLive(ctx context.Context, workerID uuid.UUID) (bool, error)
 
-	// SelectSharedWorker selects the least loaded shared worker for the given tier
-	SelectSharedWorker(ctx context.Context, freeTier bool) (*models.Worker, error)
+	// SelectWorkerFor scores the fleet for one mailbox without committing to
+	// anything. The rotation loop uses it to ask "is there somewhere better?"
+	// before deciding a move is worth its provider-trust cost.
+	SelectWorkerFor(ctx context.Context, req PlacementLookup) (*PlacementResult, error)
 
-	// SelectSharedWorkerForBand selects the shared worker whose risk_pool
-	// matches the mailbox's risk band. Strict: a risky/quarantine mailbox is
-	// never placed in the clean pool — if the matching pool is empty an idle
-	// clean worker is promoted into it, and if there's nothing to promote the
-	// call refuses rather than co-locating risky traffic with trusted inboxes.
-	SelectSharedWorkerForBand(ctx context.Context, freeTier bool, band models.EmailRiskBand) (*models.Worker, error)
+	// MoveMailbox re-places a mailbox onto a specific worker, keeping the
+	// account counts and load scores on both sides consistent.
+	MoveMailbox(ctx context.Context, emailAccountID uuid.UUID, from *uuid.UUID, to uuid.UUID) error
 
-	// Dedicated worker management
-	AssignDedicatedWorker(ctx context.Context, orgID, subscriptionID uuid.UUID) error
-	ReleaseDedicatedWorker(ctx context.Context, orgID uuid.UUID) error
-	GetDedicatedWorker(ctx context.Context, orgID uuid.UUID) (*models.Worker, error)
+	// Isolated egress: the entitlement that reserves a worker for one
+	// organization so its mailboxes sign in from an address nobody else uses.
+	ReserveIsolatedWorker(ctx context.Context, orgID, subscriptionID uuid.UUID) error
+	ReleaseIsolatedWorker(ctx context.Context, orgID uuid.UUID) error
+	GetIsolatedWorker(ctx context.Context, orgID uuid.UUID) (*models.Worker, error)
 
-	// Migration operations
-	MigrateOrgToPremiumWorkers(ctx context.Context, orgID uuid.UUID) error
-	MigrateOrgToFreeWorkers(ctx context.Context, orgID uuid.UUID) error
-	MigrateOrgToDedicated(ctx context.Context, orgID uuid.UUID, subscriptionID uuid.UUID) error
-	MigrateOrgToShared(ctx context.Context, orgID uuid.UUID) error
-	MigrateEmailsFromWorker(ctx context.Context, workerID uuid.UUID, targetFreeTier bool) error
+	// MigrateEmailsFromWorker drains every mailbox off a worker.
+	MigrateEmailsFromWorker(ctx context.Context, workerID uuid.UUID) error
+
+	// SelectValidationWorker returns any live worker to run a one-shot
+	// credential handshake on. Nothing is placed, so no scoring applies: the
+	// worker only dials the mailbox once and reports back.
+	SelectValidationWorker(ctx context.Context) (*models.Worker, error)
+}
+
+// PlacementLookup asks "where should this mailbox live?".
+type PlacementLookup struct {
+	EmailAccountID uuid.UUID
+	OrgID          uuid.UUID
+	// CurrentWorkerID is the incumbent, if any. Present means the caller is
+	// considering a move and the incumbent should get its stickiness bonus.
+	CurrentWorkerID *uuid.UUID
+	// ExcludeWorkerID drops one worker from consideration entirely. Set when
+	// draining: without it the drained worker is still the incumbent, wins on
+	// stickiness, and the drain is a silent no-op.
+	ExcludeWorkerID *uuid.UUID
+	// Region is where the mailbox signs in from today. Supplied on a
+	// re-placement so a move keeps the sign-in geography its provider has
+	// already seen; empty on first placement, which scores neutral.
+	Region string
+}
+
+// PlacementResult is the chosen worker plus the score it and the incumbent
+// earned, so a caller can decide whether the difference justifies a migration
+// and log why.
+type PlacementResult struct {
+	Worker         *models.Worker
+	Score          float64
+	IncumbentScore float64
+	// IncumbentEligible is false when the current worker could not host the
+	// mailbox at all, in which case IncumbentScore is meaningless.
+	IncumbentEligible bool
+	// Mandated is set when the worker was chosen by an entitlement rather than
+	// by scoring, which today means an isolated-egress reservation. Callers
+	// must not weigh it against the incumbent's score: the reserved worker
+	// usually scores LOWER, because the incumbent carries the stickiness
+	// bonus, so comparing them would refuse the move forever and the
+	// organization would never converge onto the worker it is paying for.
+	Mandated bool
 }
 
 type workerAssignmentService struct {
 	workerRepo repository.WorkerRepository
 	subRepo    repository.SubscriptionRepository
 	planRepo   repository.PlanRepository
-	// selfHost treats every org as paid for placement. Set when
-	// BILLING_PROVIDER=none (the self-host default), where HasPaidSubscription
-	// is structurally always false because it requires a Stripe subscription
-	// id. Without this, every org counts as free tier and placement only ever
-	// looks at free-tier workers, so a stock install can never place a mailbox.
-	// Mirrors feature.gate's selfHost unlock.
-	selfHost bool
 }
 
 func NewAssignmentService(
@@ -85,142 +118,223 @@ func NewAssignmentService(
 		workerRepo: workerRepo,
 		subRepo:    subRepo,
 		planRepo:   planRepo,
-		selfHost:   config.BillingProvider() == "none",
 	}
 }
 
-// AssignWorkerToEmail assigns an appropriate worker to an email account
+// AssignWorkerToEmail places a mailbox for the first time.
 func (s *workerAssignmentService) AssignWorkerToEmail(ctx context.Context, emailAccountID, orgID uuid.UUID) (*uuid.UUID, error) {
-	// 1. Check organization's subscription status
-	sub, err := s.subRepo.GetByOrganizationID(ctx, orgID)
+	res, err := s.SelectWorkerFor(ctx, PlacementLookup{EmailAccountID: emailAccountID, OrgID: orgID})
 	if err != nil {
 		return nil, err
 	}
-
-	// 2. Determine if free tier or paid. With billing disabled there is no
-	// paid/free split to enforce, so everything places as paid.
-	isPaidOrg := s.selfHost || (sub != nil && sub.HasPaidSubscription())
-
-	// 3. Compute mailbox weight once - reused for whichever worker we
-	// land on (dedicated or shared). 0 is a sentinel that means
-	// "couldn't look it up, use default" and is handled by
-	// resolveMailboxWeight below.
-	weight := s.resolveMailboxWeight(ctx, emailAccountID)
-
-	// 4. Check if paid org has dedicated worker plan. Requires a real
-	// subscription to read a plan from: with billing disabled isPaidOrg is true
-	// even for an org that has no subscription row at all, which is what an org
-	// created before the free-trial plan shipped looks like. Those fall through
-	// to shared placement.
-	if isPaidOrg && sub != nil {
-		plan, err := s.planRepo.GetByID(ctx, sub.PlanID)
-		if err != nil {
-			return nil, err
-		}
-		if plan != nil && plan.DedicatedWorkers > 0 {
-			// Check if org has a dedicated worker
-			dedicatedWorker, err := s.workerRepo.GetDedicatedWorkerByOrgID(ctx, orgID)
-			if err != nil {
-				return nil, err
-			}
-			// No dedicated worker bound yet — e.g. this mailbox was added
-			// before the subscription-upgrade migration ran, or that
-			// migration found no free dedicated box. Allocate one on demand:
-			// AssignDedicatedWorker promotes a spare premium shared worker to
-			// dedicated when the dedicated pool is empty. If there's nothing
-			// to promote (ErrNoDedicatedWorkers) we fall through to shared
-			// placement rather than failing the add — the rebalancer/next
-			// onboarding will retry.
-			if dedicatedWorker == nil {
-				aerr := s.AssignDedicatedWorker(ctx, orgID, sub.ID)
-				if aerr != nil && !errors.Is(aerr, ErrNoDedicatedWorkers) && !errors.Is(aerr, ErrOrgAlreadyAssigned) {
-					return nil, aerr
-				}
-				if aerr == nil || errors.Is(aerr, ErrOrgAlreadyAssigned) {
-					dedicatedWorker, err = s.workerRepo.GetDedicatedWorkerByOrgID(ctx, orgID)
-					if err != nil {
-						return nil, err
-					}
-				}
-			}
-			if dedicatedWorker != nil {
-				// Assign to dedicated worker
-				if err := s.workerRepo.UpdateEmailAccountWorker(ctx, emailAccountID, dedicatedWorker.ID); err != nil {
-					return nil, err
-				}
-				if err := s.workerRepo.IncrementAccountCount(ctx, dedicatedWorker.ID); err != nil {
-					return nil, err
-				}
-				// Best-effort load_score bump. Non-fatal: dedicated workers
-				// don't use load_score for placement (one customer per
-				// worker), but keeping the column accurate makes the
-				// capacity view useful for ops dashboards.
-				_ = s.workerRepo.AddLoadScore(ctx, dedicatedWorker.ID, weight)
-				// Dedicated workers are paid-org only, so the mailbox belongs
-				// to the premium warmup pool. Set it explicitly to match the
-				// shared-premium path and MigrateOrgToDedicated — otherwise the
-				// account keeps the schema default 'free' and reporting/
-				// filtering misclassifies it. Non-fatal.
-				if err := s.workerRepo.UpdateEmailAccountWarmupPoolType(ctx, emailAccountID, "premium"); err != nil {
-					// Log but don't fail
-				}
-				return &dedicatedWorker.ID, nil
-			}
-		}
+	if res == nil || res.Worker == nil {
+		return nil, ErrNoAvailableWorkers
 	}
 
-	// 5. Assign to a shared worker, strict on BOTH axes:
-	//   - tier separation: free trial → free workers, paid → premium workers
-	//   - risk segregation: the mailbox's risk_band must match the worker's
-	//     risk_pool, so a risky/quarantine inbox never lands on a clean
-	//     worker next to trusted ones. A fresh mailbox is 'clean' (the
-	//     column default until the warmup health sweep classifies it), so
-	//     onboarding takes the capacity-aware clean path; only already
-	//     degraded mailboxes hit the strict risky/quarantine branch.
-	freeTier := !isPaidOrg
-	band, err := s.workerRepo.GetEmailAccountRiskBand(ctx, emailAccountID)
-	if err != nil {
+	if err := s.workerRepo.UpdateEmailAccountWorker(ctx, emailAccountID, res.Worker.ID); err != nil {
 		return nil, err
 	}
-	worker, err := s.selectSharedWorkerForBandWeight(ctx, freeTier, band, weight)
-	if err != nil {
-		return nil, err
+	if err := s.workerRepo.IncrementAccountCount(ctx, res.Worker.ID); err != nil {
+		// Non-fatal: the next capacity-view refresh corrects any drift, and
+		// stranding a freshly connected mailbox would be much worse.
+		log.Warn().Err(err).Str("worker_id", res.Worker.ID.String()).Msg("placement: increment account count failed")
+	}
+	if err := s.workerRepo.AddLoadScore(ctx, res.Worker.ID, s.resolveMailboxWeight(ctx, emailAccountID)); err != nil {
+		log.Warn().Err(err).Str("worker_id", res.Worker.ID.String()).Msg("placement: load score bump failed")
 	}
 
-	// 6. Update database
-	if err := s.workerRepo.UpdateEmailAccountWorker(ctx, emailAccountID, worker.ID); err != nil {
-		return nil, err
+	// Warmup pool membership still follows the subscription. It used to be a
+	// by-product of tier placement; with tiers gone it has to be set
+	// explicitly, or every new mailbox keeps the column default and paid
+	// customers silently warm in the free pool.
+	if err := s.workerRepo.UpdateEmailAccountWarmupPoolType(ctx, emailAccountID, s.warmupPoolFor(ctx, orgID)); err != nil {
+		log.Warn().Err(err).Str("account_id", emailAccountID.String()).Msg("placement: warmup pool assignment failed")
 	}
-
-	// 7. Update worker account count
-	if err := s.workerRepo.IncrementAccountCount(ctx, worker.ID); err != nil {
-		return nil, err
-	}
-
-	// 8. Bump load_score so the next selection sees this worker as
-	// proportionally more loaded. Non-fatal so a transient DB hiccup
-	// doesn't strand the mailbox; the next capacity-view refresh
-	// will correct any drift.
-	if err := s.workerRepo.AddLoadScore(ctx, worker.ID, weight); err != nil {
-		// log but don't fail
-	}
-
-	// 9. Update warmup pool type
-	poolType := "free"
-	if !freeTier {
-		poolType = "premium"
-	}
-	if err := s.workerRepo.UpdateEmailAccountWarmupPoolType(ctx, emailAccountID, poolType); err != nil {
-		// Log but don't fail
-	}
-
-	return &worker.ID, nil
+	return &res.Worker.ID, nil
 }
 
-// resolveMailboxWeight asks the repository for the mailbox's provider +
-// warmup flag, then turns that into a load weight via MailboxWeight.
-// Any error or missing row falls back to defaultMailboxWeight so a
-// transient DB blip doesn't break placement.
+// SelectWorkerFor scores every eligible worker and returns the best, plus what
+// the incumbent scored so the caller can weigh a move against staying put.
+func (s *workerAssignmentService) SelectWorkerFor(ctx context.Context, lookup PlacementLookup) (*PlacementResult, error) {
+	hint, _ := s.workerRepo.GetEmailAccountPlacementHint(ctx, lookup.EmailAccountID)
+	provider := ""
+	weight := defaultMailboxWeight
+	if hint != nil {
+		provider = hint.Provider
+		weight = MailboxWeight(hint.Provider, hint.IsWarmup)
+	}
+
+	orgTotal, err := s.workerRepo.CountOrgMailboxes(ctx, lookup.OrgID)
+	if err != nil {
+		// Blast radius just loses its denominator; placement still works.
+		orgTotal = 0
+	}
+
+	req := PlacementRequest{
+		Weight:            weight,
+		Region:            lookup.Region,
+		CurrentWorkerID:   lookup.CurrentWorkerID,
+		OrgMailboxesTotal: orgTotal,
+		IsolatedEgress:    s.hasIsolatedEgress(ctx, lookup.OrgID),
+	}
+
+	rows, err := s.workerRepo.ListPlacementCandidates(ctx, lookup.OrgID, provider, nil)
+	if err != nil || len(rows) == 0 {
+		// A broken or unpopulated capacity view must not take onboarding down.
+		// Fall back to the least-loaded live worker.
+		return s.selectFallback(ctx, req, lookup.ExcludeWorkerID)
+	}
+
+	candidates := make([]PlacementCandidate, 0, len(rows))
+	for _, row := range rows {
+		if lookup.ExcludeWorkerID != nil && row.WorkerID == *lookup.ExcludeWorkerID {
+			continue
+		}
+		candidates = append(candidates, PlacementCandidate{
+			WorkerID: row.WorkerID,
+			Region:   row.Region,
+			Health:   row.HealthState,
+			Capacity: ComputeCapacity(WorkerCapacityRow{
+				WorkerID:         row.WorkerID,
+				Region:           row.Region,
+				HealthState:      row.HealthState,
+				LoadScore:        row.LoadScore,
+				BaseCapacity:     row.BaseCapacity,
+				HealthMultiplier: row.HealthMultiplier,
+				AgeMultiplier:    row.AgeMultiplier,
+				SendsAttempted1h: row.SendsAttempted1h,
+				SendsSucceeded1h: row.SendsSucceeded1h,
+				BouncesHard1h:    row.BouncesHard1h,
+				BouncesSoft1h:    row.BouncesSoft1h,
+				Complaints1h:     row.Complaints1h,
+				AuthErrors1h:     row.AuthErrors1h,
+			}),
+			TotalMailboxes:        row.TotalMailboxes,
+			OrgMailboxesHere:      row.OrgMailboxesHere,
+			ProviderMailboxesHere: row.ProviderMailboxesHere,
+		})
+	}
+
+	// The reserved worker for an isolated-egress org outranks the score: the
+	// customer is paying for that specific address. It still has to be
+	// eligible - a reserved worker that is down is not a reason to strand.
+	if req.IsolatedEgress {
+		if reserved, rerr := s.workerRepo.GetDedicatedWorkerByOrgID(ctx, lookup.OrgID); rerr == nil && reserved != nil {
+			for _, c := range candidates {
+				if c.WorkerID == reserved.ID && c.Eligible(req) {
+					res, err := s.buildResult(ctx, c, req, candidates)
+					if res != nil {
+						res.Mandated = true
+					}
+					return res, err
+				}
+			}
+		}
+	}
+
+	best := SelectPlacement(candidates, req)
+	if best == nil {
+		return s.selectFallback(ctx, req, lookup.ExcludeWorkerID)
+	}
+	return s.buildResult(ctx, *best, req, candidates)
+}
+
+func (s *workerAssignmentService) buildResult(
+	ctx context.Context,
+	chosen PlacementCandidate,
+	req PlacementRequest,
+	all []PlacementCandidate,
+) (*PlacementResult, error) {
+	worker, err := s.workerRepo.GetByID(ctx, chosen.WorkerID)
+	if err != nil {
+		return nil, err
+	}
+	if worker == nil {
+		return nil, ErrNoAvailableWorkers
+	}
+	res := &PlacementResult{Worker: worker, Score: chosen.Score(req)}
+	if req.CurrentWorkerID != nil {
+		for _, c := range all {
+			if c.WorkerID != *req.CurrentWorkerID {
+				continue
+			}
+			res.IncumbentEligible = c.Eligible(req)
+			res.IncumbentScore = c.Score(req)
+			break
+		}
+	}
+	return res, nil
+}
+
+// selectFallback is the no-capacity-view path: least-loaded live worker.
+//
+// It still refuses an unhealthy one. Without that, draining a quarantined
+// worker could empty the candidate set, fall through here, and place the
+// mailboxes onto another blocked machine, which is the opposite of what the
+// drain was for.
+func (s *workerAssignmentService) selectFallback(ctx context.Context, req PlacementRequest, exclude *uuid.UUID) (*PlacementResult, error) {
+	workers, err := s.workerRepo.ListPlaceableWorkers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range workers {
+		w := workers[i]
+		if exclude != nil && w.ID == *exclude {
+			continue
+		}
+		switch w.HealthState {
+		case models.WorkerHealthHealthy, models.WorkerHealthWatch:
+			return &PlacementResult{Worker: &w}, nil
+		}
+	}
+	return nil, ErrNoAvailableWorkers
+}
+
+// warmupPoolFor resolves which warmup pool a mailbox joins. Unrelated to
+// placement: it is a property of the organization's subscription, and workers
+// no longer carry a tier to infer it from. Anything unknown answers "free",
+// which is the conservative direction - a paid mailbox in the free pool warms
+// more slowly, where the reverse would put unproven mail in front of paying
+// customers.
+func (s *workerAssignmentService) warmupPoolFor(ctx context.Context, orgID uuid.UUID) string {
+	// Billing first: with it disabled there is no free/paid split to enforce,
+	// so every org gets the premium pool and the subscription is irrelevant.
+	// Checking the repository before this made a self-host install with no
+	// subscription repo wired fall through to "free" and warm every mailbox in
+	// the wrong pool. Mirrors feature.gate's self-host unlock.
+	if config.BillingProvider() == "none" {
+		return "premium"
+	}
+	if s.subRepo == nil {
+		return "free"
+	}
+	sub, err := s.subRepo.GetByOrganizationID(ctx, orgID)
+	if err != nil || sub == nil || !sub.HasPaidSubscription() {
+		return "free"
+	}
+	return "premium"
+}
+
+// hasIsolatedEgress reports whether the org's plan entitles it to a worker
+// nobody else sends from. Any lookup failure answers false: the entitlement
+// only ever adds preference, so losing it degrades to ordinary placement.
+func (s *workerAssignmentService) hasIsolatedEgress(ctx context.Context, orgID uuid.UUID) bool {
+	if s.subRepo == nil || s.planRepo == nil {
+		return false
+	}
+	sub, err := s.subRepo.GetByOrganizationID(ctx, orgID)
+	if err != nil || sub == nil {
+		return false
+	}
+	plan, err := s.planRepo.GetByID(ctx, sub.PlanID)
+	if err != nil || plan == nil {
+		return false
+	}
+	return plan.IsolatedEgress()
+}
+
+// resolveMailboxWeight turns the mailbox's provider + warmup flag into a load
+// weight. Any error falls back to the conservative default.
 func (s *workerAssignmentService) resolveMailboxWeight(ctx context.Context, emailAccountID uuid.UUID) float64 {
 	hint, err := s.workerRepo.GetEmailAccountPlacementHint(ctx, emailAccountID)
 	if err != nil || hint == nil {
@@ -229,15 +343,13 @@ func (s *workerAssignmentService) resolveMailboxWeight(ctx context.Context, emai
 	return MailboxWeight(hint.Provider, hint.IsWarmup)
 }
 
-// IsWorkerLive reports whether a worker is still a valid target for commands.
 func (s *workerAssignmentService) IsWorkerLive(ctx context.Context, workerID uuid.UUID) (bool, error) {
 	return s.workerRepo.IsWorkerLive(ctx, workerID)
 }
 
-// UnassignWorkerFromEmail removes the worker assignment for an email
-// account and refunds the load_score by the mailbox's weight. Decrement
-// is best-effort and clamped at zero by the repository so a duplicate
-// unassign never makes the score go negative.
+// UnassignWorkerFromEmail removes the worker assignment and refunds the load
+// score. Decrement is clamped at zero by the repository, so a duplicate
+// unassign never makes the score negative.
 func (s *workerAssignmentService) UnassignWorkerFromEmail(ctx context.Context, emailAccountID uuid.UUID) error {
 	info, err := s.workerRepo.GetEmailAccountWorkerInfo(ctx, emailAccountID)
 	if err != nil || info == nil || info.WorkerID == nil {
@@ -249,206 +361,57 @@ func (s *workerAssignmentService) UnassignWorkerFromEmail(ctx context.Context, e
 		return err
 	}
 	if err := s.workerRepo.DecrementAccountCount(ctx, *info.WorkerID); err != nil {
-		// log but don't fail
+		log.Warn().Err(err).Msg("unassign: decrement account count failed")
 	}
 	if err := s.workerRepo.AddLoadScore(ctx, *info.WorkerID, -weight); err != nil {
-		// log but don't fail
+		log.Warn().Err(err).Msg("unassign: load score refund failed")
 	}
 	return nil
 }
 
-// selectSharedWorkerForWeight picks the least-utilised worker that still
-// has at least `weight` headroom. Falls back to the legacy
-// account-count path if the capacity view returns nothing (test
-// environments, fresh deployments before the first health sample lands).
-func (s *workerAssignmentService) selectSharedWorkerForWeight(ctx context.Context, freeTier bool, weight float64) (*models.Worker, error) {
-	rows, err := s.workerRepo.ListCapacityCandidates(ctx, freeTier, nil)
-	if err != nil {
-		// Falling back here means a broken capacity view doesn't take
-		// the whole onboarding flow down. The legacy path uses
-		// account_count, which is always up to date.
-		return s.selectSharedWorkerLegacy(ctx, freeTier)
+// MoveMailbox re-places a mailbox, keeping both workers' counters consistent.
+// The weight is resolved once and applied symmetrically so a move is
+// load-neutral across the fleet.
+func (s *workerAssignmentService) MoveMailbox(ctx context.Context, emailAccountID uuid.UUID, from *uuid.UUID, to uuid.UUID) error {
+	if from != nil && *from == to {
+		return nil
 	}
-	if len(rows) == 0 {
-		return s.selectSharedWorkerLegacy(ctx, freeTier)
-	}
+	weight := s.resolveMailboxWeight(ctx, emailAccountID)
 
-	type scored struct {
-		WorkerID    uuid.UUID
-		Utilization float64
-		Headroom    float64
+	if err := s.workerRepo.UpdateEmailAccountWorker(ctx, emailAccountID, to); err != nil {
+		return err
 	}
-	candidates := make([]scored, 0, len(rows))
-	for _, row := range rows {
-		cap := ComputeCapacity(WorkerCapacityRow{
-			WorkerID:         row.WorkerID,
-			WorkerType:       row.WorkerType,
-			FreeTier:         row.FreeTier,
-			EgressKind:       row.EgressKind,
-			HealthState:      row.HealthState,
-			LoadScore:        row.LoadScore,
-			BaseCapacity:     row.BaseCapacity,
-			HealthMultiplier: row.HealthMultiplier,
-			AgeMultiplier:    row.AgeMultiplier,
-			SendsAttempted1h: row.SendsAttempted1h,
-			SendsSucceeded1h: row.SendsSucceeded1h,
-			BouncesHard1h:    row.BouncesHard1h,
-			BouncesSoft1h:    row.BouncesSoft1h,
-			Complaints1h:     row.Complaints1h,
-			AuthErrors1h:     row.AuthErrors1h,
-		})
-		headroom := cap.Effective - cap.Load
-		if headroom < weight {
-			continue
+	if from != nil {
+		if err := s.workerRepo.DecrementAccountCount(ctx, *from); err != nil {
+			log.Warn().Err(err).Msg("move: decrement source account count failed")
 		}
-		candidates = append(candidates, scored{
-			WorkerID:    row.WorkerID,
-			Utilization: cap.Utilization,
-			Headroom:    headroom,
-		})
+		if err := s.workerRepo.AddLoadScore(ctx, *from, -weight); err != nil {
+			log.Warn().Err(err).Msg("move: source load refund failed")
+		}
 	}
-	if len(candidates) == 0 {
-		// Every healthy worker is full. The legacy path will at least
-		// pick the least-loaded one and the operator can react to the
-		// alert this throws via the saturated load_score values.
-		return s.selectSharedWorkerLegacy(ctx, freeTier)
+	if err := s.workerRepo.IncrementAccountCount(ctx, to); err != nil {
+		log.Warn().Err(err).Msg("move: increment target account count failed")
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].Utilization < candidates[j].Utilization
-	})
-	best := candidates[0]
-	worker, err := s.workerRepo.GetByID(ctx, best.WorkerID)
-	if err != nil {
-		return nil, err
+	if err := s.workerRepo.AddLoadScore(ctx, to, weight); err != nil {
+		log.Warn().Err(err).Msg("move: target load bump failed")
 	}
-	if worker == nil {
-		return nil, ErrNoAvailableWorkers
-	}
-	return worker, nil
+	return nil
 }
 
-// SelectSharedWorker selects the least-utilised healthy shared worker for
-// the given tier. Capacity-aware:
+// ReserveIsolatedWorker binds an idle worker to an organization so its
+// mailboxes sign in from an address no other tenant uses.
 //
-//   - candidates come from worker_capacity_view (filtered to
-//     health_state IN ('healthy', 'watch'))
-//   - workers without enough headroom for one cold-SMTP-equivalent
-//     mailbox are filtered out
-//   - sorted ASC by utilization ratio (Load / Effective) so the
-//     least-loaded healthy worker wins
-//
-// Falls back to selectSharedWorkerLegacy (sort by account_count ASC) if
-// the capacity view returns nothing.
-func (s *workerAssignmentService) SelectSharedWorker(ctx context.Context, freeTier bool) (*models.Worker, error) {
-	return s.selectSharedWorkerForWeight(ctx, freeTier, defaultMailboxWeight)
-}
-
-// selectSharedWorkerLegacy is the pre-capacity-view selection path. Kept
-// as a separate function so the fallback in selectSharedWorkerForWeight
-// is explicit and the migration to capacity-aware placement can be
-// reversed without rewriting the call site.
-func (s *workerAssignmentService) selectSharedWorkerLegacy(ctx context.Context, freeTier bool) (*models.Worker, error) {
-	workers, err := s.workerRepo.GetSharedWorkersByTier(ctx, freeTier)
-	if err != nil {
-		return nil, err
-	}
-	if len(workers) == 0 {
-		return nil, ErrNoAvailableWorkers
-	}
-	return &workers[0], nil
-}
-
-// SelectSharedWorkerForBand picks the shared worker that should host a mailbox
-// of the given risk band. It is strict: a risky/quarantine mailbox is NEVER
-// placed in the clean pool. Used by the risk rebalancer (which has no per-
-// mailbox weight) — it delegates to selectSharedWorkerForBandWeight with the
-// default weight so initial placement and rebalancing share identical logic
-// and can't fight each other.
-func (s *workerAssignmentService) SelectSharedWorkerForBand(ctx context.Context, freeTier bool, band models.EmailRiskBand) (*models.Worker, error) {
-	return s.selectSharedWorkerForBandWeight(ctx, freeTier, band, defaultMailboxWeight)
-}
-
-// selectSharedWorkerForBandWeight is the strict, capacity-aware band selector
-// shared by initial placement and the rebalancer.
-//
-//   - clean band: route through the capacity-aware path
-//     (selectSharedWorkerForWeight), which honours per-mailbox weight and
-//     worker headroom. This is the unchanged behaviour for the common case
-//     and for installs that never enable risk pools (everything stays clean).
-//   - risky / quarantine band: place ONLY on a worker whose risk_pool matches.
-//     If the matching pool is empty, promote an idle clean worker into it
-//     rather than diluting the clean pool. If there's nothing to promote,
-//     refuse (ErrNoAvailableWorkers) — never co-locate a risky/quarantine
-//     inbox with trusted ones. The caller (onboarding) treats this as
-//     non-fatal and the rebalancer retries on the next tick.
-func (s *workerAssignmentService) selectSharedWorkerForBandWeight(ctx context.Context, freeTier bool, band models.EmailRiskBand, weight float64) (*models.Worker, error) {
-	target := band.MatchingRiskPool()
-	if target == models.WorkerRiskPoolClean {
-		return s.selectSharedWorkerForWeight(ctx, freeTier, weight)
-	}
-
-	workers, err := s.workerRepo.GetSharedWorkersByTierAndPool(ctx, freeTier, target)
-	if err != nil {
-		return nil, err
-	}
-	if len(workers) > 0 {
-		return &workers[0], nil
-	}
-
-	// No worker in the matching pool. Promote an idle clean worker into it so
-	// we keep risky/quarantine traffic strictly segregated from trusted
-	// inboxes instead of falling back onto the clean pool.
-	promoted, err := s.workerRepo.PromoteWorkerToPool(ctx, freeTier, target)
-	if err != nil {
-		return nil, err
-	}
-	if promoted != nil {
-		log.Info().
-			Str("worker_id", promoted.ID.String()).
-			Bool("free_tier", freeTier).
-			Str("risk_pool", string(target)).
-			Msg("assignment: promoted idle clean worker into risk pool")
-		return promoted, nil
-	}
-
-	// Nothing to promote. Refuse rather than dilute the clean pool.
-	return nil, ErrNoAvailableWorkers
-}
-
-// AssignDedicatedWorker assigns a dedicated worker to an organization.
-//
-// Dedicated capacity is allocated automatically: admins/customers only ever
-// pick free or premium, and the control plane creates dedicated workers as
-// needed. If the dedicated pool has no free worker, we promote a spare idle
-// premium shared worker to dedicated (the same SetWorkerType + bind sequence
-// the admin "convert to dedicated" action uses). Only when there's nothing to
-// promote do we surface ErrNoDedicatedWorkers.
-func (s *workerAssignmentService) AssignDedicatedWorker(ctx context.Context, orgID, subscriptionID uuid.UUID) error {
-	// Use atomic insert with conflict check to prevent race conditions.
-	// Two concurrent requests could both pass the "check if exists" step and
-	// both attempt to insert, causing duplicate assignments.
-	worker, err := s.workerRepo.GetAvailableDedicatedWorker(ctx)
+// The binding is a strong placement preference, not a hard pin: the worker
+// itself carries no category, so if it dies the org's mailboxes place normally
+// instead of stranding, and the rotation loop pulls them back onto a
+// replacement once one exists.
+func (s *workerAssignmentService) ReserveIsolatedWorker(ctx context.Context, orgID, subscriptionID uuid.UUID) error {
+	worker, err := s.workerRepo.GetIdleUnboundWorker(ctx)
 	if err != nil {
 		return err
 	}
-
-	// promoted tracks whether we flipped a shared worker to dedicated in this
-	// call, so we can undo it if we then lose the bind race below.
-	promoted := false
 	if worker == nil {
-		spare, perr := s.workerRepo.PromoteIdlePremiumWorkerToDedicated(ctx)
-		if perr != nil {
-			return perr
-		}
-		if spare == nil {
-			return ErrNoDedicatedWorkers
-		}
-		log.Info().
-			Str("worker_id", spare.ID.String()).
-			Str("org_id", orgID.String()).
-			Msg("assignment: promoted idle premium shared worker to dedicated")
-		worker = spare
-		promoted = true
+		return ErrNoIdleWorkers
 	}
 
 	assignment := &models.DedicatedWorkerAssignment{
@@ -464,235 +427,69 @@ func (s *workerAssignmentService) AssignDedicatedWorker(ctx context.Context, org
 		return err
 	}
 	if !created {
-		// Lost the bind race: the org already has a dedicated worker. If we
-		// promoted a worker just now, revert it to the shared pool so it
-		// isn't stranded as an unbound dedicated box. A pre-existing
-		// dedicated worker (promoted == false) is left untouched.
-		if promoted {
-			if rerr := s.workerRepo.SetWorkerType(ctx, worker.ID, models.WorkerTypeShared); rerr != nil {
-				// The promotion couldn't be undone: the worker stays marked
-				// dedicated with no binding, so GetAvailableDedicatedWorker
-				// will keep re-selecting it. Log loudly so ops can reconcile.
-				// Still return ErrOrgAlreadyAssigned — the org IS bound (by the
-				// race winner), so failing the assignment here would be wrong.
-				log.Error().Err(rerr).
-					Str("worker_id", worker.ID.String()).
-					Str("org_id", orgID.String()).
-					Msg("assignment: failed to revert promoted worker to shared after losing dedicated bind race; worker stranded as dedicated")
-			}
-		}
-		return ErrOrgAlreadyAssigned
+		// Lost the race; the org is bound by the winner. Nothing to undo,
+		// because reserving no longer mutates the worker row.
+		return ErrOrgAlreadyReserved
 	}
+	log.Info().
+		Str("worker_id", worker.ID.String()).
+		Str("org_id", orgID.String()).
+		Msg("placement: reserved worker for isolated egress")
 	return nil
 }
 
-// ReleaseDedicatedWorker releases a dedicated worker assignment
-func (s *workerAssignmentService) ReleaseDedicatedWorker(ctx context.Context, orgID uuid.UUID) error {
+func (s *workerAssignmentService) ReleaseIsolatedWorker(ctx context.Context, orgID uuid.UUID) error {
 	return s.workerRepo.ReleaseDedicatedAssignment(ctx, orgID)
 }
 
-// GetDedicatedWorker gets the dedicated worker for an organization
-func (s *workerAssignmentService) GetDedicatedWorker(ctx context.Context, orgID uuid.UUID) (*models.Worker, error) {
+func (s *workerAssignmentService) GetIsolatedWorker(ctx context.Context, orgID uuid.UUID) (*models.Worker, error) {
 	return s.workerRepo.GetDedicatedWorkerByOrgID(ctx, orgID)
 }
 
-// MigrateOrgToPremiumWorkers migrates all org's emails from free to premium workers
-// Called when a trial org subscribes to a paid plan
-func (s *workerAssignmentService) MigrateOrgToPremiumWorkers(ctx context.Context, orgID uuid.UUID) error {
-	accountIDs, err := s.workerRepo.GetEmailAccountsByOrganizationID(ctx, orgID)
-	if err != nil {
-		return err
-	}
-
-	for _, accountID := range accountIDs {
-		info, err := s.workerRepo.GetEmailAccountWorkerInfo(ctx, accountID)
-		if err != nil || info == nil {
-			continue
-		}
-
-		// Skip if no worker assigned or already on premium
-		if info.WorkerID == nil || (info.FreeTier != nil && !*info.FreeTier) {
-			continue
-		}
-
-		// Select new premium worker
-		newWorker, err := s.SelectSharedWorker(ctx, false)
-		if err != nil {
-			continue
-		}
-
-		// Migrate
-		if err := s.migrateEmailToWorker(ctx, accountID, *info.WorkerID, newWorker.ID); err != nil {
-			continue
-		}
-
-		// Update warmup pool type
-		s.workerRepo.UpdateEmailAccountWarmupPoolType(ctx, accountID, "premium")
-	}
-
-	return nil
-}
-
-// MigrateOrgToFreeWorkers migrates all org's emails to free tier workers
-// Called when a paid subscription is cancelled/expired
-func (s *workerAssignmentService) MigrateOrgToFreeWorkers(ctx context.Context, orgID uuid.UUID) error {
-	accountIDs, err := s.workerRepo.GetEmailAccountsByOrganizationID(ctx, orgID)
-	if err != nil {
-		return err
-	}
-
-	for _, accountID := range accountIDs {
-		info, err := s.workerRepo.GetEmailAccountWorkerInfo(ctx, accountID)
-		if err != nil || info == nil {
-			continue
-		}
-
-		// Skip if no worker assigned or already on free tier
-		if info.WorkerID == nil || (info.FreeTier != nil && *info.FreeTier) {
-			continue
-		}
-
-		// Select new free tier worker
-		newWorker, err := s.SelectSharedWorker(ctx, true)
-		if err != nil {
-			continue
-		}
-
-		// Migrate
-		if err := s.migrateEmailToWorker(ctx, accountID, *info.WorkerID, newWorker.ID); err != nil {
-			continue
-		}
-
-		// Update warmup pool type
-		s.workerRepo.UpdateEmailAccountWarmupPoolType(ctx, accountID, "free")
-	}
-
-	return nil
-}
-
-// MigrateOrgToDedicated migrates org's emails to their dedicated worker
-func (s *workerAssignmentService) MigrateOrgToDedicated(ctx context.Context, orgID uuid.UUID, subscriptionID uuid.UUID) error {
-	// First, assign a dedicated worker to the org
-	if err := s.AssignDedicatedWorker(ctx, orgID, subscriptionID); err != nil {
-		if !errors.Is(err, ErrOrgAlreadyAssigned) {
-			return err
-		}
-	}
-
-	// Get the dedicated worker
-	dedicatedWorker, err := s.workerRepo.GetDedicatedWorkerByOrgID(ctx, orgID)
-	if err != nil {
-		return err
-	}
-	if dedicatedWorker == nil {
-		return ErrNoDedicatedWorkers
-	}
-
-	accountIDs, err := s.workerRepo.GetEmailAccountsByOrganizationID(ctx, orgID)
-	if err != nil {
-		return err
-	}
-
-	for _, accountID := range accountIDs {
-		info, err := s.workerRepo.GetEmailAccountWorkerInfo(ctx, accountID)
-		if err != nil || info == nil {
-			continue
-		}
-
-		// Skip if no worker assigned or already on dedicated worker
-		if info.WorkerID == nil || *info.WorkerID == dedicatedWorker.ID {
-			continue
-		}
-
-		// Migrate to dedicated worker
-		if err := s.migrateEmailToWorker(ctx, accountID, *info.WorkerID, dedicatedWorker.ID); err != nil {
-			continue
-		}
-
-		// Update warmup pool type
-		s.workerRepo.UpdateEmailAccountWarmupPoolType(ctx, accountID, "premium")
-	}
-
-	return nil
-}
-
-// MigrateOrgToShared migrates org's emails from dedicated to shared workers
-func (s *workerAssignmentService) MigrateOrgToShared(ctx context.Context, orgID uuid.UUID) error {
-	accountIDs, err := s.workerRepo.GetEmailAccountsByOrganizationID(ctx, orgID)
-	if err != nil {
-		return err
-	}
-
-	for _, accountID := range accountIDs {
-		info, err := s.workerRepo.GetEmailAccountWorkerInfo(ctx, accountID)
-		if err != nil || info == nil {
-			continue
-		}
-
-		if info.WorkerID == nil {
-			continue
-		}
-
-		// Select new shared premium worker
-		newWorker, err := s.SelectSharedWorker(ctx, false)
-		if err != nil {
-			continue
-		}
-
-		// Migrate
-		if err := s.migrateEmailToWorker(ctx, accountID, *info.WorkerID, newWorker.ID); err != nil {
-			continue
-		}
-	}
-
-	// Release the dedicated worker
-	if err := s.ReleaseDedicatedWorker(ctx, orgID); err != nil {
-		// Log but don't fail
-	}
-
-	return nil
-}
-
-// MigrateEmailsFromWorker migrates all emails from a worker to other workers
-func (s *workerAssignmentService) MigrateEmailsFromWorker(ctx context.Context, workerID uuid.UUID, targetFreeTier bool) error {
-	// Get all email accounts on this worker
+// MigrateEmailsFromWorker drains a worker. Each mailbox is re-scored rather
+// than dumped onto one destination, so draining a big worker spreads its load
+// instead of moving the hotspot.
+func (s *workerAssignmentService) MigrateEmailsFromWorker(ctx context.Context, workerID uuid.UUID) error {
 	accountIDs, err := s.workerRepo.GetEmailAccountsByWorkerID(ctx, workerID)
 	if err != nil {
 		return err
 	}
 
 	for _, accountID := range accountIDs {
-		// Select new worker
-		newWorker, err := s.SelectSharedWorker(ctx, targetFreeTier)
-		if err != nil {
+		info, err := s.workerRepo.GetEmailAccountWorkerInfo(ctx, accountID)
+		if err != nil || info == nil {
 			continue
 		}
-
-		// Migrate
-		if err := s.migrateEmailToWorker(ctx, accountID, workerID, newWorker.ID); err != nil {
+		state, err := s.workerRepo.GetMailboxPlacementState(ctx, accountID)
+		if err != nil || state == nil || state.OrganizationID == nil {
 			continue
+		}
+		res, err := s.SelectWorkerFor(ctx, PlacementLookup{
+			EmailAccountID:  accountID,
+			OrgID:           *state.OrganizationID,
+			Region:          state.WorkerRegion,
+			ExcludeWorkerID: &workerID,
+		})
+		if err != nil || res == nil || res.Worker == nil || res.Worker.ID == workerID {
+			continue
+		}
+		if err := s.MoveMailbox(ctx, accountID, &workerID, res.Worker.ID); err != nil {
+			log.Warn().Err(err).Str("account_id", accountID.String()).Msg("drain: move failed")
 		}
 	}
 
 	return nil
 }
 
-// migrateEmailToWorker handles the actual migration of an email account
-func (s *workerAssignmentService) migrateEmailToWorker(ctx context.Context, emailAccountID, oldWorkerID, newWorkerID uuid.UUID) error {
-	// 1. Update database
-	if err := s.workerRepo.UpdateEmailAccountWorker(ctx, emailAccountID, newWorkerID); err != nil {
-		return err
+// SelectValidationWorker returns the least loaded live worker. Used by the
+// connect and reconnect flows to test credentials before anything is stored.
+func (s *workerAssignmentService) SelectValidationWorker(ctx context.Context) (*models.Worker, error) {
+	workers, err := s.workerRepo.ListPlaceableWorkers(ctx)
+	if err != nil {
+		return nil, err
 	}
-
-	// 2. Decrement old worker count
-	if err := s.workerRepo.DecrementAccountCount(ctx, oldWorkerID); err != nil {
-		// Log but don't fail
+	if len(workers) == 0 {
+		return nil, ErrNoAvailableWorkers
 	}
-
-	// 3. Increment new worker count
-	if err := s.workerRepo.IncrementAccountCount(ctx, newWorkerID); err != nil {
-		// Log but don't fail
-	}
-
-	return nil
+	return &workers[0], nil
 }

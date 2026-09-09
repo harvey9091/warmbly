@@ -62,8 +62,11 @@ func newRemovalLiveFixture(t *testing.T) *removalLiveFixture {
 		f.org, "drop-"+f.org.String()[:8], f.user)
 	// One mailbox's worth of load: an smtp_imap mailbox that is not warming
 	// weighs 1.0, which is what the delete has to refund.
-	exec(`INSERT INTO workers (id, name, ip_addr, active, account_count, load_score)
-	      VALUES ($1, 'drop-test', '127.0.0.1', true, 1, 1)`, f.worker)
+	// A worker is a node (the machine) plus a placement row (the mail on it).
+	exec(`INSERT INTO fleet_nodes (id, role, name, address, active, last_seen_at)
+	      VALUES ($1, 'worker', 'drop-test', '127.0.0.1', true, now())`, f.worker)
+	exec(`INSERT INTO workers (id, account_count, load_score)
+	      VALUES ($1, 1, 1)`, f.worker)
 	exec(`INSERT INTO email_accounts (id, user_id, organization_id, worker_id, email, name,
 	          signature_plain, signature_html, provider, status, campaign_limit, min_wait_time)
 	      VALUES ($1, $2, $3, $4, $5, 'Drop', '', '', 'smtp_imap', 'active', 50, 600)`,
@@ -76,7 +79,7 @@ func newRemovalLiveFixture(t *testing.T) *removalLiveFixture {
 			arg any
 		}{
 			{`DELETE FROM email_accounts WHERE id = $1`, f.mailbox},
-			{`DELETE FROM workers WHERE id = $1`, f.worker},
+			{`DELETE FROM fleet_nodes WHERE id = $1`, f.worker},
 			{`DELETE FROM organizations WHERE id = $1`, f.org},
 			{`DELETE FROM users WHERE id = $1`, f.user},
 		} {

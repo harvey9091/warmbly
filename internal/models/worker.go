@@ -7,36 +7,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// WorkerType represents the type of worker
-type WorkerType string
-
-const (
-	WorkerTypeShared    WorkerType = "shared"
-	WorkerTypeDedicated WorkerType = "dedicated"
-)
-
-// WorkerRiskPool buckets shared workers by acceptable mailbox risk level.
-// Dedicated workers don't use it (one customer per worker — no
-// cross-tenant contamination risk).
-type WorkerRiskPool string
-
-const (
-	WorkerRiskPoolClean      WorkerRiskPool = "clean"
-	WorkerRiskPoolRisky      WorkerRiskPool = "risky"
-	WorkerRiskPoolQuarantine WorkerRiskPool = "quarantine"
-)
-
-// WorkerEgressKind describes how a worker is wired up to actually send mail.
-// Different egress profiles ship with very different safe capacities, which
-// is why the capacity view branches on this column to derive base_capacity.
-type WorkerEgressKind string
-
-const (
-	WorkerEgressColdSMTP   WorkerEgressKind = "cold_smtp"
-	WorkerEgressOAuthAPI   WorkerEgressKind = "oauth_api"
-	WorkerEgressWarmupOnly WorkerEgressKind = "warmup_only"
-)
-
 // WorkerHealthState is the rolled-up health label maintained by the
 // assignment loop. Authoritative for "can this worker accept new
 // mailboxes" placement decisions. Mirrors the warmup health vocabulary
@@ -51,80 +21,47 @@ const (
 	WorkerHealthBlocked     WorkerHealthState = "blocked"
 )
 
+// Worker is a node that carries mailboxes. It is a flat view over
+// workers JOIN fleet_nodes: the placement columns (AccountCount, HealthState,
+// LoadScore) live on `workers`, and the machine columns below are hydrated
+// from the node, because they describe the box rather than the mail on it.
 type Worker struct {
 	ID           uuid.UUID         `json:"id"`
-	Name         string            `json:"name"`
-	Notes        string            `json:"notes"`
-	IPAddr       string            `json:"ip_addr"`
-	Active       bool              `json:"active"`
-	FreeTier     bool              `json:"free_tier"`
-	WorkerType   WorkerType        `json:"worker_type"`
 	AccountCount int               `json:"account_count"`
-	RiskPool     WorkerRiskPool    `json:"risk_pool"`
-	EgressKind   WorkerEgressKind  `json:"egress_kind"`
 	HealthState  WorkerHealthState `json:"health_state"`
 	LoadScore    float64           `json:"load_score"`
 
-	// SSH management (none of these expose secret material — the encrypted
-	// private key is fetched separately via GetWorkerSSHCredentials).
-	SSHHost            string             `json:"ssh_host,omitempty"`
-	SSHPort            int                `json:"ssh_port,omitempty"`
-	SSHUser            string             `json:"ssh_user,omitempty"`
-	SSHPublicKey       string             `json:"ssh_public_key,omitempty"`
-	SSHHostFingerprint string             `json:"ssh_host_fingerprint,omitempty"`
-	InstallState       WorkerInstallState `json:"install_state"`
-	LastSeenAt         *time.Time         `json:"last_seen_at,omitempty"`
-	LastError          string             `json:"last_error,omitempty"`
+	// From the node. Read-only here; a worker never writes them.
+	Name       string     `json:"name"`
+	Notes      string     `json:"notes"`
+	IPAddr     string     `json:"ip_addr"`
+	Active     bool       `json:"active"`
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+	LastError  string     `json:"last_error,omitempty"`
+	Version    string     `json:"version,omitempty"`
 
-	// Profile assignment. Nil means "use backend env defaults".
-	ProfileID       *uuid.UUID `json:"profile_id,omitempty"`
-	ConfigAppliedAt *time.Time `json:"config_applied_at,omitempty"`
+	// Region is a sign-in geography hint for placement, not a partition. A
+	// mailbox scores better on a worker whose egress geolocates near where
+	// its provider expects logins from; empty scores neutral.
+	Region string `json:"region"`
 
-	// Image tag the worker is currently running, captured on every successful
-	// Update. Used for the "v1.2.3 → v1.2.4" badge in the dashboard.
-	ImageVersion string `json:"image_version,omitempty"`
-
-	// Admin-applied free-form tags (eu-west, hetzner, warmup-only, ...).
-	// Auto-derived "smart" labels (tier:free, pool:risky, state:error) are
-	// computed client-side from the worker row and never stored here.
+	// Admin-applied free-form tags (eu-west, spare, ...). Auto-derived
+	// "smart" labels (health:watch) are computed client-side and never stored.
 	Tags []string `json:"tags,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// WorkerInstallState mirrors the worker_install_state enum.
-type WorkerInstallState string
-
-const (
-	WorkerInstallStatePending      WorkerInstallState = "pending"
-	WorkerInstallStateProvisioning WorkerInstallState = "provisioning"
-	WorkerInstallStateInstalled    WorkerInstallState = "installed"
-	WorkerInstallStateError        WorkerInstallState = "error"
-	WorkerInstallStateUninstalling WorkerInstallState = "uninstalling"
-	WorkerInstallStateUninstalled  WorkerInstallState = "uninstalled"
-)
-
-// WorkerSSHCredentials carries the encrypted private key alongside the
-// connection info. Only the orchestrator should ever fetch this; the field is
-// never serialised to admin clients.
-type WorkerSSHCredentials struct {
-	WorkerID               uuid.UUID
-	SSHHost                string
-	SSHPort                int
-	SSHUser                string
-	SSHPublicKey           string
-	SSHPrivateKeyEncrypted string
-	SSHHostFingerprint     string
-}
-
 type UpdateWorker struct {
-	IPAddr     *string     `json:"ip_addr"`
-	Active     *bool       `json:"active"`
-	WorkerType *WorkerType `json:"worker_type,omitempty"`
+	Active *bool   `json:"active"`
+	Region *string `json:"region,omitempty"`
 }
 
-// DedicatedWorkerAssignment represents a dedicated worker assignment to a user
+// DedicatedWorkerAssignment binds an organization entitled to isolated egress
+// to a worker. It is a preference the placer converges on, not a hard pin: the
+// worker itself carries no category, and if it dies the org's mailboxes place
+// normally rather than stranding.
 type DedicatedWorkerAssignment struct {
 	ID             uuid.UUID  `json:"id"`
 	WorkerID       uuid.UUID  `json:"worker_id"`

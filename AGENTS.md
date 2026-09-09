@@ -186,7 +186,7 @@ Infra runs in docker; the Go services and frontends run natively on the host for
 - `make dev` — the one-command stack: brings up the docker infra and waits for postgres, applies migrations, loads seed fixtures (skip with `SEED=false`), installs web + admin deps on first run, starts realtime and tracking as containers, then runs backend + forms + consumer + worker + dashboard + admin in one terminal. Login: dev@warmbly.com / password123, with the emailed login code in Mailpit at http://localhost:18025. Ctrl-C stops the app; infra stays up.
 - `make infra` — start the backing services in docker (postgres, redis, nats, mailpit). Run once; leave running. Kafka, Schema Registry, localstack, cloud-tasks, and stripe-mock are gone; the stack is no-cloud by default (NATS, local KMS, filesystem blobs, in-process tasks).
 - `make backend` — run the API natively on `:8080` (applies the embedded migrations on boot against the docker postgres).
-- `make consumer` / `make worker` / `make worker-premium` — run those Go services natively, each in its own terminal. Two native workers exist because tier placement is strict: free-trial orgs place onto the free-tier worker (`make worker`), paid orgs onto the premium one (`make worker-premium`). The workers read encrypted DEKs through the backend's `/internal/dek` endpoint (the prod `http` provider, no worker DB), so `make backend` must be running and their `INTERNAL_API_TOKEN` must match (the targets are pre-wired to match).
+- `make consumer` / `make worker` — run those Go services natively, each in its own terminal. Both register themselves as fleet nodes on their first heartbeat, so they show up in `warmblyctl fleet list` without any enrolment step in dev. Workers are interchangeable, so one is enough; run a second `make worker WORKER_ID=<uuid>` in another terminal when you want to watch placement spread mailboxes across a fleet. The workers read encrypted DEKs through the backend's `/internal/dek` endpoint (the prod `http` provider, no worker DB), so `make backend` must be running and their `INTERNAL_API_TOKEN` must match (the targets are pre-wired to match).
 - `make run` — backend + forms + consumer + worker together in one terminal (Ctrl-C stops all).
 - `make forms` — the public forms service natively on `:8090` (`cmd/forms`): builds the `forms/` TanStack app, then serves it plus the embed loader and public submissions. No database; it resolves forms and forwards submissions through the backend's internal API, so `make backend` must be running and `INTERNAL_API_TOKEN` must match (pre-wired). The backend's `FORMS_DOMAIN=localhost:8090` makes dashboard share links point at it; `make forms FORMS_PORT=8091` (matched on `make backend`) moves it when worktrees share the machine. `make forms-web` runs the Vite dev server (:5175) for iterating on the app itself.
 - `make sandbox` — fully working demo environment: seeds the "Sunrise Labs" showcase org (live mailboxes: SMTP -> mailpit, IMAP -> dovecot, credentials sealed with `CREDENTIALS_ENCRYPTION_KEY`) and runs the simulator that plays the internet (delivers mail into dovecot inboxes, opens pixels, clicks tracked links, replies as contacts). Needs `make run` + `make tracking` alongside. Docs: `docs/content/docs/development/sandbox.mdx`.
@@ -294,26 +294,83 @@ API keys with the `REALTIME_SUBSCRIBE` permission (bit 11) can connect to the sa
 
 Workers are intended to run distributed across many machines, with one worker process per machine.
 
-That layout matters because it lets the system spread sending activity across different machine-level network identities and IP addresses instead of concentrating traffic through a single sender runtime.
+**There is one kind of worker.** No tier, no type, no risk pool, no egress category. You stand a worker up, it heartbeats, and the control plane decides what runs on it. The only thing an operator may set is an optional free-form `WORKER_REGION` label, and leaving it blank is fine.
+
+Do not reintroduce a worker category. The four that used to exist (`free_tier`, `worker_type`, `risk_pool`, `egress_kind`) were removed in migration `000140` because they all rested on a premise that is false for this architecture: that the worker's IP is the sending identity.
+
+It is not. A worker never talks to a recipient's MX. It authenticates to the customer's own mailbox provider, and that provider delivers from its own outbound pool. So:
+
+- **the worker IP is invisible to recipient spam filtering.** Google strips the submitting client's IP; Microsoft dropped `X-Originating-IP` years ago. A spam-prone mailbox therefore cannot contaminate a healthy neighbour on the same machine, which is why hard risk segregation of workers bought nothing
+- **the worker IP is very visible to the mailbox provider**, where it drives sign-in risk challenges, per-IP auth throttles (`454 4.7.0`) and per-IP rate limits (`421 4.7.28`). Exchange Online also caps SMTP AUTH at ~3 concurrent connections and ~30 msg/min per mailbox, and IMAP at ~8 concurrent sessions
+
+The practical inversion: **IP stability per mailbox beats IP diversity.** Moving a mailbox changes the client address its provider sees and buys a security challenge for nothing, so a migration is a cost, not a win. A fleet where nothing rotates is a healthy fleet.
 
 In production, workers are treated as individually addressable executors:
 
 - each worker has its own `worker_id`
 - email accounts are assigned to a specific worker
 - worker events are delivered through worker-specific Kafka topics
-- the platform can rebalance or migrate accounts between workers
+- the platform can rebalance or migrate accounts between workers, reluctantly
 
-This repo already models three worker modes:
+Placement is a score, never a filter (`internal/app/worker/placement.go`). Hard constraints cover only whether the work can be done: heartbeating, health in `healthy`/`watch`, and enough capacity headroom for the mailbox's weight. Everything else is a preference term: capacity headroom, incumbency (weighted highest), region match, tenant blast radius, per-provider crowding on one address, and foreign tenants for orgs entitled to isolated egress.
 
-- shared free-tier workers
-- shared premium workers
-- dedicated workers assigned to a single paying organization
+Capacity is one number for every worker in cold-mailbox equivalents, because each mailbox declares its own cost through `MailboxWeight`: `smtp_imap` = 1.0, `gmail`/`outlook` = 0.05, warmup-only = 0.4. Those are the `email_provider` enum values as stored; do not invent provider strings for them.
+
+Rotation is gated separately (`internal/app/worker/rotation.go`) and is deliberately reluctant:
+
+| Urgency | Trigger | Residency floor | Destination bar |
+|---|---|---|---|
+| Immediate | worker inactive, not heartbeating, blocked, quarantined | none | anything eligible |
+| Elevated | worker throttled | 6h | anything eligible |
+| Opportunistic | worker over 85% utilization, isolated-egress drift | 72h | must beat the incumbent by `RotationMinScoreGain` |
+
+Isolated egress (the entitlement `plan.IsolatedEgress()`, still stored in `plans.dedicated_workers`) binds an org to a worker through `dedicated_worker_assignments`. It is a strong placement preference, not a pin: the worker carries no marking, so a reserved worker going down never strands the customer.
 
 The relevant code paths are in:
 
-- `internal/app/worker/assignment.go`
-- `internal/repository/pg_worker.go`
-- `internal/infrastructure/db/migrations/000015_worker_tiers.up.sql`
+- `internal/app/fleetnode/service.go` (enrolment, heartbeat, desired version)
+- `internal/app/worker/placement.go` (the score)
+- `internal/app/worker/rotation.go` (when a move is allowed)
+- `internal/app/worker/assignment.go` (the service that commits placements)
+- `internal/app/fleet/rebalance.go` (the rotation loop)
+- `internal/repository/pg_worker_placement.go`
+- `internal/infrastructure/db/migrations/000140_worker_decategorization.up.sql`
+
+## The Fleet Is Pull-Based
+
+Every Warmbly process that runs on a machine you own is a **node**: `worker` (sends and syncs mail) or `consumer` (processes events). Both share one lifecycle and one registry.
+
+A node joins by running one command with the instance join token, then heartbeats forever. **Nothing is ever pushed to a node.** Everything the control plane wants it to do comes back in the heartbeat reply, which today is exactly one instruction: what version to be running.
+
+Do not reintroduce a push path. Migration `000142` deleted the whole of it — the Hetzner provider, `provisioning_templates`/`_jobs`/`_policy`, `worker_profiles`, `aws_credentials`, the SSH orchestrator and every `workers.ssh_*` column — because onboarding a machine you already own does not need a cloud API or a keypair, and an update does not need someone to shell in and run it.
+
+Shape:
+
+- `fleet_nodes` is the registry every role shares: identity, region, address, version, liveness, resource usage. `workers` is the placement extension and holds only `account_count`, `health_state`, `load_score`; `workers.id` IS the node id, enforced by a foreign key
+- a node is created by enrolling, never by an admin form. `EnsureWorkerRow` adds the placement half when a node declares itself a worker
+- liveness lives on `fleet_nodes.last_seen_at` and nowhere else. `models.Worker` is a flat view over `workers JOIN fleet_nodes`, so read it through `workerSelect` rather than adding a second source of truth
+- `models.NodeLivenessWindow` is the one definition of live. The node paces its own beat at a third of it, from the value the server returns
+
+Auto-update:
+
+- `internal/app/releases` resolves the head of the configured channel from GitHub Releases and writes the tag to `admin_settings` under `fleet.release`. It updates nothing itself
+- the heartbeat reply carries `desired_version`; the node writes it to a file and a systemd timer (`warmbly-node-update`, installed by the join script) pulls and restarts. The process being replaced is never the process doing the replacing
+- an empty `desired_version` means "no opinion" and must never be read as "downgrade to nothing". A node that cannot be told what to run keeps running what it has
+- a per-node `pinned_version` overrides the fleet target, for canarying or holding a machine back
+- **the backend is deliberately excluded.** It is what tells everyone else their version; a self-update that goes wrong leaves nothing to recover with
+
+The join script is `internal/api/handler/nodescript/join.sh`, embedded and served at `GET /join.sh` by the instance itself, so a self-hosted fleet never depends on a vendor host and always gets a script matching its backend. There is exactly one copy: do not add a mirror under `scripts/` or `site/public/`. All the POSIX-sh rules for published scripts apply to it (`sh -n`, `shellcheck -s sh`, everything in a function, `main "$@"` last).
+
+Run `make join-check` before pushing a change to it; it is a prerequisite of `make lint`. It asserts on what `join.sh --print-unit` *renders*; an earlier version compared a heredoc copied into the checker itself and stayed green when the original bug was put back. It exists because nothing covered the script and three separate defects shipped into the branch as a result: a systemd unit built with `$(cat ...)`, which systemd never expands, so the machine restart-looped while the script printed "Done"; a missing bind mount, so the node wrote its update target inside the container and auto-update silently never ran; and an env file assembled by picking a multi-line value back out of JSON with sed, which appended a stray fragment. Assert on what the shell *renders*, not on the source text: every one of those parsed fine. The two invariants that leave no trace in the rendered unit (that `main` validates before writing anything, and that `install_units` prepares the blob root) are checked at their call sites instead, matched on the first field, which a mention inside a string or a comment cannot satisfy. That does mean those calls have to stay standalone statements, which `join.sh` notes above each set of asserted calls; a looser regex was tried and turned out to be satisfied by the name appearing inside a `warn` message, which is a far worse failure than a reformat that reports itself. Every assertion there was mutation-tested: the bug it guards was reintroduced and the check was watched to fail.
+
+Two rules that follow from those:
+
+- **systemd runs no shell.** No `$(...)`, no globbing, no word splitting in a unit. A value that has to vary comes from an `EnvironmentFile` as `${VAR}`, which expands to exactly one argument
+- **What the node may write and what root reads are different directories.** The container runs as uid 1000; it gets `/var/lib/warmbly/node` and nothing else. `image-ref` lives one level up, root-owned, because systemd feeds it to a root `docker run --network host` and a node that could rewrite it would choose the image root executes
+
+The env the join endpoint hands a node is rendered from the backend's own environment (`nodeEnvKeys` in `internal/api/handler/fleet_nodes.go`). `PRIMARY_DB` is deliberately absent: a worker reaches relational data through the internal API and nothing else, and shipping a DSN here would quietly undo that boundary.
+
+Operator surface: `warmblyctl fleet` (join-token, list, show, remove, pin, version, channel) and the admin panel's Fleet section. There is no install, restart, logs or reboot action anywhere, because nothing reaches into a machine.
 
 ## Warmup Pool Model
 
@@ -430,14 +487,14 @@ Warmup posture:
 
 ### Worker-level distribution rule
 
-For shared workers, distribute volume by mailbox budget and IP spread:
+Distribute by mailbox budget, not by a per-worker sending target. Note what this rule is and is not for: spreading mailboxes across workers does **not** improve recipient-side deliverability, because the worker is not the sending identity (see Worker Topology). It limits blast radius and keeps any one address from crowding one provider's auth rate limits.
 
-- no shared worker should become a concentration point for a large fraction of total cold-email traffic
-- prefer adding more workers and spreading accounts rather than increasing per-worker density
-- if one worker holds many active cold mailboxes, keep the total planned worker volume equal to the sum of those mailbox caps, not an independent higher target
-- as a conservative planning heuristic, shared workers should usually stay near the equivalent of about `10` actively sending cold mailboxes at default settings, or roughly `500` cold campaign emails/day, unless there is explicit evidence that the worker/IP pool can safely sustain more
+- no worker should become a concentration point for a large fraction of one customer's mailboxes, because losing it stops that fraction of their sending
+- keep a worker's total planned volume equal to the sum of its mailboxes' caps, not an independent higher target
+- avoid piling many mailboxes of the same provider onto one worker; that is the combination that earns a per-IP auth throttle (`providerSoftCap` in `placement.go`)
+- prefer adding workers over increasing per-worker density, but do not churn existing mailboxes to achieve it
 
-Dedicated workers may carry higher organization-specific volume, but those increases should come from more healthy mailboxes, not from forcing a small number of inboxes to send too much.
+Increases in volume should come from more healthy mailboxes, never from forcing a small number of inboxes to send too much.
 
 ### Internet research constraints
 
@@ -859,7 +916,7 @@ If a new feature requires heavy joins, admin queries, billing checks, or complex
 
 - do not add direct Postgres usage to `cmd/worker` or `internal/app/worker` unless explicitly required
 - preserve worker-specific Kafka topic routing
-- preserve separation between free, premium, and dedicated worker capacity
+- do not reintroduce worker categories; placement is a score over live state
 - preserve separation between free and premium warmup pools
 - optimize for many-worker deployments, not a single giant worker
 - document any change that alters worker assignment, pool membership, or network boundaries

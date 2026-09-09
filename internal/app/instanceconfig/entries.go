@@ -702,10 +702,10 @@ var table = []Entry{
 		Resolve:    envValue("WORKER_ID"),
 	},
 	{
-		Key: "WORKER_TIER", Group: GroupWorkers, RuntimeChangeable: ChangeBootOnly,
-		Effect:     "Which placement tier a worker accepts. Free-trial organizations place onto free workers, paid ones onto premium.",
+		Key: "WARMBLY_NODE_REGION", Group: GroupWorkers, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Where this node egresses from, as a free-form label. Placement prefers a worker near where a mailbox's provider expects sign-ins; unset scores neutral.",
 		DocsAnchor: docsWorkers,
-		Resolve:    envValue("WORKER_TIER"),
+		Resolve:    envValue("WARMBLY_NODE_REGION"),
 	},
 	{
 		Key: "MAIL_TLS_INSECURE", Group: GroupWorkers, RuntimeChangeable: ChangeBootOnly,

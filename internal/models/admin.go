@@ -142,16 +142,15 @@ type UnbanUserRequest struct {
 
 // AdminWorkerDetail represents a worker with admin-relevant details
 type AdminWorkerDetail struct {
-	ID           uuid.UUID  `json:"id"`
-	Name         string     `json:"name"`
-	Notes        string     `json:"notes"`
-	IPAddr       string     `json:"ip_addr"`
-	Active       bool       `json:"active"`
-	FreeTier     bool       `json:"free_tier"`
-	WorkerType   WorkerType `json:"worker_type"`
-	AccountCount int        `json:"account_count"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID           uuid.UUID `json:"id"`
+	Name         string    `json:"name"`
+	Notes        string    `json:"notes"`
+	IPAddr       string    `json:"ip_addr"`
+	Active       bool      `json:"active"`
+	Region       string    `json:"region"`
+	AccountCount int       `json:"account_count"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 
 	// Statistics
 	EmailsSentToday int `json:"emails_sent_today"`
@@ -169,10 +168,12 @@ type AdminWorkersResult struct {
 
 // AdminUpdateWorker represents the request to update a worker
 type AdminUpdateWorker struct {
-	Name       *string     `json:"name,omitempty"`
-	Notes      *string     `json:"notes,omitempty"`
-	Active     *bool       `json:"active,omitempty"`
-	WorkerType *WorkerType `json:"worker_type,omitempty"`
+	Name   *string `json:"name,omitempty"`
+	Notes  *string `json:"notes,omitempty"`
+	Active *bool   `json:"active,omitempty"`
+	// Region is a sign-in geography hint the placer scores on. It is the only
+	// worker attribute an operator sets, and leaving it empty is fine.
+	Region *string `json:"region,omitempty"`
 }
 
 // AdminWorkerEmail represents an email account connected to a worker, including

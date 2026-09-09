@@ -75,6 +75,8 @@ func dispatch(ctx context.Context, args []string) error {
 		return runRestore(ctx, args[1:])
 	case "api":
 		return runAPI(ctx, args[1:])
+	case "fleet":
+		return runFleet(ctx, args[1:])
 	}
 	if _, ok := apiFamilies[args[0]]; ok {
 		return runAPIResource(ctx, args[0], args[1:])
@@ -108,6 +110,12 @@ var commands = []command{
 	{"org list", "List the workspaces on this instance with their id, owner, and size", composeExec + "org list"},
 	{"org export", "Write a whole workspace to a portable archive file", composeExec + "org export --org you@example.com --out /tmp/workspace.warmbly.zip"},
 	{"org import", "Apply an archive to a workspace on this instance", composeExec + "org import --org you@example.com --file /tmp/workspace.warmbly.zip"},
+	{"fleet join-token", "Issue the token a machine needs to join the fleet. Shown once", composeExec + "fleet join-token"},
+	{"fleet list", "Every worker and consumer: role, version, liveness and usage", composeExec + "fleet list"},
+	{"fleet version", "Show or set the version every node should be running", composeExec + "fleet version v1.4.2"},
+	{"fleet channel", "Follow stable or dev releases, or hold the fleet where it is", composeExec + "fleet channel stable"},
+	{"fleet pin", "Hold one node at a version, to canary or to hold it back", composeExec + "fleet pin <node-id> v1.4.1"},
+	{"fleet remove", "Forget a node. Its mailboxes re-place themselves", composeExec + "fleet remove <node-id>"},
 }
 
 func usage(w *os.File) {

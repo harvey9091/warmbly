@@ -1471,3 +1471,12 @@ func derefString(v *string) string {
 	}
 	return *v
 }
+
+// nullIfEmpty writes SQL NULL for an empty string, so an optional text column
+// stores NULL rather than ” and IS NULL checks keep working.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}

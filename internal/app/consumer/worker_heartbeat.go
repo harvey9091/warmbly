@@ -47,7 +47,7 @@ func (s *JobsService) syncHeartbeats(ctx context.Context) error {
 		if err != nil {
 			continue
 		}
-		if err := s.WorkerRepo.UpdateLastSeen(ctx, w.ID, t); err != nil {
+		if err := s.FleetNodeRepo.TouchLastSeen(ctx, w.ID, t); err != nil {
 			log.Warn().Err(err).Str("worker_id", w.ID.String()).Msg("heartbeat sync: update failed")
 		}
 	}

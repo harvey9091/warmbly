@@ -37,7 +37,7 @@ PROTOC_GEN_GO_GRPC_VERSION ?= v1.6.1
 PROTO_DIR := internal/tasks/proto
 PROTO_GEN_FILES := $(PROTO_DIR)/tasks.pb.go
 
-.PHONY: poollink-dev poollink-dev-down poollink-dev-reset setup-tools fmt lint check-migrations proto check-proto \
+.PHONY: poollink-dev poollink-dev-down poollink-dev-reset setup-tools fmt lint check-migrations join-check proto check-proto \
         up upgrade claim doctor cli seed-demo seed seed-plan sandbox sandbox-seed sandbox-simulate reset logs status stop down test-seed \
         restart restart-go restart-all infra infra-down app app-down app-logs \
         backend forms forms-web consumer worker run dev tracking realtime web \
@@ -82,7 +82,7 @@ cli-check:
 fmt:
 	gofmt -w ./cmd ./internal
 
-lint: check-migrations
+lint: check-migrations join-check
 	./scripts/check-forms-mirror.sh
 	$(GO_BIN)/golangci-lint run --timeout=5m
 
@@ -694,7 +694,6 @@ consumer:
 worker:
 	$(WORKER_DEV_ENV) \
 	WORKER_ID=10c8f5e4-1c39-5b2a-9c8b-3d2f0a8b1a01 \
-	WORKER_TIER=shared \
 	ENCRYPTED_KEYS_PROVIDER=http \
 	ENCRYPTED_KEYS_BACKEND_URL=http://localhost:8080 \
 	ENCRYPTED_KEYS_WORKER_TOKEN=local-dev-internal-token \
@@ -730,6 +729,13 @@ installer-sha:
 # --print-env, a compose file per answer shape, and the checksum.
 installer-check:
 	@./scripts/check-installer.sh
+
+# The fleet join script is served verbatim from the backend at GET /join.sh and
+# is what a stranger pipes into a root shell to add a machine. Nothing covered
+# it, and a systemd unit that could never start shipped as a result. Part of
+# `make lint`, like check-migrations.
+join-check:
+	@./scripts/check-join-script.sh
 
 # Every published image has to be pullable by a stranger, and nothing else we
 # run proves it: a package on GHCR is created private, does not inherit the

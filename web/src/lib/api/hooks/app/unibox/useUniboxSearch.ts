@@ -20,7 +20,10 @@ export default function useUniboxSearch(params: UniboxSearchParams, enabled = tr
         initialPageParam: null,
         getNextPageParam: (last) => (last.pagination.has_more ? last.pagination.next_cursor : undefined),
         staleTime: 30_000,
-        gcTime: 5 * 60 * 1000,
+        // Held long enough that leaving the inbox and coming back restores every
+        // page the user had loaded, which is what the remembered scroll offset
+        // needs to land on (issue #396).
+        gcTime: 30 * 60 * 1000,
         // Scope/filter switches change the query key; keep showing the
         // previous list while the new one loads instead of flashing the
         // whole pane to skeletons on every switch.

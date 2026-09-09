@@ -484,8 +484,7 @@ services:
       # so ids survive container recreates and --scale still works.
       WORKER_ID: ${WORKER_ID:-}
       WORKER_STATE_DIR: ${WORKER_STATE_DIR:-/data/state}
-      WORKER_TIER: ${WORKER_TIER:-}
-      WORKER_EGRESS_KIND: ${WORKER_EGRESS_KIND:-}
+      WARMBLY_NODE_REGION: ${WARMBLY_NODE_REGION:-}
       BOX_GOOGLE_CLIENT_ID: ${BOX_GOOGLE_CLIENT_ID:-}
       BOX_GOOGLE_CLIENT_SECRET: ${BOX_GOOGLE_CLIENT_SECRET:-}
       BOX_OUTLOOK_CLIENT_ID: ${BOX_OUTLOOK_CLIENT_ID:-}

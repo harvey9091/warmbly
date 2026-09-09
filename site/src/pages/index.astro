@@ -80,12 +80,14 @@ const plans = [
     sendsPerDay: 15000,
     save: '$792',
     meter: 91,
-    // "Dedicated IPs" was the old wording. The mechanism is a whole worker
-    // machine bound to one org (plan.DedicatedWorkers > 0), and what that buys
-    // is reputation isolation, so the bullet says that instead.
+    // "Dedicated IPs" was the old wording, and it was wrong twice over: the
+    // IP recipients see belongs to the mailbox provider, not to us. What the
+    // plan actually reserves is the address the mailboxes sign IN from
+    // (plan.IsolatedEgress()), which is what earns sign-in trust and keeps a
+    // noisy neighbour from triggering a shared per-IP auth throttle.
     features: [
       'Everything in Grow',
-      'Sending kept apart from other customers',
+      'Your mailboxes sign in from an address no one else uses',
       'Team roles and permissions',
       'Full audit log',
       'Priority support',

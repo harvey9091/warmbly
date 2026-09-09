@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -25,7 +22,9 @@ import (
 	"github.com/warmbly/warmbly/internal/infrastructure/kafka"
 	"github.com/warmbly/warmbly/internal/infrastructure/kms"
 	"github.com/warmbly/warmbly/internal/infrastructure/storage"
+	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/observability"
+	"github.com/warmbly/warmbly/internal/pkg/nodeagent"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -199,7 +198,7 @@ func main() {
 	heartbeatDone := make(chan struct{})
 	go func() {
 		defer close(heartbeatDone)
-		runInternalHeartbeat(ctx, workerID, bindIP)
+		newNodeAgent(workerID, bindIP).Run(ctx)
 	}()
 
 	// Graceful shutdown
@@ -228,75 +227,44 @@ func main() {
 	log.Println("Worker stopped")
 }
 
-func runInternalHeartbeat(ctx context.Context, workerID uuid.UUID, bindIP string) {
-	baseURL := strings.TrimRight(os.Getenv("ENCRYPTED_KEYS_BACKEND_URL"), "/")
-	token := os.Getenv("ENCRYPTED_KEYS_WORKER_TOKEN")
-	if baseURL == "" || token == "" {
-		return
-	}
+// newNodeAgent builds the shared fleet agent. It replaces the worker's own
+// heartbeat loop: identity, usage reporting and self-update are node concerns,
+// identical for every role, so they live in one place.
+func newNodeAgent(workerID uuid.UUID, bindIP string) *nodeagent.Agent {
 	reportedIP := os.Getenv("WORKER_PUBLIC_IP")
 	if reportedIP == "" && bindIP != "default route" {
 		reportedIP = bindIP
 	}
-	if reportedIP == "" {
-		reportedIP = "unknown"
-	}
+	return nodeagent.New(nodeagent.Config{
+		NodeID:  workerID,
+		Role:    models.NodeRoleWorker,
+		Name:    os.Getenv("WARMBLY_NODE_NAME"),
+		Region:  nodeRegion(),
+		Address: reportedIP,
+		Version: buildVersion(),
+		BaseURL: os.Getenv("ENCRYPTED_KEYS_BACKEND_URL"),
+		Token:   os.Getenv("ENCRYPTED_KEYS_WORKER_TOKEN"),
+		// Written for the host-side updater installed by `warmbly join`.
+		TargetVersionPath: os.Getenv("WARMBLY_TARGET_VERSION_PATH"),
+	})
+}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	// reqCtx is separate from ctx so the farewell beat still sends after ctx is
-	// cancelled by the shutdown signal.
-	send := func(reqCtx context.Context, booted, stopping bool) {
-		payload := map[string]any{
-			"worker_id":   workerID.String(),
-			"bind_ip":     reportedIP,
-			"tier":        os.Getenv("WORKER_TIER"),
-			"egress_kind": os.Getenv("WORKER_EGRESS_KIND"),
-		}
-		if booted {
-			// Mailboxes live in memory only, so a fresh process holds none.
-			// The backend reloads this worker's mailboxes on this beat
-			// instead of leaving them to the reconciler's next pass.
-			payload["booted"] = true
-		}
-		if stopping {
-			payload["stopping"] = true
-		}
-		body, _ := json.Marshal(payload)
-		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, baseURL+"/api/v1/internal/worker/heartbeat", bytes.NewReader(body))
-		if err != nil {
-			log.Println("failed to build internal heartbeat:", err)
-			return
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Println("failed internal heartbeat:", err)
-			return
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode >= 300 {
-			log.Println("internal heartbeat returned status", resp.StatusCode)
-		}
+// nodeRegion reads the sign-in geography hint. WARMBLY_NODE_REGION is what the
+// join script writes and what every role uses; WORKER_REGION is the older
+// worker-only name, kept as a fallback so a machine configured by hand before
+// the join flow existed keeps reporting its region.
+func nodeRegion() string {
+	if v := os.Getenv("WARMBLY_NODE_REGION"); v != "" {
+		return v
 	}
+	return os.Getenv("WORKER_REGION")
+}
 
-	send(ctx, true, false)
-	ticker := time.NewTicker(90 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			// Farewell beat on a fresh context: ctx is already cancelled, and
-			// without this the row stays selectable until the heartbeat ages
-			// out, so placement keeps picking a worker that has exited.
-			byeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			send(byeCtx, false, true)
-			cancel()
-			return
-		case <-ticker.C:
-			send(ctx, false, false)
-		}
-	}
+// buildVersion is the image tag this build reports. Set by the join script
+// from the tag it pulled; empty means unknown, which the control plane must
+// not read as "needs updating".
+func buildVersion() string {
+	return os.Getenv("WARMBLY_VERSION")
 }
 
 // uuidNamespaceURL is the RFC 4122 URL namespace, matching the value used by

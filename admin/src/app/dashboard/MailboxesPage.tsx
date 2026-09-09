@@ -24,7 +24,7 @@ import { DataTable, type Column } from "@/components/data/DataTable";
 import { useCursorPager } from "@/lib/useCursorPager";
 import { emptyRange, rangeActive, rangeWithin, rangeAfter, rangeBefore, type DateRange } from "@/lib/dateRange";
 import { searchMailboxes } from "@/lib/api/client/admin/mailboxes";
-import { listManagedWorkers } from "@/lib/api/client/admin/workers";
+import { listFleetNodes, type FleetNode } from "@/lib/api/client/admin/fleetNodes";
 import type { AdminMailboxRow } from "@/lib/api/models/admin";
 
 type StatusFilter = "active" | "inactive" | "all";
@@ -206,7 +206,7 @@ export default function MailboxesPage() {
         if (qParam) setStatus("all");
     }, [qParam]);
 
-    const { data: workersData } = useQuery({ queryKey: ["admin", "workers", "managed"], queryFn: listManagedWorkers, staleTime: 60_000 });
+    const { data: workersData } = useQuery({ queryKey: ["admin", "workers", "managed"], queryFn: () => listFleetNodes("worker"), staleTime: 60_000 });
     const workerOptions = [
         { value: "any", label: "Any worker" },
         ...(workersData?.data ?? []).map((w) => ({ value: w.id, label: w.name || w.id.slice(0, 8) })),

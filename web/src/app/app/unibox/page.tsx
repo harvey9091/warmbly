@@ -19,7 +19,7 @@ import { ChevronLeftIcon, InboxIcon } from "lucide-react";
 import { ConversationList } from "@/components/app/unibox/ConversationList";
 import { ScheduledList } from "@/components/app/unibox/ScheduledList";
 import { ThreadView } from "@/components/app/unibox/ThreadView";
-import { ScopeRail, type UniboxScope } from "@/components/app/unibox/ScopeRail";
+import { ScopeRail, scopeKey, type UniboxScope } from "@/components/app/unibox/ScopeRail";
 import { ScopeSheet } from "@/components/app/unibox/ScopeSheet";
 import { UniboxHeader } from "@/components/app/unibox/UniboxHeader";
 import useFeatureAccess from "@/hooks/useFeatureAccess";
@@ -336,6 +336,7 @@ export default function UniboxPage() {
                 )}
               >
                 <ConversationList
+                  scopeKey={scopeKey(scope)}
                   scopeLabel={scopeLabel}
                   params={params}
                   setParams={setParams}
@@ -359,7 +360,11 @@ export default function UniboxPage() {
                       Inbox
                     </button>
                     <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                      <ThreadView threadId={urlThread} />
+                      {/* Keyed: the list is what has to survive a thread
+                          change, the reader is what has to start clean, so a
+                          half-typed reply never follows you to the next
+                          conversation. */}
+                      <ThreadView key={urlThread} threadId={urlThread} />
                     </div>
                   </>
                 ) : (

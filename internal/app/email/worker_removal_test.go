@@ -354,13 +354,13 @@ func TestDeleteGivesTheWorkerItsCapacityBack(t *testing.T) {
 func TestDeleteRefundsTheWeightTheMailboxWasChargedAt(t *testing.T) {
 	f := newRemovalFixture(t)
 	warming := time.Now()
-	f.repo.account.Provider = "gmail-api"
+	f.repo.account.Provider = "gmail"
 	f.repo.account.Warmup = &warming
 
 	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr != nil {
 		t.Fatalf("delete: %v", xerr)
 	}
-	if len(f.repo.refunded) != 1 || f.repo.refunded[0] != worker.MailboxWeight("gmail-api", true) {
+	if len(f.repo.refunded) != 1 || f.repo.refunded[0] != worker.MailboxWeight("gmail", true) {
 		t.Errorf("refund = %v, want the warmup weight", f.repo.refunded)
 	}
 }

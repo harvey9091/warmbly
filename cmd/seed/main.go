@@ -133,9 +133,9 @@ func seedBaseline(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 
-	// Worker for dev accounts. Matches the docker-compose shared worker
-	// hostname so the running worker container can pick the assignments up.
-	if err := upsertWorker(ctx, pool, workerShared, "shared-1", "10.0.0.11", "shared", true, true); err != nil {
+	// Worker for dev accounts. Matches the docker-compose worker hostname so
+	// the running worker container can pick the assignments up.
+	if err := upsertWorker(ctx, pool, workerShared, "worker-1", "10.0.0.11", "", true); err != nil {
 		return fmt.Errorf("dev worker: %w", err)
 	}
 
@@ -254,19 +254,18 @@ func seedRich(ctx context.Context, pool *pgxpool.Pool) error {
 
 	// workers
 	workers := []struct {
-		id       uuid.UUID
-		name     string
-		ip       string
-		wtype    string
-		freeTier bool
-		active   bool
+		id     uuid.UUID
+		name   string
+		ip     string
+		region string
+		active bool
 	}{
-		{workerShared, "shared-1", "10.0.0.11", "shared", true, true},
-		{workerPremium, "premium-1", "10.0.0.12", "shared", false, true},
-		{workerDedicated, "dedicated-1", "10.0.0.13", "dedicated", false, true},
+		{workerShared, "worker-1", "10.0.0.11", "eu-central", true},
+		{workerPremium, "worker-2", "10.0.0.12", "eu-central", true},
+		{workerDedicated, "worker-3", "10.0.0.13", "us-east", true},
 	}
 	for _, w := range workers {
-		if err := upsertWorker(ctx, pool, w.id, w.name, w.ip, w.wtype, w.freeTier, w.active); err != nil {
+		if err := upsertWorker(ctx, pool, w.id, w.name, w.ip, w.region, w.active); err != nil {
 			return fmt.Errorf("worker %s: %w", w.name, err)
 		}
 	}
@@ -406,18 +405,23 @@ func upsertOrg(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, name, slug
 	return tx.Commit(ctx)
 }
 
-func upsertWorker(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, name, ip, wtype string, freeTier, active bool) error {
-	_, err := pool.Exec(ctx, `
-		INSERT INTO workers (id, name, ip_addr, worker_type, free_tier, active)
-		VALUES ($1, $2, $3, $4, $5, $6)
+func upsertWorker(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, name, ip, region string, active bool) error {
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO fleet_nodes (id, role, name, address, region, active, last_seen_at)
+		VALUES ($1, 'worker', $2, $3, $4, $5, now())
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
-			ip_addr = EXCLUDED.ip_addr,
-			worker_type = EXCLUDED.worker_type,
-			free_tier = EXCLUDED.free_tier,
+			address = EXCLUDED.address,
+			region = EXCLUDED.region,
 			active = EXCLUDED.active,
-			updated_at = NOW()`,
-		id, name, ip, wtype, freeTier, active)
+			last_seen_at = now(),
+			updated_at = now()`,
+		id, name, ip, region, active); err != nil {
+		return err
+	}
+	_, err := pool.Exec(ctx, `
+		INSERT INTO workers (id, account_count) VALUES ($1, 0)
+		ON CONFLICT (id) DO NOTHING`, id)
 	return err
 }
 

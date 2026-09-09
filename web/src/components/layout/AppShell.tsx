@@ -31,6 +31,7 @@ import { GlobalCursorsProvider } from "@/components/app/presence/GlobalCursors";
 import AgentPanel from "@/components/app/agent/AgentPanel";
 import { BackgroundLayer } from "@/components/appearance/BackgroundLayer";
 import { useAppStore } from "@/stores";
+import { useRouteKey } from "@/hooks/useRouteKey";
 
 export function AppShell() {
     useKeyboardShortcuts();
@@ -39,15 +40,26 @@ export function AppShell() {
     const glassOpacity = useAppStore((state) => state.glassOpacity)
     const glassBlur = useAppStore((state) => state.glassBlur)
 
+    // Mobile nav drawer. On >=md the sidebar is a static column and this is
+    // ignored; below md it's an off-canvas drawer toggled from the header.
     const [navOpen, setNavOpen] = useState(false);
     const { pathname } = useLocation();
+    // Close the drawer whenever the route changes (tapping a nav link).
     useEffect(() => setNavOpen(false), [pathname]);
 
+    // The page content's scroll container, anchor for the global cursor layer.
     const scrollRef = useRef<HTMLDivElement>(null);
 
+    // Pages scroll this inner container, not the window, so nothing resets the
+    // offset between routes: navigating from halfway down a long list used to
+    // land mid-page on the next one. Reset before paint so it never flashes.
+    // Keyed on the route identity, not the raw pathname, so a page that keeps
+    // in-page state in the URL (the unibox's open thread) is not scrolled away
+    // from what the user was reading.
+    const routeKey = useRouteKey();
     useLayoutEffect(() => {
         scrollRef.current?.scrollTo({ top: 0, left: 0 });
-    }, [pathname]);
+    }, [routeKey]);
 
     useEffect(() => {
         const root = document.documentElement
@@ -62,6 +74,9 @@ export function AppShell() {
             <SkyChrome />
 
             <div className="relative z-10 flex flex-col h-full">
+                {/* Sits above the header so it can't be missed. Only
+                    renders when the current workspace or the user's
+                    own account is scheduled for deletion. */}
                 <SendingRestrictedBar />
                 <PendingDeletionBar />
 
@@ -70,11 +85,21 @@ export function AppShell() {
                 <div className="flex-1 flex min-h-0">
                     <AppNav open={navOpen} onClose={() => setNavOpen(false)} />
 
+                    {/* Content panel — supports custom backgrounds and glassmorphism.
+                        The inner corner is softened (rounded-tl-2xl) only on >=md, where
+                        the sidebar sits beside it; on mobile the panel is
+                        full-bleed with just a top hairline. */}
                     <main className="app-shell-content flex-1 min-w-0 bg-background overflow-hidden border-t border-slate-200/70 md:rounded-tl-2xl md:border-l">
                         <GlobalCursorsProvider scrollRef={scrollRef}>
                             <div ref={scrollRef} className="h-full overflow-auto">
                                 <RouteBoundary>
-                                    <Suspense fallback={<RouteFallback />}>
+                                    {/* Router navigations run inside a
+                                        transition, so a page that suspends with
+                                        no boundary above it commits an empty
+                                        content area and stays that way until
+                                        the query lands (only a reload fixes
+                                        it). This is that boundary. */}
+                                    <Suspense key={routeKey} fallback={<RouteFallback />}>
                                         <SubscriptionGate>
                                             <Outlet />
                                         </SubscriptionGate>
@@ -88,6 +113,7 @@ export function AppShell() {
 
             <ShortcutsModal />
             <CommandPalette />
+            {/* Right-side AI assistant, persistent across routes. */}
             <AgentPanel />
         </div>
     );

@@ -26,6 +26,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/emailsend"
 	emailverifyapp "github.com/warmbly/warmbly/internal/app/emailverify"
 	"github.com/warmbly/warmbly/internal/app/feature"
+	"github.com/warmbly/warmbly/internal/app/fleetnode"
 	"github.com/warmbly/warmbly/internal/app/form"
 	"github.com/warmbly/warmbly/internal/app/group"
 	"github.com/warmbly/warmbly/internal/app/instancecheck"
@@ -68,7 +69,6 @@ import (
 	"github.com/warmbly/warmbly/internal/app/webhook"
 	"github.com/warmbly/warmbly/internal/app/websitetracking"
 	"github.com/warmbly/warmbly/internal/app/worker"
-	"github.com/warmbly/warmbly/internal/app/worker_orchestrator"
 	"github.com/warmbly/warmbly/internal/pkg/generation"
 
 	"github.com/warmbly/warmbly/internal/infrastructure/encryptedkeys"
@@ -158,10 +158,10 @@ type Handler struct {
 	AdminService         admin.AdminService
 	AdminOutreachService adminoutreach.Service
 
-	// Worker orchestration (SSH-driven lifecycle for admin-managed workers)
-	WorkerOrchestrator *worker_orchestrator.Orchestrator
-	WorkerRepo         repository.WorkerRepository
-	CredentialsRepo    repository.CredentialsRepository
+	// Fleet. Nodes enrol with the join token and pull everything else; the
+	// control plane never reaches into a machine.
+	FleetNodes *fleetnode.Service
+	WorkerRepo repository.WorkerRepository
 	// UpdatesService backs the admin panel's update indicator and button.
 	UpdatesService *updates.Service
 
@@ -291,15 +291,13 @@ type Handler struct {
 	// Direct repositories used by handlers that don't yet have a
 	// service layer (avatars, etc.). Keep narrow and add a service
 	// only when business logic accumulates.
-	UserRepo                 repository.UserRepository
-	OrgRepo                  repository.OrganizationRepository
-	AttachmentRepo           repository.AttachmentRepository
-	EmailImageRepo           repository.EmailImageRepository
-	StorageBackendRepo       repository.StorageBackendRepository
-	CloudCredentialRepo      repository.CloudCredentialRepository
-	ProvisioningTemplateRepo repository.ProvisioningTemplateRepository
-	ProvisioningJobRepo      repository.ProvisioningJobRepository
-	ProvisioningPolicyRepo   repository.ProvisioningPolicyRepository
+	UserRepo           repository.UserRepository
+	OrgRepo            repository.OrganizationRepository
+	AttachmentRepo     repository.AttachmentRepository
+	EmailImageRepo     repository.EmailImageRepository
+	StorageBackendRepo repository.StorageBackendRepository
+	FleetNodeRepo      repository.FleetNodeRepository
+	FleetSettingsRepo  repository.FleetSettingsRepository
 
 	// Danger zone (delayed deletions for orgs & user accounts)
 	DangerZoneService dangerzone.Service

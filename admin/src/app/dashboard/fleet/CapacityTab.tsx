@@ -7,10 +7,10 @@ import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/data/DataTable";
 import { StateLegend } from "@/components/StateLegend";
-import { WORKER_HEALTH_LEGEND, WORKER_RISK_POOL_LEGEND } from "@/lib/legends";
+import { WORKER_HEALTH_LEGEND } from "@/lib/legends";
 import { getFleetCapacity, type AdminFleetWorkerRow } from "@/lib/api/client/admin/fleet";
 import { cn } from "@/lib/utils";
-import { HealthPill, LiveDot, RiskPoolPill, TierPill, TypePill } from "./tones";
+import { HealthPill, LiveDot } from "./tones";
 import { fmtAgo } from "./format";
 
 function UtilizationBar({ row }: { row: AdminFleetWorkerRow }) {
@@ -83,15 +83,11 @@ const columns: Column<AdminFleetWorkerRow>[] = [
         ),
         csv: (w) => w.name || w.worker_id,
     },
-    { id: "tier", header: "Tier", cell: (w) => <TierPill freeTier={w.free_tier} />, csv: (w) => (w.free_tier ? "free" : "premium") },
-    { id: "type", header: "Type", cell: (w) => <TypePill type={w.worker_type} />, csv: (w) => w.worker_type },
-    { id: "pool", header: "Risk pool", cell: (w) => <RiskPoolPill pool={w.risk_pool} />, csv: (w) => w.risk_pool },
     {
-        id: "egress",
-        header: "Egress",
-        cell: (w) => <span className="font-mono text-[11px]">{w.egress_kind}</span>,
-        csv: (w) => w.egress_kind,
-        defaultHidden: true,
+        id: "region",
+        header: "Region",
+        cell: (w) => <span className="font-mono text-[11px]">{w.region || "—"}</span>,
+        csv: (w) => w.region,
     },
     { id: "health", header: "Health", cell: (w) => <HealthPill state={w.health_state} />, csv: (w) => w.health_state },
     {
@@ -197,7 +193,6 @@ export function CapacityTab() {
                     )}
                 </span>
                 <span className="flex flex-wrap gap-3">
-                    <StateLegend label="Risk pools" entries={WORKER_RISK_POOL_LEGEND} />
                     <StateLegend label="Health states" entries={WORKER_HEALTH_LEGEND} />
                 </span>
             </div>

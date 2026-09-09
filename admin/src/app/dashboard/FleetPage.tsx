@@ -1,6 +1,6 @@
 // Fleet: placement as the operator sees it. Capacity (per-worker load vs.
 // effective capacity with the last hour's outcome counters), the decision log
-// the control loops write, and the dedicated worker bindings. The tab lives
+// the control loops write, and the isolated-egress reservations. The tab lives
 // in ?tab= so links deep-link.
 
 import { useSearchParams } from "react-router-dom";

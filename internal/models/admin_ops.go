@@ -201,12 +201,9 @@ type AdminFleetWorkerRow struct {
 	Name         string            `json:"name"`
 	IPAddr       string            `json:"ip_addr"`
 	Active       bool              `json:"active"`
-	FreeTier     bool              `json:"free_tier"`
-	WorkerType   WorkerType        `json:"worker_type"`
-	RiskPool     WorkerRiskPool    `json:"risk_pool"`
-	EgressKind   WorkerEgressKind  `json:"egress_kind"`
+	Region       string            `json:"region"`
 	HealthState  WorkerHealthState `json:"health_state"`
-	InstallState string            `json:"install_state"`
+	Version      string            `json:"version"`
 	LastSeenAt   *time.Time        `json:"last_seen_at,omitempty"`
 	Live         bool              `json:"live"`
 	AccountCount int               `json:"account_count"`
@@ -254,13 +251,6 @@ type AdminDedicatedAssignment struct {
 	AssignedAt       time.Time  `json:"assigned_at"`
 	ReleasedAt       *time.Time `json:"released_at,omitempty"`
 	AccountCount     int        `json:"account_count"`
-}
-
-// AdminConvertDedicatedRequest is the body of POST /admin/workers/:id/convert-dedicated.
-type AdminConvertDedicatedRequest struct {
-	OrganizationID  string  `json:"organization_id"`
-	SubscriptionID  string  `json:"subscription_id"`
-	DrainToWorkerID *string `json:"drain_to_worker_id"`
 }
 
 // ---- workspace transfers ----

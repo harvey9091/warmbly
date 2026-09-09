@@ -27,7 +27,6 @@ type EmailAccountWorkerInfo struct {
 	EmailAccountID uuid.UUID
 	WorkerID       *uuid.UUID
 	UserID         uuid.UUID
-	FreeTier       *bool
 }
 
 // EmailAccountPlacementHint carries the small slice of mailbox metadata the
@@ -42,16 +41,19 @@ type EmailAccountPlacementHint struct {
 type WorkerRepository interface {
 	// Worker queries
 	GetByID(ctx context.Context, id uuid.UUID) (*models.Worker, error)
-	GetSharedWorkersByTier(ctx context.Context, freeTier bool) ([]models.Worker, error)
+	// ListPlaceableWorkers returns every live worker, least loaded first. It
+	// is the fallback path for when the capacity view has no rows yet.
+	ListPlaceableWorkers(ctx context.Context) ([]models.Worker, error)
 	// IsWorkerLive reports whether a worker is active and heartbeating inside
 	// WorkerLivenessWindow, i.e. whether it can still receive commands.
 	IsWorkerLive(ctx context.Context, id uuid.UUID) (bool, error)
 	GetAllActiveWorkers(ctx context.Context) ([]models.Worker, error)
-	GetAvailableDedicatedWorker(ctx context.Context) (*models.Worker, error)
-	PromoteIdlePremiumWorkerToDedicated(ctx context.Context) (*models.Worker, error)
+	// GetIdleUnboundWorker finds an active worker carrying no mailboxes and
+	// bound to no organization, so it can be reserved for one that is
+	// entitled to isolated egress.
+	GetIdleUnboundWorker(ctx context.Context) (*models.Worker, error)
 	IncrementAccountCount(ctx context.Context, workerID uuid.UUID) error
 	DecrementAccountCount(ctx context.Context, workerID uuid.UUID) error
-	SetWorkerType(ctx context.Context, workerID uuid.UUID, workerType models.WorkerType) error
 
 	// Dedicated worker assignments
 	CreateDedicatedAssignment(ctx context.Context, assignment *models.DedicatedWorkerAssignment) error
@@ -72,29 +74,18 @@ type WorkerRepository interface {
 	ClearEmailAccountWorker(ctx context.Context, emailAccountID uuid.UUID) error
 	UpdateEmailAccountWarmupPoolType(ctx context.Context, emailAccountID uuid.UUID, poolType string) error
 
-	// SSH-managed workers (admin-driven lifecycle)
-	CreateWorker(ctx context.Context, in CreateWorkerInput) error
+	// Worker rows. A worker is created by its node enrolling, never by an
+	// admin form, so there is no create here: EnsureWorkerRow is called by the
+	// heartbeat once a node declares itself a worker.
+	EnsureWorkerRow(ctx context.Context, id uuid.UUID) error
 	GetWorkerDetail(ctx context.Context, id uuid.UUID) (*models.Worker, error)
 	ListWorkersDetail(ctx context.Context) ([]models.Worker, error)
-	GetWorkerSSHCredentials(ctx context.Context, id uuid.UUID) (*models.WorkerSSHCredentials, error)
-	UpdateInstallState(ctx context.Context, id uuid.UUID, state models.WorkerInstallState, lastError string) error
-	UpdateLastSeen(ctx context.Context, id uuid.UUID, at time.Time) error
-	UpdateHostFingerprint(ctx context.Context, id uuid.UUID, fingerprint string) error
-	RotateSSHKey(ctx context.Context, id uuid.UUID, publicKey, privateKeyEncrypted string) error
-	DeleteWorker(ctx context.Context, id uuid.UUID) error
-	ConsumeEnrollmentToken(ctx context.Context, tokenHash string) (*models.Worker, error)
-	RecordEnrolledIP(ctx context.Context, id uuid.UUID, ip string) error
-	AssignWorkerProfile(ctx context.Context, workerID uuid.UUID, profileID *uuid.UUID) error
-	MarkConfigApplied(ctx context.Context, workerID uuid.UUID, at time.Time) error
-	MarkImageVersion(ctx context.Context, workerID uuid.UUID, version string) error
-	ListWorkersByProfile(ctx context.Context, profileID uuid.UUID) ([]models.Worker, error)
 
-	// Threat-level segregation
-	SetWorkerRiskPool(ctx context.Context, workerID uuid.UUID, pool models.WorkerRiskPool) error
+	// Per-mailbox reputation banding. Drives warmup partner selection and
+	// pacing; it deliberately does NOT drive worker placement, because the
+	// worker is not the sending identity.
 	SetEmailAccountRiskBand(ctx context.Context, emailAccountID uuid.UUID, band models.EmailRiskBand) error
 	GetEmailAccountRiskBand(ctx context.Context, emailAccountID uuid.UUID) (models.EmailRiskBand, error)
-	GetSharedWorkersByTierAndPool(ctx context.Context, freeTier bool, pool models.WorkerRiskPool) ([]models.Worker, error)
-	PromoteWorkerToPool(ctx context.Context, freeTier bool, target models.WorkerRiskPool) (*models.Worker, error)
 	ListRiskCandidates(ctx context.Context, limit int) ([]RiskCandidate, error)
 
 	// Tags
@@ -103,17 +94,18 @@ type WorkerRepository interface {
 	ListAllWorkerTags(ctx context.Context) ([]string, error)
 	HydrateWorkerTags(ctx context.Context, workers []*models.Worker) error
 
-	// Heartbeat (auto-registers new workers on first contact)
-	UpsertOnHeartbeat(ctx context.Context, id uuid.UUID, ipAddr, tier, egressKind string) error
-	DeactivateWorker(ctx context.Context, id uuid.UUID) error
-
 	// Health and capacity
 	InsertWorkerHealthSample(ctx context.Context, sample *models.WorkerHealthSample) error
-	ListCapacityCandidates(ctx context.Context, freeTier bool, allowedStates []models.WorkerHealthState) ([]WorkerCapacityRowDB, error)
+	ListCapacityCandidates(ctx context.Context, allowedStates []models.WorkerHealthState) ([]WorkerCapacityRowDB, error)
+	// ListPlacementCandidates is ListCapacityCandidates plus the neighbour
+	// counts the placement score needs, resolved in one round trip.
+	ListPlacementCandidates(ctx context.Context, orgID uuid.UUID, provider string, allowedStates []models.WorkerHealthState) ([]PlacementCandidateRow, error)
+	CountOrgMailboxes(ctx context.Context, orgID uuid.UUID) (int, error)
+	GetMailboxPlacementState(ctx context.Context, emailAccountID uuid.UUID) (*MailboxPlacementState, error)
+	ListRotationCandidates(ctx context.Context, hotUtilization float64, limit int) ([]MailboxPlacementState, error)
 	GetCapacityRow(ctx context.Context, workerID uuid.UUID) (*WorkerCapacityRowDB, error)
 	AddLoadScore(ctx context.Context, workerID uuid.UUID, delta float64) error
 	SetWorkerHealthState(ctx context.Context, workerID uuid.UUID, state models.WorkerHealthState) error
-	SetWorkerEgressKind(ctx context.Context, workerID uuid.UUID, kind models.WorkerEgressKind) error
 	RefreshWorkerCapacityView(ctx context.Context) error
 	GetEmailAccountPlacementHint(ctx context.Context, emailAccountID uuid.UUID) (*EmailAccountPlacementHint, error)
 }
@@ -126,178 +118,130 @@ func NewWorkerRepository(db *pgxpool.Pool) WorkerRepository {
 	return &workerRepository{db: db}
 }
 
+// workerSelect is the single projection every worker read goes through. The
+// placement columns come from `workers`, the machine columns from the node it
+// is; keeping it in one place is what stops the two halves drifting apart.
+const workerSelect = `
+	SELECT w.id, w.account_count, w.health_state, w.load_score,
+	       n.name, n.notes, n.address, n.active, n.last_seen_at, n.last_error,
+	       n.version, n.region, w.created_at, w.updated_at
+	  FROM workers w
+	  JOIN fleet_nodes n ON n.id = w.id`
+
+func scanWorker(row pgx.Row) (*models.Worker, error) {
+	var w models.Worker
+	err := row.Scan(
+		&w.ID, &w.AccountCount, &w.HealthState, &w.LoadScore,
+		&w.Name, &w.Notes, &w.IPAddr, &w.Active, &w.LastSeenAt, &w.LastError,
+		&w.Version, &w.Region, &w.CreatedAt, &w.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &w, nil
+}
+
+func scanWorkers(rows pgx.Rows) ([]models.Worker, error) {
+	defer rows.Close()
+	var out []models.Worker
+	for rows.Next() {
+		w, err := scanWorker(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *w)
+	}
+	return out, rows.Err()
+}
+
+// EnsureWorkerRow creates the placement half for a node that has declared
+// itself a worker. Idempotent: every heartbeat calls it, and only the first
+// one does anything.
+func (r *workerRepository) EnsureWorkerRow(ctx context.Context, id uuid.UUID) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO workers (id) VALUES ($1)
+		ON CONFLICT (id) DO NOTHING`, id)
+	return err
+}
+
 func (r *workerRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.Worker, error) {
-	query := `
-		SELECT id, ip_addr, active, free_tier, worker_type, account_count, created_at, updated_at
-		FROM workers
-		WHERE id = $1
-	`
-
-	var w models.Worker
-	err := r.db.QueryRow(ctx, query, id).Scan(
-		&w.ID, &w.IPAddr, &w.Active, &w.FreeTier, &w.WorkerType, &w.AccountCount,
-		&w.CreatedAt, &w.UpdatedAt,
-	)
-	if err == pgx.ErrNoRows {
+	w, err := scanWorker(r.db.QueryRow(ctx, workerSelect+` WHERE w.id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	return &w, nil
+	return w, err
 }
 
-// GetSharedWorkersByTier retrieves all shared workers matching the specified tier
-// Results are sorted by account_count ASC (least loaded first) for even distribution
-// IsWorkerLive reports whether a worker is still a valid placement target,
-// using the same predicate as selection: active, and heartbeating inside
-// WorkerLivenessWindow. A mailbox already assigned to a worker that fails this
-// is orphaned, because its send commands go to a topic with no consumer.
+// IsWorkerLive reports whether a worker is still a valid placement target:
+// active, and heartbeating inside WorkerLivenessWindow. Liveness is a property
+// of the node, so it is read there and nowhere else.
 func (r *workerRepository) IsWorkerLive(ctx context.Context, id uuid.UUID) (bool, error) {
-	query := `
-		SELECT EXISTS(
-			SELECT 1 FROM workers
-			WHERE id = $1
-			  AND active = true
-			  AND last_seen_at > now() - $2::interval
-		)
-	`
 	var live bool
-	if err := r.db.QueryRow(ctx, query, id, WorkerLivenessWindow).Scan(&live); err != nil {
-		return false, err
-	}
-	return live, nil
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM fleet_nodes
+			WHERE id = $1 AND role = 'worker' AND active
+			  AND last_seen_at > now() - $2::interval
+		)`, id, WorkerLivenessWindow).Scan(&live)
+	return live, err
 }
 
-func (r *workerRepository) GetSharedWorkersByTier(ctx context.Context, freeTier bool) ([]models.Worker, error) {
-	query := `
-		SELECT id, ip_addr, active, free_tier, worker_type, account_count, created_at, updated_at
-		FROM workers
-		WHERE worker_type = 'shared'
-		  AND active = true
-		  AND free_tier = $1
-		  AND last_seen_at > now() - $2::interval
-		ORDER BY account_count ASC
-	`
-
-	rows, err := r.db.Query(ctx, query, freeTier, WorkerLivenessWindow)
+func (r *workerRepository) ListPlaceableWorkers(ctx context.Context) ([]models.Worker, error) {
+	rows, err := r.db.Query(ctx, workerSelect+`
+		 WHERE n.active AND n.last_seen_at > now() - $1::interval
+		 ORDER BY w.account_count ASC`, WorkerLivenessWindow)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var workers []models.Worker
-	for rows.Next() {
-		var w models.Worker
-		if err := rows.Scan(
-			&w.ID, &w.IPAddr, &w.Active, &w.FreeTier, &w.WorkerType, &w.AccountCount,
-			&w.CreatedAt, &w.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		workers = append(workers, w)
-	}
-
-	return workers, rows.Err()
+	return scanWorkers(rows)
 }
 
-// GetAllActiveWorkers retrieves all active workers regardless of tier
+// GetAllActiveWorkers retrieves every active worker, live or not.
 func (r *workerRepository) GetAllActiveWorkers(ctx context.Context) ([]models.Worker, error) {
-	query := `
-		SELECT id, ip_addr, active, free_tier, worker_type, account_count, created_at, updated_at
-		FROM workers
-		WHERE active = true
-		ORDER BY created_at
-	`
-	rows, err := r.db.Query(ctx, query)
+	rows, err := r.db.Query(ctx, workerSelect+` WHERE n.active ORDER BY w.created_at`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var workers []models.Worker
-	for rows.Next() {
-		var w models.Worker
-		if err := rows.Scan(
-			&w.ID, &w.IPAddr, &w.Active, &w.FreeTier, &w.WorkerType, &w.AccountCount,
-			&w.CreatedAt, &w.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		workers = append(workers, w)
-	}
-	return workers, rows.Err()
+	return scanWorkers(rows)
 }
 
-// GetAvailableDedicatedWorker finds an available dedicated worker that is not assigned
-func (r *workerRepository) GetAvailableDedicatedWorker(ctx context.Context) (*models.Worker, error) {
-	query := `
-		SELECT w.id, w.ip_addr, w.active, w.free_tier, w.worker_type, w.account_count, w.created_at, w.updated_at
-		FROM workers w
-		WHERE w.worker_type = 'dedicated'
-		  AND w.active = true
-		  AND w.free_tier = false
-		  AND NOT EXISTS (
-			SELECT 1 FROM dedicated_worker_assignments dwa
-			WHERE dwa.worker_id = w.id AND dwa.released_at IS NULL
-		  )
-		ORDER BY w.created_at ASC
-		LIMIT 1
-	`
-
-	var w models.Worker
-	err := r.db.QueryRow(ctx, query).Scan(
-		&w.ID, &w.IPAddr, &w.Active, &w.FreeTier, &w.WorkerType, &w.AccountCount,
-		&w.CreatedAt, &w.UpdatedAt,
-	)
-	if err == pgx.ErrNoRows {
+// GetIdleUnboundWorker finds an active worker that carries no mailboxes and is
+// bound to no organization, so it can be reserved for one entitled to isolated
+// egress. There is no worker category to check: any idle worker will do.
+func (r *workerRepository) GetIdleUnboundWorker(ctx context.Context) (*models.Worker, error) {
+	w, err := scanWorker(r.db.QueryRow(ctx, workerSelect+`
+		 WHERE n.active
+		   AND n.last_seen_at > now() - $1::interval
+		   AND w.account_count = 0
+		   AND NOT EXISTS (
+		       SELECT 1 FROM dedicated_worker_assignments dwa
+		        WHERE dwa.worker_id = w.id AND dwa.released_at IS NULL
+		   )
+		 ORDER BY w.created_at ASC
+		 LIMIT 1`, WorkerLivenessWindow))
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	return &w, nil
+	return w, err
 }
 
-// PromoteIdlePremiumWorkerToDedicated flips the oldest idle premium shared
-// worker to dedicated and returns it, so the control plane can seed dedicated
-// capacity on demand when GetAvailableDedicatedWorker finds none free. Only
-// premium (free_tier = false), shared, active workers with account_count = 0
-// are eligible — promoting a loaded worker would strand its mailboxes on a box
-// that suddenly belongs to one org. Returns nil if no idle premium worker
-// exists.
-//
-// The candidate is selected and flipped in a single statement
-// (UPDATE ... WHERE id = (SELECT ... FOR UPDATE SKIP LOCKED)), so two
-// concurrent promotions never pick the same row. free/premium capacity
-// separation is preserved: free-tier workers are never promoted.
-func (r *workerRepository) PromoteIdlePremiumWorkerToDedicated(ctx context.Context) (*models.Worker, error) {
-	query := `
-		UPDATE workers SET worker_type = 'dedicated', updated_at = NOW()
-		WHERE id = (
-			SELECT id FROM workers
-			WHERE worker_type = 'shared'
-			  AND active = true
-			  AND free_tier = false
-			  AND account_count = 0
-			ORDER BY created_at ASC
-			LIMIT 1
-			FOR UPDATE SKIP LOCKED
-		)
-		RETURNING id, ip_addr, active, free_tier, worker_type, account_count, risk_pool, created_at, updated_at
-	`
-	var w models.Worker
-	err := r.db.QueryRow(ctx, query).Scan(
-		&w.ID, &w.IPAddr, &w.Active, &w.FreeTier, &w.WorkerType, &w.AccountCount, &w.RiskPool,
-		&w.CreatedAt, &w.UpdatedAt,
-	)
-	if err == pgx.ErrNoRows {
+// GetWorkerDetail and ListWorkersDetail are the admin reads. They differ from
+// GetByID/GetAllActiveWorkers only in including inactive workers, so an
+// operator can still see a machine that went away.
+func (r *workerRepository) GetWorkerDetail(ctx context.Context, id uuid.UUID) (*models.Worker, error) {
+	w, err := scanWorker(r.db.QueryRow(ctx, workerSelect+` WHERE w.id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
+	return w, err
+}
+
+func (r *workerRepository) ListWorkersDetail(ctx context.Context) ([]models.Worker, error) {
+	rows, err := r.db.Query(ctx, workerSelect+` ORDER BY n.active DESC, n.last_seen_at DESC NULLS LAST, n.name`)
 	if err != nil {
 		return nil, err
 	}
-	return &w, nil
+	return scanWorkers(rows)
 }
 
 func (r *workerRepository) IncrementAccountCount(ctx context.Context, workerID uuid.UUID) error {
@@ -309,12 +253,6 @@ func (r *workerRepository) IncrementAccountCount(ctx context.Context, workerID u
 func (r *workerRepository) DecrementAccountCount(ctx context.Context, workerID uuid.UUID) error {
 	query := `UPDATE workers SET account_count = GREATEST(account_count - 1, 0), updated_at = NOW() WHERE id = $1`
 	_, err := r.db.Exec(ctx, query, workerID)
-	return err
-}
-
-func (r *workerRepository) SetWorkerType(ctx context.Context, workerID uuid.UUID, workerType models.WorkerType) error {
-	query := `UPDATE workers SET worker_type = $1, updated_at = NOW() WHERE id = $2`
-	_, err := r.db.Exec(ctx, query, workerType, workerID)
 	return err
 }
 
@@ -383,28 +321,16 @@ func (r *workerRepository) GetActiveDedicatedAssignment(ctx context.Context, use
 
 // GetDedicatedWorkerByOrgID retrieves the dedicated worker assigned to an organization
 func (r *workerRepository) GetDedicatedWorkerByOrgID(ctx context.Context, orgID uuid.UUID) (*models.Worker, error) {
-	query := `
-		SELECT w.id, w.ip_addr, w.active, w.free_tier, w.worker_type, w.account_count, w.created_at, w.updated_at
-		FROM workers w
-		JOIN dedicated_worker_assignments dwa ON w.id = dwa.worker_id
-		WHERE dwa.organization_id = $1 AND dwa.released_at IS NULL
-	`
-
-	var w models.Worker
-	err := r.db.QueryRow(ctx, query, orgID).Scan(
-		&w.ID, &w.IPAddr, &w.Active, &w.FreeTier, &w.WorkerType, &w.AccountCount,
-		&w.CreatedAt, &w.UpdatedAt,
-	)
-	if err == pgx.ErrNoRows {
+	w, err := scanWorker(r.db.QueryRow(ctx, workerSelect+`
+		  JOIN dedicated_worker_assignments dwa ON dwa.worker_id = w.id
+		 WHERE dwa.organization_id = $1 AND dwa.released_at IS NULL
+		 LIMIT 1`, orgID))
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	return &w, nil
+	return w, err
 }
 
-// ReleaseDedicatedAssignment releases a dedicated worker assignment
 func (r *workerRepository) ReleaseDedicatedAssignment(ctx context.Context, userID uuid.UUID) error {
 	query := `
 		UPDATE dedicated_worker_assignments
@@ -495,15 +421,27 @@ func (r *workerRepository) GetEmailAccountsByOrganizationID(ctx context.Context,
 }
 
 // UpdateEmailAccountWorker assigns a worker to an email account
+// UpdateEmailAccountWorker (re)assigns a mailbox and stamps worker_assigned_at,
+// which is what the rotation loop reads to enforce a minimum residency. The
+// stamp only moves when the worker actually changes, so re-writing the same
+// assignment does not reset a mailbox's clock.
 func (r *workerRepository) UpdateEmailAccountWorker(ctx context.Context, emailAccountID, workerID uuid.UUID) error {
-	query := `UPDATE email_accounts SET worker_id = $1, updated_at = NOW() WHERE id = $2`
+	query := `
+		UPDATE email_accounts
+		   SET worker_id = $1,
+		       worker_assigned_at = CASE
+		         WHEN worker_id IS DISTINCT FROM $1 THEN NOW()
+		         ELSE worker_assigned_at
+		       END,
+		       updated_at = NOW()
+		 WHERE id = $2`
 	_, err := r.db.Exec(ctx, query, workerID, emailAccountID)
 	return err
 }
 
 // ClearEmailAccountWorker removes worker assignment from an email account
 func (r *workerRepository) ClearEmailAccountWorker(ctx context.Context, emailAccountID uuid.UUID) error {
-	query := `UPDATE email_accounts SET worker_id = NULL, updated_at = NOW() WHERE id = $1`
+	query := `UPDATE email_accounts SET worker_id = NULL, worker_assigned_at = NULL, updated_at = NOW() WHERE id = $1`
 	_, err := r.db.Exec(ctx, query, emailAccountID)
 	return err
 }
@@ -550,15 +488,14 @@ func (r *workerRepository) UpdateEmailAccountWarmupPoolType(ctx context.Context,
 // GetEmailAccountWorkerInfo retrieves worker info for an email account
 func (r *workerRepository) GetEmailAccountWorkerInfo(ctx context.Context, emailAccountID uuid.UUID) (*EmailAccountWorkerInfo, error) {
 	query := `
-		SELECT ea.id, ea.worker_id, ea.user_id, w.free_tier
+		SELECT ea.id, ea.worker_id, ea.user_id
 		FROM email_accounts ea
-		LEFT JOIN workers w ON ea.worker_id = w.id
 		WHERE ea.id = $1
 	`
 
 	var info EmailAccountWorkerInfo
 	err := r.db.QueryRow(ctx, query, emailAccountID).Scan(
-		&info.EmailAccountID, &info.WorkerID, &info.UserID, &info.FreeTier,
+		&info.EmailAccountID, &info.WorkerID, &info.UserID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil

@@ -16,16 +16,29 @@ import { AlertTriangleIcon, RefreshCcwIcon } from "lucide-react";
 interface State {
     error: Error | null;
     info: React.ErrorInfo | null;
+    /** Last `resetKey` seen, so a change clears the error without a remount. */
+    seenResetKey?: string;
 }
 
-export class ErrorBoundary extends React.Component<
-    { children: React.ReactNode; onReset?: () => void },
-    State
-> {
+interface BoundaryProps {
+    children: React.ReactNode;
+    onReset?: () => void;
+    /** Change this to drop a caught error and re-render the children. */
+    resetKey?: string;
+}
+
+export class ErrorBoundary extends React.Component<BoundaryProps, State> {
     state: State = { error: null, info: null };
 
     static getDerivedStateFromError(error: Error): Partial<State> {
         return { error };
+    }
+
+    // Clearing the error here rather than remounting the boundary is what lets
+    // a healthy page keep its state across a URL change.
+    static getDerivedStateFromProps(props: BoundaryProps, state: State): Partial<State> | null {
+        if (state.seenResetKey === props.resetKey) return null;
+        return { seenResetKey: props.resetKey, error: null, info: null };
     }
 
     componentDidCatch(error: Error, info: React.ErrorInfo) {
@@ -111,7 +124,10 @@ function BoundaryFallback({ error, info, reset }: { error: Error; info: React.Er
  */
 export function RouteBoundary({ children }: { children: React.ReactNode }) {
     const { pathname } = useLocation();
-    // Key forces a fresh ErrorBoundary instance on every route change, which
-    // both clears stale errors and lets the new page mount cleanly.
-    return <ErrorBoundary key={pathname}>{children}</ErrorBoundary>;
+    // resetKey, not key: a `key` here would tear down and re-create the whole
+    // routed subtree on every URL change, which throws away the scroll offset
+    // of any list whose page encodes in-page state in the path (issue #396).
+    // Mounting the next page cleanly is the Suspense boundary's job in
+    // AppShell, which keys off the route identity instead.
+    return <ErrorBoundary resetKey={pathname}>{children}</ErrorBoundary>;
 }

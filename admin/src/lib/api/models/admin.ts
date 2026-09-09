@@ -9,10 +9,6 @@ export type WorkerInstallState =
     | "uninstalling"
     | "uninstalled";
 
-export type WorkerType = "shared" | "dedicated";
-
-export type WorkerRiskPool = "clean" | "risky" | "quarantine";
-export type WorkerEgressKind = "cold_smtp" | "oauth_api" | "warmup_only";
 export type WorkerHealthState =
     | "healthy"
     | "watch"
@@ -26,11 +22,9 @@ export interface ManagedWorker {
     notes: string;
     ip_addr: string;
     active: boolean;
-    free_tier: boolean;
-    worker_type: WorkerType;
     account_count: number;
-    risk_pool: WorkerRiskPool;
-    egress_kind: WorkerEgressKind;
+    /** Sign-in geography hint the placer scores on. Empty is fine. */
+    region: string;
     health_state: WorkerHealthState;
     load_score: number;
 
@@ -82,8 +76,8 @@ export interface AdminWorkerEmailsResult {
 export interface CreateWorkerInput {
     name: string;
     notes?: string;
-    worker_type: WorkerType;
-    free_tier: boolean;
+    /** Optional sign-in geography hint. The only placement input an operator sets. */
+    region?: string;
     ssh_host: string;
     ssh_port?: number;
     ssh_user?: string;

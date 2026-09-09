@@ -32,8 +32,7 @@ export function DedicatedTab() {
         mutationFn: (orgId: string) => releaseDedicatedWorker(orgId),
         onSuccess: (res) => {
             toast.success(
-                `${res.accounts_moved} mailbox${res.accounts_moved === 1 ? "" : "es"} moved to shared workers` +
-                    (res.returned_to_shared ? "; worker returned to the shared pool" : "; worker still bound to another workspace"),
+                `Reservation released; ${res.accounts_remaining} mailbox${res.accounts_remaining === 1 ? "" : "es"} still on that worker`,
             );
             qc.invalidateQueries({ queryKey: ["admin", "workers"] });
             qc.invalidateQueries({ queryKey: ["admin", "fleet"] });
@@ -44,7 +43,7 @@ export function DedicatedTab() {
     async function onRelease(a: AdminDedicatedAssignment) {
         const ok = await confirm({
             title: `Release ${a.worker_name || shortId(a.worker_id)} from ${a.organization_name}?`,
-            description: `The workspace's ${a.account_count} mailbox${a.account_count === 1 ? "" : "es"} move back onto shared premium workers and the worker returns to the shared pool once no other workspace binds it. A mailbox with no live shared target stays where it is.`,
+            description: `The worker rejoins the general fleet. The workspace's ${a.account_count} mailbox${a.account_count === 1 ? "" : "es"} stay where they are: moving one changes the address its provider sees signing in, so the rotation loop only re-places them when it has a reason to.`,
             confirmLabel: "Release",
             destructive: true,
         });
@@ -113,12 +112,14 @@ export function DedicatedTab() {
         <div>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-[12.5px] text-muted-foreground max-w-2xl">
-                    A dedicated worker carries one workspace's mailboxes and nothing else, so its IP reputation is that
-                    workspace's alone. Placement still respects the mailbox tier and the warmup pool policy.
+                    A reserved worker carries one workspace's mailboxes and nothing else, so that workspace always
+                    authenticates to its mailbox providers from an address no other tenant sends from. That is what
+                    the entitlement buys: fewer sign-in challenges and no shared per-IP auth throttle. It is a strong
+                    placement preference, not a pin, so a worker going down never strands the workspace.
                 </p>
                 <Button size="sm" onClick={() => setConvertOpen(true)}>
                     <Plus className="size-4" />
-                    Convert a worker to dedicated
+                    Reserve a worker
                 </Button>
             </div>
             <DataTable
@@ -132,8 +133,8 @@ export function DedicatedTab() {
                 storageKey="admin.fleet.dedicated"
                 csvName="warmbly-dedicated-workers"
                 noun="assignments"
-                emptyTitle="No dedicated workers"
-                emptyHint="Every worker is shared. Convert one above to reserve it for a single workspace."
+                emptyTitle="No reserved workers"
+                emptyHint="Every worker is shared by the whole fleet. Reserve one above to give a workspace its own sending address."
             />
             <ConvertDedicatedDialog open={convertOpen} onOpenChange={setConvertOpen} />
         </div>

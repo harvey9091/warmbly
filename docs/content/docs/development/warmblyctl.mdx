@@ -83,6 +83,12 @@ A command that would set a password refuses on a non-TTY unless you passed `--pa
 | [`user revoke-admin`](#user-revoke-admin) | Takes platform admin away from an account |
 | [`user disable-2fa`](#user-disable-2fa) | Clears an account's authenticator enrolment |
 | [`hash-password`](#hash-password) | Prints an argon2 hash for unattended provisioning |
+| [`fleet join-token`](#fleet) | Issues the token a machine needs to join the fleet |
+| [`fleet list`](#fleet) | Every worker and consumer: role, version, liveness and usage |
+| [`fleet version`](#fleet) | Shows or sets the version every node should run |
+| [`fleet channel`](#fleet) | Follows stable or dev releases, or holds the fleet |
+| [`fleet pin`](#fleet) | Holds one node at a version, to canary or hold it back |
+| [`fleet remove`](#fleet) | Forgets a node; its mailboxes re-place themselves |
 | [`backup`](#backup) | Writes the whole instance to one restorable bundle |
 | [`restore`](#restore) | Restores a bundle onto this instance, replacing everything on it |
 | [`org list`](#org-list) | Lists the workspaces on this instance with their id, owner, and size |
@@ -507,3 +513,52 @@ Every one of these runs `warmblyctl` inside the backend container of a compose i
 - [Export and import](/guides/workspace-export-import/) for what an archive contains and what deliberately does not travel
 - [Configuration reference](/development/configuration/) for every variable named here
 - [API authentication](/api/authentication/) and [permissions](/api/permissions/) for the keys and scopes the API commands run on
+
+## fleet
+
+Manages the machines running Warmbly. Every process on a machine you own is a node: a `worker` sends and syncs mail, a `consumer` processes events. Both enrol with a token, heartbeat, and pull the version the control plane tells them to run.
+
+Adding a machine is two commands:
+
+```bash
+warmblyctl fleet join-token
+```
+
+Then on the machine itself:
+
+```bash
+curl -fsSL https://<your-instance>/join.sh | sh -s -- \
+  --url https://<your-instance> --token <token> --role worker
+```
+
+The token is shown once. Issuing another revokes the previous one; machines that already joined are unaffected.
+
+```bash
+warmblyctl fleet list
+```
+
+```
+ROLE      NAME      STATE  VERSION           REGION      MEM    SEEN     ID
+worker    box-1     live   v1.4.2            eu-central  128MB  12s ago  de434ce4-...
+consumer  events-1  live   v1.0.0 -> v1.4.2  -           96MB   30s ago  2b334317-...
+```
+
+`STATE` is `live`, `unreachable` (enrolled but silent) or `stopped`. A version shown as `a -> b` has not picked up the target yet. `--role worker` narrows it; `--json` is machine-readable.
+
+Moving the fleet:
+
+```bash
+warmblyctl fleet version              # what the fleet should be on
+warmblyctl fleet version v1.4.2       # move everything to a tag
+warmblyctl fleet channel stable       # follow releases again
+warmblyctl fleet pin <node-id> v1.4.1 # hold or canary one machine
+warmblyctl fleet pin <node-id>        # clear that pin
+```
+
+Setting a tag also pins the channel, so a release landing later does not undo a deliberate rollback.
+
+```bash
+warmblyctl fleet remove <node-id>
+```
+
+Forgets a node. Any mailboxes it carried are re-placed within a few minutes. It does not stop the process: a machine still running re-joins on its next heartbeat, so stop the service there too.

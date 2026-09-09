@@ -30,7 +30,7 @@ import { AdminPerm, hasAdminPerm } from "@/lib/auth/permissions";
 import { searchUsers } from "@/lib/api/client/admin/users";
 import { listOrganizations } from "@/lib/api/client/admin/organizations";
 import { searchMailboxes } from "@/lib/api/client/admin/mailboxes";
-import { listManagedWorkers } from "@/lib/api/client/admin/workers";
+import { listFleetNodes, type FleetNode } from "@/lib/api/client/admin/fleetNodes";
 import { checkForUpdates } from "@/lib/api/client/admin/updates";
 import { visibleNavGroups } from "./Sidebar";
 
@@ -153,7 +153,7 @@ export function CommandPalette() {
     });
     const workersQ = useQuery({
         queryKey: ["admin", "workers", "managed"],
-        queryFn: listManagedWorkers,
+        queryFn: () => listFleetNodes("worker"),
         enabled: searching && canWorkers,
         staleTime: 30_000,
     });
@@ -165,8 +165,7 @@ export function CommandPalette() {
                 (w) =>
                     includes(w.name, debounced) ||
                     includes(w.id, debounced) ||
-                    includes(w.ip_addr ?? "", debounced) ||
-                    includes(w.ssh_host ?? "", debounced),
+                    includes(w.address ?? "", debounced),
             )
             .slice(0, SEARCH_LIMIT);
     }, [workersQ.data, debounced, searching]);
@@ -328,7 +327,7 @@ export function CommandPalette() {
                                 <Server className="size-4" />
                                 <span className="truncate">{w.name}</span>
                                 <span className="ml-auto truncate font-mono text-[11px] text-muted-foreground">
-                                    {w.ssh_host || w.ip_addr}
+                                    {w.address}
                                 </span>
                             </CommandItem>
                         ))}

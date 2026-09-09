@@ -10,47 +10,49 @@ import (
 
 func seedWorkers(ctx context.Context, pool *pgxpool.Pool, r *Result) error {
 	type worker struct {
-		id       uuid.UUID
-		name     string
-		ipAddr   string
-		notes    string
-		wType    string
-		freeTier bool
+		id     uuid.UUID
+		name   string
+		ipAddr string
+		notes  string
+		region string
 	}
 	workers := []worker{
-		{id: WorkerFreeID, name: "worker-free-1", ipAddr: "10.0.0.11", wType: "shared", freeTier: true, notes: "Free-tier shared worker"},
-		{id: WorkerSharedID, name: "worker-shared-1", ipAddr: "10.0.0.12", wType: "shared", freeTier: false, notes: "Premium shared worker"},
-		{id: WorkerDedicatedID, name: "worker-dedicated-1", ipAddr: "10.0.0.13", wType: "dedicated", freeTier: false, notes: "Reserved for enterprise org"},
+		{id: WorkerFreeID, name: "worker-1", ipAddr: "10.0.0.11", region: "eu-central", notes: "Fleet worker"},
+		{id: WorkerSharedID, name: "worker-2", ipAddr: "10.0.0.12", region: "eu-central", notes: "Fleet worker"},
+		{id: WorkerDedicatedID, name: "worker-3", ipAddr: "10.0.0.13", region: "us-east", notes: "Reserved for the enterprise org"},
 	}
 
 	for _, w := range workers {
-		_, err := pool.Exec(ctx, `
-			INSERT INTO workers (id, name, notes, ip_addr, active, worker_type, account_count, free_tier, created_at, updated_at)
-			VALUES ($1,$2,$3,$4,TRUE,$5,0,$6,$7,$7)
+		// A worker is a node (the machine) plus a placement row (the mail it
+		// carries). Seeding both is what an enrolling node does.
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO fleet_nodes (id, role, name, notes, address, active, region, last_seen_at, created_at, updated_at)
+			VALUES ($1,'worker',$2,$3,$4,TRUE,$5,now(),$6,$6)
 			ON CONFLICT (id) DO UPDATE SET
 				name = EXCLUDED.name,
 				notes = EXCLUDED.notes,
-				ip_addr = EXCLUDED.ip_addr,
+				address = EXCLUDED.address,
 				active = TRUE,
-				worker_type = EXCLUDED.worker_type,
-				free_tier = EXCLUDED.free_tier,
-				updated_at = NOW()
-		`, w.id, w.name, w.notes, w.ipAddr, w.wType, w.freeTier, time.Now())
-		if err != nil {
+				region = EXCLUDED.region,
+				last_seen_at = now(),
+				updated_at = now()
+		`, w.id, w.name, w.notes, w.ipAddr, w.region, time.Now()); err != nil {
 			return err
 		}
-		tier := "premium"
-		if w.freeTier {
-			tier = "free"
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO workers (id, account_count) VALUES ($1, 0)
+			ON CONFLICT (id) DO NOTHING
+		`, w.id); err != nil {
+			return err
 		}
-		r.Workers = append(r.Workers, SeededWorker{Name: w.name, Tier: tier, Type: w.wType, ID: w.id.String()})
+		r.Workers = append(r.Workers, SeededWorker{Name: w.name, Region: w.region, ID: w.id.String()})
 	}
 	return nil
 }
 
 func seedWorkerAssignments(ctx context.Context, pool *pgxpool.Pool, _ *Result) error {
-	// Acme (Pro plan) gets the dedicated worker. Use a stable assignment ID so
-	// re-running the seed updates rather than duplicates.
+	// Acme (Pro plan) reserves a worker for isolated egress. Use a stable
+	// assignment ID so re-running the seed updates rather than duplicates.
 	assignmentID := uuid.MustParse("00000000-0000-0000-0000-000000000280")
 	_, err := pool.Exec(ctx, `
 		INSERT INTO dedicated_worker_assignments (id, worker_id, organization_id, subscription_id, assigned_at)

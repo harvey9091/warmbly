@@ -154,10 +154,13 @@ func TestMailboxWeight_TableDriven(t *testing.T) {
 		warmup   bool
 		want     float64
 	}{
-		{"warmup_overrides_provider", "gmail-api", true, 0.4},
+		// The provider strings are the email_provider enum values as stored.
+		// The old table asserted "gmail-api"/"graph-api", which nothing ever
+		// wrote, so the API-mailbox weight never actually applied in production.
+		{"warmup_overrides_provider", "gmail", true, 0.4},
 		{"warmup_overrides_smtp_imap", "smtp_imap", true, 0.4},
-		{"gmail_api_cold", "gmail-api", false, 0.05},
-		{"graph_api_cold", "graph-api", false, 0.05},
+		{"gmail_cold", "gmail", false, 0.05},
+		{"outlook_cold", "outlook", false, 0.05},
 		{"smtp_imap_cold", "smtp_imap", false, 1.0},
 		{"empty_provider_cold", "", false, 1.0},
 		{"unknown_provider_cold", "exchange-rpc", false, 1.0},

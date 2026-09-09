@@ -34,21 +34,21 @@ Free pools are useful for testing the mechanics but include higher-risk members.
 - Keep a separate recovery pool for senders coming back from quarantine.
 - Never silently mix free-tier mailboxes into the premium recipient set.
 
-In Warmbly, free and premium pools are physically separated. Dedicated-worker customers still participate in the premium pool by default: dedicated infrastructure is for isolation and IP control, not a reputation shortcut.
+In Warmbly, free and premium pools are physically separated. Reserved sending infrastructure does not change that: it is for isolation, not a reputation shortcut.
 
-## What "dedicated" should mean
+## What reserved sending means
 
-A dedicated worker is a worker process and IP allocated to your organisation. It gives you:
+Plans that include it reserve a worker for your organisation, so your mailboxes always authenticate to their providers from an address no other customer uses. It gives you:
 
-- Predictable sending IP.
-- Isolation from other tenants' bad days.
-- The ability to negotiate IP allowlisting with specific partners.
+- A predictable sign-in address for every one of your mailboxes.
+- Isolation from another tenant triggering a per-address authentication throttle.
+- The ability to negotiate allowlisting with specific partners.
 
 It does _not_:
 
+- Change the address your recipients see. That belongs to your mailbox provider, not to Warmbly.
 - Bypass per-mailbox health rules.
 - Let you ignore complaint or bounce thresholds.
-- Magically warm a brand-new IP. Dedicated IPs need their own warmup ramp.
 
 ## Re-entry after quarantine
 

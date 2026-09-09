@@ -15,9 +15,7 @@ import (
 // which the assignment service builds from this DB row.
 type WorkerCapacityRowDB struct {
 	WorkerID         uuid.UUID
-	WorkerType       models.WorkerType
-	FreeTier         bool
-	EgressKind       models.WorkerEgressKind
+	Region           string
 	HealthState      models.WorkerHealthState
 	LoadScore        float64
 	BaseCapacity     float64
@@ -61,17 +59,15 @@ func (r *workerRepository) InsertWorkerHealthSample(ctx context.Context, sample 
 	return err
 }
 
-// ListCapacityCandidates returns the rows the assignment loop should
-// pick from for a given tier. health_state filtering happens here so a
-// quarantined worker never even appears as a candidate; load + capacity
-// filtering happens in app code so we can keep the SQL stable across
-// changes to the placement math.
+// ListCapacityCandidates returns the rows the assignment loop should pick
+// from. health_state filtering happens here so a quarantined worker never even
+// appears as a candidate; load + capacity filtering happens in app code so we
+// can keep the SQL stable across changes to the placement math.
 //
-// The view's WHERE w.active clause already excludes deactivated workers.
+// The view's WHERE n.active clause already excludes deactivated nodes.
 // The result is unordered; the app layer sorts by utilization ratio.
 func (r *workerRepository) ListCapacityCandidates(
 	ctx context.Context,
-	freeTier bool,
 	allowedStates []models.WorkerHealthState,
 ) ([]WorkerCapacityRowDB, error) {
 	if len(allowedStates) == 0 {
@@ -86,17 +82,16 @@ func (r *workerRepository) ListCapacityCandidates(
 	}
 
 	rows, err := r.db.Query(ctx, `
-		SELECT v.worker_id, v.worker_type, v.free_tier, v.egress_kind, v.health_state,
+		SELECT v.worker_id, v.region, v.health_state,
 		       v.load_score, v.base_capacity, v.health_multiplier, v.age_multiplier,
 		       v.sends_attempted_1h, v.sends_succeeded_1h,
 		       v.bounces_hard_1h, v.bounces_soft_1h, v.complaints_1h, v.auth_errors_1h
 		  FROM worker_capacity_view v
-		  JOIN workers w ON w.id = v.worker_id
-		 WHERE v.worker_type = 'shared'
-		   AND v.free_tier = $1
-		   AND v.health_state = ANY($2::text[])
-		   AND w.last_seen_at > now() - $3::interval
-	`, freeTier, states, WorkerLivenessWindow)
+		  JOIN fleet_nodes n ON n.id = v.worker_id
+		 WHERE v.health_state = ANY($1::text[])
+		   AND n.active
+		   AND n.last_seen_at > now() - $2::interval
+	`, states, WorkerLivenessWindow)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +101,7 @@ func (r *workerRepository) ListCapacityCandidates(
 	for rows.Next() {
 		var c WorkerCapacityRowDB
 		if err := rows.Scan(
-			&c.WorkerID, &c.WorkerType, &c.FreeTier, &c.EgressKind, &c.HealthState,
+			&c.WorkerID, &c.Region, &c.HealthState,
 			&c.LoadScore, &c.BaseCapacity, &c.HealthMultiplier, &c.AgeMultiplier,
 			&c.SendsAttempted1h, &c.SendsSucceeded1h,
 			&c.BouncesHard1h, &c.BouncesSoft1h, &c.Complaints1h, &c.AuthErrors1h,
@@ -124,14 +119,14 @@ func (r *workerRepository) ListCapacityCandidates(
 func (r *workerRepository) GetCapacityRow(ctx context.Context, workerID uuid.UUID) (*WorkerCapacityRowDB, error) {
 	var c WorkerCapacityRowDB
 	err := r.db.QueryRow(ctx, `
-		SELECT worker_id, worker_type, free_tier, egress_kind, health_state,
+		SELECT worker_id, region, health_state,
 		       load_score, base_capacity, health_multiplier, age_multiplier,
 		       sends_attempted_1h, sends_succeeded_1h,
 		       bounces_hard_1h, bounces_soft_1h, complaints_1h, auth_errors_1h
 		  FROM worker_capacity_view
 		 WHERE worker_id = $1
 	`, workerID).Scan(
-		&c.WorkerID, &c.WorkerType, &c.FreeTier, &c.EgressKind, &c.HealthState,
+		&c.WorkerID, &c.Region, &c.HealthState,
 		&c.LoadScore, &c.BaseCapacity, &c.HealthMultiplier, &c.AgeMultiplier,
 		&c.SendsAttempted1h, &c.SendsSucceeded1h,
 		&c.BouncesHard1h, &c.BouncesSoft1h, &c.Complaints1h, &c.AuthErrors1h,
@@ -174,36 +169,20 @@ func (r *workerRepository) SetWorkerHealthState(ctx context.Context, workerID uu
 	return err
 }
 
-// SetWorkerEgressKind sets a worker's egress profile. Admin-driven; the
-// placement loop never changes this on its own because it affects
-// base_capacity and would silently change every existing placement's
-// utilization.
-func (r *workerRepository) SetWorkerEgressKind(ctx context.Context, workerID uuid.UUID, kind models.WorkerEgressKind) error {
-	_, err := r.db.Exec(ctx, `
-		UPDATE workers
-		   SET egress_kind = $2,
-		       updated_at = NOW()
-		 WHERE id = $1
-	`, workerID, kind)
-	return err
-}
-
 // RefreshWorkerCapacityView refreshes the materialized view. CONCURRENTLY
-// requires PG14+ and the unique index on worker_id created by the
-// migration. Run from a backend cron (every minute or so); the placement
-// loop reads stale data between refreshes, which is fine because the
-// load_score column is the freshness-critical signal and that lives on
-// workers directly.
+// requires PG14+ and the unique index on worker_id created by the migration.
+// Run from a backend cron (every minute or so); the placement loop reads stale
+// data between refreshes, which is fine because load_score is the
+// freshness-critical signal and that lives on workers directly.
 func (r *workerRepository) RefreshWorkerCapacityView(ctx context.Context) error {
 	_, err := r.db.Exec(ctx, `REFRESH MATERIALIZED VIEW CONCURRENTLY worker_capacity_view`)
 	return err
 }
 
 // GetEmailAccountPlacementHint returns the provider + warmup flag the
-// assignment service needs to weight a placement. Returns nil if the
-// account isn't found (which the caller treats as "use default weight"
-// rather than erroring out, because failing to assign is worse than
-// over-counting load by a fraction).
+// placement service needs to weight a mailbox. Returns nil if the account
+// isn't found, which the caller treats as "use the default weight" rather than
+// erroring out: failing to place is worse than over-counting load slightly.
 func (r *workerRepository) GetEmailAccountPlacementHint(ctx context.Context, emailAccountID uuid.UUID) (*EmailAccountPlacementHint, error) {
 	var provider string
 	var warmup *string

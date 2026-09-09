@@ -36,10 +36,9 @@ type SeededOrg struct {
 }
 
 type SeededWorker struct {
-	Name string
-	Tier string
-	Type string
-	ID   string
+	Name   string
+	Region string
+	ID     string
 }
 
 func (r *Result) Print(w io.Writer) {
@@ -61,7 +60,7 @@ func (r *Result) Print(w io.Writer) {
 	}
 	b.WriteString("\nWorkers\n-------\n")
 	for _, w := range r.Workers {
-		fmt.Fprintf(b, "  %-22s tier=%-7s type=%-9s  (%s)\n", w.Name, w.Tier, w.Type, w.ID)
+		fmt.Fprintf(b, "  %-22s region=%-12s (%s)\n", w.Name, w.Region, w.ID)
 	}
 
 	if r.APIKeySecret != "" {

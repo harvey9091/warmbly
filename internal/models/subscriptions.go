@@ -51,6 +51,10 @@ type Plan struct {
 	StripeProductID     *string `json:"stripe_product_id,omitempty"`
 
 	// Worker tier settings
+	// DedicatedWorkers is the isolated-egress entitlement, kept under its
+	// original column name. Read it through IsolatedEgress() rather than
+	// comparing it directly: the number never meant "how many machines you
+	// get", only "does this plan reserve egress for you".
 	DedicatedWorkers   int  `json:"dedicated_workers"`
 	DailyCampaignLimit *int `json:"daily_campaign_limit,omitempty"`
 
@@ -242,4 +246,20 @@ type StripeWebhookEvent struct {
 	EventType   string                 `json:"event_type"`
 	ProcessedAt time.Time              `json:"processed_at"`
 	Payload     map[string]interface{} `json:"payload,omitempty"`
+}
+
+// IsolatedEgress reports whether the plan reserves a worker for the
+// organization, so its mailboxes always authenticate to their providers from
+// an address no other tenant sends from.
+//
+// This is the deliverability shape of what used to be sold as a "dedicated
+// worker". The customer-visible promise is about the sign-in address being
+// theirs alone, which is the part that actually affects them: providers score
+// login trust and apply per-IP auth throttles on that address, so an
+// organization running many mailboxes benefits from not sharing it. It was
+// never about the machine, and pinning them to one was the wrong shape - a
+// reserved worker that dies used to strand the customer, where a preference
+// simply re-converges.
+func (p *Plan) IsolatedEgress() bool {
+	return p != nil && p.DedicatedWorkers > 0
 }

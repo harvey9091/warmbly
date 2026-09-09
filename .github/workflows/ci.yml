@@ -47,6 +47,9 @@ jobs:
               - 'go.sum'
               - 'internal/**'
               - 'cmd/**'
+              # make lint runs the join-script checks, so a change to the
+              # checker itself has to trigger the job that runs it.
+              - 'scripts/check-join-script.sh'
             migrations:
               - 'internal/infrastructure/db/migrations/**'
               - 'scripts/check-migrations.sh'
