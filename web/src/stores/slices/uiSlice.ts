@@ -1,7 +1,7 @@
 import type { StateCreator } from 'zustand'
 
 export type Theme = 'light' | 'dark' | 'system'
-export type BackgroundPreset = 'default' | 'gradient-1' | 'gradient-2' | 'gradient-3'
+export type BackgroundPreset = 'default' | 'gradient-1' | 'gradient-4' | 'gradient-5'
 
 export interface AppearanceState {
   glassmorphismEnabled: boolean
@@ -165,6 +165,13 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set, get) 
       document.documentElement.classList.remove('dark')
     }
     set({ theme, resolvedTheme })
+    if (resolvedTheme === 'dark') {
+      const current = get()
+      if (!current.backgroundImage) {
+        current.setBackgroundImage('/backgrounds/bg-1.png')
+        current.setBackgroundPreset('default')
+      }
+    }
   },
   setResolvedTheme: (resolvedTheme) =>
     set((state) => (state.resolvedTheme === resolvedTheme ? state : { resolvedTheme })),

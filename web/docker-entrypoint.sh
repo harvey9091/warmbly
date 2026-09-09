@@ -26,3 +26,4 @@ EOF
 # The redirect truncates in place and keeps whatever mode the built file had, so
 # a restrictive umask or checkout leaves nginx serving 403 for the whole config.
 chmod 644 /usr/share/nginx/html/config.js
+

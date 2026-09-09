@@ -26,15 +26,22 @@ const THEME_OPTIONS = [
 const PRESET_OPTIONS = [
     { value: "default", label: "Default" },
     { value: "gradient-1", label: "Sky fade" },
-    { value: "gradient-2", label: "Lavender" },
-    { value: "gradient-3", label: "Mint" },
+    { value: "gradient-4", label: "Blue fade" },
+    { value: "gradient-5", label: "Monochrome" },
 ] as const;
 
     const PRESET_BACKGROUNDS: Record<string, string> = {
         "gradient-1": "linear-gradient(170deg, #f8fafc 0%, #e0f2fe 18%, #fef3c7 48%, #fde68a 78%, #fefce8 100%)",
-        "gradient-2": "linear-gradient(165deg, #faf5ff 0%, #f3e8ff 22%, #fce7f3 52%, #fbcfe8 82%, #fdf2f8 100%)",
-        "gradient-3": "linear-gradient(150deg, #f0fdf4 0%, #d1fae5 22%, #a7f3d0 52%, #e0f2fe 82%, #f0f9ff 100%)",
+        "gradient-4": "linear-gradient(170deg, #f8fafc 0%, #e0f2fe 18%, #bfdbfe 48%, #93c5fd 78%, #dbeafe 100%)",
+        "gradient-5": "linear-gradient(170deg, #f8fafc 0%, #f1f5f9 25%, #e2e8f0 55%, #cbd5e1 100%)",
     };
+
+    const BUILTIN_BACKGROUNDS = [
+        { value: "bg-1", label: "BG1", src: "/backgrounds/bg-1.png" },
+        { value: "bg-2", label: "BG2", src: "/backgrounds/bg-2.png" },
+        { value: "bg-3", label: "BG3", src: "/backgrounds/bg-3.png" },
+        { value: "bg-4", label: "BG4", src: "/backgrounds/bg-4.png" },
+    ] as const;
 
 export default function AppearanceSettingsPage() {
     const canManage = usePermission("MANAGE_SETTINGS");
@@ -193,16 +200,54 @@ function AppearanceSettings() {
                     </div>
 
                     <div>
-                        <div className="text-[12.5px] font-medium text-slate-900 mb-2">Custom image</div>
+                        <div className="text-[12.5px] font-medium text-slate-900 mb-2">Background images</div>
+                        <div className="grid grid-cols-4 gap-2 mb-3">
+                            {BUILTIN_BACKGROUNDS.map((bg) => {
+                                const isActive = backgroundImage === bg.src
+                                return (
+                                    <button
+                                        key={bg.value}
+                                        onClick={() => {
+                                            setBackgroundImage(bg.src)
+                                            setBackgroundPreset("default")
+                                        }}
+                                        className={cn(
+                                            "relative rounded-lg border-2 overflow-hidden transition-all duration-200",
+                                            isActive
+                                                ? "border-sky-500 shadow-sm"
+                                                : "border-slate-200 hover:border-slate-300"
+                                        )}
+                                    >
+                                        <div
+                                            className="h-16 w-full"
+                                            style={{
+                                                backgroundImage: `url(${bg.src})`,
+                                                backgroundSize: "cover",
+                                                backgroundPosition: "center",
+                                            }}
+                                        />
+                                        <div className="text-[10px] font-medium text-slate-700 px-1 py-0.5 bg-white/80">
+                                            {bg.label}
+                                        </div>
+                                        {isActive && (
+                                            <div className="absolute top-1 right-1 size-3.5 rounded-full bg-sky-500 text-white flex items-center justify-center">
+                                                <CheckIcon className="w-2 h-2" />
+                                            </div>
+                                        )}
+                                    </button>
+                                )
+                            })}
+                        </div>
+                        <div className="text-[11px] text-slate-500 mb-2">Or upload your own</div>
                         <BackgroundImageUploader
                             current={backgroundImage}
                             onSelect={(url) => {
-                                setBackgroundImage(url);
-                                if (url) setBackgroundPreset("default");
+                                setBackgroundImage(url)
+                                if (url) setBackgroundPreset("default")
                             }}
                             onClear={() => {
-                                setBackgroundImage("");
-                                setBackgroundPreset("default");
+                                setBackgroundImage("")
+                                setBackgroundPreset("default")
                             }}
                         />
                     </div>

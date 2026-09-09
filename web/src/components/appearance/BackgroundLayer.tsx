@@ -12,8 +12,8 @@ import { useAppStore } from '@/stores'
 
 const PRESET_GRADIENTS: Record<string, string> = {
   'gradient-1': 'linear-gradient(170deg, #f8fafc 0%, #e0f2fe 18%, #fef3c7 48%, #fde68a 78%, #fefce8 100%)',
-  'gradient-2': 'linear-gradient(165deg, #faf5ff 0%, #f3e8ff 22%, #fce7f3 52%, #fbcfe8 82%, #fdf2f8 100%)',
-  'gradient-3': 'linear-gradient(150deg, #f0fdf4 0%, #d1fae5 22%, #a7f3d0 52%, #e0f2fe 82%, #f0f9ff 100%)',
+  'gradient-4': 'linear-gradient(170deg, #f8fafc 0%, #e0f2fe 18%, #bfdbfe 48%, #93c5fd 78%, #dbeafe 100%)',
+  'gradient-5': 'linear-gradient(170deg, #f8fafc 0%, #f1f5f9 25%, #e2e8f0 55%, #cbd5e1 100%)',
 }
 
 export function BackgroundLayer() {

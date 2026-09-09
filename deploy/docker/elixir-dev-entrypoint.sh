@@ -15,3 +15,4 @@ mix deps.get
 mix deps.compile
 
 exec mix phx.server
+
