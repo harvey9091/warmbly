@@ -37,7 +37,7 @@ PROTOC_GEN_GO_GRPC_VERSION ?= v1.6.1
 PROTO_DIR := internal/tasks/proto
 PROTO_GEN_FILES := $(PROTO_DIR)/tasks.pb.go
 
-.PHONY: poollink-dev poollink-dev-down poollink-dev-reset setup-tools fmt lint check-migrations join-check proto check-proto \
+.PHONY: poollink-dev poollink-dev-down poollink-dev-reset setup-tools fmt lint check-migrations join-check split-cloud-check proto check-proto \
         up upgrade claim doctor cli seed-demo seed seed-plan sandbox sandbox-seed sandbox-simulate reset logs status stop down test-seed \
         restart restart-go restart-all infra infra-down app app-down app-logs \
         backend forms forms-web consumer worker run dev tracking realtime web \
@@ -82,7 +82,7 @@ cli-check:
 fmt:
 	gofmt -w ./cmd ./internal
 
-lint: check-migrations join-check check-dockerfiles
+lint: check-migrations join-check split-cloud-check check-dockerfiles
 	./scripts/check-forms-mirror.sh
 	$(GO_BIN)/golangci-lint run --timeout=5m
 
@@ -91,6 +91,13 @@ lint: check-migrations join-check check-dockerfiles
 # documented ship signal covers it.
 check-migrations:
 	@./scripts/check-migrations.sh
+
+# The split-deployment bus bundle. Starts the real compose file against a
+# self-signed certificate and asserts both services reach healthy, because the
+# defects it has had were invisible in the file and obvious on first start.
+# Skips the Docker half when there is no daemon, so it stays runnable anywhere.
+split-cloud-check:
+	@./scripts/check-split-cloud.sh
 
 # A COPY naming a path no longer in the repo builds green everywhere until it
 # lands: nothing in `make lint` or the CI workflow builds an image, and

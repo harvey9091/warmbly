@@ -23,6 +23,7 @@ The full walkthrough, with costs and the order to build it in, is
 | Path | What it is |
 |------|------------|
 | `control-plane.env.example` | Every setting the container host needs, annotated |
+| `bus/setup.sh` | One command that stands the whole bus box up, and re-runs safely |
 | `bus/docker-compose.yml` | NATS JetStream and Redis, both over TLS |
 | `bus/nats.conf` | The bus config the compose file mounts |
 | `bus/certbot-deploy-hook.sh` | Publishes renewed certificates where the containers can read them |

@@ -21,6 +21,7 @@
 set -eu
 
 CERT_GID="${WARMBLY_CERT_GID:-2000}"
+INSTALL_DIR="/opt/warmbly/bus"
 
 DOMAIN="${WARMBLY_BUS_DOMAIN:-bus.example.com}"
 SRC="/etc/letsencrypt/live/$DOMAIN"
@@ -42,5 +43,9 @@ chgrp "$CERT_GID" "$DEST/privkey.pem" || {
 }
 chmod 0640 "$DEST/privkey.pem"
 
-# Both hold the certificate open and neither re-reads it on its own.
-cd /opt/warmbly/bus && docker compose restart nats redis
+# Both hold the certificate open and neither re-reads it on its own, so a
+# renewal without this restart leaves them serving an expired certificate.
+# The env has to be passed through: compose reads it for the cert path and the
+# group, and a renewal must not quietly relocate either.
+cd "$INSTALL_DIR" && WARMBLY_CERT_DIR="$DEST" WARMBLY_CERT_GID="$CERT_GID" \
+  docker compose restart nats redis

@@ -19,21 +19,28 @@ services:
   nats:
     image: nats:2.10-alpine
     restart: unless-stopped
-    command: ["-c", "/etc/nats/nats.conf", "-js", "-sd", "/data", "-m", "8222"]
+    # Only the config file. Passing -js/-sd/-m as well duplicates what
+    # nats.conf already sets, and NATS refuses to start on a duplicate
+    # rather than picking one.
+    command: ["-c", "/etc/nats/nats.conf"]
     environment:
       NATS_TOKEN: ${NATS_TOKEN:?set NATS_TOKEN in .env}
     # The private key is 0640 and owned by this group, so neither container
     # needs it world-readable and nothing else on the box can read it.
     group_add:
-      - "2000"
+      - "${WARMBLY_CERT_GID:-2000}"
     volumes:
       - ./nats.conf:/etc/nats/nats.conf:ro
-      - /opt/warmbly/certs:/certs:ro
+      - ${WARMBLY_CERT_DIR:-/opt/warmbly/certs}:/certs:ro
       - nats_data:/data
     ports:
       - "4222:4222"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      # 127.0.0.1, not localhost: nats.conf binds the monitor to IPv4
+      # loopback, and `localhost` resolves to ::1 first in a container, so the
+      # check never reaches it and the service sits unhealthy while serving
+      # traffic perfectly well.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8222/healthz"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -41,6 +48,10 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # Pinned so the entrypoint never runs as root. Left as root it drops to
+    # uid 999 with gosu, which resets supplementary groups and throws away the
+    # group_add below, and then it cannot read the private key.
+    user: "999:999"
     # TLS is not optional on this box. Redis holds each organization's
     # decrypted data key for the life of its cache entry, so a plaintext
     # connection across the internet publishes key material. The password
@@ -60,9 +71,9 @@ services:
       --appendonly yes
       --maxmemory-policy noeviction
     group_add:
-      - "2000"
+      - "${WARMBLY_CERT_GID:-2000}"
     volumes:
-      - /opt/warmbly/certs:/certs:ro
+      - ${WARMBLY_CERT_DIR:-/opt/warmbly/certs}:/certs:ro
       - redis_data:/data
     ports:
       - "6380:6380"
