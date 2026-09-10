@@ -1,27 +1,38 @@
-// Package errs is the only place the Sentry SDK is called from.
+// Package errs is the only place an error-reporting SDK is called from.
 //
 // Every service, job and repository reports through these functions, so the
-// vendor import stays in one file: turning reporting off, attaching a tag to
-// every event, or swapping the backend is a change here rather than across
-// ninety files. Nothing here needs Init to have run; an uninitialised SDK
-// drops the event, which is what a deployment with no DSN wants.
+// vendor imports stay in two files: turning reporting off, attaching a tag to
+// every event, or adding a backend is a change here rather than across ninety
+// files. Nothing here needs Init to have run; with no backend configured an
+// event is summarised to the local log, which is what a deployment that
+// configured no reporting wants.
+//
+// Two backends exist and either, both or neither can be on:
+//
+//   - PostHog (POSTHOG_KEY), the default. Error tracking sits in the same
+//     project as the product analytics this instance may already send, so one
+//     key covers both and there is no second vendor to sign up with.
+//   - Sentry (SENTRY_DSN), kept because it is what an operator who already runs
+//     Sentry wants and because dropping a working integration to switch vendors
+//     is not a migration anybody asked for.
 package errs
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"strings"
+	"sync/atomic"
 	"time"
-
-	"github.com/getsentry/sentry-go"
 )
 
 // Config is what a service knows about itself at boot.
 type Config struct {
-	// DSN is empty when the operator configured no error reporting. Events are
-	// then summarised to the local log instead of being sent anywhere.
-	DSN string
+	// PostHogKey is the project API key error events are captured with. Empty
+	// turns the PostHog backend off.
+	PostHogKey string
+	// PostHogHost is the capture host. Empty means PostHog Cloud US.
+	PostHogHost string
+	// SentryDSN is empty when the operator configured no Sentry project.
+	SentryDSN string
 	// Environment is the deployment label (dev, staging, prod).
 	Environment string
 	// Release identifies the build, so a stack trace can be tied to a commit.
@@ -30,72 +41,117 @@ type Config struct {
 	Service string
 }
 
-// Init configures the SDK for one process. Safe to call once per process.
+// sink is one configured backend. Everything public in this package fans out
+// over the enabled sinks, so a service reporting to both pays one call.
+type sink interface {
+	capture(event)
+	recoverPanic(ctx context.Context, r any, sc scope)
+	flush(timeout time.Duration) bool
+}
+
+// active holds the sinks Init built. A pointer swap rather than a plain slice
+// so a capture racing a late Init reads one state or the other.
+var active atomic.Pointer[[]sink]
+
+// Init configures the SDKs for one process. Safe to call once per process.
+//
+// A backend is used when it is configured, in any environment. Error reporting
+// is the operator's choice, not a requirement of the software: demanding an
+// account to run APP_ENV=prod made a self-hosted deployment fail to boot over a
+// service it never asked for.
 func Init(cfg Config) error {
-	options := sentry.ClientOptions{
-		SendDefaultPII: true,
-		Environment:    cfg.Environment,
-		Release:        cfg.Release,
-		ServerName:     cfg.Service,
+	var sinks []sink
+	var initErr error
+
+	if cfg.PostHogKey != "" {
+		s, err := newPostHogSink(cfg)
+		if err != nil {
+			initErr = err
+		} else {
+			sinks = append(sinks, s)
+		}
+	}
+	if cfg.SentryDSN != "" {
+		s, err := newSentrySink(cfg)
+		if err != nil {
+			initErr = err
+		} else {
+			sinks = append(sinks, s)
+		}
 	}
 
-	// A DSN is used when one is configured, in any environment. Error reporting
-	// is the operator's choice, not a requirement of the software: demanding a
-	// Sentry account to run APP_ENV=prod made a self-hosted deployment fail to
-	// boot over a service it never asked for.
-	if cfg.DSN != "" {
-		options.Dsn = cfg.DSN
-	} else {
+	if len(sinks) == 0 {
 		if cfg.Environment == "prod" {
-			log.Printf("Sentry is not configured (no SENTRY_DSN); errors are logged locally only.")
+			log.Printf("Error reporting is not configured (no POSTHOG_KEY, no SENTRY_DSN); errors are logged locally only.")
 		}
-		options.BeforeSend = func(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
-			log.Printf("[sentry-local][%s][%s] %s", cfg.Service, event.Level, summarize(event))
-			return event
-		}
+		sinks = append(sinks, localSink{service: cfg.Service})
 	}
 
-	if err := sentry.Init(options); err != nil {
-		return fmt.Errorf("init sentry: %w", err)
-	}
-	return nil
+	active.Store(&sinks)
+	return initErr
 }
 
 // Option decorates the scope one event is reported on. Callers build these with
-// Tag and Extra so they never name a Sentry type themselves.
-type Option func(*sentry.Scope)
+// Tag and Extra so they never name a vendor type themselves.
+type Option func(*scope)
 
-// Tag adds an indexed key/value pair, searchable and groupable in Sentry.
+// scope is the per-event detail, in a shape both backends can render: Sentry
+// splits it into tags and extras, PostHog flattens the pair into the event's
+// properties.
+type scope struct {
+	tags  map[string]string
+	extra map[string]any
+}
+
+// Tag adds an indexed key/value pair, searchable and groupable.
 func Tag(key, value string) Option {
-	return func(scope *sentry.Scope) { scope.SetTag(key, value) }
+	return func(s *scope) {
+		if s.tags == nil {
+			s.tags = map[string]string{}
+		}
+		s.tags[key] = value
+	}
 }
 
 // Extra adds an unindexed value, for detail that is worth reading on the event
 // but not worth searching by.
 func Extra(key string, value any) Option {
-	return func(scope *sentry.Scope) { scope.SetExtra(key, value) }
+	return func(s *scope) {
+		if s.extra == nil {
+			s.extra = map[string]any{}
+		}
+		s.extra[key] = value
+	}
 }
 
-// CaptureException reports err on the process-wide hub.
+// event is one report on its way to every enabled backend.
+type event struct {
+	ctx context.Context
+	// err is set for an exception, message for a plain message. Never both.
+	err     error
+	message string
+	scope   scope
+}
+
+// CaptureException reports err.
 func CaptureException(err error, opts ...Option) {
-	capture(sentry.CurrentHub(), opts, func(hub *sentry.Hub) { hub.CaptureException(err) })
+	report(event{err: err, scope: build(opts)})
 }
 
-// CaptureExceptionContext reports err on the hub carried by ctx when there is
-// one, so a request's breadcrumbs and scope travel with the event, and on the
-// process-wide hub otherwise.
+// CaptureExceptionContext reports err on the reporting state carried by ctx
+// when there is one, so a request's scope travels with the event.
 func CaptureExceptionContext(ctx context.Context, err error, opts ...Option) {
-	capture(hubFrom(ctx), opts, func(hub *sentry.Hub) { hub.CaptureException(err) })
+	report(event{ctx: ctx, err: err, scope: build(opts)})
 }
 
 // CaptureMessage reports a message with no error attached.
 func CaptureMessage(message string, opts ...Option) {
-	capture(sentry.CurrentHub(), opts, func(hub *sentry.Hub) { hub.CaptureMessage(message) })
+	report(event{message: message, scope: build(opts)})
 }
 
-// CaptureMessageContext is CaptureMessage on ctx's hub.
+// CaptureMessageContext is CaptureMessage on ctx's reporting state.
 func CaptureMessageContext(ctx context.Context, message string, opts ...Option) {
-	capture(hubFrom(ctx), opts, func(hub *sentry.Hub) { hub.CaptureMessage(message) })
+	report(event{ctx: ctx, message: message, scope: build(opts)})
 }
 
 // fatalFlushTimeout is how long a process about to exit waits for its last
@@ -103,9 +159,9 @@ func CaptureMessageContext(ctx context.Context, message string, opts ...Option) 
 const fatalFlushTimeout = 2 * time.Second
 
 // CaptureFatal reports err and waits for it to be sent. Use it instead of
-// CaptureException wherever the next statement ends the process: the SDK sends
-// in the background and os.Exit does not wait for it, so a boot failure — the
-// error most worth having — was the one that never arrived.
+// CaptureException wherever the next statement ends the process: both SDKs send
+// in the background and os.Exit does not wait for them, so a boot failure, the
+// error most worth having, was the one that never arrived.
 func CaptureFatal(err error, opts ...Option) {
 	CaptureException(err, opts...)
 	Flush(fatalFlushTimeout)
@@ -113,91 +169,61 @@ func CaptureFatal(err error, opts ...Option) {
 
 // Recover reports a value from recover(). Call it inside the deferred function
 // that recovered, not after.
-func Recover(r any) {
-	sentry.CurrentHub().Recover(r)
+func Recover(r any, opts ...Option) {
+	reportPanic(context.Background(), r, build(opts))
 }
 
-// RecoverContext is Recover on ctx's hub.
-func RecoverContext(ctx context.Context, r any) {
-	hubFrom(ctx).RecoverWithContext(ctx, r)
+// RecoverContext is Recover on ctx's reporting state.
+func RecoverContext(ctx context.Context, r any, opts ...Option) {
+	reportPanic(ctx, r, build(opts))
 }
 
-// Flush waits up to timeout for queued events to reach the server, and reports
-// whether the queue drained. Worth calling before a process exits on purpose:
-// the SDK sends in the background, so an immediate exit loses the last event.
-func Flush(timeout time.Duration) bool {
-	return sentry.Flush(timeout)
-}
-
-// Hub returns the hub bound to ctx, or a clone of the process-wide one when
-// ctx carries none. Middleware that needs a request-scoped scope uses this;
-// everything else should use the Context helpers above.
+// Flush waits up to timeout for queued events to reach their backend, and
+// reports whether every queue drained. Worth calling before a process exits on
+// purpose: the SDKs send in the background, so an immediate exit loses the last
+// event.
 //
-// The fallback clones rather than handing back the process-wide hub, because
-// the reason to reach for a hub instead of CaptureExceptionContext is to set
-// scope on it, and setting scope on the shared hub would leak one request's
-// data onto every later event in the process.
-func Hub(ctx context.Context) *sentry.Hub {
-	if ctx != nil {
-		if hub := sentry.GetHubFromContext(ctx); hub != nil {
-			return hub
+// It is an exit-path call. The PostHog client has no flush that leaves it
+// usable, so flushing it closes it and anything reported afterwards is dropped.
+func Flush(timeout time.Duration) bool {
+	drained := true
+	for _, s := range sinks() {
+		if !s.flush(timeout) {
+			drained = false
 		}
 	}
-	return sentry.CurrentHub().Clone()
+	return drained
 }
 
-// NewContext returns ctx carrying its own hub, so scope set on one request does
-// not leak into another.
-func NewContext(ctx context.Context) context.Context {
-	return sentry.SetHubOnContext(ctx, sentry.CurrentHub().Clone())
-}
-
-func hubFrom(ctx context.Context) *sentry.Hub {
-	if ctx != nil {
-		if hub := sentry.GetHubFromContext(ctx); hub != nil {
-			return hub
-		}
+// report and reportPanic are one frame deep on purpose: the PostHog sink walks
+// a fixed number of frames off the stack it captures, so both public entry
+// points have to reach a sink through the same depth. See stackSkip.
+func report(ev event) {
+	for _, s := range sinks() {
+		s.capture(ev)
 	}
-	return sentry.CurrentHub()
 }
 
-// capture applies the options to a throwaway scope so they touch only this
-// event, then hands the hub to send.
-func capture(hub *sentry.Hub, opts []Option, send func(*sentry.Hub)) {
-	if len(opts) == 0 {
-		send(hub)
+func reportPanic(ctx context.Context, r any, sc scope) {
+	if r == nil {
 		return
 	}
-	hub.WithScope(func(scope *sentry.Scope) {
-		for _, opt := range opts {
-			opt(scope)
-		}
-		send(hub)
-	})
+	for _, s := range sinks() {
+		s.recoverPanic(ctx, r, sc)
+	}
 }
 
-func summarize(event *sentry.Event) string {
-	if event == nil {
-		return "nil event"
+func sinks() []sink {
+	if p := active.Load(); p != nil {
+		return *p
 	}
+	return nil
+}
 
-	parts := []string{}
-	if event.EventID != "" {
-		parts = append(parts, "event_id="+string(event.EventID))
+func build(opts []Option) scope {
+	var s scope
+	for _, opt := range opts {
+		opt(&s)
 	}
-	if event.Message != "" {
-		parts = append(parts, "message="+event.Message)
-	}
-	if len(event.Exception) > 0 {
-		ex := event.Exception[0]
-		exMsg := strings.TrimSpace(strings.TrimSpace(ex.Type + ": " + ex.Value))
-		if exMsg != "" && exMsg != ":" {
-			parts = append(parts, "exception="+exMsg)
-		}
-	}
-	if len(parts) == 0 {
-		return "captured event with no message"
-	}
-
-	return strings.Join(parts, " | ")
+	return s
 }

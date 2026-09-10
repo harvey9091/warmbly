@@ -35,7 +35,12 @@ func Run(
 ) *gin.Engine {
 	gin.SetMode(ginMode)
 
-	r := gin.Default()
+	// gin.Default() is Logger plus gin's own Recovery; the recovery here is
+	// ours, which reports the panic with its request context before returning
+	// the same 500. Everything else about the pair is unchanged.
+	r := gin.New()
+	r.Use(gin.Logger())
+	r.Use(middleware.Recovery())
 
 	// Gin trusts every proxy by default, which makes X-Forwarded-For (and so
 	// c.ClientIP()) attacker-controlled: forged values reach the captcha

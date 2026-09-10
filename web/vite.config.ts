@@ -4,29 +4,33 @@ import path from "path";
 import tailwindcss from "@tailwindcss/vite";
 import { sentryVitePlugin } from "@sentry/vite-plugin";
 
-// Source-map upload, and nothing else, is what the Sentry plugin does here.
+// Source maps, and nothing else, is what this section decides.
 //
-// It is never a required build step: a fork, a self-host build or a local
-// `pnpm build` sets none of these and the plugin is simply not in the plugin
-// list, so nothing needs a Sentry account and nothing is uploaded. CI passes
-// the token as a build secret only for the hosted release.
+// Uploading them is never a required build step: a fork, a self-host build or a
+// local `pnpm build` configures neither backend, so nothing needs an account
+// anywhere and nothing is uploaded. CI passes the credentials as build secrets
+// only for the hosted release.
 //
-// Source maps are emitted only in that case too, so the shipped bundle is
-// unchanged for everybody else, and `filesToDeleteAfterUpload` keeps the .map
-// files out of the image once they have been sent.
+// Source maps are emitted only when something is going to upload them, so the
+// shipped bundle is unchanged for everybody else. PostHog's are uploaded after
+// the build by the `sourcemaps:posthog` script, which is also what deletes the
+// .map files afterwards, so the Sentry plugin only deletes them when it is the
+// one upload configured.
 const sentryAuthToken = process.env.SENTRY_AUTH_TOKEN;
 const sentryOrg = process.env.SENTRY_ORG;
 const sentryProject = process.env.SENTRY_PROJECT;
-const uploadSourceMaps = Boolean(sentryAuthToken && sentryOrg && sentryProject);
+const uploadToSentry = Boolean(sentryAuthToken && sentryOrg && sentryProject);
+const uploadToPostHog = Boolean(process.env.POSTHOG_CLI_API_KEY && process.env.POSTHOG_CLI_PROJECT_ID);
+const uploadSourceMaps = uploadToSentry || uploadToPostHog;
 
-const sentryPlugins = uploadSourceMaps
+const sentryPlugins = uploadToSentry
     ? [
           sentryVitePlugin({
               authToken: sentryAuthToken,
               org: sentryOrg,
               project: sentryProject,
               release: { name: process.env.VITE_SENTRY_RELEASE },
-              sourcemaps: { filesToDeleteAfterUpload: ["dist/**/*.map"] },
+              sourcemaps: { filesToDeleteAfterUpload: uploadToPostHog ? [] : ["dist/**/*.map"] },
               telemetry: false,
           }),
       ]
@@ -40,7 +44,7 @@ export default defineConfig({
     ],
     build: {
         // Only when they are going to be uploaded: shipping them otherwise
-        // would hand every visitor the dashboard's original sources.
+        // would hand every visitor the app's original sources.
         sourcemap: uploadSourceMaps,
     },
     resolve: {

@@ -22,7 +22,7 @@ func NewDangerZoneJob(svc dangerzone.Service) *DangerZoneJob {
 	return &DangerZoneJob{svc: svc}
 }
 
-// Run performs one tick. Errors are logged to Sentry and swallowed so
+// Run performs one tick. Errors are reported and swallowed so
 // the scheduler keeps ticking; the next tick will retry anything that
 // got marked failed.
 func (j *DangerZoneJob) Run(ctx context.Context) error {

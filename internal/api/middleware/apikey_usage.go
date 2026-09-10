@@ -14,7 +14,7 @@ import (
 //
 // Logging is best-effort and runs after the response is written. We don't
 // fail the request if the insert fails; the service layer captures errors
-// to Sentry.
+// to the error reporter.
 func (h *Handler) APIKeyUsageMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		started := time.Now()

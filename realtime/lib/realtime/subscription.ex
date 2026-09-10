@@ -140,7 +140,7 @@ defmodule Realtime.Subscription do
   rescue
     e ->
       Logger.error("Database error fetching limits: #{inspect(e)}")
-      ErrorReporter.capture_exception(e)
+      ErrorReporter.capture_exception(e, stacktrace: __STACKTRACE__)
       @default_limits
   end
 

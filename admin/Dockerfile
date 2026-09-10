@@ -19,17 +19,31 @@ COPY . .
 # deployment.
 ARG VERSION=""
 ARG COMMIT=""
-# Source-map upload is optional and off unless CI passes all three. A fork or a
-# self-host build sets none of them, needs no Sentry account, and ships no
-# source maps.
+# Source-map upload is optional and off unless CI passes a whole backend's
+# worth of credentials. A fork or a self-host build sets none of them, needs no
+# account anywhere, and ships no source maps.
+#
+# PostHog's upload runs after the build because it is a CLI rather than a Vite
+# plugin: it rewrites the built files with a chunk id, sends them, and deletes
+# the .map files it sent. The `if` is what keeps a fork's build from reaching
+# for a CLI it has no credentials for.
 ARG SENTRY_ORG=""
 ARG SENTRY_PROJECT=""
+ARG POSTHOG_CLI_PROJECT_ID=""
+ARG POSTHOG_CLI_HOST=""
 RUN --mount=type=secret,id=sentry_auth_token,required=false \
-    VITE_SENTRY_RELEASE="${VERSION:-$COMMIT}" \
-    SENTRY_ORG="$SENTRY_ORG" \
-    SENTRY_PROJECT="$SENTRY_PROJECT" \
-    SENTRY_AUTH_TOKEN="$(cat /run/secrets/sentry_auth_token 2>/dev/null || true)" \
-    pnpm build
+    --mount=type=secret,id=posthog_cli_api_key,required=false \
+    export VITE_SENTRY_RELEASE="${VERSION:-$COMMIT}" && \
+    export SENTRY_ORG="$SENTRY_ORG" && \
+    export SENTRY_PROJECT="$SENTRY_PROJECT" && \
+    export SENTRY_AUTH_TOKEN="$(cat /run/secrets/sentry_auth_token 2>/dev/null || true)" && \
+    export POSTHOG_CLI_PROJECT_ID="$POSTHOG_CLI_PROJECT_ID" && \
+    export POSTHOG_CLI_HOST="$POSTHOG_CLI_HOST" && \
+    export POSTHOG_CLI_API_KEY="$(cat /run/secrets/posthog_cli_api_key 2>/dev/null || true)" && \
+    pnpm build && \
+    if [ -n "$POSTHOG_CLI_PROJECT_ID" ] && [ -n "$POSTHOG_CLI_API_KEY" ]; then \
+        pnpm sourcemaps:posthog; \
+    fi
 
 # Stage 2: serve the built SPA from nginx with a history fallback. The
 # entrypoint renders /config.js from container env at startup.

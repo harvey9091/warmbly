@@ -12,6 +12,7 @@
 import React from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { AlertTriangleIcon, RefreshCcwIcon } from "lucide-react";
+import { captureException } from "@/lib/observability";
 
 interface State {
     error: Error | null;
@@ -43,9 +44,10 @@ export class ErrorBoundary extends React.Component<BoundaryProps, State> {
 
     componentDidCatch(error: Error, info: React.ErrorInfo) {
         this.setState({ info });
-        if (typeof window !== "undefined" && (window as unknown as { Sentry?: { captureException: (e: Error) => void } }).Sentry) {
-            (window as unknown as { Sentry?: { captureException: (e: Error) => void } }).Sentry?.captureException(error);
-        }
+        // Through lib/observability, so the error reaches whichever backend
+        // the deployment configured. Reading a global off `window` found the
+        // SDK only when it had put itself there, which a bundled one does not.
+        captureException(error);
         console.error("[ErrorBoundary]", error, info?.componentStack);
     }
 

@@ -20,9 +20,10 @@ import (
 
 func main() {
 	// Error reporting, before anything that can fail. Optional here as
-	// everywhere: no SENTRY_DSN means nothing is initialised and nothing is
-	// sent. A failure to configure it must not stop the service serving forms.
-	if err := observability.InitSentryEnv("forms"); err != nil {
+	// everywhere: no POSTHOG_KEY and no SENTRY_DSN means nothing is sent
+	// anywhere. A failure to configure it must not stop the service serving
+	// forms.
+	if err := observability.InitEnv("forms"); err != nil {
 		log.Printf("error reporting not configured: %v", err)
 	}
 	defer errs.Flush(2 * time.Second)
@@ -58,12 +59,14 @@ func main() {
 		StaticDir:     staticDir,
 		SubmitLimit:   submitLimit,
 		// The browser half of error reporting, separate from this process's
-		// own SENTRY_DSN: form pages are public and their errors belong in a
+		// own credentials: form pages are public and their errors belong in a
 		// frontend project, not the service's. Empty means the page loads no
-		// reporting SDK, which is the self-host default.
-		BrowserSentryDSN: strings.TrimSpace(os.Getenv("WARMBLY_SENTRY_DSN")),
-		Release:          observability.Release(),
-		Environment:      appEnv(),
+		// reporting SDK at all, which is the self-host default.
+		BrowserPostHogKey:  strings.TrimSpace(os.Getenv("WARMBLY_POSTHOG_KEY")),
+		BrowserPostHogHost: strings.TrimSpace(os.Getenv("WARMBLY_POSTHOG_HOST")),
+		BrowserSentryDSN:   strings.TrimSpace(os.Getenv("WARMBLY_SENTRY_DSN")),
+		Release:            observability.Release(),
+		Environment:        appEnv(),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -88,7 +91,7 @@ func main() {
 	}
 }
 
-// appEnv is the deployment label, matching what InitSentryEnv reports for this
+// appEnv is the deployment label, matching what InitEnv reports for this
 // process so the browser and the server halves agree.
 func appEnv() string {
 	if env := strings.TrimSpace(os.Getenv("APP_ENV")); env != "" {

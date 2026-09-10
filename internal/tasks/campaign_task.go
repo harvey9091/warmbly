@@ -1083,7 +1083,7 @@ func (s *tasksService) autoPauseCampaign(ctx context.Context, campaignID, taskID
 // there is no way to honour an unsubscribe, bounce or complaint for this
 // campaign — it is parked rather than sent unchecked. Since migration 000092
 // made campaigns.organization_id NOT NULL this should be unreachable, so it is
-// also reported to Sentry: reaching it means tenancy was lost somewhere else.
+// also reported: reaching it means tenancy was lost somewhere else.
 func (s *tasksService) haltOrglessCampaign(ctx context.Context, campaignID, taskID uuid.UUID) {
 	const reason = "Campaign paused: it has no workspace, so unsubscribes, bounces and complaints cannot be checked before sending. Contact support to reattach it."
 

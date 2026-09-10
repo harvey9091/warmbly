@@ -1,7 +1,7 @@
 // Error boundary for the authenticated shell. A page that throws during
 // render (or a loader that rejects) lands here instead of a blank screen:
 // the message, the backend code and request id when it was an API error,
-// and a way to retry. Reported once to Sentry when a DSN is configured.
+// and a way to retry. Reported once to whichever error backend is configured.
 
 import { useEffect, useRef } from "react";
 import { isRouteErrorResponse, Link, useRouteError } from "react-router-dom";

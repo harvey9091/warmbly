@@ -235,7 +235,7 @@ These are the ones that break things quietly when they drift, because each servi
 | realtime | `JWT_SECRET`, `SECRET_KEY_BASE`, `DATABASE_URL`, `REDIS_URL`, `PHX_HOST` |
 | web / admin | Only `WARMBLY_*` URLs, read at container start and written into `/config.js`. The same image runs anywhere |
 
-`APP_ENV` accepts `dev` or `prod`. No other value turns on production behavior. `prod` needs no cloud account: `SENTRY_DSN` stays optional in every environment, and `GEODB_PATH` must be *set* on the backend everywhere while the file it points at is optional (the consumer reads it too, optionally, for the location on opens and clicks).
+`APP_ENV` accepts `dev` or `prod`. No other value turns on production behavior. `prod` needs no cloud account: error tracking stays optional in every environment, and `GEODB_PATH` must be *set* on the backend everywhere while the file it points at is optional (the consumer reads it too, optionally, for the location on opens and clicks).
 
 The complete list of variables, with defaults and whether a change needs a restart, is the [configuration reference](/development/configuration/).
 
@@ -313,7 +313,12 @@ DEPLOYMENT_MODE=self_hosted
 # STRIPE_SECRET_KEY=
 # STRIPE_WEBHOOK_SECRET=
 # STRIPE_PUBLISHABLE_KEY=
-# SENTRY_DSN=
+# POSTHOG_KEY=                      # error tracking, and server-side product events
+# POSTHOG_HOST=                     # empty means PostHog Cloud US
+# POSTHOG_ERROR_TRACKING=true       # false keeps the key for analytics only
+# WARMBLY_POSTHOG_KEY=              # the browser half, used by web + admin + form pages
+# SENTRY_DSN=                       # the other backend, alongside PostHog or instead
+# WARMBLY_SENTRY_DSN=
 
 # ── Optional: swap infrastructure ─────────────────────────────────
 # BLOB_PROVIDER=s3
@@ -641,7 +646,7 @@ Three things to know:
 | Sign in with Apple | `APPLE_APP_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_KEY_SECRET` |
 | Mobile push (APNs) | `APNS_KEY_PATH` (or `APNS_KEY`), `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC` on backend and consumer. Partial config disables push with a warning, never a crash |
 | Notification tuning | `NOTIFICATION_PUSH_WINDOW` (default `5h`), `NOTIFICATION_EMAIL_DAILY_CAP` (default `25`, `0` means uncapped) |
-| Error tracking | `SENTRY_DSN`. Optional in every environment, including `prod` |
+| Error tracking | `POSTHOG_KEY` (plus `POSTHOG_HOST` for a PostHog you run) or `SENTRY_DSN`, and `WARMBLY_POSTHOG_KEY` / `WARMBLY_SENTRY_DSN` for the browser apps. Either, both or neither; optional in every environment, including `prod` |
 
 ## AI provider
 

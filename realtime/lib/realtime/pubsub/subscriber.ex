@@ -58,7 +58,7 @@ defmodule Realtime.CloudPubSub.Subscriber do
   rescue
     e ->
       Logger.error("Error handling Pub/Sub message: #{inspect(e)}")
-      ErrorReporter.capture_exception(e, extra: %{data: message.data})
+      ErrorReporter.capture_exception(e, stacktrace: __STACKTRACE__, extra: %{data: message.data})
       Broadway.Message.failed(message, "processing_error")
   end
 

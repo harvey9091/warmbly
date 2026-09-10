@@ -8,6 +8,8 @@
 
 import axios, { type AxiosRequestConfig } from "axios";
 import { API_URL } from "@/lib/env";
+import { maskIds } from "@/lib/maskIds";
+import { noteStep } from "@/lib/observability";
 import {
     clearToken,
     getToken,
@@ -126,12 +128,37 @@ export async function Request<T>(config: AuthRequestConfig): Promise<T> {
                 throw new SessionExpiredError();
             }
             const body = (err.response?.data ?? {}) as { error?: string; message?: string };
-            throw new APIError(
+            const failure = new APIError(
                 body.error || body.message || err.message || "Request failed",
                 status,
                 err.response?.data,
             );
+            noteFailure(config, failure);
+            throw failure;
         }
         throw err;
     }
+}
+
+// noteFailure leaves the failed call on the trail the next exception carries.
+//
+// A page that throws because a response came back empty is unreadable on its
+// own and obvious next to "GET /admin/orgs/:id 500 req-abc123". The request id
+// is the backend's own, so the same incident is findable in its logs.
+//
+// Ids in the path are masked and nothing else about the call travels: no query
+// string, no body, no header.
+function noteFailure(config: AuthRequestConfig, failure: APIError): void {
+    const method = config.method?.toUpperCase() ?? "REQUEST";
+    const path = maskIds(config.url?.split("?")[0] ?? "");
+
+    const properties: Record<string, string | number | boolean> = {
+        method,
+        path,
+        status: failure.status,
+    };
+    if (failure.code) properties.code = failure.code;
+    if (failure.requestId) properties.request_id = failure.requestId;
+
+    noteStep(`${method} ${path} ${failure.status || "failed"}`, properties);
 }

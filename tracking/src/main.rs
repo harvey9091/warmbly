@@ -9,6 +9,7 @@ mod kafka;
 mod links;
 mod nats;
 mod observability;
+mod posthog;
 mod producer;
 mod scanners;
 mod unsubscribe;
@@ -95,7 +96,13 @@ async fn main() {
         }
     };
     // Held until main returns so queued events are flushed on shutdown.
-    let _sentry = observability::init(&config.env, Some(&config.sentry_dsn), &config.release);
+    let _reporting = observability::init(observability::Settings {
+        env: &config.env,
+        release: &config.release,
+        sentry_dsn: &config.sentry_dsn,
+        posthog_key: &config.posthog_key,
+        posthog_host: &config.posthog_host,
+    });
     info!("Starting tracking service on {}", config.addr());
 
     // Event-bus producer (NATS by default; Kafka when EVENTBUS_PROVIDER=kafka
