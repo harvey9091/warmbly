@@ -43,6 +43,17 @@ type APIKey struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// CanAuthenticate reports whether this key would still be accepted on a
+// request. The `status` column only ever holds 'active' or 'revoked'; expiry is
+// applied when the key is read (GetByHash), so a key past its expires_at is
+// already dead without the column saying so.
+func (k APIKey) CanAuthenticate() bool {
+	if k.Status != APIKeyStatusActive {
+		return false
+	}
+	return k.ExpiresAt == nil || k.ExpiresAt.After(time.Now())
+}
+
 type APIKeyWithSecret struct {
 	APIKey
 	Secret string `json:"secret"` // Only returned on creation
