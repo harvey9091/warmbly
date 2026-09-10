@@ -159,12 +159,6 @@ func triggerTermsIn(lower string) []termHit {
 	return hits
 }
 
-// occurrence is one place a term was written, already resolved to a span.
-type occurrence struct {
-	key  string
-	span Span
-}
-
 // triggerSpans returns the distinct trigger terms across the template and every
 // place each one is written.
 //
