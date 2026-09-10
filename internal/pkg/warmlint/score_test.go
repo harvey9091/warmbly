@@ -553,3 +553,49 @@ func TestEverySpanQuotesTheHalfItNames(t *testing.T) {
 		}
 	}
 }
+
+// Pointing at one "free" out of three sends the writer back to hunt for the
+// other two on the next re-check, which is the hunting this panel exists to
+// stop. The term still counts once towards the score.
+func TestScoreShowsEveryOccurrenceOfARepeatedTerm(t *testing.T) {
+	res := Score("Quick question", "", "A free look.\nAnother free thing.\nOne more free one.")
+	issue, ok := issueByCode(res, "spam_trigger_terms")
+	if !ok {
+		t.Fatalf("trigger term not flagged: %+v", res.Issues)
+	}
+	if res.Score != 92 {
+		t.Errorf("score = %d, want one term's deduction however often it is written", res.Score)
+	}
+	if !strings.HasPrefix(issue.Message, "1 spam-trigger term(s)") {
+		t.Errorf("message = %q, want the term counted once", issue.Message)
+	}
+	if len(issue.Spans) != 3 {
+		t.Fatalf("got %d spans, want one per occurrence: %+v", len(issue.Spans), issue.Spans)
+	}
+	for i, want := range []int{1, 2, 3} {
+		if issue.Spans[i].Line != want {
+			t.Errorf("span %d is on line %d, want %d", i, issue.Spans[i].Line, want)
+		}
+	}
+}
+
+// The span list is capped for display, so occurrences come out round by round:
+// every term shows once before any term shows twice. In reading order a word
+// written twenty times would fill the list and hide every other term that is
+// also wrong.
+func TestScoreSpansShowEveryTermBeforeAnyRepeats(t *testing.T) {
+	body := strings.Repeat("A free thing. ", 20) + "Act now, this is a bonus prize."
+	issue, ok := issueByCode(Score("Quick question", "", body), "spam_trigger_terms")
+	if !ok {
+		t.Fatalf("trigger terms not flagged")
+	}
+	seen := map[string]bool{}
+	for _, sp := range issue.Spans {
+		seen[sp.Text] = true
+	}
+	for _, want := range []string{"free", "Act now", "bonus", "prize"} {
+		if !seen[want] {
+			t.Errorf("%q never got a span; the repeated word filled the list: %+v", want, issue.Spans)
+		}
+	}
+}

@@ -121,37 +121,34 @@ func punctuationSpans(subject, body string) []Span {
 	return spans
 }
 
-// termHit is one trigger term and the offset it was first seen at, in the
-// folded text it was found in.
+// termHit is one occurrence of one trigger term, at an offset in the folded
+// text it was found in.
 type termHit struct {
 	term string
 	at   int
 }
 
-// triggerTermsIn returns the distinct trigger terms in already-folded text, in
-// order of first appearance. It matches countTriggerTerms exactly on which
-// terms count; only the ordering and the offsets are extra.
+// triggerTermsIn returns EVERY occurrence of every trigger term in already-
+// folded text, in reading order. Which terms count is identical to
+// countTriggerTerms; the offsets and the repeats are extra, and the caller
+// deduplicates for scoring.
 func triggerTermsIn(lower string) []termHit {
-	first := map[string]int{}
+	var hits []termHit
 	for _, loc := range wordToken.FindAllStringIndex(lower, -1) {
 		w := lower[loc[0]:loc[1]]
-		if _, ok := triggerWords[w]; !ok {
-			continue
-		}
-		if _, seen := first[w]; !seen {
-			first[w] = loc[0]
+		if _, ok := triggerWords[w]; ok {
+			hits = append(hits, termHit{term: w, at: loc[0]})
 		}
 	}
 	for _, p := range triggerPhrases {
-		if i := strings.Index(lower, p); i >= 0 {
-			if _, seen := first[p]; !seen {
-				first[p] = i
+		for from := 0; from < len(lower); {
+			i := strings.Index(lower[from:], p)
+			if i < 0 {
+				break
 			}
+			hits = append(hits, termHit{term: p, at: from + i})
+			from += i + len(p)
 		}
-	}
-	hits := make([]termHit, 0, len(first))
-	for term, at := range first {
-		hits = append(hits, termHit{term: term, at: at})
 	}
 	sort.Slice(hits, func(i, j int) bool {
 		if hits[i].at != hits[j].at {
@@ -162,16 +159,29 @@ func triggerTermsIn(lower string) []termHit {
 	return hits
 }
 
+// occurrence is one place a term was written, already resolved to a span.
+type occurrence struct {
+	key  string
+	span Span
+}
+
 // triggerSpans returns the distinct trigger terms across the template and every
-// place each one appears.
+// place each one is written.
 //
-// The two halves are separate on purpose. A term counts ONCE towards the score
-// however often it is written, which keeps the count identical to
-// countTriggerTerms over the two joined together, but it gets a span in each
-// half it appears in: deduplicating the spans as well lost the body occurrence
-// of a word written in both, and then labelled the whole issue "subject".
+// Two things are deliberate here. A term counts ONCE towards the score however
+// often it appears, which keeps the count identical to countTriggerTerms over
+// the two halves joined together, while every occurrence still gets a span:
+// pointing at one "free" out of three sends the writer back to hunt for the
+// other two on the next re-check.
+//
+// And the spans come out round by round rather than in reading order, so every
+// term shows once in every half it appears in before any term shows twice. The
+// list is capped for display, and a word written twenty times would otherwise
+// fill it and hide every other term that is also wrong.
 func triggerSpans(subject, body string) (terms []string, spans []Span) {
 	counted := map[string]struct{}{}
+	rounds := map[string][]Span{}
+	var order []string
 	for _, f := range []scanned{
 		{FieldSubject, withoutURLs(subject), subject},
 		{FieldBody, withoutURLs(body), body},
@@ -183,7 +193,23 @@ func triggerSpans(subject, body string) (terms []string, spans []Span) {
 				terms = append(terms, hit.term)
 			}
 			start, end := casefold.Origin(offsets, hit.at), casefold.Origin(offsets, hit.at+len(hit.term))
-			spans = append(spans, spanAt(f.field, f.scan, f.display, start, end))
+			key := f.field + "\x00" + hit.term
+			if _, seen := rounds[key]; !seen {
+				order = append(order, key)
+			}
+			rounds[key] = append(rounds[key], spanAt(f.field, f.scan, f.display, start, end))
+		}
+	}
+	for r := 0; ; r++ {
+		emitted := false
+		for _, key := range order {
+			if r < len(rounds[key]) {
+				spans = append(spans, rounds[key][r])
+				emitted = true
+			}
+		}
+		if !emitted {
+			break
 		}
 	}
 	return terms, spans
