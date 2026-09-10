@@ -19,6 +19,8 @@ CERT_GID="2000"
 CERT_GROUP="warmbly-certs"
 INSTALL_DIR="/opt/warmbly/bus"
 SKIP_DOCKER="false"
+REFRESH="false"
+RAW_BASE="https://raw.githubusercontent.com/warmbly/warmbly/main/deploy/split-cloud/bus"
 VERIFY_ONLY="false"
 PRINT_ENV_ONLY="false"
 DRY_RUN="false"
@@ -41,6 +43,8 @@ Stand up the Warmbly bus box: NATS JetStream and Redis, both over TLS.
   --gid <n>         Group that may read the private key. Default 2000.
   --install-dir <d> Where the compose file lives. Default /opt/warmbly/bus.
   --skip-docker     Do not install Docker, even if it is missing.
+  --refresh         Re-download the compose file, nats.conf and the renewal
+                    hook, replacing local copies. Use it to pick up a fix.
   --verify          Run the end-to-end checks against a running box and exit.
   --print-env       Print the control plane's NATS_URL and REDIS and exit.
   --dry-run         Say what would happen, change nothing.
@@ -59,6 +63,7 @@ parse_args() {
       --gid)         CERT_GID="${2:-}"; shift 2 ;;
       --install-dir) INSTALL_DIR="${2:-}"; shift 2 ;;
       --skip-docker) SKIP_DOCKER="true"; shift ;;
+      --refresh)     REFRESH="true"; shift ;;
       --verify)      VERIFY_ONLY="true"; shift ;;
       --print-env)   PRINT_ENV_ONLY="true"; shift ;;
       --dry-run)     DRY_RUN="true"; shift ;;
@@ -88,7 +93,16 @@ run() {
 preflight() {
   step "Checking this machine can be certified for $DOMAIN"
 
+  # getent is the right answer on the Linux hosts this targets, but it does not
+  # consult DNS everywhere, and a false "does not resolve" is a dead end for
+  # someone whose record is perfectly fine. Fall through to real resolvers.
   resolved=$(getent hosts "$DOMAIN" 2>/dev/null | awk '{print $1}' | head -n 1)
+  if [ -z "$resolved" ] && command -v dig >/dev/null 2>&1; then
+    resolved=$(dig +short A "$DOMAIN" 2>/dev/null | head -n 1)
+  fi
+  if [ -z "$resolved" ] && command -v host >/dev/null 2>&1; then
+    resolved=$(host -t A "$DOMAIN" 2>/dev/null | awk '/has address/{print $NF}' | head -n 1)
+  fi
   if [ -z "$resolved" ]; then
     die "$DOMAIN does not resolve. Add an A record pointing at this machine first.
        On Cloudflare it must be DNS only (grey cloud): the proxy does not pass
@@ -101,6 +115,35 @@ preflight() {
        control of $DOMAIN. Stop that service and re-run."
   fi
   log "  port 80 is free for the challenge"
+  return 0
+}
+
+# ensure_bundle puts the files this script drives next to it. The documented
+# way in is `curl setup.sh && sh setup.sh`, which fetches this file and nothing
+# else, so without this the run installs Docker, creates a group and spends a
+# Let's Encrypt attempt before dying on a missing compose file.
+#
+# An existing file is adopted rather than replaced: an operator who tuned their
+# compose should not lose it to a re-run. --refresh is the way to take updates.
+ensure_bundle() {
+  step "Checking the bundle files are present"
+  run mkdir -p "$INSTALL_DIR"
+  for f in docker-compose.yml nats.conf certbot-deploy-hook.sh; do
+    if [ -f "$INSTALL_DIR/$f" ] && [ "$REFRESH" = "false" ]; then
+      log "  $f present, left alone (--refresh to take updates)"
+      continue
+    fi
+    if [ "$DRY_RUN" = "true" ]; then
+      log "  would download $f"
+      continue
+    fi
+    curl -fsSL "$RAW_BASE/$f" -o "$INSTALL_DIR/$f.tmp" \
+      || die "could not download $f from $RAW_BASE"
+    # Downloaded to a temp name and moved, so an interrupted fetch never leaves
+    # a half-written compose file that docker would try to parse.
+    mv "$INSTALL_DIR/$f.tmp" "$INSTALL_DIR/$f"
+    log "  downloaded $f"
+  done
   return 0
 }
 
@@ -124,6 +167,12 @@ install_certbot() {
     return 0
   fi
   step "Installing certbot"
+  # Checked before the package manager is, so --dry-run previews the whole run
+  # from a machine that is not the target rather than dying two steps in.
+  if [ "$DRY_RUN" = "true" ]; then
+    log "  would install certbot"
+    return 0
+  fi
   if command -v apt-get >/dev/null 2>&1; then
     run env DEBIAN_FRONTEND=noninteractive apt-get update -qq
     run env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq certbot
@@ -161,9 +210,16 @@ ensure_secrets() {
     log "  would write $INSTALL_DIR/.env with a fresh NATS_TOKEN and REDIS_PASSWORD"
     return 0
   fi
+  # Generated first and checked, because printf would happily write an empty
+  # value if openssl failed, and an empty token is a bus with no authorization
+  # that still starts and still accepts connections.
+  generated_nats=$(openssl rand -hex 32) || die "could not generate a token"
+  generated_redis=$(openssl rand -hex 32) || die "could not generate a password"
+  [ "${#generated_nats}" -eq 64 ] || die "generated NATS token is malformed"
+  [ "${#generated_redis}" -eq 64 ] || die "generated Redis password is malformed"
   ( umask 077
     printf 'NATS_TOKEN=%s\nREDIS_PASSWORD=%s\n' \
-      "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > "$INSTALL_DIR/.env" )
+      "$generated_nats" "$generated_redis" > "$INSTALL_DIR/.env" )
   chmod 600 "$INSTALL_DIR/.env"
   log "  wrote $INSTALL_DIR/.env"
   return 0
@@ -196,8 +252,17 @@ install_hook() {
 }
 
 obtain_cert() {
-  if [ -d "/etc/letsencrypt/live/$DOMAIN" ]; then
-    log "  certificate for $DOMAIN already issued, reusing it"
+  # Existing is not the same as valid. A box that was off past its renewal
+  # window has a certificate on disk that every client will reject, and
+  # reusing it produces a stack that starts cleanly and refuses every
+  # connection. checkend gives us a week of margin.
+  if [ -d "/etc/letsencrypt/live/$DOMAIN" ] && \
+     openssl x509 -checkend 604800 -noout \
+       -in "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" >/dev/null 2>&1; then
+    log "  certificate for $DOMAIN is present and valid, reusing it"
+  elif [ -d "/etc/letsencrypt/live/$DOMAIN" ]; then
+    step "Renewing the certificate for $DOMAIN (expired or within a week)"
+    run certbot renew --cert-name "$DOMAIN" --standalone --force-renewal --non-interactive
   else
     step "Obtaining a certificate for $DOMAIN"
     if [ -n "$EMAIL" ]; then
@@ -233,8 +298,13 @@ wait_healthy() {
   cd "$INSTALL_DIR"
   i=0
   while [ "$i" -lt 30 ]; do
-    nats_state=$(docker inspect --format '{{.State.Health.Status}}' bus-nats-1 2>/dev/null || echo starting)
-    redis_state=$(docker inspect --format '{{.State.Health.Status}}' bus-redis-1 2>/dev/null || echo starting)
+    # Resolved through compose. Compose derives the project name from the
+    # directory, so --install-dir moves it and a hard-coded bus-nats-1 would
+    # inspect a container that does not exist and wait out the whole timeout.
+    nats_state=$(docker inspect --format '{{.State.Health.Status}}' \
+      "$(docker compose ps -q nats 2>/dev/null)" 2>/dev/null || echo starting)
+    redis_state=$(docker inspect --format '{{.State.Health.Status}}' \
+      "$(docker compose ps -q redis 2>/dev/null)" 2>/dev/null || echo starting)
     if [ "$nats_state" = "healthy" ] && [ "$redis_state" = "healthy" ]; then
       log "  nats healthy, redis healthy"
       return 0
@@ -333,10 +403,11 @@ main() {
   fi
 
   preflight
+  ensure_bundle
   install_docker
   install_certbot
   ensure_group
-  run mkdir -p "$INSTALL_DIR" "$CERT_DIR"
+  run mkdir -p "$CERT_DIR"
   ensure_secrets
   install_hook
   obtain_cert
