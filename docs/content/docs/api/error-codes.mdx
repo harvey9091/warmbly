@@ -320,6 +320,23 @@ A `503` whose `code` is `mailbox_provider_not_configured` is not transient and r
 - Or connect the mailbox over SMTP and IMAP instead, which needs no configuration
 - Full walkthrough: [connect mailboxes](/development/deployment-guide/#connect-mailboxes)
 
+#### `ai_not_configured`
+
+A `503` whose `code` is `ai_not_configured` is not transient and retrying will not help. It comes from `POST /templates/analyze` and means the deployment has no AI provider set up at all. It is how a client tells "there is no AI here" apart from "the provider is having a bad minute", which returns the generic `service_unavailable` and is worth retrying.
+
+```json
+{
+  "error": "Service Unavailable",
+  "message": "AI analysis is not configured on this deployment.",
+  "code": "ai_not_configured",
+  "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
+}
+```
+
+**How to fix:**
+- Set `AI_PROVIDER` and `AI_API_KEY` in the `.env` at your install root, then restart. See the [configuration reference](/development/configuration/)
+- Hide the AI affordance in your client rather than retrying: nothing about the request will make it succeed
+
 #### `mailbox_allowance_reached`
 
 A `403` whose `code` is `mailbox_allowance_reached` comes from every path that connects a mailbox: `POST /emails/onboarding/oauth/start`, `POST /emails/onboarding/oauth/finish`, `POST /emails/onboarding/smtp-imap`, and per row inside `POST /emails/onboarding/smtp-imap/bulk`. It is not a permission problem: the workspace holds its whole [mailbox allowance](/guides/mailboxes/#mailbox-allowance), which on a paid plan is one mailbox for every send a day the plan includes, and `10` on a free workspace. Nothing was connected.

@@ -2042,16 +2042,7 @@ func worstStepContentScore(seqs []models.Sequence, attachmentsFor func(models.Se
 		if r.Score >= worst {
 			continue
 		}
-		worst, worstStep, issue = r.Score, seq.Position+1, ""
-		for _, is := range r.Issues {
-			if is.Severity == "high" {
-				issue = is.Message
-				break
-			}
-		}
-		if issue == "" && len(r.Issues) > 0 {
-			issue = r.Issues[0].Message
-		}
+		worst, worstStep, issue = r.Score, seq.Position+1, warmlint.LeadIssue(r)
 	}
 	return worst, worstStep, issue, scored
 }

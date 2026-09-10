@@ -32,6 +32,10 @@ const (
 	// CostWebSearch is one web-search lookup made on behalf of an AI step
 	// (charged only when the search returned results).
 	CostWebSearch = 1
+
+	// CostSpamAnalysis is one AI spam analysis of a campaign template
+	// (POST /templates/analyze, and every Re-check after an edit).
+	CostSpamAnalysis = 2
 )
 
 // Usage-based metering. The per-feature constants above are the up-front
