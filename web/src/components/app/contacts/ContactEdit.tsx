@@ -37,6 +37,15 @@ import NotesTab from "./contact-edit/NotesTab";
 import ResearchTab from "./contact-edit/ResearchTab";
 import DetailsTab, { type CustomField } from "./contact-edit/DetailsTab";
 import {
+    fieldsOf,
+    idsOf,
+    rebase,
+    recordFromCF,
+    sameCampaigns,
+    sameFields,
+    sameIDs,
+} from "./contact-edit/rebase";
+import {
     CONTACT_SLIDE_TABS,
     type ContactSlideTab,
 } from "./contact-edit/tabs";
@@ -97,11 +106,9 @@ function ContactEditPanel({
     const [phone, setPhone] = React.useState(contact.phone);
     const [subscribed, setSubscribed] = React.useState(contact.subscribed);
     const [campaigns, setCampaigns] = React.useState<MiniCampaign[]>(contact.campaigns ?? []);
-    const [categoryIds, setCategoryIds] = React.useState<string[]>(
-        () => (contact.categories ?? []).map((c) => c.id),
-    );
+    const [categoryIds, setCategoryIds] = React.useState<string[]>(() => idsOf(contact.categories ?? []));
     const [customFields, setCustomFields] = React.useState<CustomField[]>(() =>
-        Object.entries(contact.custom_fields ?? {}).map(([n, v]) => ({ name: n, value: v })),
+        fieldsOf(contact.custom_fields),
     );
 
     function reset() {
@@ -112,18 +119,35 @@ function ContactEditPanel({
         setPhone(contact.phone);
         setSubscribed(contact.subscribed);
         setCampaigns(contact.campaigns ?? []);
-        setCategoryIds((contact.categories ?? []).map((c) => c.id));
-        setCustomFields(Object.entries(contact.custom_fields ?? {}).map(([n, v]) => ({ name: n, value: v })));
+        setCategoryIds(idsOf(contact.categories ?? []));
+        setCustomFields(fieldsOf(contact.custom_fields));
     }
 
-    const recordFromCF = React.useCallback((fields: CustomField[]) => {
-        const out: Record<string, string> = {};
-        for (const f of fields) {
-            if (!f.name.trim()) continue;
-            out[f.name.trim()] = f.value;
-        }
-        return out;
-    }, []);
+    // The panel outlives the record it edits: lifting a suppression on the
+    // Overview tab re-subscribes the contact, and a teammate's edit arrives
+    // through the audit spine. Rebase every field the user has not touched
+    // onto the new server value, so a change the user made elsewhere in this
+    // panel does not read back as an unsaved edit and pop "Discard unsaved
+    // changes?" on the way out (issue #415).
+    const serverRef = React.useRef(contact);
+    React.useEffect(() => {
+        const prev = serverRef.current;
+        if (prev === contact) return;
+        serverRef.current = contact;
+        setFirstName((v) => rebase(v, prev.first_name, contact.first_name));
+        setLastName((v) => rebase(v, prev.last_name, contact.last_name));
+        setEmail((v) => rebase(v, prev.email, contact.email));
+        setCompany((v) => rebase(v, prev.company, contact.company));
+        setPhone((v) => rebase(v, prev.phone, contact.phone));
+        setSubscribed((v) => rebase(v, prev.subscribed, contact.subscribed));
+        setCampaigns((v) => rebase(v, prev.campaigns ?? [], contact.campaigns ?? [], sameCampaigns));
+        setCategoryIds((v) =>
+            rebase(v, idsOf(prev.categories ?? []), idsOf(contact.categories ?? []), sameIDs),
+        );
+        setCustomFields((v) =>
+            rebase(v, fieldsOf(prev.custom_fields), fieldsOf(contact.custom_fields), sameFields),
+        );
+    }, [contact]);
 
     const dirty = React.useMemo(() => {
         if (firstName !== contact.first_name) return true;
@@ -142,7 +166,7 @@ function ContactEditPanel({
         if (curCat.size !== nextCat.size) return true;
         for (const id of curCat) if (!nextCat.has(id)) return true;
         return false;
-    }, [contact, firstName, lastName, email, company, phone, subscribed, customFields, campaigns, categoryIds, recordFromCF]);
+    }, [contact, firstName, lastName, email, company, phone, subscribed, customFields, campaigns, categoryIds]);
 
     async function save() {
         if (!dirty) return;
