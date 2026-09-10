@@ -118,8 +118,8 @@ export function setErrorIdentity(next: Identity): void {
 }
 
 // noteStep adds one step to the trail the next exception carries. Keep the
-// message a fixed phrase and put the varying part in properties, and keep both
-// free of a contact's name, an email address or a subject line.
+// message bounded, a route pattern rather than a record id, and keep it and the
+// properties free of a contact's name, an email address or a subject line.
 export function noteStep(message: string, properties?: StepProperties): void {
     if (awaiting > 0 && earlySteps.length < EARLY_LIMIT) earlySteps.push({ message, properties });
     for (const backend of backends) backend.step(message, properties);
