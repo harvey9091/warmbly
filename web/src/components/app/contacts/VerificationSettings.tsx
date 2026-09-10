@@ -1,8 +1,3 @@
-// Address verification at a glance: who checks this workspace's contacts,
-// what it has found so far, and the one-click path to pay-as-you-go
-// MillionVerifier. Verdicts change in the background, so the bar and the
-// numbers animate as they land.
-
 import React from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
@@ -12,6 +7,7 @@ import { Section } from "@/app/app/settings/_components/SectionShell";
 import AnimatedNumber from "@/components/ui/AnimatedNumber";
 import { useContactVerification } from "@/lib/api/hooks/app/contacts/useContactVerification";
 import { cn } from "@/lib/utils";
+import { PROVIDER_LABELS, type IntegrationProvider } from "@/lib/api/models/app/integrations/Integration";
 
 const SEGMENTS = [
     { key: "valid", label: "Deliverable", color: "bg-emerald-500", text: "text-emerald-700" },
@@ -24,7 +20,8 @@ export default function VerificationSettings() {
     const { data, isLoading } = useContactVerification();
     const counts = data?.counts;
     const total = counts ? counts.valid + counts.risky + counts.invalid + counts.unknown : 0;
-    const paid = data?.provider === "millionverifier";
+    const paid = !!data && data.provider !== "builtin";
+    const providerName = data ? PROVIDER_LABELS[data.provider as IntegrationProvider] ?? data.provider : "";
 
     return (
         <Section
@@ -50,14 +47,16 @@ export default function VerificationSettings() {
                             </motion.span>
                             <div className="min-w-0">
                                 <p className="text-[12.5px] font-medium text-slate-900">
-                                    {paid ? "MillionVerifier" : "Built-in check"}
+                                    {paid ? providerName : "Built-in check"}
                                     <span className="ml-1.5 text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">
-                                        {paid ? "pay as you go" : "included"}
+                                        {paid ? "connected service" : "included"}
                                     </span>
                                 </p>
                                 <p className="text-[11.5px] text-slate-500 leading-snug">
                                     {paid
-                                        ? "One credit per address, from your own MillionVerifier balance."
+                                        ? data.provider === "cleanmylist"
+                                            ? "Uses your CleanMyList plan allowance, then credits. View your balance in CleanMyList."
+                                            : `One credit per address, from your own ${providerName} balance.`
                                         : data.builtin_ready
                                           ? "Syntax, mail server, disposable domains and a mailbox probe. Catch-all domains and Microsoft 365 stay unverified."
                                           : "Syntax, mail server and disposable-domain checks. The mailbox probe is off on this instance, so most addresses stay unverified."}
@@ -65,7 +64,7 @@ export default function VerificationSettings() {
                             </div>
                         </div>
                         <div className="md:ml-auto shrink-0 flex items-center gap-2">
-                            {paid && data.credits !== undefined && (
+                            {paid && data.credits != null && (
                                 <span className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md bg-slate-50 border border-slate-200 text-[12px] text-slate-700">
                                     <CoinsIcon className="w-3.5 h-3.5 text-amber-500" />
                                     <AnimatedNumber value={data.credits} className="font-medium tabular-nums" /> credits
@@ -75,7 +74,7 @@ export default function VerificationSettings() {
                                 to="/app/integrations"
                                 className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-[12px] font-medium transition-colors"
                             >
-                                {paid ? "Manage connection" : "Connect MillionVerifier"}
+                                {paid ? "Manage connection" : "Connect verification service"}
                                 <ArrowRightIcon className="w-3.5 h-3.5" />
                             </Link>
                         </div>

@@ -205,5 +205,18 @@ func Catalog() []models.IntegrationCatalogEntry {
 				"Replaces the built-in check while credits last, falls back when they run out",
 			},
 		},
+		{
+			Provider:   models.IntegrationCleanMyList,
+			Name:       "CleanMyList",
+			Tagline:    "Verify contact addresses with your CleanMyList account.",
+			Category:   models.IntegrationCategoryVerification,
+			AuthMethod: string(models.IntegrationAuthAPIKey),
+			DocsURL:    "https://www.cleanmylist.io/developers",
+			Highlights: []string{
+				"Checks new contacts and re-verifies existing addresses",
+				"Uses your CleanMyList plan allowance first, then credits",
+				"Falls back to the built-in check when the service is unavailable",
+			},
+		},
 	}
 }

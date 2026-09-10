@@ -3,7 +3,6 @@ package emailverify
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,9 +30,9 @@ const (
 
 var (
 	// ErrMillionVerifierKey is returned when the API rejects the key.
-	ErrMillionVerifierKey = errors.New("millionverifier rejected the API key")
+	ErrMillionVerifierKey = ErrProviderKey
 	// ErrMillionVerifierCredits is returned when the account is out of credits.
-	ErrMillionVerifierCredits = errors.New("millionverifier account has no credits left")
+	ErrMillionVerifierCredits = ErrProviderCredits
 )
 
 // NewMillionVerifier constructs the client. baseURL is overridable for tests.
@@ -129,6 +128,12 @@ func (m *MillionVerifier) Check(ctx context.Context, email string) (Result, erro
 	}
 	res.Reason = "millionverifier: " + reason
 	return res, nil
+}
+
+// Account validates the key and returns the remaining credits.
+func (m *MillionVerifier) Account(ctx context.Context) (*int, error) {
+	n, err := m.Credits(ctx)
+	return &n, err
 }
 
 // Credits returns the account's remaining credits, and validates the key.

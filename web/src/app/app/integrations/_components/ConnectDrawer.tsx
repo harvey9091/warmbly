@@ -56,6 +56,15 @@ interface FieldDef {
 
 // Credential fields for non-OAuth providers only. OAuth providers never paste.
 const FIELDS_BY_PROVIDER: Record<string, FieldDef[]> = {
+    cleanmylist: [
+        {
+            key: "api_key",
+            label: "CleanMyList API key",
+            type: "password",
+            required: true,
+            helper: "App → API keys in CleanMyList. Verify your account email first. Connecting is free; checks use your plan allowance, then credits.",
+        },
+    ],
     millionverifier: [
         {
             key: "api_key",

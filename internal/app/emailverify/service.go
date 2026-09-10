@@ -29,7 +29,7 @@ type Provider struct {
 	// ConnectionID is the integration connection carrying the key; nil for
 	// the instance-wide key an operator configured.
 	ConnectionID *uuid.UUID
-	Client       *emailverify.MillionVerifier
+	Client       emailverify.ProviderClient
 }
 
 // ProviderSource resolves the paid provider an organization connected.
@@ -104,7 +104,7 @@ type service struct {
 }
 
 type creditsEntry struct {
-	n   int
+	n   *int
 	err error
 	at  time.Time
 }
@@ -190,6 +190,7 @@ func (s *service) VerifyAddress(ctx context.Context, orgID uuid.UUID, email stri
 	if p := s.providerFor(ctx, orgID); p != nil {
 		res, err := p.Client.Check(ctx, email)
 		if err == nil {
+			s.noteProviderOK(ctx, p)
 			return res
 		}
 		s.noteProviderError(ctx, p, err)
@@ -217,7 +218,7 @@ func (s *service) noteProviderError(ctx context.Context, p *Provider, err error)
 	if p == nil || err == nil {
 		return
 	}
-	if errors.Is(err, emailverify.ErrMillionVerifierKey) || errors.Is(err, emailverify.ErrMillionVerifierCredits) {
+	if errors.Is(err, emailverify.ErrProviderKey) || errors.Is(err, emailverify.ErrProviderCredits) {
 		if p.ConnectionID != nil && s.providers != nil {
 			s.providers.ReportVerificationProviderError(ctx, *p.ConnectionID, err)
 		}
@@ -234,9 +235,8 @@ func cacheKey(p *Provider) string {
 	return "platform"
 }
 
-// providerUsable checks (cached for a minute) that the provider's key works
-// and has credits, so a pass never burns a whole batch on a dead key.
-func (s *service) providerUsable(ctx context.Context, p *Provider) (int, error) {
+// providerUsable caches account health and any available balance for a minute.
+func (s *service) providerUsable(ctx context.Context, p *Provider) (*int, error) {
 	key := cacheKey(p)
 	s.creditsMu.Lock()
 	e, ok := s.credits[key]
@@ -244,16 +244,16 @@ func (s *service) providerUsable(ctx context.Context, p *Provider) (int, error) 
 	if ok && time.Since(e.at) < time.Minute {
 		return e.n, e.err
 	}
-	n, err := p.Client.Credits(ctx)
-	if err == nil && n <= 0 {
-		err = emailverify.ErrMillionVerifierCredits
+	n, err := p.Client.Account(ctx)
+	if err == nil && n != nil && *n <= 0 {
+		err = emailverify.ErrProviderCredits
 	}
 	s.creditsMu.Lock()
 	s.credits[key] = creditsEntry{n: n, err: err, at: time.Now()}
 	s.creditsMu.Unlock()
 	if err != nil {
 		s.noteProviderError(ctx, p, err)
-	} else {
+	} else if n != nil {
 		s.noteProviderOK(ctx, p)
 	}
 	return n, err
@@ -263,6 +263,13 @@ func (s *service) providerUsable(ctx context.Context, p *Provider) (int, error) 
 // a balance again. The write is guarded in the repository, so a pass that finds
 // the connection already healthy costs nothing.
 func (s *service) noteProviderOK(ctx context.Context, p *Provider) {
+	if p != nil {
+		s.creditsMu.Lock()
+		if s.credits[cacheKey(p)].err != nil {
+			delete(s.credits, cacheKey(p))
+		}
+		s.creditsMu.Unlock()
+	}
 	if p == nil || p.ConnectionID == nil || s.providers == nil {
 		return
 	}
@@ -319,6 +326,7 @@ func (s *service) verifyOrgBatch(ctx context.Context, orgID uuid.UUID, cands []r
 					// Fall back for this address so the pass still makes progress.
 					return s.verifyBuiltin(ctx, orgID, email)
 				}
+				s.noteProviderOK(ctx, p)
 				return res
 			}
 		}
@@ -438,7 +446,7 @@ func (s *service) Overview(ctx context.Context, orgID uuid.UUID) (*models.Verifi
 			out.ProviderError = providerErrorText(err)
 		} else {
 			out.Provider = p.Name
-			out.Credits = &n
+			out.Credits = n
 		}
 	}
 	return out, nil
@@ -446,11 +454,11 @@ func (s *service) Overview(ctx context.Context, orgID uuid.UUID) (*models.Verifi
 
 func providerErrorText(err error) string {
 	switch {
-	case errors.Is(err, emailverify.ErrMillionVerifierKey):
-		return "MillionVerifier rejected the API key. Reconnect it with a current key."
-	case errors.Is(err, emailverify.ErrMillionVerifierCredits):
-		return "The MillionVerifier account has no credits left. Top it up to keep using it; the built-in check is used meanwhile."
+	case errors.Is(err, emailverify.ErrProviderKey):
+		return "The verification service rejected the API key or account. Check the account and reconnect with a current key."
+	case errors.Is(err, emailverify.ErrProviderCredits):
+		return "The verification account has no allowance or credits left. Top it up to keep using it; the built-in check is used meanwhile."
 	default:
-		return "MillionVerifier could not be reached; the built-in check is used meanwhile."
+		return "The verification service could not be reached; the built-in check is used meanwhile."
 	}
 }

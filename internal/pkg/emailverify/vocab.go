@@ -16,6 +16,12 @@ type ExternalVerdict struct {
 // vocabularies maps a provider name to the statuses it emits. Keys are
 // lower-cased with spaces, dashes and underscores removed (see vocabKey).
 var vocabularies = map[string]map[string]ExternalVerdict{
+	ProviderCleanMyList: {
+		"deliverable":   {Status: StatusValid},
+		"undeliverable": {Status: StatusInvalid},
+		"risky":         {Status: StatusRisky},
+		"unknown":       {Status: StatusUnknown},
+	},
 	ProviderMillionVerifier: {
 		"ok":         {Status: StatusValid},
 		"good":       {Status: StatusValid},
@@ -128,12 +134,13 @@ var vocabularies = map[string]map[string]ExternalVerdict{
 // value. Specific vocabularies first; the generic one last.
 var vocabProviderOrder = []string{
 	"zerobounce", ProviderMillionVerifier, "neverbounce", "emaillistverify",
-	"debounce", "bouncer", "kickbox", "emailable", "clearout", ProviderBuiltin,
+	"debounce", "bouncer", "kickbox", "emailable", "clearout", ProviderCleanMyList, ProviderBuiltin,
 }
 
 // vocabProviderAliases maps how a provider is written in a column header to
 // its vocabulary key.
 var vocabProviderAliases = map[string]string{
+	"cleanmylist":     ProviderCleanMyList,
 	"millionverifier": ProviderMillionVerifier, "mv": ProviderMillionVerifier,
 	"zerobounce": "zerobounce", "zb": "zerobounce",
 	"neverbounce": "neverbounce", "nb": "neverbounce",
