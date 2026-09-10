@@ -42,6 +42,9 @@ type WorkerCapacityRow struct {
 // dimensionless except Effective (mailbox-equivalents) and Load (sum of
 // mailbox weights). Utilization is Load/Effective and is the value the
 // scheduler sorts on when picking the next worker.
+//
+// Effective is a target, not a ceiling. Nothing refuses a placement for being
+// over it; see Score in placement.go for what being over it costs.
 type Capacity struct {
 	Base        float64
 	HealthMul   float64
@@ -49,6 +52,10 @@ type Capacity struct {
 	Effective   float64
 	Load        float64
 	Utilization float64
+
+	// AuthPressure is how hard this worker's address is being pushed back on
+	// by mailbox providers, in [0, 1]. See computeAuthPressure.
+	AuthPressure float64
 }
 
 // ComputeCapacity is the placement math: Base * Health * Age, floored at
@@ -69,7 +76,35 @@ func ComputeCapacity(row WorkerCapacityRow) Capacity {
 	if c.Effective > 0 {
 		c.Utilization = c.Load / c.Effective
 	}
+	c.AuthPressure = computeAuthPressure(row.AuthErrors1h, row.SendsAttempted1h)
 	return c
+}
+
+// authPressureFullScale is the auth-error rate that saturates the pressure
+// signal. Auth errors are the one thing in worker_health_samples that is
+// genuinely about the worker's own address rather than about the mailbox or
+// its contact list: a per-IP authentication throttle (454 4.7.0) or per-IP
+// rate limit (421 4.7.28) is the provider saying this client is signing in
+// too much. Bounces and complaints follow the mailbox and say nothing about
+// where it is running from.
+//
+// 5% is already a bad hour, so that is full scale.
+const authPressureFullScale = 0.05
+
+// computeAuthPressure scales the last hour's auth-error rate into [0, 1].
+//
+// The denominator floors at 1 rather than at attempts, because auth errors
+// also arrive from sync on a worker that sent nothing. Errors with no attempts
+// is the worst case there is, and it saturates, which is the right answer.
+func computeAuthPressure(authErrors, sendsAttempted int64) float64 {
+	if authErrors <= 0 {
+		return 0
+	}
+	denom := float64(sendsAttempted)
+	if denom < 1 {
+		denom = 1
+	}
+	return clampUnit((float64(authErrors) / denom) / authPressureFullScale)
 }
 
 // clampUnit pins x into [0, 1]. Negatives are surprisingly easy to feed

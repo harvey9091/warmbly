@@ -91,8 +91,9 @@ type PlacementResult struct {
 	Worker         *models.Worker
 	Score          float64
 	IncumbentScore float64
-	// IncumbentEligible is false when the current worker could not host the
-	// mailbox at all, in which case IncumbentScore is meaningless.
+	// IncumbentEligible is false when the current worker is too unhealthy to
+	// host the mailbox at all, in which case IncumbentScore is meaningless.
+	// Being over capacity does not clear it; that shows up in IncumbentScore.
 	IncumbentEligible bool
 	// Mandated is set when the worker was chosen by an entitlement rather than
 	// by scoring, which today means an isolated-egress reservation. Callers

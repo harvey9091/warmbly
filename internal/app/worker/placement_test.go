@@ -20,15 +20,17 @@ func candidate(id uuid.UUID, effective, load float64) PlacementCandidate {
 	return c
 }
 
-func TestEligibleRequiresHealthAndHeadroom(t *testing.T) {
+func TestEligibleRequiresHealthOnly(t *testing.T) {
 	id := uuid.New()
 	req := PlacementRequest{Weight: 1.0}
 
 	if c := candidate(id, 16, 4); !c.Eligible(req) {
 		t.Fatal("healthy worker with headroom should be eligible")
 	}
-	if c := candidate(id, 16, 15.5); c.Eligible(req) {
-		t.Fatal("worker with less headroom than the mailbox weight should not be eligible")
+	// Capacity is a preference, not a fence: an over-target worker is still a
+	// legal home, it just scores badly. See TestOverTargetWorkerIsLastResort.
+	if c := candidate(id, 16, 40); !c.Eligible(req) {
+		t.Fatal("being over the capacity target must not refuse a placement")
 	}
 
 	for _, state := range []models.WorkerHealthState{
@@ -154,13 +156,76 @@ func TestRegionMatchIsAPreferenceNotARequirement(t *testing.T) {
 	}
 }
 
-func TestSelectPlacementReturnsNilWhenNothingFits(t *testing.T) {
-	full := candidate(uuid.New(), 16, 16)
-	if got := SelectPlacement([]PlacementCandidate{full}, PlacementRequest{Weight: 1.0}); got != nil {
-		t.Fatal("expected no placement when every worker is full")
+func TestSelectPlacementReturnsNilOnlyWhenNothingIsHealthy(t *testing.T) {
+	sick := candidate(uuid.New(), 16, 0)
+	sick.Health = models.WorkerHealthQuarantined
+	if got := SelectPlacement([]PlacementCandidate{sick}, PlacementRequest{Weight: 1.0}); got != nil {
+		t.Fatal("expected no placement when every worker is unhealthy")
 	}
 	if got := SelectPlacement(nil, PlacementRequest{Weight: 1.0}); got != nil {
 		t.Fatal("expected no placement from an empty fleet")
+	}
+
+	// A full fleet is not an empty one. Returning nil here used to drop
+	// assignment into selectFallback, which ignores every preference term.
+	full := candidate(uuid.New(), 16, 16)
+	if got := SelectPlacement([]PlacementCandidate{full}, PlacementRequest{Weight: 1.0}); got == nil {
+		t.Fatal("a full but healthy fleet must still place the mailbox")
+	}
+}
+
+func TestOverTargetWorkerIsLastResort(t *testing.T) {
+	over, room := uuid.New(), uuid.New()
+
+	// The over-target worker is also the incumbent and matches the region, so
+	// it collects every bonus available. It must still lose to spare capacity.
+	a := candidate(over, 16, 18)
+	a.Region = "eu"
+	b := candidate(room, 16, 15)
+
+	got := SelectPlacement([]PlacementCandidate{a, b}, PlacementRequest{
+		Weight: 1.0, CurrentWorkerID: &over, Region: "eu",
+	})
+	if got == nil || got.WorkerID != room {
+		t.Fatal("a worker with room must beat an over-target one holding every bonus")
+	}
+}
+
+func TestAmongOverloadedWorkersTheLeastOverloadedWins(t *testing.T) {
+	bad, worse := uuid.New(), uuid.New()
+
+	got := SelectPlacement([]PlacementCandidate{
+		candidate(worse, 16, 40),
+		candidate(bad, 16, 18),
+	}, PlacementRequest{Weight: 1.0})
+	if got == nil || got.WorkerID != bad {
+		t.Fatal("with no room anywhere, the least-overloaded worker should win")
+	}
+}
+
+func TestMailboxWeightCountsAgainstTheTarget(t *testing.T) {
+	id := uuid.New()
+	c := candidate(id, 16, 15.5)
+
+	// The same worker is under target for a Gmail mailbox and over it for an
+	// smtp_imap one. Only the projected utilization can tell them apart.
+	light := c.Score(PlacementRequest{Weight: MailboxWeight("gmail", false)})
+	heavy := c.Score(PlacementRequest{Weight: MailboxWeight("smtp_imap", false)})
+	if !(light > 0 && heavy < -weightOverTarget+1) {
+		t.Fatalf("weight should change the verdict: light=%.3f heavy=%.3f", light, heavy)
+	}
+}
+
+func TestAuthPressureSteersAwayFromAThrottledAddress(t *testing.T) {
+	throttled, clean := uuid.New(), uuid.New()
+
+	a := candidate(throttled, 16, 8)
+	a.Capacity.AuthPressure = 1
+	b := candidate(clean, 16, 8)
+
+	got := SelectPlacement([]PlacementCandidate{a, b}, PlacementRequest{Weight: 1.0})
+	if got == nil || got.WorkerID != clean {
+		t.Fatal("placement should avoid an address the provider is auth-throttling")
 	}
 }
 

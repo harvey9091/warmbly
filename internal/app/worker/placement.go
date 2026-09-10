@@ -41,6 +41,9 @@ const (
 	weightIsolation    = 1.5
 	weightBlastRadius  = 0.8
 	weightProviderLoad = 0.7
+	weightAuthPressure = 1.2
+	weightOverTarget   = 3.0
+	weightOverload     = 4.0
 )
 
 // providerSoftCap is how many mailboxes of ONE provider a single worker is
@@ -91,16 +94,19 @@ type PlacementRequest struct {
 	IsolatedEgress bool
 }
 
-// Eligible reports whether a candidate may host the mailbox at all. These are
-// the only hard constraints left: the worker has to be able to do the work.
-// Everything else is a preference expressed in the score.
+// Eligible reports whether a candidate may host the mailbox at all. Health is
+// the only hard constraint: capacity is a preference in the score, because
+// base_capacity is a flat 16 for every worker and refusing on it refused on a
+// guess. It also refused where placement mattered most - a full fleet returned
+// nil and fell through to selectFallback, which reads none of region, blast
+// radius or provider crowding.
 func (c PlacementCandidate) Eligible(req PlacementRequest) bool {
 	switch c.Health {
 	case models.WorkerHealthHealthy, models.WorkerHealthWatch:
+		return true
 	default:
 		return false
 	}
-	return c.Capacity.Effective-c.Capacity.Load >= req.Weight
 }
 
 // Score ranks an eligible candidate. Higher is better. The terms are additive
@@ -109,12 +115,29 @@ func (c PlacementCandidate) Eligible(req PlacementRequest) bool {
 func (c PlacementCandidate) Score(req PlacementRequest) float64 {
 	var score float64
 
-	// Capacity: prefer the worker with the most room, so the fleet fills evenly.
-	utilization := c.Capacity.Utilization
-	if utilization > 1 {
-		utilization = 1
+	// Capacity: prefer the worker with the most room, so the fleet fills
+	// evenly. Projected, so the incoming mailbox's own weight counts - Eligible
+	// used to be the only thing that read req.Weight.
+	projected := c.Capacity.Utilization
+	if c.Capacity.Effective > 0 {
+		projected = (c.Capacity.Load + req.Weight) / c.Capacity.Effective
 	}
-	score += weightHeadroom * (1 - utilization)
+	if projected <= 1 {
+		score += weightHeadroom * (1 - projected)
+	} else {
+		// A soft wall: the flat cost exceeds the largest bonus a candidate can
+		// earn (incumbency 2.0 + region 0.6), so anything with room wins when
+		// it exists, and the ramp still ranks the overloaded against each
+		// other when nothing does.
+		over := projected - 1
+		score -= weightOverTarget + weightOverload*over
+	}
+
+	// Provider pushback: 454/421 auth throttles mean this address is signing
+	// in too much, so steer new mailboxes away. Below incumbency on purpose -
+	// evacuating a throttled worker is rotation's call, behind a residency
+	// floor, not a per-mailbox sign-in challenge paid here.
+	score -= weightAuthPressure * c.Capacity.AuthPressure
 
 	// Stickiness: the incumbent wins ties and most non-ties. A mailbox that
 	// stays put keeps presenting the same client IP to its provider.

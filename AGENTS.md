@@ -312,7 +312,9 @@ In production, workers are treated as individually addressable executors:
 - worker events are delivered through worker-specific Kafka topics
 - the platform can rebalance or migrate accounts between workers, reluctantly
 
-Placement is a score, never a filter (`internal/app/worker/placement.go`). Hard constraints cover only whether the work can be done: heartbeating, health in `healthy`/`watch`, and enough capacity headroom for the mailbox's weight. Everything else is a preference term: capacity headroom, incumbency (weighted highest), region match, tenant blast radius, per-provider crowding on one address, and foreign tenants for orgs entitled to isolated egress.
+Placement is a score, never a filter (`internal/app/worker/placement.go`). Hard constraints cover only whether the work can be done: heartbeating and health in `healthy`/`watch`. Everything else is a preference term: capacity headroom (projected, so the incoming mailbox's own weight counts), incumbency (weighted highest), region match, tenant blast radius, per-provider crowding on one address, auth pressure from `454`/`421` throttles on that address, and foreign tenants for orgs entitled to isolated egress.
+
+Capacity is a target, not a ceiling, and nothing refuses a placement for being over it. Over-target costs more score than any bonus a candidate can earn, so a worker with room always wins when one exists; when none does, the least-overloaded wins with every other preference still applied. Do not put capacity back into `Eligible`: `base_capacity` is a flat `16` for every worker regardless of the machine, so refusing on it refuses on a guess, and it refused precisely when the fleet was full, dropping assignment into `selectFallback` (first healthy worker, no region, no blast radius, no provider crowding).
 
 Capacity is one number for every worker in cold-mailbox equivalents, because each mailbox declares its own cost through `MailboxWeight`: `smtp_imap` = 1.0, `gmail`/`outlook` = 0.05, warmup-only = 0.4. Those are the `email_provider` enum values as stored; do not invent provider strings for them.
 
