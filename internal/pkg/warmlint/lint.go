@@ -66,11 +66,40 @@ func Check(subject, body string, isReply bool) error {
 	return nil
 }
 
+// Field names the half of the template a finding sits in, so the editor can
+// say "in the subject" rather than leaving the writer to search for the word.
+const (
+	FieldSubject = "subject"
+	FieldBody    = "body"
+)
+
+// Span locates one exact fragment that triggered an issue. Without it a writer
+// reads "3 spam-trigger term(s) found" and has to guess which words those are.
+type Span struct {
+	// Field is FieldSubject or FieldBody.
+	Field string `json:"field"`
+	// Text is the fragment as it is written in the copy.
+	Text string `json:"text"`
+	// Line is the 1-based line the fragment sits on within that field.
+	Line int `json:"line,omitempty"`
+	// Excerpt is that whole line, so the fragment can be shown in context.
+	Excerpt string `json:"excerpt,omitempty"`
+}
+
 // Issue is a single advisory content problem found by Score.
 type Issue struct {
 	Severity string `json:"severity"` // "warn" | "high"
 	Code     string `json:"code"`
 	Message  string `json:"message"`
+	// Field is FieldSubject or FieldBody when the issue lives in exactly one of
+	// them, and empty when it spans both or describes the send as a whole.
+	Field string `json:"field,omitempty"`
+	// Spans are the exact fragments that triggered the issue, in reading order.
+	// Empty for an issue with nothing to point at (an empty subject, an
+	// attachment count).
+	Spans []Span `json:"spans,omitempty"`
+	// Suggestion is the concrete fix, in one line.
+	Suggestion string `json:"suggestion,omitempty"`
 }
 
 // ScoreResult is an advisory content assessment for a campaign template.
@@ -84,11 +113,17 @@ type ScoreResult struct {
 // warmup mail — Score never blocks: it surfaces guidance before the user sends
 // the mail that actually reaches prospects and drives complaints. It reuses the
 // same trigger-term and ALL-CAPS heuristics as the warmup lint.
+//
+// Every issue carries where it is (subject or body) and the exact fragments
+// that caused it, because a score with no location is advice nobody can act on.
 func Score(subject, bodyHTML, bodyPlain string) ScoreResult {
 	res := ScoreResult{Score: 100, Issues: []Issue{}}
-	deduct := func(n int, severity, code, msg string) {
+	deduct := func(n int, issue Issue) {
 		res.Score -= n
-		res.Issues = append(res.Issues, Issue{Severity: severity, Code: code, Message: msg})
+		if issue.Field == "" {
+			issue.Field = commonField(issue.Spans)
+		}
+		res.Issues = append(res.Issues, issue)
 	}
 
 	subj := strings.TrimSpace(subject)
@@ -96,17 +131,31 @@ func Score(subject, bodyHTML, bodyPlain string) ScoreResult {
 	if strings.TrimSpace(body) == "" {
 		body = stripTags(bodyHTML)
 	}
-	combined := subj + "\n" + body
 
 	if subj == "" {
-		deduct(20, "high", "empty_subject", "Subject is empty.")
+		deduct(20, Issue{
+			Severity: "high", Code: "empty_subject", Field: FieldSubject,
+			Message:    "Subject is empty.",
+			Suggestion: "Write a short, specific subject: lowercase, under six words, about them.",
+		})
 	} else if isAllCaps(subj) {
-		deduct(15, "high", "all_caps_subject", "Subject is all caps, a strong spam signal.")
+		deduct(15, Issue{
+			Severity: "high", Code: "all_caps_subject", Field: FieldSubject,
+			Message:    "Subject is all caps, a strong spam signal.",
+			Spans:      []Span{{Field: FieldSubject, Text: subj, Line: 1, Excerpt: subj}},
+			Suggestion: "Write the subject in ordinary sentence case.",
+		})
 	}
-	if stackedPunct.MatchString(combined) {
-		deduct(10, "warn", "stacked_punctuation", "Stacked punctuation (e.g. !!! or ?!) reads as promotional.")
+	if punct := punctuationSpans(subj, body); len(punct) > 0 {
+		deduct(10, Issue{
+			Severity: "warn", Code: "stacked_punctuation",
+			Message:    "Stacked punctuation (e.g. !!! or ?!) reads as promotional.",
+			Spans:      punct,
+			Suggestion: "Use a single full stop or question mark.",
+		})
 	}
-	if n := countTriggerTerms(withoutURLs(combined)); n > 0 {
+	terms, termSpans := triggerSpans(subj, body)
+	if n := len(terms); n > 0 {
 		d := n * 8
 		if d > 40 {
 			d = 40
@@ -115,19 +164,38 @@ func Score(subject, bodyHTML, bodyPlain string) ScoreResult {
 		if n >= 3 {
 			severity = "high"
 		}
-		deduct(d, severity, "spam_trigger_terms", fmt.Sprintf("%d spam-trigger term(s) found in subject/body.", n))
+		deduct(d, Issue{
+			Severity: severity, Code: "spam_trigger_terms",
+			Message:    fmt.Sprintf("%d spam-trigger term(s) found in subject/body: %s.", n, joinTerms(terms)),
+			Spans:      termSpans,
+			Suggestion: "Rewrite those words in plain language, or cut the sentence they sit in.",
+		})
 	}
-	if links := countLinks(combined, bodyHTML); links > 3 {
+	linked := linkSpans(subj, body, bodyHTML)
+	if links := len(linked); links > 3 {
 		d := (links - 3) * 5
 		if d > 20 {
 			d = 20
 		}
-		deduct(d, "warn", "too_many_links", fmt.Sprintf("%d links. Keep the link count low in cold email.", links))
+		deduct(d, Issue{
+			Severity: "warn", Code: "too_many_links",
+			Message:    fmt.Sprintf("%d links. Keep the link count low in cold email.", links),
+			Spans:      capSpans(linked),
+			Suggestion: "Keep one link at most on a first touch, and cut the rest.",
+		})
 	}
 	if strings.TrimSpace(body) == "" {
-		deduct(25, "high", "empty_body", "Body has no text content (image-only or empty body hurts deliverability).")
+		deduct(25, Issue{
+			Severity: "high", Code: "empty_body", Field: FieldBody,
+			Message:    "Body has no text content (image-only or empty body hurts deliverability).",
+			Suggestion: "Write the message as text. Filters cannot read an image.",
+		})
 	} else if len(body) > 15000 {
-		deduct(10, "warn", "oversized_body", "Body is very large; trim it for deliverability.")
+		deduct(10, Issue{
+			Severity: "warn", Code: "oversized_body", Field: FieldBody,
+			Message:    "Body is very large; trim it for deliverability.",
+			Suggestion: "Cut it to a few short paragraphs and one ask.",
+		})
 	}
 
 	// Images: cold mail from a real person is usually plain. A wall of images,
@@ -135,14 +203,21 @@ func Score(subject, bodyHTML, bodyPlain string) ScoreResult {
 	if images := len(imgTag.FindAllString(bodyHTML, -1)); images > 0 {
 		switch {
 		case len(strings.TrimSpace(body)) < 200 && images >= 1:
-			deduct(20, "high", "image_heavy",
-				"Almost all of this email is images. Filters cannot read it and treat that as evasion.")
+			deduct(20, Issue{
+				Severity: "high", Code: "image_heavy", Field: FieldBody,
+				Message:    "Almost all of this email is images. Filters cannot read it and treat that as evasion.",
+				Suggestion: "Put the message in text and keep images to a signature at most.",
+			})
 		case images > 3:
 			d := (images - 3) * 5
 			if d > 15 {
 				d = 15
 			}
-			deduct(d, "warn", "many_images", fmt.Sprintf("%d images. Cold email from a person rarely has many.", images))
+			deduct(d, Issue{
+				Severity: "warn", Code: "many_images", Field: FieldBody,
+				Message:    fmt.Sprintf("%d images. Cold email from a person rarely has many.", images),
+				Suggestion: "Drop all but the one image the message actually needs.",
+			})
 		}
 	}
 
@@ -150,6 +225,31 @@ func Score(subject, bodyHTML, bodyPlain string) ScoreResult {
 		res.Score = 0
 	}
 	return res
+}
+
+// LeadIssue renders the one issue worth naming in a one-line summary: the first
+// high-severity one, else the first of any. It says where the problem is,
+// because "3 spam-trigger terms" on its own sends the reader looking in the
+// wrong box. Empty when there is nothing to report.
+func LeadIssue(res ScoreResult) string {
+	lead := Issue{}
+	for _, issue := range res.Issues {
+		if issue.Severity == "high" {
+			lead = issue
+			break
+		}
+		if lead.Code == "" {
+			lead = issue
+		}
+	}
+	switch lead.Field {
+	case FieldSubject:
+		return "Subject: " + lead.Message
+	case FieldBody:
+		return "Body: " + lead.Message
+	default:
+		return lead.Message
+	}
 }
 
 // ScoreWithAttachments is Score plus the attachment heuristic, which needs
@@ -164,9 +264,10 @@ func ScoreWithAttachments(subject, bodyHTML, bodyPlain string, attachments int) 
 			res.Score = 0
 		}
 		res.Issues = append(res.Issues, Issue{
-			Severity: "warn",
-			Code:     "has_attachments",
-			Message:  fmt.Sprintf("%d attachment(s) on a cold email. Link to the file instead.", attachments),
+			Severity:   "warn",
+			Code:       "has_attachments",
+			Message:    fmt.Sprintf("%d attachment(s) on a cold email. Link to the file instead.", attachments),
+			Suggestion: "Remove the file and offer to send it once they reply.",
 		})
 	}
 	return res
@@ -200,25 +301,6 @@ func isAllCaps(s string) bool {
 		}
 	}
 	return letters >= 4
-}
-
-// countLinks counts every anchor plus any bare URL in the text that is not
-// already an anchor's destination. Stripping tags throws hrefs away, so the text
-// alone reports zero links for an HTML email; matching destinations keeps a URL
-// used as its own anchor text from counting twice.
-func countLinks(text, bodyHTML string) int {
-	destinations := map[string]struct{}{}
-	n := 0
-	for _, m := range hrefPattern.FindAllStringSubmatch(bodyHTML, -1) {
-		destinations[trimURL(m[1])] = struct{}{}
-		n++
-	}
-	for _, u := range linkPattern.FindAllString(text, -1) {
-		if _, seen := destinations[trimURL(u)]; !seen {
-			n++
-		}
-	}
-	return n
 }
 
 // trimURL drops the sentence punctuation a URL picks up in prose, so the same

@@ -1,6 +1,7 @@
 package warmlint
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -178,5 +179,197 @@ func TestScoreIgnoresAStylesheet(t *testing.T) {
 	styled := Score("Quick question", `<style>.free-trial-banner{color:red}</style><p>Hi Ana, ten minutes on Thursday?</p>`, "")
 	if styled.Score != clean.Score {
 		t.Errorf("a stylesheet changed the content score: %d vs %d (%v)", styled.Score, clean.Score, styled.Issues)
+	}
+}
+
+func issueByCode(res ScoreResult, code string) (Issue, bool) {
+	for _, i := range res.Issues {
+		if i.Code == code {
+			return i, true
+		}
+	}
+	return Issue{}, false
+}
+
+// A score with no location is advice nobody can act on: the writer is told
+// three trigger terms exist and left to hunt for them.
+func TestScoreLocatesTriggerTermsInTheSubject(t *testing.T) {
+	res := Score("Your FREE bonus inside", "<p>Hi Ada, worth a chat?</p>", "Hi Ada, worth a chat?")
+	issue, ok := issueByCode(res, "spam_trigger_terms")
+	if !ok {
+		t.Fatalf("trigger terms not flagged: %+v", res.Issues)
+	}
+	if issue.Field != FieldSubject {
+		t.Errorf("issue field = %q, want subject", issue.Field)
+	}
+	if len(issue.Spans) != 2 {
+		t.Fatalf("got %d spans, want one per term: %+v", len(issue.Spans), issue.Spans)
+	}
+	for _, s := range issue.Spans {
+		if s.Field != FieldSubject {
+			t.Errorf("span %q sits in %q, want subject", s.Text, s.Field)
+		}
+		if s.Excerpt != "Your FREE bonus inside" {
+			t.Errorf("span %q quoted %q, want the whole subject line", s.Text, s.Excerpt)
+		}
+	}
+	if issue.Spans[0].Text != "FREE" {
+		t.Errorf("first span = %q, want the term as the writer typed it", issue.Spans[0].Text)
+	}
+	if issue.Suggestion == "" {
+		t.Error("no suggestion on a trigger-term issue")
+	}
+}
+
+func TestScoreLocatesTriggerTermsInTheBodyByLine(t *testing.T) {
+	body := "Hi Ada,\n\nThis is a limited time offer.\n\nWorth a chat?"
+	res := Score("Quick question", "", body)
+	issue, ok := issueByCode(res, "spam_trigger_terms")
+	if !ok {
+		t.Fatalf("trigger phrase not flagged: %+v", res.Issues)
+	}
+	if issue.Field != FieldBody {
+		t.Errorf("issue field = %q, want body", issue.Field)
+	}
+	span := issue.Spans[0]
+	if span.Line != 3 {
+		t.Errorf("span line = %d, want the third line", span.Line)
+	}
+	if span.Excerpt != "This is a limited time offer." {
+		t.Errorf("excerpt = %q, want the sentence it sits in", span.Excerpt)
+	}
+}
+
+// A term in both halves counts once, as it always has, and is shown where the
+// reader meets it first.
+func TestScoreCountsATermInBothHalvesOnce(t *testing.T) {
+	res := Score("A free look", "", "Here is a free look at it.")
+	issue, ok := issueByCode(res, "spam_trigger_terms")
+	if !ok {
+		t.Fatalf("trigger term not flagged: %+v", res.Issues)
+	}
+	if len(issue.Spans) != 1 {
+		t.Fatalf("got %d spans for one distinct term: %+v", len(issue.Spans), issue.Spans)
+	}
+	if issue.Spans[0].Field != FieldSubject {
+		t.Errorf("span field = %q, want the subject occurrence", issue.Spans[0].Field)
+	}
+	if res.Score != 92 {
+		t.Errorf("score = %d, want one term's deduction only", res.Score)
+	}
+}
+
+// The trigger pass reads a URL-stripped copy of the text; quoting that copy
+// would show the writer a line with their own links blanked out.
+func TestScoreExcerptKeepsTheLinkTheTriggerPassStripped(t *testing.T) {
+	body := "A free look: https://example.com/pricing"
+	res := Score("Quick question", "", body)
+	issue, ok := issueByCode(res, "spam_trigger_terms")
+	if !ok {
+		t.Fatalf("trigger term not flagged: %+v", res.Issues)
+	}
+	if issue.Spans[0].Excerpt != body {
+		t.Errorf("excerpt = %q, want the line as written", issue.Spans[0].Excerpt)
+	}
+}
+
+func TestScoreLocatesStackedPunctuationAndImages(t *testing.T) {
+	res := Score("Hurry!!", "<p>Ready?!</p>", "Ready?!")
+	issue, ok := issueByCode(res, "stacked_punctuation")
+	if !ok {
+		t.Fatalf("stacked punctuation not flagged: %+v", res.Issues)
+	}
+	if issue.Field != "" {
+		t.Errorf("field = %q, want empty when the issue straddles both halves", issue.Field)
+	}
+	if len(issue.Spans) != 2 {
+		t.Fatalf("got %d spans, want one per run: %+v", len(issue.Spans), issue.Spans)
+	}
+	if issue.Spans[0].Field != FieldSubject || issue.Spans[1].Field != FieldBody {
+		t.Errorf("spans = %+v, want the subject one first", issue.Spans)
+	}
+}
+
+func TestScoreLinkIssueNamesTheDestinations(t *testing.T) {
+	body := strings.Repeat("A real sentence about the recipient's work. ", 10)
+	html := "<p>" + body + "</p><p>" +
+		`<a href="https://a.com/1">one</a> <a href="https://b.com/2">two</a> ` +
+		`<a href="https://c.com/3">three</a> <a href="https://d.com/4">four</a></p>`
+	res := Score("Quick question", html, body)
+	issue, ok := issueByCode(res, "too_many_links")
+	if !ok {
+		t.Fatalf("four links not flagged: %+v", res.Issues)
+	}
+	if len(issue.Spans) != 4 {
+		t.Fatalf("got %d spans, want one per link: %+v", len(issue.Spans), issue.Spans)
+	}
+	if issue.Spans[0].Text != "https://a.com/1" {
+		t.Errorf("first span = %q, want the destination", issue.Spans[0].Text)
+	}
+}
+
+// Trimming the displayed spans must never move the score, so the count that
+// drives the deduction is taken before the cap.
+func TestScoreCapsSpansWithoutMovingTheScore(t *testing.T) {
+	body := strings.Repeat("A real sentence about the recipient's work. ", 10)
+	links := ""
+	for i := 0; i < 14; i++ {
+		links += fmt.Sprintf(`<a href="https://example.com/%d">link</a> `, i)
+	}
+	res := Score("Quick question", "<p>"+body+"</p><p>"+links+"</p>", body)
+	issue, ok := issueByCode(res, "too_many_links")
+	if !ok {
+		t.Fatalf("fourteen links not flagged: %+v", res.Issues)
+	}
+	if len(issue.Spans) != maxSpans {
+		t.Errorf("got %d spans, want them capped at %d", len(issue.Spans), maxSpans)
+	}
+	if !strings.HasPrefix(issue.Message, "14 links") {
+		t.Errorf("message = %q, want it to count all fourteen", issue.Message)
+	}
+	// 14 links is 11 over the allowance, well past the 20-point cap.
+	if res.Score != 80 {
+		t.Errorf("score = %d, want the capped 20-point deduction", res.Score)
+	}
+}
+
+func TestScoreFieldsTheIssuesWithNothingToQuote(t *testing.T) {
+	res := Score("", "", "")
+	for _, code := range []string{"empty_subject", "empty_body"} {
+		issue, ok := issueByCode(res, code)
+		if !ok {
+			t.Fatalf("%s not flagged: %+v", code, res.Issues)
+		}
+		if issue.Field == "" {
+			t.Errorf("%s has no field", code)
+		}
+		if issue.Suggestion == "" {
+			t.Errorf("%s has no suggestion", code)
+		}
+	}
+}
+
+// The preflight dialog and the campaign feed both print one line about the
+// worst thing in a step's copy, and that line has to say which box to open.
+func TestLeadIssueNamesTheField(t *testing.T) {
+	if got := LeadIssue(Score("FREE CASH PRIZE", "<p>Hi Ada, worth a chat?</p>", "Hi Ada, worth a chat?")); !strings.HasPrefix(got, "Subject: ") {
+		t.Errorf("lead issue = %q, want it to name the subject", got)
+	}
+	if got := LeadIssue(Score("Quick question", "", "Here is a limited time offer.")); !strings.HasPrefix(got, "Body: ") {
+		t.Errorf("lead issue = %q, want it to name the body", got)
+	}
+	if got := LeadIssue(Score("Quick question", "<p>Hi Ada, worth a chat?</p>", "Hi Ada, worth a chat?")); got != "" {
+		t.Errorf("lead issue = %q on clean copy, want nothing", got)
+	}
+}
+
+// A high-severity issue outranks a warning even when the warning came first.
+func TestLeadIssuePrefersTheHighSeverityOne(t *testing.T) {
+	res := ScoreResult{Issues: []Issue{
+		{Severity: "warn", Code: "stacked_punctuation", Message: "Stacked punctuation."},
+		{Severity: "high", Code: "empty_body", Field: FieldBody, Message: "Body has no text content."},
+	}}
+	if got := LeadIssue(res); got != "Body: Body has no text content." {
+		t.Errorf("lead issue = %q, want the high-severity one", got)
 	}
 }

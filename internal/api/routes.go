@@ -1051,6 +1051,10 @@ func Run(
 				templates.POST("/:id/duplicate", m.RequireAccess(models.PermManageCampaigns, models.APIPermWriteTemplates), h.DuplicateTemplate)
 				templates.POST("/:id/render", m.RequireAccess(models.PermViewCampaigns, models.APIPermReadTemplates), h.RenderTemplate)
 				templates.POST("/score", m.RequireAccess(models.PermViewCampaigns, models.APIPermReadTemplates), h.ScoreTemplateContent)
+				// The AI half of the same check. It spends credits, so the
+				// use-AI member gate layers on top for JWT callers exactly as
+				// it does on /generation.
+				templates.POST("/analyze", m.RequireAccess(models.PermViewCampaigns, models.APIPermReadTemplates), m.RequireAccess(models.PermUseAI, models.APIPermReadTemplates), h.AnalyzeTemplateContent)
 			}
 
 			// Workspace image library for email bodies. The bytes are public

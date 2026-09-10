@@ -275,6 +275,8 @@ function describeReason(reason: string): string {
         reply_draft_refund: "Reply draft refund",
         agent_iteration_refund: "AI assistant refund",
         inbox_agent_draft: "Inbox agent",
+        spam_analysis: "Spam analysis",
+        spam_analysis_refund: "Spam analysis refund",
         credit_topup: "Top-up purchase",
         credit_auto_topup: "Auto top-up",
         monthly_reset: "Monthly allowance",
