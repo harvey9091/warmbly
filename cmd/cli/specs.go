@@ -985,6 +985,10 @@ func templateSpec() resource {
 				Method: http.MethodPost, Path: "/templates/score", Body: bodyRequired,
 			},
 			{
+				Name: "analyze", Short: "AI spam analysis of a draft, with the wording to fix",
+				Method: http.MethodPost, Path: "/templates/analyze", Body: bodyRequired,
+			},
+			{
 				Name: "reorder", Short: "Change the order templates appear in",
 				Method: http.MethodPatch, Path: "/templates/reorder", Body: bodyRequired,
 				Success: "Templates reordered.",

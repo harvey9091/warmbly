@@ -225,11 +225,15 @@ If scheduling stalls on a transient infrastructure hiccup, Warmbly re-seeds with
 
 Warmbly scores each step's copy out of 100 for the signals spam filters weight: trigger wording, stacked punctuation, ALL-CAPS subjects, link and image counts, image-only bodies, empty or oversized bodies, and attachments.
 
+Anything the checker can point at, it points at: the badge names the subject or the body (or both, when the wording straddles the two), the offending words are quoted back exactly as you typed them, and the line they sit in is shown for context. You never have to hunt through your own copy for a word the checker already found.
+
+A few issues are about the message as a whole rather than any wording in it. An empty subject, an empty or oversized body and an image-heavy layout name the half they concern but have nothing to quote; an attachment on a cold email concerns neither half, so it shows as a plain line with no badge. Every issue, located or not, carries its fix in a sentence.
+
 You see it in three places:
 
 - **In the editor**, re-scored as you write a step.
-- **In the launch dialog**, alongside the other pre-send checks, with the lowest-scoring step named. Only email steps are scored; wait and action steps carry no copy.
-- **In the campaign activity feed**, if the copy that actually goes out scores below your floor.
+- **In the launch dialog**, alongside the other pre-send checks, with the lowest-scoring step named and its worst issue quoted as `Subject:` or `Body:`. Only email steps are scored; wait and action steps carry no copy.
+- **In the campaign activity feed**, if the copy that actually goes out scores below your floor, again naming the half of the message at fault.
 
 That last one catches what the first two cannot. The editor scores the template; the send path scores the message after merge fields, spintax, A/B selection and AI blocks have resolved, which is where a clean template becomes "Hi ," or picks the one spammy spintax branch. It logs once per step per day, not once per recipient.
 
@@ -238,6 +242,29 @@ That last one catches what the first two cannot. The editor scores the template;
 <Callout type="info" title="Advisory, not a gate">
 A low score never blocks or delays a send. It is a signal to rewrite, not a verdict: a legitimate email can score badly, and a well-scoring one sent to a bad list will still fail.
 </Callout>
+
+### Analyze with AI
+
+The rules above catch what rules can catch. **Analyze with AI**, under the score in the step editor, reads the copy itself and reports what a filter and a human reader will object to:
+
+- the specific word, phrase or sentence, quoted from your draft, and whether it is in the subject or the body
+- why that fragment hurts deliverability or replies
+- what to write instead
+- a rewritten subject line, which you can apply in one click
+- copy-level advice that has no single fragment to point at
+- an overall deliverability score out of 100
+
+It runs on the AI provider configured for the deployment (see [AI credits](/guides/ai-credits/) for the cost, and [Configuration](/development/configuration/) for self-host setup). It needs the **Use AI** permission. A deployment with no provider configured says so in place of the button rather than offering something that cannot run.
+
+Every quote is checked against your draft before it is shown. A fragment the model could not have copied from your copy is dropped rather than displayed, so the panel never points at a sentence you did not write.
+
+### Re-check
+
+**Re-check** re-scores the copy on the spot instead of waiting for the editor's debounce, and once you have run an AI analysis it re-runs that too. Edit what the findings told you to edit, press it, and the panel shows the new score against the previous one: `+14 since your last check`.
+
+The AI score is deliberately not sampled, so re-checking copy you did not touch returns the same number. A change in the score is a change in the copy.
+
+When the draft has moved on from the analysis on screen, the panel says so and highlights the button, rather than presenting stale findings as current.
 
 ## Easing out of warmup
 

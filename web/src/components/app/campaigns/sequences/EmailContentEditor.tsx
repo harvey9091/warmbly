@@ -405,7 +405,12 @@ export default function EmailContentEditor({
                 )}
             </div>
 
-            <ContentScore subject={subject} bodyHtml={bodyHtml} bodyPlain={htmlToPlain(bodyHtml)} />
+            <ContentScore
+                subject={subject}
+                bodyHtml={bodyHtml}
+                bodyPlain={htmlToPlain(bodyHtml)}
+                onApplySubject={onSubjectChange}
+            />
         </div>
     );
 }

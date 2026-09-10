@@ -29,6 +29,7 @@ const REASON_LABELS: Record<string, string> = {
     research_run: "Contact research",
     automation_ai: "Automation AI",
     campaign_ai: "Campaign switches",
+    spam_analysis: "Spam analysis",
 };
 
 type WindowKey = "day" | "week" | "month";
