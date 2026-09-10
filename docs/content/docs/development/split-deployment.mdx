@@ -163,6 +163,36 @@ Nothing connects back to the machine, then or later. It needs no inbound port an
 
 </Steps>
 
+## The dashboard and admin panel on a static host
+
+`web` and `admin` are static builds, so they do not need a container. Serving them from a CDN is cheaper and faster than running two nginx containers on your container host.
+
+The one thing to know: both read `window.__WARMBLY_ENV__` from `/config.js`, which the container entrypoint renders from environment at start. A static host has no container start, so the same script renders it at build time instead.
+
+```
+Build command:      pnpm build:pages
+Build output:       dist
+Root directory:     web        (or admin)
+```
+
+`build:pages` runs the normal build and then the app's own entrypoint with `WARMBLY_CONFIG_OUT=dist/config.js`. One definition of the key set serves both paths, so the container and the static host cannot drift apart.
+
+Set these as build environment variables on the host:
+
+| `web` | `admin` |
+|---|---|
+| `WARMBLY_API_URL` | `WARMBLY_API_URL` |
+| `WARMBLY_APP_URL` | `WARMBLY_DASHBOARD_URL` |
+| `WARMBLY_TURNSTILE_KEY` | `WARMBLY_ENV_LABEL` |
+| `WARMBLY_SENTRY_DSN` | `WARMBLY_TURNSTILE_KEY` |
+| `WARMBLY_POSTHOG_KEY` | `WARMBLY_SENTRY_DSN` |
+
+<Callout title="Both apps ship a _redirects">
+`/* /index.html 200`, copied into the build root. Without it every route below the root returns 404 on a refresh or a shared link, because the file genuinely does not exist and only the app knows the route. It is the static-host equivalent of nginx `try_files`.
+</Callout>
+
+Whichever origin you serve them from has to be in the backend's `CORS_ALLOW_ORIGINS`, or the dashboard loads and every API call fails preflight.
+
 ## Anything the control plane cannot know
 
 `warmbly join` writes `/etc/warmbly/node.env` from the control plane's answer and rewrites it on every join. Next to it, `/etc/warmbly/node.local.env` is created once and never written again, and the container reads it second, so a name repeated there wins.

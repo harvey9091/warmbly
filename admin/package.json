@@ -11,7 +11,8 @@
     "lint:fix": "eslint . --fix",
     "preview": "vite preview",
     "test": "vitest",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "build:pages": "vite build && WARMBLY_CONFIG_OUT=dist/config.js sh ./docker-entrypoint.sh"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",
