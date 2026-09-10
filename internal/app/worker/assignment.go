@@ -91,8 +91,9 @@ type PlacementResult struct {
 	Worker         *models.Worker
 	Score          float64
 	IncumbentScore float64
-	// IncumbentEligible is false when the current worker could not host the
-	// mailbox at all, in which case IncumbentScore is meaningless.
+	// IncumbentEligible is false when the current worker is too unhealthy to
+	// host the mailbox at all, in which case IncumbentScore is meaningless.
+	// Being over capacity does not clear it; that shows up in IncumbentScore.
 	IncumbentEligible bool
 	// Mandated is set when the worker was chosen by an entitlement rather than
 	// by scoring, which today means an isolated-egress reservation. Callers
@@ -217,11 +218,18 @@ func (s *workerAssignmentService) SelectWorkerFor(ctx context.Context, lookup Pl
 
 	// The reserved worker for an isolated-egress org outranks the score: the
 	// customer is paying for that specific address. It still has to be
-	// eligible - a reserved worker that is down is not a reason to strand.
+	// eligible - a reserved worker that is down is not a reason to strand -
+	// and it still has to have room. Capacity used to bound this branch
+	// through Eligible; now that Eligible is health-only, the check is
+	// explicit, because this path skips SelectPlacement and would otherwise
+	// pile a whole organization onto one box without ever paying the
+	// over-target cost. An over-target reserved worker falls through to
+	// scoring, where weightIsolation still prefers it: the entitlement is a
+	// strong preference, not a pin.
 	if req.IsolatedEgress {
 		if reserved, rerr := s.workerRepo.GetDedicatedWorkerByOrgID(ctx, lookup.OrgID); rerr == nil && reserved != nil {
 			for _, c := range candidates {
-				if c.WorkerID == reserved.ID && c.Eligible(req) {
+				if c.WorkerID == reserved.ID && c.Eligible(req) && !c.OverTarget(req) {
 					res, err := s.buildResult(ctx, c, req, candidates)
 					if res != nil {
 						res.Mandated = true

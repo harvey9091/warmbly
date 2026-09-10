@@ -41,6 +41,9 @@ const (
 	weightIsolation    = 1.5
 	weightBlastRadius  = 0.8
 	weightProviderLoad = 0.7
+	weightNewWorker    = 0.5
+	weightOverTarget   = 3.0
+	weightOverload     = 4.0
 )
 
 // providerSoftCap is how many mailboxes of ONE provider a single worker is
@@ -91,16 +94,35 @@ type PlacementRequest struct {
 	IsolatedEgress bool
 }
 
-// Eligible reports whether a candidate may host the mailbox at all. These are
-// the only hard constraints left: the worker has to be able to do the work.
-// Everything else is a preference expressed in the score.
+// Eligible reports whether a candidate may host the mailbox at all. Health is
+// the only hard constraint: capacity is a preference in the score, because
+// base_capacity is a flat 16 for every worker and refusing on it refused on a
+// guess. It also refused where placement mattered most - a full fleet returned
+// nil and fell through to selectFallback, which reads none of region, blast
+// radius or provider crowding.
 func (c PlacementCandidate) Eligible(req PlacementRequest) bool {
 	switch c.Health {
 	case models.WorkerHealthHealthy, models.WorkerHealthWatch:
+		return true
 	default:
 		return false
 	}
-	return c.Capacity.Effective-c.Capacity.Load >= req.Weight
+}
+
+// Projected is the worker's utilization against its capacity target once this
+// mailbox lands on it.
+func (c PlacementCandidate) Projected(req PlacementRequest) float64 {
+	if c.Capacity.Target <= 0 {
+		return c.Capacity.Utilization
+	}
+	return (c.Capacity.Load + req.Weight) / c.Capacity.Target
+}
+
+// OverTarget reports whether taking this mailbox would put the worker past its
+// capacity target. Never refuses a placement on its own; it is what the
+// isolated-egress override consults before skipping the score entirely.
+func (c PlacementCandidate) OverTarget(req PlacementRequest) bool {
+	return c.Projected(req) > 1
 }
 
 // Score ranks an eligible candidate. Higher is better. The terms are additive
@@ -109,12 +131,28 @@ func (c PlacementCandidate) Eligible(req PlacementRequest) bool {
 func (c PlacementCandidate) Score(req PlacementRequest) float64 {
 	var score float64
 
-	// Capacity: prefer the worker with the most room, so the fleet fills evenly.
-	utilization := c.Capacity.Utilization
-	if utilization > 1 {
-		utilization = 1
+	// Capacity: prefer the worker with the most room, so the fleet fills
+	// evenly. Projected, so the incoming mailbox's own weight counts - Eligible
+	// used to be the only thing that read req.Weight.
+	projected := c.Projected(req)
+	if projected <= 1 {
+		score += weightHeadroom * (1 - projected)
+	} else {
+		// A soft wall: the flat cost exceeds every bonus a candidate can earn
+		// (incumbency 2.0 + region 0.6), so being over target can never be
+		// outweighed by stickiness. It does not dominate the penalty terms, so
+		// a worker with room but carrying foreign tenants, org concentration
+		// and provider crowding can still lose - those are real costs too. The
+		// ramp keeps ranking the overloaded against each other when nothing
+		// has room, which is the case the old hard check handled by giving up.
+		score -= weightOverTarget + weightOverload*(projected-1)
 	}
-	score += weightHeadroom * (1 - utilization)
+
+	// Youth: a node that enrolled minutes ago has proved nothing, so probe it
+	// gently rather than handing it every placement for being empty. Small on
+	// purpose - it must never outweigh the over-target cost, or a full fleet
+	// could not be relieved by joining a worker, which is the whole remedy.
+	score -= weightNewWorker * (1 - c.Capacity.AgeMul)
 
 	// Stickiness: the incumbent wins ties and most non-ties. A mailbox that
 	// stays put keeps presenting the same client IP to its provider.
