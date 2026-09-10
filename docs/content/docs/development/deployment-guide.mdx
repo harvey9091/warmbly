@@ -508,7 +508,7 @@ https://api.example.com/addresses/outlook/callback
 </Step>
 
 <Step>
-Under **API permissions**, add the Microsoft Graph delegated permissions the mailbox needs: `Mail.ReadWrite`, `Mail.Send`, `IMAP.AccessAsUser.All`, `SMTP.Send`, and `offline_access` so refresh tokens are issued.
+Under **API permissions**, add the Microsoft Graph **delegated** permissions the mailbox needs, and no others: `User.Read`, `Mail.Send`, `Mail.ReadWrite`, and `offline_access` so refresh tokens are issued. Graph is the transport for both send and sync, so the legacy `IMAP.AccessAsUser.All` and `SMTP.Send` permissions are not requested and should not be added: each one is admin-consent-only and adding it turns a sign-in every user could complete into one only a tenant admin can.
 </Step>
 
 <Step>
@@ -521,6 +521,10 @@ BOX_OUTLOOK_CLIENT_SECRET=your-client-secret-value
 </Step>
 
 </Steps>
+
+<Callout title="Non-admin users and tenant-wide consent">
+None of the four permissions above requires admin consent by default, so an ordinary user can connect their own mailbox. A tenant that has turned user consent off needs an admin to grant consent once, under **Enterprise applications > your app > Permissions > Grant admin consent**. Warmbly's authorize request asks for `prompt=select_account`, never `prompt=consent`, so that grant is honoured for everyone afterwards. See [approval required when connecting an Outlook mailbox](/development/troubleshooting/#the-stack-is-up-but-something-is-wrong) if a non-admin is still refused.
+</Callout>
 
 <Callout type="warn" title="Workers need these too">
 The backend starts the OAuth flow, but **each worker refreshes the token** when it expires. Compose passes the `BOX_*` values to the worker automatically, and remote workers receive them in their enrollment config. If a worker is missing them, the mailbox connects fine and then silently stops about an hour later when its first access token expires.

@@ -48,11 +48,7 @@ func (s *emailService) OAuthStart(ctx context.Context, userID string, orgID *uui
 		return nil, xerr
 	}
 
-	url := cfg.AuthCodeURL(
-		state,
-		oauth2.AccessTypeOffline,
-		oauth2.ApprovalForce, // force refresh_token issuance on reconnect
-	)
+	url := cfg.AuthCodeURL(state, authCodeOptions(provider, "")...)
 	return &models.EmailOnboardingStartResponse{URL: url, State: state}, nil
 }
 
