@@ -20,7 +20,7 @@ func (s *emailService) OAuthAuthorizeURL(provider models.InboxProvider, state st
 	if xerr != nil {
 		return "", xerr
 	}
-	return cfg.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.ApprovalForce), nil
+	return cfg.AuthCodeURL(state, authCodeOptions(provider, "")...), nil
 }
 
 func (s *emailService) OAuthConnectWithCode(ctx context.Context, userID string, orgID *uuid.UUID, provider models.InboxProvider, code string) (*models.Email, *errx.Error) {
