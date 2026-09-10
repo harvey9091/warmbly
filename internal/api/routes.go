@@ -128,6 +128,17 @@ func Run(
 		internal.PUT("/dek/:orgID", h.InternalPutDEK)
 		internal.DELETE("/dek/:orgID", h.InternalDeleteDEK)
 
+		// Opens a sealed data key for a node running KMS_PROVIDER=brokered, so
+		// a machine you own needs no cloud credential of its own. Registered
+		// before the :orgID routes would ever match it: gin routes the static
+		// segment first, but keeping them adjacent makes the pair obvious.
+		internal.POST("/dek/decrypt", h.InternalDecryptDEK)
+
+		// Signs one blob operation for a node running BLOB_PROVIDER=brokered.
+		// The node then transfers directly against the object store, so bodies
+		// and attachments never pass through here.
+		internal.POST("/blobs/presign", h.InternalPresignBlob)
+
 		// Click-link tickets: the tracking service resolves /c/<id> redirects
 		// here instead of touching Postgres (read-only, heavily cached there).
 		internal.GET("/tracked-links/:id", h.InternalGetTrackedLink)

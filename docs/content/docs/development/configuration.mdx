@@ -240,12 +240,12 @@ Verdicts are re-checked after 90 days (30 for an inconclusive one), in passes of
 
 | Variable | What it does | Default | Restart needed |
 |---|---|---|---|
-| `KMS_PROVIDER` | `local` (AES master key below) or `aws` (AWS KMS) | `local` under compose, `aws` for a bare binary | yes |
+| `KMS_PROVIDER` | `local` (AES master key below), `aws` (AWS KMS), or `brokered` (hold no key material and ask the control plane to unwrap). A joining node is given `brokered` automatically wherever the instance runs `aws`, so no machine in the fleet needs a cloud credential | `local` under compose, `aws` for a bare binary | yes |
 | `KMS_LOCAL_MASTER_KEY` | base64, exactly 32 bytes. The root of trust for every per-organization data key | published default under compose | yes |
 | `KMS_LOCAL_MASTER_KEY_FILE` | Path to a file holding that key instead. Mutually exclusive with the inline value | unset | yes |
 | `KMS_AWS_KEY_ID` | Key id or alias when `KMS_PROVIDER=aws` | unset | yes |
 | `CREDENTIALS_ENCRYPTION_KEY` | exactly 64 hex characters. Seals mailbox SMTP and IMAP passwords at rest | published default under compose | yes |
-| `ENCRYPTED_KEYS_PROVIDER` | `postgres` for backend and consumer, `http` for workers | the caller's fallback, so set it explicitly | yes |
+| `ENCRYPTED_KEYS_PROVIDER` | `postgres` for the backend and a consumer that has a DSN, `http` for workers | the caller's fallback, so set it explicitly | yes |
 | `ENCRYPTED_KEYS_BACKEND_URL` | Where a worker reaches the backend's key endpoint | unset | yes |
 | `ENCRYPTED_KEYS_WORKER_TOKEN` | The worker's copy of `INTERNAL_API_TOKEN` | unset | yes |
 
@@ -255,7 +255,7 @@ An empty `CREDENTIALS_ENCRYPTION_KEY` does not fail at boot. It disables sealing
 
 | Variable | What it does | Default | Restart needed |
 |---|---|---|---|
-| `BLOB_PROVIDER` | `filesystem` or `s3` | `filesystem` under compose, `s3` for a bare binary | yes |
+| `BLOB_PROVIDER` | `filesystem`, `s3`, or `brokered` (hold no bucket credential and ask the control plane to sign each operation; the bytes still travel directly). A joining node is given `brokered` automatically wherever the instance runs `s3` | `filesystem` under compose, `s3` for a bare binary | yes |
 | `BLOB_FS_ROOT` | Directory for stored bodies, attachments, avatars and email body images. The backend, the consumer and every worker on the host must share it | `/data/blobs` | yes |
 | `BLOB_BUCKET` | Bucket name when `BLOB_PROVIDER=s3` | unset | yes |
 | `BLOB_PUBLIC_BASE_URL` | Public base for the backend's `/public` route. Images placed in an email body are served from here, so it has to be an address a recipient's mail client can reach | derived | yes |
@@ -332,6 +332,25 @@ An empty `ENCRYPTED_KEYS_BACKEND_URL` or `ENCRYPTED_KEYS_WORKER_TOKEN` lets the 
 </Callout>
 
 Workers hold no database connection by design. Everything relational they need arrives over the backend's internal HTTP API.
+
+### What a joining node is given
+
+`warmbly join` renders `/etc/warmbly/node.env` from the backend's own environment, so most of this page reaches a node without being set twice. Three things are decided rather than copied:
+
+- **The crypto and blob providers are translated.** An instance on `KMS_PROVIDER=aws` hands its nodes `brokered`, and one on `BLOB_PROVIDER=s3` hands them `brokered` too, so no machine in the fleet carries a cloud credential. Providers that need no credential pass through unchanged.
+- **A worker never receives `PRIMARY_DB`.** A consumer does, because it opens Postgres itself. An instance that keeps its DSN in a secret manager rather than the environment has none to send, and the join script says so.
+- **Addresses are inherited literally.** `NATS_URL`, `REDIS` and `ENCRYPTED_KEYS_BACKEND_URL` are used exactly as the backend has them, and a value that only resolves inside your container network produces a node that enrols cleanly and reaches nothing.
+
+### Settings the control plane cannot know
+
+`node.env` is rewritten on every join. Next to it, `/etc/warmbly/node.local.env` is created once and never written again, and the container reads it second, so a name repeated there wins.
+
+That is where a per-machine value belongs: a DSN this instance does not hold, credentials for infrastructure of your own, or a deliberate override back to a direct provider.
+
+```bash
+printf 'PRIMARY_DB=%s\n' "postgres://..." >> /etc/warmbly/node.local.env
+systemctl restart warmbly-consumer
+```
 
 ## Mailbox connections
 

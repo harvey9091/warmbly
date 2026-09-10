@@ -13,6 +13,8 @@ import (
 //	BLOB_PROVIDER=s3          -> existing S3 client (works for AWS / MinIO /
 //	                             R2 / B2 / Hetzner Object Storage)
 //	BLOB_PROVIDER=filesystem  -> NewFilesystem at BLOB_FS_ROOT
+//	BLOB_PROVIDER=brokered    -> node-side: no bucket credential, every
+//	                             operation signed by the control plane
 //	(unset)                   -> defaults to "s3" for backwards compatibility
 //
 // awscfg + defaultBucket are only consulted when the S3 provider is selected.
@@ -51,8 +53,21 @@ func NewFromEnv(ctx context.Context, awscfg aws.Config, defaultBucket string) (S
 			return nil, fmt.Errorf("storage: filesystem provider requires BLOB_FS_ROOT")
 		}
 		return NewFilesystem(root, publicBaseURL)
+	case "brokered":
+		// Same pair the node's other internal-API clients use, so a node has
+		// exactly one credential for the control plane and none for anything
+		// behind it.
+		baseURL := os.Getenv("ENCRYPTED_KEYS_BACKEND_URL")
+		if baseURL == "" {
+			baseURL = os.Getenv("WARMBLY_BACKEND_URL")
+		}
+		token := os.Getenv("INTERNAL_API_TOKEN")
+		if token == "" {
+			token = os.Getenv("ENCRYPTED_KEYS_WORKER_TOKEN")
+		}
+		return NewBrokered(baseURL, token)
 	default:
-		return nil, fmt.Errorf("storage: unknown BLOB_PROVIDER %q (want: s3, filesystem)", provider)
+		return nil, fmt.Errorf("storage: unknown BLOB_PROVIDER %q (want: s3, filesystem, brokered)", provider)
 	}
 }
 
@@ -60,4 +75,5 @@ func NewFromEnv(ctx context.Context, awscfg aws.Config, defaultBucket string) (S
 var (
 	_ Store = (*Client)(nil)
 	_ Store = (*FilesystemStore)(nil)
+	_ Store = (*BrokeredStore)(nil)
 )
