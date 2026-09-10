@@ -775,6 +775,30 @@ var table = []Entry{
 		DocsAnchor: docsAddresses,
 		Resolve:    envOr("TRACKING_RATE_LIMIT_PER_MIN", "300"),
 	},
+	{
+		Key: "TRACKING_SCANNER_BUILTINS", Group: GroupTracking, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Loads the known-scanner network catalogue shipped with Warmbly. Off leaves only the networks you name.",
+		DocsAnchor: docsAddresses,
+		Resolve:    boolOr("TRACKING_SCANNER_BUILTINS", true),
+	},
+	{
+		Key: "TRACKING_SCANNER_NETWORKS", Group: GroupTracking, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Extra scanner sources whose opens and clicks are both recorded as automated.",
+		DocsAnchor: docsAddresses,
+		Resolve:    envValue("TRACKING_SCANNER_NETWORKS"),
+	},
+	{
+		Key: "TRACKING_SCANNER_CLICK_NETWORKS", Group: GroupTracking, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Extra scanner sources judged on clicks only, for networks that also proxy a mail client's image fetches.",
+		DocsAnchor: docsAddresses,
+		Resolve:    envValue("TRACKING_SCANNER_CLICK_NETWORKS"),
+	},
+	{
+		Key: "TRACKING_SCANNER_ASN_HEADER", Group: GroupTracking, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Header a trusted proxy sets with the source ASN. Empty means asn: entries cannot match.",
+		DocsAnchor: docsAddresses,
+		Resolve:    envValue("TRACKING_SCANNER_ASN_HEADER"),
+	},
 
 	// Observability.
 	{

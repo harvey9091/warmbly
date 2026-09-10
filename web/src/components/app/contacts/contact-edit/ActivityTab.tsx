@@ -1158,6 +1158,8 @@ function machineLabel(reason?: string | null): string {
             return "Automated: several links followed within seconds, the way a security scanner walks an email";
         case "prefetch":
             return "Automated: fetched by a mail proxy or a client with no browser";
+        case "scanner":
+            return "Automated: came from a mail security network, not the recipient's own device";
         default:
             return "Automated: a mail privacy proxy or scanner, not a person";
     }
