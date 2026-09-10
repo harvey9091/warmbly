@@ -21,6 +21,8 @@ When you create a key, the response includes a `secret` field containing the ful
 
 Returns the organization's API keys, newest first, with the secret never included.
 
+`status` is `active` or `revoked`. Expiry is applied when a key is read, not written to the row, so a key past its `expires_at` still reports `active` here while authenticating nothing. Compare `expires_at` against the current time if you need to know whether a key is usable.
+
 Auth: **Scope** `API_KEYS` · **Org permission** `manage_api_keys`
 
 | Parameter | In | Type | Description |

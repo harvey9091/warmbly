@@ -33,6 +33,20 @@ export default interface APIKey {
     updated_at: string;
 }
 
+// The `status` column only ever holds "active" or "revoked": expiry is applied
+// when the backend reads a key, so one past its `expires_at` still reports
+// "active" while authenticating nothing. Everything user-facing goes through
+// these two so the dashboard says the same thing the API does.
+export function keyCanAuthenticate(key: APIKey): boolean {
+    if (key.status !== "active") return false;
+    return !key.expires_at || new Date(key.expires_at).getTime() > Date.now();
+}
+
+export function keyStatus(key: APIKey): APIKeyStatus {
+    if (key.status === "active" && !keyCanAuthenticate(key)) return "expired";
+    return key.status;
+}
+
 export interface APIKeyWithSecret extends APIKey {
     secret: string;
 }

@@ -161,6 +161,36 @@ func TestLiveAPIKeyDelete(t *testing.T) {
 	})
 }
 
+// The dashboard's key-count strip has to agree with the status the list shows
+// for the same key: one past its expires_at is expired, not active.
+func TestLiveAPIKeyUsageSummaryCountsExpiry(t *testing.T) {
+	handle, pool := liveContactDB(t)
+	f := newAPIKeyFixture(t, pool)
+	repo := NewAPIKeyRepository(handle)
+	ctx := context.Background()
+
+	past := time.Now().Add(-time.Hour)
+	future := time.Now().Add(time.Hour)
+	f.addKey(t, pool, f.org, "active", nil)
+	f.addKey(t, pool, f.org, "active", &future)
+	f.addKey(t, pool, f.org, "active", &past)
+	f.addKey(t, pool, f.org, "revoked", nil)
+
+	sum, xerr := repo.GetUsageSummary(ctx, f.org)
+	if xerr != nil {
+		t.Fatalf("usage summary: %v", xerr)
+	}
+	if sum.ActiveKeys != 2 {
+		t.Errorf("active_keys = %d, want 2", sum.ActiveKeys)
+	}
+	if sum.ExpiredKeys != 1 {
+		t.Errorf("expired_keys = %d, want 1", sum.ExpiredKeys)
+	}
+	if sum.RevokedKeys != 1 {
+		t.Errorf("revoked_keys = %d, want 1", sum.RevokedKeys)
+	}
+}
+
 func TestAPIKeyCanAuthenticate(t *testing.T) {
 	past := time.Now().Add(-time.Hour)
 	future := time.Now().Add(time.Hour)

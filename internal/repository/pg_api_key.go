@@ -350,10 +350,14 @@ func (r *apiKeyRepository) LogUsage(ctx context.Context, log *models.APIKeyUsage
 func (r *apiKeyRepository) GetUsageSummary(ctx context.Context, orgID uuid.UUID) (*models.APIKeyUsageSummary, *errx.Error) {
 	query := `
 		WITH key_counts AS (
+			-- The status column only ever holds 'active' or 'revoked'; expiry
+			-- is applied when a key is read, so a key past expires_at counts
+			-- as expired here rather than inflating the active total.
 			SELECT
-				COUNT(*) FILTER (WHERE status = 'active')  AS active_keys,
+				COUNT(*) FILTER (WHERE status = 'active' AND (expires_at IS NULL OR expires_at > now())) AS active_keys,
 				COUNT(*) FILTER (WHERE status = 'revoked') AS revoked_keys,
-				COUNT(*) FILTER (WHERE status = 'expired') AS expired_keys
+				COUNT(*) FILTER (WHERE status = 'expired'
+					OR (status = 'active' AND expires_at IS NOT NULL AND expires_at <= now())) AS expired_keys
 			FROM api_keys
 			WHERE organization_id = $1
 		),

@@ -30,6 +30,7 @@ import {
 import toast from "react-hot-toast";
 
 import type APIKey from "@/lib/api/models/app/apikeys/APIKey";
+import { keyCanAuthenticate, keyStatus } from "@/lib/api/models/app/apikeys/APIKey";
 import useAPIKeyAnalytics from "@/lib/api/hooks/app/api-keys/useAPIKeyAnalytics";
 import useAPIKeyUsageLogs from "@/lib/api/hooks/app/api-keys/useAPIKeyUsageLogs";
 import useAPIPermissions from "@/lib/api/hooks/app/api-keys/useAPIPermissions";
@@ -169,7 +170,7 @@ function Inner({ apiKey, onClose }: { apiKey: APIKey; onClose: () => void }) {
                 <span className="font-mono text-[11.5px] text-slate-900 truncate">
                     {apiKey.key_prefix}…{apiKey.key_suffix}
                 </span>
-                <StatusBadge status={apiKey.status} />
+                <StatusBadge status={keyStatus(apiKey)} />
                 <button
                     type="button"
                     onClick={onClose}
@@ -222,7 +223,7 @@ function Inner({ apiKey, onClose }: { apiKey: APIKey; onClose: () => void }) {
                         <div>
                             <div className="flex items-center gap-2">
                                 <h2 className="text-[15px] font-medium text-slate-900 truncate">{apiKey.name}</h2>
-                                {apiKey.status === "active" && (
+                                {keyCanAuthenticate(apiKey) && (
                                     <button
                                         type="button"
                                         onClick={() => setEditing(true)}
@@ -408,7 +409,7 @@ function Inner({ apiKey, onClose }: { apiKey: APIKey; onClose: () => void }) {
 
             {/* Footer */}
             <div className="h-12 px-4 border-t border-slate-200 flex items-center gap-2 bg-white shrink-0">
-                {apiKey.status === "active" ? (
+                {keyCanAuthenticate(apiKey) ? (
                     <button
                         type="button"
                         onClick={confirmRevoke}
@@ -420,18 +421,22 @@ function Inner({ apiKey, onClose }: { apiKey: APIKey; onClose: () => void }) {
                     </button>
                 ) : (
                     <>
-                        <span className="min-w-0 text-[11.5px] text-slate-500 inline-flex items-center gap-1.5">
-                            <span className="size-1.5 rounded-full bg-rose-500 shrink-0" />
-                            <span className="truncate">
-                                Revoked {apiKey.revoked_at ? fmtRelative(apiKey.revoked_at) : ""}
-                                {apiKey.revoked_reason ? ` · ${apiKey.revoked_reason}` : ""}
-                            </span>
+                        {/* flex-1 rather than a second ml-auto: two auto margins
+                            in one row split the free space and park the button
+                            in the middle of the footer. */}
+                        <span className="flex-1 min-w-0 text-[11.5px] text-slate-500 inline-flex items-center gap-1.5">
+                            <span
+                                className={`size-1.5 rounded-full shrink-0 ${
+                                    keyStatus(apiKey) === "expired" ? "bg-slate-400" : "bg-rose-500"
+                                }`}
+                            />
+                            <span className="truncate">{endedNote(apiKey)}</span>
                         </span>
                         <button
                             type="button"
                             onClick={confirmDelete}
                             disabled={remove.isPending}
-                            className="ml-auto shrink-0 h-7 px-3 rounded-md border border-rose-200 text-rose-700 hover:bg-rose-50 hover:border-rose-300 text-[12px] inline-flex items-center gap-1.5 transition-colors disabled:opacity-60"
+                            className="shrink-0 h-7 px-3 rounded-md border border-rose-200 text-rose-700 hover:bg-rose-50 hover:border-rose-300 text-[12px] inline-flex items-center gap-1.5 transition-colors disabled:opacity-60"
                         >
                             {remove.isPending ? <Loader2Icon className="w-3 h-3 animate-spin" /> : <Trash2Icon className="w-3 h-3" />}
                             Delete key
@@ -442,6 +447,16 @@ function Inner({ apiKey, onClose }: { apiKey: APIKey; onClose: () => void }) {
             </div>
         </>
     );
+}
+
+// What ended the key, for the footer of a key that can no longer authenticate.
+function endedNote(key: APIKey): string {
+    if (keyStatus(key) === "expired") {
+        return `Expired ${key.expires_at ? fmtRelative(key.expires_at) : ""}`.trim();
+    }
+    const when = key.revoked_at ? ` ${fmtRelative(key.revoked_at)}` : "";
+    const why = key.revoked_reason ? ` · ${key.revoked_reason}` : "";
+    return `Revoked${when}${why}`;
 }
 
 function StatusBadge({ status }: { status: "active" | "revoked" | "expired" }) {
