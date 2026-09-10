@@ -42,14 +42,17 @@ export function sameCampaigns(a: MiniCampaign[], b: MiniCampaign[]): boolean {
 }
 
 // The custom-field rows as the record they save as: unnamed rows dropped,
-// names trimmed.
+// names trimmed. Built from entries rather than by assignment, because
+// assigning to `__proto__` sets the prototype instead of adding an own
+// property, and a contact may legitimately have a field by that name.
 export function recordFromCF(fields: CustomField[]): Record<string, string> {
-    const out: Record<string, string> = {};
+    const entries: [string, string][] = [];
     for (const f of fields) {
-        if (!f.name.trim()) continue;
-        out[f.name.trim()] = f.value;
+        const name = f.name.trim();
+        if (!name) continue;
+        entries.push([name, f.value]);
     }
-    return out;
+    return Object.fromEntries(entries);
 }
 
 export function fieldsOf(record: Record<string, string> | undefined): CustomField[] {
@@ -79,4 +82,11 @@ export function sameFields(a: CustomField[], b: CustomField[]): boolean {
 export function sameRows(a: CustomField[], b: CustomField[]): boolean {
     if (a.length !== b.length) return false;
     return a.every((f, i) => f.name === b[i].name && f.value === b[i].value);
+}
+
+// A row with a value but no name yet saves nowhere, so no comparison of what
+// would be sent can see it. It is still work in progress, and closing the
+// panel on it should ask before throwing it away.
+export function hasUnnamedValue(fields: CustomField[]): boolean {
+    return fields.some((f) => !f.name.trim() && f.value.trim() !== "");
 }

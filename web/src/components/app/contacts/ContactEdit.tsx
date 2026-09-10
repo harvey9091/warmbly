@@ -38,6 +38,7 @@ import ResearchTab from "./contact-edit/ResearchTab";
 import DetailsTab, { type CustomField } from "./contact-edit/DetailsTab";
 import {
     fieldsOf,
+    hasUnnamedValue,
     idsOf,
     rebase,
     recordFromCF,
@@ -153,7 +154,10 @@ function ContactEditPanel({
         );
     }, [contact]);
 
-    const dirty = React.useMemo(() => {
+    // What the save would send. The panel also treats a half-typed custom
+    // field as unsaved work (see `dirty`), which this deliberately does not:
+    // there is nothing to send for a row with no name.
+    const changed = React.useMemo(() => {
         if (firstName !== contact.first_name) return true;
         if (lastName !== contact.last_name) return true;
         if (email !== contact.email) return true;
@@ -166,8 +170,13 @@ function ContactEditPanel({
         return false;
     }, [contact, firstName, lastName, email, company, phone, subscribed, customFields, campaigns, categoryIds]);
 
+    // What the user would lose on the way out, which is more than what would
+    // be sent: a custom-field row they have typed a value into but not named
+    // yet is not savable and not, on its own, a reason to enable Save.
+    const dirty = changed || hasUnnamedValue(customFields);
+
     async function save() {
-        if (!dirty) return;
+        if (!changed) return;
         const data: Record<string, unknown> = {};
         if (firstName !== contact.first_name) data.first_name = firstName;
         if (lastName !== contact.last_name) data.last_name = lastName;
@@ -292,7 +301,7 @@ function ContactEditPanel({
                         <button
                             type="button"
                             onClick={save}
-                            disabled={!dirty || update.isPending}
+                            disabled={!changed || update.isPending}
                             className="ml-auto h-7 px-3 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
                         >
                             {update.isPending ? (

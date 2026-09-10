@@ -7,6 +7,7 @@
 import { describe, it, expect } from "vitest";
 import {
     fieldsOf,
+    hasUnnamedValue,
     idsOf,
     rebase,
     recordFromCF,
@@ -162,5 +163,36 @@ describe("sameRows", () => {
         const server = [{ name: "industry", value: "Freight" }];
         const next = [{ name: "industry", value: "Rail" }];
         expect(rebase([{ name: "industry", value: "Freight" }], server, next, sameRows)).toBe(next);
+    });
+});
+
+describe("recordFromCF", () => {
+    // Assigning to `__proto__` sets the prototype instead of adding an own
+    // property, so a field by that name vanished from what was saved.
+    it("keeps a field named __proto__", () => {
+        const record = recordFromCF([{ name: "__proto__", value: "Freight" }]);
+        expect(Object.hasOwn(record, "__proto__")).toBe(true);
+        expect(record["__proto__"]).toBe("Freight");
+        expect(Object.getPrototypeOf(record)).toBe(Object.prototype);
+    });
+
+    it("notices a change to a field named __proto__", () => {
+        expect(
+            sameFields([{ name: "__proto__", value: "a" }], [{ name: "__proto__", value: "b" }]),
+        ).toBe(false);
+    });
+});
+
+describe("hasUnnamedValue", () => {
+    it("sees a row typed into but not named", () => {
+        expect(hasUnnamedValue([{ name: "", value: "half typed" }])).toBe(true);
+        expect(hasUnnamedValue([{ name: "   ", value: "half typed" }])).toBe(true);
+    });
+
+    it("ignores an empty row and a named one", () => {
+        expect(hasUnnamedValue([{ name: "", value: "" }])).toBe(false);
+        expect(hasUnnamedValue([{ name: "", value: "   " }])).toBe(false);
+        expect(hasUnnamedValue([{ name: "industry", value: "Freight" }])).toBe(false);
+        expect(hasUnnamedValue([])).toBe(false);
     });
 });

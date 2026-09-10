@@ -166,6 +166,18 @@ describe("the contact 360 panel", () => {
         expect(screen.queryByText("Unsubscribed")).toBeNull();
     });
 
+    it("asks before closing on a custom-field row that is typed but not named", () => {
+        const { container } = render(<Panel contacts={[contact()]} />);
+        fireEvent.click(screen.getByText("add field"));
+        // Nothing to save: the row has no name to save the value under. Still
+        // the user's work, so leaving has to ask.
+        expect((screen.getByText("Save changes") as HTMLButtonElement).disabled).toBe(true);
+        expect(screen.getByText("Unsaved")).toBeTruthy();
+
+        clickBackdrop(container);
+        expect(confirmShow).toHaveBeenCalledTimes(1);
+    });
+
     it("does not throw away a custom-field row that is still being typed", () => {
         const { rerender } = render(<Panel contacts={[contact()]} />);
         fireEvent.click(screen.getByText("add field"));
