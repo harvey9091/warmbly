@@ -271,7 +271,10 @@ Changing Advisor settings (`PATCH /advisor/settings`) is JWT only, alongside the
 | GET | `/api-keys/:id` | `API_KEYS` |
 | PATCH | `/api-keys/:id` | `API_KEYS` |
 | DELETE | `/api-keys/:id` | `API_KEYS` |
+| DELETE | `/api-keys/:id/permanent` | `API_KEYS` |
 | DELETE | `/api-keys/self` | none |
+
+`DELETE /api-keys/:id/permanent` deletes a key that has already been revoked or has expired, taking its usage logs with it. A key that could still authenticate gets a `409`, because revoking is what records that a credential was ended and why. See [Ending a key](/api/authentication/).
 
 `DELETE /api-keys/self` revokes the key the request was made with, and is the one route here that needs no scope. A credential must always be able to end itself: requiring `API_KEYS` to sign out would leave a read-only key on a laptop someone is handing back live, which is what [`warmbly auth logout`](/api/cli/) promises to prevent. A JWT caller gets a `400`: there is no key in that request to end, only a session, which `POST /auth/logout` ends.
 

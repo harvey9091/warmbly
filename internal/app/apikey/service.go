@@ -55,6 +55,7 @@ type APIKeyService interface {
 	List(ctx context.Context, orgID uuid.UUID, limit int, cursor *uuid.UUID) (*models.APIKeysResult, *errx.Error)
 	Update(ctx context.Context, orgID, keyID uuid.UUID, data *models.UpdateAPIKey) (*models.APIKey, *errx.Error)
 	Revoke(ctx context.Context, orgID, keyID uuid.UUID, reason string) *errx.Error
+	Delete(ctx context.Context, orgID, keyID uuid.UUID) *errx.Error
 
 	// Validation
 	ValidateKey(ctx context.Context, rawKey string) (*models.APIKey, *errx.Error)
@@ -242,6 +243,21 @@ func (s *apiKeyService) Revoke(ctx context.Context, orgID, keyID uuid.UUID, reas
 	// later. For now the GetByHash query filters status='active', so the
 	// revoke takes effect on the next request regardless of cache state.
 	return nil
+}
+
+// Delete removes a revoked or expired key from the workspace for good, along
+// with its usage logs. An active key has to be revoked first: revoking is what
+// records that the credential was ended and why, and a delete that also cut
+// off live access would end it with nothing saying so.
+func (s *apiKeyService) Delete(ctx context.Context, orgID, keyID uuid.UUID) *errx.Error {
+	key, xerr := s.repo.GetByID(ctx, orgID, keyID)
+	if xerr != nil {
+		return xerr
+	}
+	if key.CanAuthenticate() {
+		return errx.New(errx.Conflict, "this key is still active; revoke it before deleting it")
+	}
+	return s.repo.Delete(ctx, orgID, keyID)
 }
 
 func (s *apiKeyService) ValidateKey(ctx context.Context, rawKey string) (*models.APIKey, *errx.Error) {

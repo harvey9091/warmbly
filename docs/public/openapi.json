@@ -11800,6 +11800,107 @@
         }
       }
     },
+    "/api-keys/{id}/permanent": {
+      "delete": {
+        "operationId": "api-keys_delete",
+        "summary": "Delete an API key",
+        "description": "Removes a revoked or expired key from the workspace for good, along with its usage logs. A key that could still authenticate is refused with a 409: revoke it first, so what ended the credential stays on the record. A key past its expires_at can be deleted directly, since it already authenticates nothing.",
+        "tags": [
+          "api-keys"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deletion status envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyDeleteResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No organization selected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing API_KEYS scope or manage_api_keys org permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Invalid UUID or key not found in this organization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The key can still authenticate. Revoke it first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api-keys/{id}/analytics": {
       "get": {
         "operationId": "api-keys_analytics",
@@ -25003,6 +25104,20 @@
             "type": "string",
             "enum": [
               "revoked"
+            ]
+          }
+        }
+      },
+      "APIKeyDeleteResult": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "deleted"
             ]
           }
         }
