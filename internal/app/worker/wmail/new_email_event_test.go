@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/infrastructure/storage"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/repository"
 )
@@ -36,6 +37,9 @@ func (fakeStore) Delete(context.Context, string) error      { return nil }
 func (fakeStore) Has(context.Context, string) (bool, error) { return false, nil }
 func (fakeStore) Name() string                              { return "fake" }
 func (fakeStore) PresignedGetURL(context.Context, string, time.Duration) (string, error) {
+	return "", nil
+}
+func (fakeStore) PresignedURL(context.Context, storage.PresignOp, string, string, time.Duration) (string, error) {
 	return "", nil
 }
 

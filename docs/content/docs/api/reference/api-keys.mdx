@@ -21,6 +21,8 @@ When you create a key, the response includes a `secret` field containing the ful
 
 Returns the organization's API keys, newest first, with the secret never included.
 
+`status` is `active` or `revoked`. Expiry is applied when a key is read, not written to the row, so a key past its `expires_at` still reports `active` here while authenticating nothing. Compare `expires_at` against the current time if you need to know whether a key is usable.
+
 Auth: **Scope** `API_KEYS` · **Org permission** `manage_api_keys`
 
 | Parameter | In | Type | Description |
@@ -262,6 +264,26 @@ A small status envelope.
 { "status": "revoked" }
 ```
 
+## Delete an API key
+
+`DELETE /api-keys/:id/permanent`
+
+Removes a revoked or expired key from the workspace for good, along with its usage logs. A key that could still authenticate is refused with a `409`: revoke it first, so what ended the credential stays on the record. A key past its `expires_at` can be deleted directly, since it already authenticates nothing.
+
+Auth: **Scope** `API_KEYS` · **Org permission** `manage_api_keys`
+
+| Parameter | In | Type | Description |
+| --- | --- | --- | --- |
+| `id` | path | uuid | The API key id. |
+
+### Response
+
+A small status envelope.
+
+```json
+{ "status": "deleted" }
+```
+
 ## Usage summary
 
 `GET /api-keys/usage/summary`
@@ -386,5 +408,6 @@ All endpoints use the shared error envelope with stable `code` and `request_id` 
 - `401` when the caller is unauthenticated.
 - `403` when the caller lacks the `API_KEYS` scope or the `manage_api_keys` org permission.
 - `404` when the `:id` path value is not a valid UUID or the key does not belong to the organization.
+- `409` when deleting a key that can still authenticate. Revoke it first.
 
 See [Error codes](/api/error-codes/) for the full list.

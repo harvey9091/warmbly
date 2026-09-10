@@ -285,7 +285,7 @@ API keys with the `REALTIME_SUBSCRIBE` permission (bit 11) can connect to the sa
 - `web/`: in-product frontend (dashboard). Customer-facing only: it holds no platform-admin screens, and operator tooling must not be added back here
 - `admin/`: platform admin panel (:5174), the single operator surface. Workers, users, orgs, warmup, campaigns, analytics, audit. Every route sits behind `RequireAdmin` and the backend's `RequireAdminPermission` gates
 - `site/`: public marketing site (Astro 5 + Tailwind v4). `site/public/install.sh` is the self-host installer served at warmbly.com/install.sh and `site/public/cli.sh` is the CLI installer served at warmbly.com/cli.sh (with `cli.ps1` for Windows), each with its checksum next to it; see the rules above before touching either
-- `deploy/`: production deploy manifests, infrastructure, and runtime config
+- `deploy/`: production deploy manifests, infrastructure, and runtime config. `deploy/split-cloud/` is the three-provider shape (control plane on a container host, bus + cache + fleet on machines you own, database + root key + object store in a cloud region), documented at `docs/content/docs/development/split-deployment.mdx`
 - `docs/`: documentation site (docs.warmbly.com); product guides, API reference, and self-hosting/engineering docs under `content/docs/development/`
 - `scripts/`: one-off tooling (codegen, migrations, installer checks, local dev utilities)
 - `skills/`: agent playbooks shipped with the repo (`warmbly-cli` for the `warmbly` CLI, `warmbly-api` for the same product surface through `warmblyctl`, `warmbly-ops` for instance administration, `warmbly-install` for standing an instance up and moving it). A command an operator can run is not usable by an agent until it is in one of these
@@ -370,7 +370,13 @@ Two rules that follow from those:
 - **systemd runs no shell.** No `$(...)`, no globbing, no word splitting in a unit. A value that has to vary comes from an `EnvironmentFile` as `${VAR}`, which expands to exactly one argument
 - **What the node may write and what root reads are different directories.** The container runs as uid 1000; it gets `/var/lib/warmbly/node` and nothing else. `image-ref` lives one level up, root-owned, because systemd feeds it to a root `docker run --network host` and a node that could rewrite it would choose the image root executes
 
-The env the join endpoint hands a node is rendered from the backend's own environment (`nodeEnvKeys` in `internal/api/handler/fleet_nodes.go`). `PRIMARY_DB` is deliberately absent: a worker reaches relational data through the internal API and nothing else, and shipping a DSN here would quietly undo that boundary.
+The env the join endpoint hands a node is rendered from the backend's own environment (`nodeEnvKeys` in `internal/api/handler/fleet_nodes.go`). Three things are decided rather than copied:
+
+- **`PRIMARY_DB` reaches a consumer and never a worker.** A worker gets relational data through the internal API and nothing else; a consumer opens Postgres itself and cannot boot without the DSN. Role is known at render time, so the exclusion lives exactly where it belongs
+- **The crypto and blob providers are translated, not copied** (`nodeProviders`), so no machine in the fleet carries a cloud credential
+- **Every name sent must be one the node's own code reads.** `S3_BUCKET` and `KMS_KEY_ID` were sent for a while and read by nothing, against a storage layer reading `BLOB_BUCKET` and a KMS factory reading `KMS_AWS_KEY_ID`, so an AWS-backed node silently used the default bucket and the default key alias. `internal/api/handler/fleet_nodes_test.go` asserts on the rendered file
+
+`/etc/warmbly/node.local.env` is the operator's half: created once by `join.sh`, never rewritten, and passed to the container after `node.env` so it wins. That is where a value the control plane cannot know belongs, and it is why nothing needs to be hand-edited into a file the next join replaces.
 
 Operator surface: `warmblyctl fleet` (join-token, list, show, remove, pin, version, channel) and the admin panel's Fleet section. There is no install, restart, logs or reboot action anywhere, because nothing reaches into a machine.
 
@@ -401,6 +407,8 @@ Design intent:
 - workers may talk to infrastructure-style services that scale independently, such as S3, KMS, and cache layers
 - relational data the worker needs (encrypted DEKs, the messageId→internal-email map) is reached over the backend's internal HTTP API (`/api/v1/internal/...`), never via direct SQL
 - worker-local state should be minimal and disposable
+- **a node holds no cloud credential.** The two privileged operations it needs are brokered through the internal API: `KMS_PROVIDER=brokered` posts sealed keys to `/api/v1/internal/dek/decrypt` and `BLOB_PROVIDER=brokered` asks `/api/v1/internal/blobs/presign` to sign one operation on one key. `renderNodeEnv` translates `aws`/`s3` into these automatically when rendering a node's env, so an IAM key never reaches a machine in the fleet. Blob bytes still travel node↔store directly; only the signature comes from the control plane
+- those two routes are the one place the internal API hands out something that is worth more than a record, so they take `NODE_BROKER_TOKEN` (falling back to `INTERNAL_API_TOKEN`) rather than the token the internet-facing tracking and forms services also carry, and presign refuses any key outside `nodeKeyPrefixes`. Extend that list when a node starts touching a new prefix; a signed URL is the whole authorisation
 
 Current code matches that intent in `cmd/worker/main.go`: the worker boots Kafka, Redis cache, KMS, and S3 clients, and reaches DEKs + the email message map through the backend's internal API, but does not open a PostgreSQL connection.
 
@@ -434,7 +442,10 @@ Main code paths:
 - `internal/infrastructure/kms/encryption.go`
 - `internal/infrastructure/kms/decryption.go`
 - `internal/infrastructure/encryptedkeys/` (`store.go`, `factory.go`, `postgres.go`, `http.go`)
-- `internal/api/handler/internal_dek.go` (the worker-facing DEK proxy endpoint)
+- `internal/infrastructure/kms/brokered.go` (the node-side provider that holds no key material)
+- `internal/infrastructure/storage/brokered.go` (the node-side blob store that holds no bucket credential)
+- `internal/api/handler/internal_dek.go` (the worker-facing DEK proxy endpoint, and the decrypt broker)
+- `internal/api/handler/internal_blobs.go` (the blob presign broker)
 
 Operational guidance:
 

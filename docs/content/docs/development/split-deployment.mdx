@@ -1,0 +1,204 @@
+---
+title: Split deployment
+description: Running the control plane on a container host, the fleet on machines you own, and the database, root key and object store in a cloud region, with what each piece costs.
+---
+
+The [self-hosting guide](/development/deployment-guide/) puts everything on one machine, which is the right answer until it is not. This page is the other shape: the control plane on a container host, the worker fleet on machines you own, and the durable pieces in a cloud region next to the control plane.
+
+It is the deployment Warmbly's own architecture describes. The control plane owns relational state and runs where a container host is convenient. The execution plane is a fleet of machines you rent, because a worker's value is being a distinct machine somewhere.
+
+```
+container host          machines you own        cloud region
+──────────────          ────────────────        ────────────
+backend                 worker                  Postgres
+consumer                worker                  KMS key
+realtime                nats + redis            S3 bucket
+tracking                                        SES
+forms
+web / admin
+```
+
+Everything here is env-var configuration and manifests in [`deploy/split-cloud/`](https://github.com/warmbly/warmbly/tree/main/deploy/split-cloud). No code changes, no fork.
+
+## What goes where, and why
+
+| Service | Plane | Why there |
+|---------|-------|-----------|
+| backend | control | Owns Postgres and applies migrations on boot |
+| consumer | control | Opens Postgres directly, so it belongs next to it |
+| realtime | control | Websocket fanout; needs Redis and a public hostname |
+| tracking | control | Public pixel and click endpoints on their own domain |
+| forms | control | Only if you use hosted forms |
+| web, admin | control | Static builds, configured at container start |
+| worker | execution | Sends and syncs from machines you control |
+| NATS, Redis | execution side | Both planes reach them; keeping them near the fleet keeps the noisy hop local |
+| Postgres, KMS, S3, SES | cloud | Durability, a root of trust, and shared blob storage |
+
+The consumer is the one people put in the wrong place. It is not a worker: it updates relational state, and it needs the database DSN a worker is deliberately never given. Running it beside the backend saves a database connection crossing the internet for every event.
+
+## Keep the three regions close
+
+The backend reaches Postgres and Redis on every request, so the round trips between the three providers are the latency floor of the whole product. Pick a container-host region, a cloud region, and a datacentre for the machines that are near each other, and confirm it before you build anything on top.
+
+## Two things that are not optional
+
+<Callout type="warn" title="Redis has to be TLS here">
+The cache holds each organization's decrypted data key for the life of its entry. A plaintext connection across the internet publishes key material, and a password does not change that. On one machine the loopback bind was the protection; once the control plane is somewhere else, TLS is.
+</Callout>
+
+**Blobs have to be object storage.** A worker reads the message body the backend wrote. With `BLOB_PROVIDER=filesystem` it has neither the disk nor the permissions, and the failure arrives at the last step of a send with everything else looking healthy. `warmbly join` warns about this and starts the node anyway; the warning is the whole warning you get.
+
+## Nodes carry no cloud credentials
+
+A machine in the fleet needs two privileged things: opening the sealed data key for an organization, and reading and writing message bodies. Both would normally mean an AWS credential on every box, in a file `warmbly join` rewrites on each run.
+
+It does not work that way. When the control plane runs `KMS_PROVIDER=aws` or `BLOB_PROVIDER=s3`, a joining node is handed the brokered form instead:
+
+| Control plane | What a node is given |
+|---|---|
+| `KMS_PROVIDER=aws` | `KMS_PROVIDER=brokered` |
+| `KMS_PROVIDER=local` | `KMS_PROVIDER=local`, with the master key |
+| `BLOB_PROVIDER=s3` | `BLOB_PROVIDER=brokered` |
+| `BLOB_PROVIDER=filesystem` | `BLOB_PROVIDER=filesystem`, and a warning |
+
+A brokered provider authenticates with the internal API token the node already holds and asks the instance to perform the one privileged operation: unwrap this key, sign this blob operation. The instance token is scoped to one deployment and revocable from it, which an IAM access key on a rented machine is not.
+
+Blob bytes are not proxied. The control plane signs a URL and the node transfers directly against the object store, so a mailbox sync costs the backend one small request per object rather than the bytes.
+
+The cost is one HTTPS call per DEK open, which Redis caches, and one per blob operation. If you would rather a node talk to AWS directly, put `KMS_PROVIDER`, `BLOB_PROVIDER` and the credentials in `/etc/warmbly/node.local.env`, which a re-join does not overwrite.
+
+Two limits are worth knowing. A signed URL covers one verb on one key, and only for the prefixes a node reaches: transport bodies, campaign attachments, and the mailbox bodies a sync stores. Avatars, form assets and workspace export archives cannot be signed for at all, so the credential a node holds is not a credential for the bucket.
+
+That credential is `NODE_BROKER_TOKEN`. It falls back to `INTERNAL_API_TOKEN`, which is what a single-machine install uses, but set it to its own value here: the tracking and forms services are internet-facing and carry the shared token, and there is no reason for what they hold to be enough to open a data key.
+
+## Building it
+
+<Steps>
+
+<Step>
+
+### The cloud resources
+
+```bash
+scripts/aws-bootstrap.sh --domain example.com --region eu-central-1
+```
+
+That creates the KMS key and alias, a private bucket with encryption on, a Postgres instance, an SES domain identity, and an IAM user for the control plane with a least-privilege policy. It is idempotent, and `--dry-run` prints what it would do.
+
+Five things it deliberately leaves to you, because each is a decision rather than a default: an access key for the control-plane user, the database security group, `rds.force_ssl=1` in the parameter group, the DKIM records in DNS, and SES production access.
+
+<Callout type="warn" title="SES starts sandboxed">
+Until you request production access, SES only delivers to addresses you have verified, which means invitations and password resets silently reach nobody else. This is platform mail only: campaign and warmup mail goes out through the mailboxes your customers connect, and never touches SES.
+</Callout>
+
+</Step>
+
+<Step>
+
+### The bus and cache
+
+On the machine that will run them, with a certificate for its hostname:
+
+```bash
+cp -r deploy/split-cloud/bus /opt/warmbly/bus
+cd /opt/warmbly/bus
+printf 'NATS_TOKEN=%s\nREDIS_PASSWORD=%s\n' \
+  "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > .env
+docker compose up -d
+```
+
+`certbot-deploy-hook.sh` belongs in `/etc/letsencrypt/renewal-hooks/deploy/`. Neither service re-reads its certificate, so a renewal without it leaves both serving an expired one.
+
+Redis publishes only its TLS port. The plaintext port stays on the container network for anything co-located.
+
+</Step>
+
+<Step>
+
+### The control plane
+
+`deploy/split-cloud/control-plane.env.example` is every setting, annotated. The ones that decide whether a fleet can exist at all:
+
+```bash
+PRIMARY_DB=postgres://warmbly:...@db.eu-central-1.rds.amazonaws.com:5432/warmbly?sslmode=verify-full
+REDIS=rediss://:<password>@bus.example.com:6380
+NATS_URL=tls://<token>@bus.example.com:4222
+ENCRYPTED_KEYS_BACKEND_URL=https://api.example.com
+BLOB_PROVIDER=s3
+```
+
+<Callout title="A node inherits these addresses">
+`warmbly join` renders a node's configuration from the backend's own environment. A value that only resolves inside your container network produces a node that enrols cleanly and then cannot reach anything. Set these to addresses another machine can use before adding one.
+</Callout>
+
+Deploy the backend first: it applies the migrations. Then the consumer, realtime, tracking, and the two frontends.
+
+</Step>
+
+<Step>
+
+### The fleet
+
+```bash
+warmblyctl fleet join-token
+
+# on each machine, as root
+curl -fsSL https://api.example.com/join.sh | sh -s -- \
+  --url https://api.example.com \
+  --token <join-token> \
+  --role worker \
+  --region eu-central
+```
+
+Nothing connects back to the machine, then or later. It needs no inbound port and no SSH key, and re-running the same command re-joins it under the same identity, keeping its mailboxes.
+
+`deploy/split-cloud/node/` has the same thing as a compose file, for when you want a node's configuration in version control. A node run that way keeps itself current with `docker compose pull`; `warmblyctl fleet version` only moves nodes that were joined.
+
+</Step>
+
+</Steps>
+
+## Anything the control plane cannot know
+
+`warmbly join` writes `/etc/warmbly/node.env` from the control plane's answer and rewrites it on every join. Next to it, `/etc/warmbly/node.local.env` is created once and never written again, and the container reads it second, so a name repeated there wins.
+
+That is the place for a value this instance does not hold: a DSN kept in a secret manager rather than the environment, credentials for infrastructure of your own, a per-machine tuning knob.
+
+```bash
+printf 'PRIMARY_DB=%s\n' "postgres://..." >> /etc/warmbly/node.local.env
+systemctl restart warmbly-consumer
+```
+
+## Sizing the fleet
+
+A worker's capacity is 16 cold-mailbox equivalents, and each mailbox declares its own weight: an SMTP or IMAP mailbox costs `1.0`, a Gmail or Outlook mailbox `0.05`, a warmup-only mailbox `0.4`.
+
+So one worker holds 16 SMTP mailboxes or around 300 OAuth ones. OAuth-heavy customers cost almost nothing in machines; SMTP and IMAP customers are what drive the count.
+
+Give NATS and Redis their own machine once you have more than one worker. Until then the control plane depends on a box that also runs a worker, and restarting that worker takes the bus with it.
+
+## What it costs
+
+A starting instance, with one machine running the bus and the first worker:
+
+| | Item | Monthly |
+|---|---|---|
+| Machines | One small VPS: bus, cache, first worker | ~$5 |
+| Cloud | Postgres, smallest burstable instance with 20 GB | $13-15 |
+| | KMS: one key plus requests, which Redis caches away | ~$1 |
+| | Object storage: a few GB | ~$0.20 |
+| | Platform mail: hundreds of messages | ~$0.05 |
+| Container host | The control plane's actual usage | $5-10 |
+| | **Total** | **~$25-32** |
+
+Two things move that number. A cloud account under twelve months old gets the smallest database instance free, which takes roughly $14 off. Turning on a standby doubles the database line, so leave it off at the start and take snapshots instead.
+
+The line that grows quietly is egress. Every query result and every message body a node reads crosses the internet, billed past the first 100 GB a month. It is invisible at launch and becomes the second-largest cloud line once mailbox sync is moving real volume.
+
+## Where things run out
+
+**One bus machine is one failure domain.** Nothing sends while it is down. Snapshots and a documented rebuild are the honest answer at this size; NATS clustering is the answer when the instance is worth more than the afternoon it costs.
+
+**The database is reachable from the internet.** That is what makes a container host and a fleet able to share it. Restrict the security group to the addresses that need it, force TLS, and treat the master password as the credential it is.
+
+**Auto-update covers nodes, not the control plane.** The backend is what tells every node which version to be, so it upgrades the way the rest of your container host does. Upgrade it, and the fleet follows.
