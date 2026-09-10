@@ -170,7 +170,7 @@ func Score(subject, bodyHTML, bodyPlain string) ScoreResult {
 		}
 		deduct(d, Issue{
 			Severity: severity, Code: "spam_trigger_terms",
-			Message:    fmt.Sprintf("%d spam-trigger term(s) found in subject/body: %s.", n, joinTerms(terms)),
+			Message:    fmt.Sprintf("%d spam-trigger term(s): %s.", n, joinTerms(terms)),
 			Spans:      termSpans,
 			Suggestion: "Rewrite those words in plain language, or cut the sentence they sit in.",
 		})
@@ -246,11 +246,14 @@ func LeadIssue(res ScoreResult) string {
 			lead = issue
 		}
 	}
-	switch lead.Field {
-	case FieldSubject:
+	switch {
+	case lead.Field == FieldSubject:
 		return "Subject: " + lead.Message
-	case FieldBody:
+	case lead.Field == FieldBody:
 		return "Body: " + lead.Message
+	case len(lead.Spans) > 0:
+		// No single field but fragments to point at means it is in both.
+		return "Subject and body: " + lead.Message
 	default:
 		return lead.Message
 	}

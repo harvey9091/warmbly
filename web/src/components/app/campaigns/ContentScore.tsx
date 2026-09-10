@@ -59,14 +59,23 @@ function copyKey(subject: string, bodyHtml: string, bodyPlain: string): string {
 const FIELD_LABEL: Record<TemplateField, string> = { subject: "Subject", body: "Body" };
 
 // The first thing a writer needs is which box to open.
-function FieldBadge({ field, line }: { field?: TemplateField; line?: number }) {
-    if (!field) return null;
+function FieldBadge({ field, line, label }: { field?: TemplateField; line?: number; label?: string }) {
+    const text = label ?? (field ? FIELD_LABEL[field] : "");
+    if (!text) return null;
     return (
         <span className="shrink-0 inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-slate-500">
-            {FIELD_LABEL[field]}
+            {text}
             {field === "body" && !!line && line > 1 && <span className="text-slate-400">line {line}</span>}
         </span>
     );
+}
+
+// An issue with no single field but fragments in both halves is in both, and
+// saying so beats saying nothing on the one panel that exists to say where.
+function issueFieldLabel(issue: TemplateScoreIssue): string | undefined {
+    if (issue.field) return FIELD_LABEL[issue.field];
+    const fields = new Set((issue.spans ?? []).map((s) => s.field));
+    return fields.size > 1 ? "Subject and body" : undefined;
 }
 
 // The offending words, quoted exactly as they are written in the copy.
@@ -80,10 +89,16 @@ function Quoted({ text }: { text: string }) {
 
 function SpanList({ spans }: { spans: TemplateScoreSpan[] }) {
     if (spans.length === 0) return null;
+    // Only when they straddle: repeating "body" on every chip of a body-only
+    // issue is noise the badge above already carries.
+    const mixed = new Set(spans.map((s) => s.field)).size > 1;
     return (
         <div className="mt-1 flex flex-wrap items-center gap-1">
             {spans.map((s, i) => (
-                <Quoted key={`${s.field}-${s.text}-${i}`} text={s.text} />
+                <span key={`${s.field}-${s.text}-${i}`} className="inline-flex items-center gap-1">
+                    {mixed && <span className="text-[10px] uppercase tracking-[0.08em] text-slate-400">{FIELD_LABEL[s.field]}</span>}
+                    <Quoted text={s.text} />
+                </span>
             ))}
         </div>
     );
@@ -99,7 +114,7 @@ function IssueRow({ issue }: { issue: TemplateScoreIssue }) {
             <Icon className={cn("w-3.5 h-3.5 shrink-0 mt-0.5", high ? "text-rose-500" : "text-amber-500")} />
             <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-1.5">
-                    <FieldBadge field={issue.field} />
+                    <FieldBadge field={issue.field} label={issueFieldLabel(issue)} />
                     <span className="text-[12px] text-slate-700 leading-relaxed">{issue.message}</span>
                     <span className="text-[10px] text-slate-400 font-mono">{issue.code}</span>
                 </div>

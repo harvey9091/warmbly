@@ -443,3 +443,21 @@ func TestScoreFieldSurvivesTheSpanCap(t *testing.T) {
 		t.Errorf("field = %q, want empty: the terms straddle both halves", issue.Field)
 	}
 }
+
+// The message names the terms and the field names the place, so the one-line
+// summary does not read "Body: 3 spam-trigger term(s) found in subject/body".
+func TestLeadIssueDoesNotRepeatTheLocation(t *testing.T) {
+	got := LeadIssue(Score("Quick question", "", "Here is a free look at it."))
+	if got != "Body: 1 spam-trigger term(s): free." {
+		t.Errorf("lead issue = %q", got)
+	}
+}
+
+// Terms in both halves have no single field, so the summary says both rather
+// than dropping the location entirely.
+func TestLeadIssueNamesBothHalvesWhenTheIssueStraddles(t *testing.T) {
+	got := LeadIssue(Score("A free look", "", "This is a limited time offer."))
+	if !strings.HasPrefix(got, "Subject and body: ") {
+		t.Errorf("lead issue = %q, want it to name both halves", got)
+	}
+}
