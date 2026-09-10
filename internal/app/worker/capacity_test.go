@@ -198,3 +198,29 @@ func TestComputeCapacity_HealthStatesArePassedThrough(t *testing.T) {
 		}
 	}
 }
+
+func TestComputeCapacity_TargetIgnoresTheAgeRamp(t *testing.T) {
+	// One hour into the 72h ramp. Effective collapses to its floor, which is
+	// what the placer used to divide by; Target must not.
+	c := ComputeCapacity(WorkerCapacityRow{
+		BaseCapacity: 16, HealthMultiplier: 1, AgeMultiplier: 1.0 / 72, LoadScore: 0,
+	})
+	if c.Effective != 1 {
+		t.Fatalf("effective: got %v want the floor of 1", c.Effective)
+	}
+	if c.Target != 16 {
+		t.Fatalf("target: got %v want 16", c.Target)
+	}
+
+	// Health still shrinks the target: that is about the worker, not its age.
+	sick := ComputeCapacity(WorkerCapacityRow{BaseCapacity: 16, HealthMultiplier: 0.5, AgeMultiplier: 1})
+	if sick.Target != 8 {
+		t.Fatalf("target: got %v want 8", sick.Target)
+	}
+
+	// And it never reaches zero, or projected utilization divides by nothing.
+	dead := ComputeCapacity(WorkerCapacityRow{BaseCapacity: 16, HealthMultiplier: 0, AgeMultiplier: 1})
+	if dead.Target != 1 {
+		t.Fatalf("target: got %v want the floor of 1", dead.Target)
+	}
+}

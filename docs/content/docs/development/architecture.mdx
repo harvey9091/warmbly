@@ -114,7 +114,7 @@ So the levers invert: IP *stability* per mailbox beats IP diversity, and a migra
 
 ### Choosing a worker
 
-Placement scores every live worker and takes the best (`internal/app/worker/placement.go`). Hard constraints are only about whether the work can be done at all: the worker has to be heartbeating, in `healthy` or `watch`, and have capacity headroom for the mailbox's weight. Everything else is a preference:
+Placement scores every live worker and takes the best (`internal/app/worker/placement.go`). Hard constraints are only about whether the work can be done at all: the worker has to be heartbeating and in `healthy` or `watch`. Everything else is a preference:
 
 | Term | Why |
 |---|---|
@@ -123,9 +123,12 @@ Placement scores every live worker and takes the best (`internal/app/worker/plac
 | Region match | Sign-ins from where the provider expects them raise fewer challenges |
 | Tenant blast radius | Spread one customer across workers so a single failure does not stop their sending |
 | Provider crowding | Many accounts of one provider signing in from one address is what earns a per-IP throttle |
+| Node youth | A worker that enrolled minutes ago has proved nothing, so it is probed gently rather than handed every placement for being empty |
 | Foreign tenants | Only for organizations entitled to isolated egress |
 
-Capacity is one number for every worker, in cold-mailbox equivalents, because each mailbox already declares its own cost: an `smtp_imap` mailbox weighs `1.0`, a Gmail or Outlook API mailbox `0.05`, and a warmup-only assignment `0.4`.
+Capacity is one number for every worker, in cold-mailbox equivalents, because each mailbox already declares its own cost: an `smtp_imap` mailbox weighs `1.0`, a Gmail or Outlook API mailbox `0.05`, and a warmup-only assignment `0.4`. The mailbox being placed counts against the target too, so the same nearly-full worker can be under target for a Gmail mailbox and over it for an `smtp_imap` one.
+
+**Capacity is a target, not a ceiling.** Nothing refuses a placement for being over it. Going over costs more than any bonus a candidate can earn, so stickiness alone can never keep a mailbox on an over-target worker; it does not outweigh the penalty terms, so a worker with room but crowded with foreign tenants can still lose. Once no worker has room, the least-overloaded one wins with region, blast radius and provider crowding all applied. This is deliberate: the target is a flat `16` for every worker regardless of the machine, so refusing on it refuses on a guess, and refusing exactly when the fleet is full is when good placement matters most.
 
 ### Moving a mailbox
 
