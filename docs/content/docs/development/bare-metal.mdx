@@ -546,20 +546,21 @@ The point of workers is to spread sending across machine identities, so most ins
 
 **The join script**, which is what the admin panel's Add a machine flow produces, runs the node as a container on the remote host. It needs Docker and systemd only there. The backend serves it at `GET /join.sh`, and it is embedded in the binary, so there is no path to configure.
 
-**A native worker** is the same binary and env file as above, with the addresses changed. The backend renders a complete env file for an enrollment token, so nothing has to be copied by hand:
+**A native worker** is the same binary and env file as above, with the addresses changed. The backend renders a complete env file for a join token, so nothing has to be copied by hand:
 
 ```bash
 # On the remote host, with /opt/warmbly/bin/worker built for it:
-curl -fsS https://api.yourdomain.com/api/v1/workers/enroll \
+curl -fsS https://api.yourdomain.com/api/v1/fleet/join \
   -H 'Content-Type: application/json' \
-  -d '{"token":"wmenroll_..."}' | sudo tee /etc/warmbly/worker.env >/dev/null
-echo "WORKER_ID=$(uuidgen)" | sudo tee -a /etc/warmbly/worker.env >/dev/null
+  -d '{"token":"<join-token>","role":"worker","region":"eu-central"}' \
+  | sed -n 's/.*"env_b64"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+  | base64 -d | sudo tee /etc/warmbly/worker.env >/dev/null
 sudo chmod 0600 /etc/warmbly/worker.env
 sudo cp deploy/systemd/warmbly-worker.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now warmbly-worker
 ```
 
-The token is consumed on first use and the response carries the decryption material, so do this over HTTPS only. Before enrolling anything, set `API_PUBLIC_URL`, `NATS_URL` and `REDIS` on the backend to addresses the remote host can reach, and open those ports to it: the rendered file inherits the backend's own values, and `127.0.0.1` does not resolve to your control plane from another machine.
+The rendered file already carries this node's `WORKER_ID`, so its placement row and its node row are the same machine. Issue the token with `warmblyctl fleet join-token`; it is consumed on first use and the response carries the decryption material, so do this over HTTPS only. Before enrolling anything, set `API_PUBLIC_URL`, `NATS_URL` and `REDIS` on the backend to addresses the remote host can reach, and open those ports to it: the rendered file inherits the backend's own values, and `127.0.0.1` does not resolve to your control plane from another machine.
 
 Opening NATS and Redis to another machine means they stop being protected by the loopback bind, so give both a credential and TLS first. For NATS, extend `/etc/nats.conf` and restart it:
 

@@ -150,3 +150,10 @@ func (s *FilesystemStore) Has(_ context.Context, key string) (bool, error) {
 func (s *FilesystemStore) PresignedGetURL(_ context.Context, _ string, _ time.Duration) (string, error) {
 	return "", ErrUnsupported
 }
+
+// PresignedURL is unsupported for the same reason, for every verb. A node on
+// another machine therefore cannot reach filesystem blobs at all, which is the
+// honest answer: they are on a disk it does not have.
+func (s *FilesystemStore) PresignedURL(_ context.Context, _ PresignOp, _, _ string, _ time.Duration) (string, error) {
+	return "", ErrUnsupported
+}

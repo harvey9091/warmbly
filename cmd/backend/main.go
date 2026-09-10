@@ -287,6 +287,9 @@ func main() {
 	// repository / object-storage needs. Declared up here so they
 	// survive the config block where they're initialized.
 	var s3ForHandler storage.Store
+	// The root of trust, surfaced so /api/v1/internal/dek/decrypt can open a
+	// sealed key for a node that carries no KMS credential of its own.
+	var kmsForHandler kms.Provider
 	var emailMessageMapForHandler repository.EmailMessageMapRepository
 	var emailSyncStateRepository repository.EmailSyncStateRepository
 	var trackedLinkRepository repository.TrackedLinkRepository
@@ -379,6 +382,7 @@ func main() {
 			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
+		kmsForHandler = kms
 
 		geoPath, err := cfg.LoadGeoDBPath(ctx)
 		if err != nil {
@@ -1982,6 +1986,7 @@ func main() {
 		// without a dedicated service layer (avatars, etc.).
 		Storage:                s3ForHandler,
 		EncryptedKeys:          encryptedKeys,
+		KMS:                    kmsForHandler,
 		EmailMessageMap:        emailMessageMapForHandler,
 		EmailSyncState:         emailSyncStateRepository,
 		TrackedLinks:           trackedLinkRepository,

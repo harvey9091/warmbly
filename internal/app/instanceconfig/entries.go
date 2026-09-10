@@ -547,7 +547,7 @@ var table = []Entry{
 	// Encryption.
 	{
 		Key: "KMS_PROVIDER", Group: GroupEncryption, RuntimeChangeable: ChangeBootOnly,
-		Effect:     "local wraps organization keys with the master key below; aws wraps them with AWS KMS.",
+		Effect:     "local wraps organization keys with the master key below; aws wraps them with AWS KMS; brokered holds no key material and asks this instance to unwrap, which is what a node off this machine should run.",
 		DocsAnchor: docsEncryption,
 		Resolve:    func(*Runtime) string { return config.KMSProvider() },
 	},
@@ -585,7 +585,7 @@ var table = []Entry{
 	// Storage.
 	{
 		Key: "BLOB_PROVIDER", Group: GroupStorage, RuntimeChangeable: ChangeBootOnly,
-		Effect:     "filesystem stores email bodies, attachments and avatars on disk; s3 stores them in any S3-compatible bucket.",
+		Effect:     "filesystem stores email bodies, attachments and avatars on disk; s3 stores them in any S3-compatible bucket; brokered holds no bucket credential and asks this instance to sign each operation, which is what a node off this machine should run.",
 		DocsAnchor: docsStorage,
 		Resolve:    func(*Runtime) string { return config.BlobProvider() },
 	},

@@ -60,6 +60,11 @@ Full reference: [local development](https://docs.warmbly.com/development/local-d
 
 ## Deploying without Docker
 
+`deploy/split-cloud/` holds the manifests for running the two planes on
+different providers: the control plane on a container host, the bus and cache
+and fleet on machines you own, and the database, root key and object store in a
+cloud region. Its README lists what is in it.
+
 `deploy/systemd/` holds one unit per service and `deploy/nginx/warmbly.conf` a site that serves the static frontends and proxies the API, websocket and tracking hosts. The step-by-step guide that uses them is [Deploying without Docker](https://docs.warmbly.com/development/bare-metal/).
 
 ## Deploying the control plane

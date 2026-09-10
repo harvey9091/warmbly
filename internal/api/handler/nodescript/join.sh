@@ -57,7 +57,9 @@ Join a machine to a Warmbly fleet.
   -h, --help         This text.
 
 A second run re-enrols the same machine: it keeps the existing node id, so the
-node keeps its identity, history and mailbox placements.
+node keeps its identity, history and mailbox placements. It rewrites node.env
+from the control plane's answer; put anything of your own in node.local.env
+next to it, which is created once and never written again.
 USAGE
 }
 
@@ -176,7 +178,10 @@ write_config() {
   if [ "$DRY_RUN" = "true" ]; then
     log ""
     log "--dry-run: would write $CONFIG_DIR/node.env with:"
-    printf '%s\n' "$NODE_ENV" | sed 's/\(TOKEN=\|KEY=\|SECRET=\|PASSWORD=\).*/\1***/' | sed 's/^/    /'
+    printf '%s\n' "$NODE_ENV" | redact | sed 's/^/    /'
+    log ""
+    log "--dry-run: would create $CONFIG_DIR/node.local.env if absent, and leave it"
+    log "           alone if present. Both files are passed to the container."
     log ""
     log "--dry-run: would run image $WARMBLY_IMAGE_REPO/$WARMBLY_ROLE:$DESIRED_VERSION"
     return 0
@@ -216,6 +221,8 @@ write_config() {
   } > "$CONFIG_DIR/node.env"
   chmod 600 "$CONFIG_DIR/node.env"
 
+  ensure_local_env
+
   printf '%s\n' "$DESIRED_VERSION" > "$AGENT_DIR/target-version"
   chown 1000:1000 "$AGENT_DIR/target-version" 2>/dev/null || true
   printf '%s\n' "$WARMBLY_IMAGE_REPO/$WARMBLY_ROLE" > "$STATE_DIR/image"
@@ -224,6 +231,59 @@ write_config() {
   printf 'WARMBLY_IMAGE_REF=%s/%s:%s\n' \
     "$WARMBLY_IMAGE_REPO" "$WARMBLY_ROLE" "$DESIRED_VERSION" > "$STATE_DIR/image-ref"
   log "Wrote $CONFIG_DIR/node.env"
+}
+
+# redact masks every value in the env that carries a credential, for the
+# --dry-run listing. Two shapes, because they leak differently:
+#
+#   NAME_TOKEN=secret             the whole value goes
+#   NAME=scheme://user:pass@host  only the userinfo goes, so the address the
+#                                 node will actually use stays readable, which
+#                                 is the thing --dry-run exists to show
+#
+# The second shape is why a name list is not enough on its own: PRIMARY_DB,
+# NATS_URL, REDIS and SENTRY_DSN all carry their credential inside a URL and
+# none of them is called TOKEN, KEY, SECRET or PASSWORD.
+#
+# One -e per word rather than a `\|` alternation: alternation in a BRE is a GNU
+# extension, and on a sed without it the expression matches nothing and every
+# secret prints in clear, which is the failure mode this function exists to
+# prevent. Matched as a SUFFIX so ENCRYPTED_KEYS_BACKEND_URL, an address worth
+# reading, is not masked for containing "KEY".
+redact() {
+  sed -e 's/^\([A-Z0-9_]*TOKEN\)=.*/\1=***/' \
+      -e 's/^\([A-Z0-9_]*KEY\)=.*/\1=***/' \
+      -e 's/^\([A-Z0-9_]*SECRET\)=.*/\1=***/' \
+      -e 's/^\([A-Z0-9_]*PASSWORD\)=.*/\1=***/' \
+      -e 's/^\([A-Z0-9_]*DSN\)=.*/\1=***/' \
+      -e 's|^\([A-Z0-9_]*\)=\([a-z][a-z0-9+.-]*://\)[^:/@]*:[^@]*@|\1=\2***:***@|' \
+      -e 's|^\([A-Z0-9_]*\)=\([a-z][a-z0-9+.-]*://\)[^:/@]*@|\1=\2***@|'
+}
+
+# ensure_local_env creates the operator's own env file, once. node.env is
+# rewritten wholesale on every join, so anything added there is lost the next
+# time this runs; this file is the place that survives. The container reads
+# both, this one second, so a value here wins.
+#
+# Never truncates an existing file: re-running a join must not discard the
+# credential someone put here.
+ensure_local_env() {
+  if [ -f "$CONFIG_DIR/node.local.env" ]; then
+    return 0
+  fi
+  cat > "$CONFIG_DIR/node.local.env" <<'LOCALENV'
+# Local overrides for this machine, read after node.env, so a name repeated
+# here wins.
+#
+# `warmbly join` creates this file once and never writes it again, which makes
+# it the place for anything the control plane cannot know: a DSN it does not
+# hold, credentials for infrastructure of your own, a per-machine tuning knob.
+#
+# KEY=value, one per line, no export, no quotes needed.
+LOCALENV
+  chmod 600 "$CONFIG_DIR/node.local.env"
+  log "Created $CONFIG_DIR/node.local.env (yours; re-joining leaves it alone)"
+  return 0
 }
 
 # Blob handling. All of it reads the env in memory rather than the file on
@@ -340,6 +400,30 @@ warn_shared_blobs() {
   warn ""
 }
 
+# warn_missing_db covers the one config a consumer cannot start without and the
+# control plane cannot always supply: an instance holding its DSN in SSM rather
+# than its environment has nothing to send. Silence here is a node that enrols,
+# writes its files, and then restart-loops on a config error.
+warn_missing_db() {
+  [ "$WARMBLY_ROLE" = "consumer" ] || return 0
+  if printf '%s\n' "$NODE_ENV" | grep -q '^PRIMARY_DB='; then
+    return 0
+  fi
+  warn ""
+  warn "WARNING: this consumer has no PRIMARY_DB."
+  warn ""
+  warn "         A consumer is control plane: it updates relational state"
+  warn "         directly, so it needs the database DSN. The control plane sent"
+  warn "         none, which means the backend reads its own DSN from somewhere"
+  warn "         other than its environment (AWS SSM or Secrets Manager)."
+  warn ""
+  warn "         Add it to $CONFIG_DIR/node.local.env, which re-joining will"
+  warn "         not overwrite, then: systemctl restart warmbly-consumer"
+  warn ""
+  warn "           PRIMARY_DB=postgres://user:pass@host:5432/warmbly?sslmode=verify-full"
+  warn ""
+}
+
 # render_unit prints the systemd service exactly as install_units writes it.
 # Separate so it can be asserted on without root, Docker, or a real join:
 # `make join-check` renders this and checks the result, because every defect
@@ -364,7 +448,7 @@ EnvironmentFile=$STATE_DIR/image-ref
 # any previous one first: a name collision after an unclean stop would
 # otherwise wedge the service in a restart loop.
 ExecStartPre=-/usr/bin/docker rm -f $service
-ExecStart=/usr/bin/docker run --rm --name $service --env-file $CONFIG_DIR/node.env --network host $MOUNTS \${WARMBLY_IMAGE_REF}
+ExecStart=/usr/bin/docker run --rm --name $service --env-file $CONFIG_DIR/node.env --env-file $CONFIG_DIR/node.local.env --network host $MOUNTS \${WARMBLY_IMAGE_REF}
 ExecStop=/usr/bin/docker stop $service
 
 [Install]
@@ -473,6 +557,8 @@ start_node() {
   log ""
   log "  Node id      $NODE_ID"
   log "  Version      $DESIRED_VERSION"
+  log "  Config       $CONFIG_DIR/node.env (rewritten on every join)"
+  log "  Yours        $CONFIG_DIR/node.local.env (never rewritten; wins on conflict)"
   log "  Logs         journalctl -u $service -f"
   log "  Status       systemctl status $service"
   log ""
@@ -504,6 +590,7 @@ main() {
   install_units
   start_node
   warn_shared_blobs
+  warn_missing_db
   return 0
 }
 
