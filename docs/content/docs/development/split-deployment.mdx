@@ -97,19 +97,24 @@ Until you request production access, SES only delivers to addresses you have ver
 
 ### The bus and cache
 
-On the machine that will run them, with a certificate for its hostname:
+Point an A record at the machine first, then one command on it:
 
 ```bash
-cp -r deploy/split-cloud/bus /opt/warmbly/bus
-cd /opt/warmbly/bus
-printf 'NATS_TOKEN=%s\nREDIS_PASSWORD=%s\n' \
-  "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > .env
-docker compose up -d
+curl -fsSLO https://raw.githubusercontent.com/warmbly/warmbly/main/deploy/split-cloud/bus/setup.sh
+sh setup.sh --domain bus.example.com
 ```
 
-`certbot-deploy-hook.sh` belongs in `/etc/letsencrypt/renewal-hooks/deploy/`. Neither service re-reads its certificate, so a renewal without it leaves both serving an expired one.
+It downloads the rest of the bundle next to itself, installs Docker and certbot if they are missing, creates the group that may read the private key, generates the two credentials, obtains the certificate, installs the renewal hook, starts both services, waits for them to report healthy, proves a real client can connect over TLS with each credential and that a wrong one is refused, and prints the two lines your control plane needs.
 
-Redis publishes only its TLS port. The plaintext port stays on the container network for anything co-located.
+<Callout type="warn" title="On Cloudflare, the record must be DNS only">
+Grey cloud, not orange. Cloudflare's proxy passes HTTP and HTTPS on a fixed set of ports and nothing else, so a proxied record swallows 4222 and 6380 entirely. The script checks that the name resolves before spending a Let's Encrypt attempt, but it cannot tell you the answer came from a proxy.
+</Callout>
+
+It is idempotent. A second run adopts what is there: it never rotates a secret, never reissues a valid certificate, and never overwrites your `.env`. Re-running is how you pick up a change.
+
+Three flags worth knowing: `--verify` re-runs the connection checks against a box that is already up, `--print-env` prints the control plane lines again, and `--refresh` re-downloads the compose file and config to pick up a fix without touching your secrets.
+
+The renewal hook is the part that matters after day one. Neither service re-reads its certificate, so without it everything works for 90 days and then stops. Redis publishes only its TLS port; the plaintext port stays on the container network for a worker running on the same machine.
 
 </Step>
 
