@@ -12,7 +12,10 @@ func candidate(id uuid.UUID, effective, load float64) PlacementCandidate {
 	c := PlacementCandidate{
 		WorkerID: id,
 		Health:   models.WorkerHealthHealthy,
-		Capacity: Capacity{Effective: effective, Load: load},
+		// AgeMul 1: a mature worker, so the youth term stays out of the way
+		// unless a test sets it. Target tracks Effective because these helpers
+		// describe workers past the age ramp, where the two are equal.
+		Capacity: Capacity{Effective: effective, Target: effective, Load: load, AgeMul: 1},
 	}
 	if effective > 0 {
 		c.Capacity.Utilization = load / effective
@@ -216,19 +219,6 @@ func TestMailboxWeightCountsAgainstTheTarget(t *testing.T) {
 	}
 }
 
-func TestAuthPressureSteersAwayFromAThrottledAddress(t *testing.T) {
-	throttled, clean := uuid.New(), uuid.New()
-
-	a := candidate(throttled, 16, 8)
-	a.Capacity.AuthPressure = 1
-	b := candidate(clean, 16, 8)
-
-	got := SelectPlacement([]PlacementCandidate{a, b}, PlacementRequest{Weight: 1.0})
-	if got == nil || got.WorkerID != clean {
-		t.Fatal("placement should avoid an address the provider is auth-throttling")
-	}
-}
-
 func TestSelectPlacementIsDeterministicOnTies(t *testing.T) {
 	a, b := uuid.New(), uuid.New()
 	cands := []PlacementCandidate{candidate(a, 16, 8), candidate(b, 16, 8)}
@@ -238,5 +228,68 @@ func TestSelectPlacementIsDeterministicOnTies(t *testing.T) {
 	second := SelectPlacement([]PlacementCandidate{cands[1], cands[0]}, PlacementRequest{Weight: 1.0})
 	if first == nil || second == nil || first.WorkerID != second.WorkerID {
 		t.Fatal("tie-breaking must not depend on candidate order")
+	}
+}
+
+func TestOverTargetLosesToStickinessButNotToEveryPenalty(t *testing.T) {
+	over, room := uuid.New(), uuid.New()
+
+	// Stickiness alone never rescues an over-target worker: the flat cost is
+	// set above incumbency plus a region match.
+	a := candidate(over, 16, 18)
+	a.Region = "eu"
+	b := candidate(room, 16, 15)
+	got := SelectPlacement([]PlacementCandidate{a, b}, PlacementRequest{
+		Weight: 1.0, CurrentWorkerID: &over, Region: "eu",
+	})
+	if got == nil || got.WorkerID != room {
+		t.Fatal("stickiness must not outweigh being over target")
+	}
+
+	// It is not a fence, though. Stack every penalty on the worker with room -
+	// a fresh node full of foreign tenants, already holding all of this org's
+	// mailboxes and crowded with this provider - and a marginally over-target
+	// but otherwise clean worker is the better home. That is the intended
+	// reading: the other terms are real costs, not tie-breakers.
+	crowded := candidate(room, 16, 15)
+	crowded.Capacity.AgeMul = 0
+	crowded.TotalMailboxes = 1000
+	crowded.OrgMailboxesHere = 10
+	crowded.ProviderMailboxesHere = 24
+	marginal := candidate(over, 16, 16.05)
+	req := PlacementRequest{Weight: 0.05, IsolatedEgress: true, OrgMailboxesTotal: 10}
+	if marginal.Score(req) <= crowded.Score(req) {
+		t.Fatalf("over-target cost should not dominate every penalty: over=%.3f room=%.3f",
+			marginal.Score(req), crowded.Score(req))
+	}
+}
+
+func TestNewNodeRelievesAFullFleet(t *testing.T) {
+	fresh, mature := uuid.New(), uuid.New()
+
+	// A node enrolled an hour ago: the age ramp has collapsed Effective to its
+	// floor, but Target is what placement divides by, so it still reads empty.
+	// Scoring against Effective made this worker look 200% loaded after one
+	// mailbox and no full fleet could ever be relieved by adding a machine.
+	n := ComputeCapacity(WorkerCapacityRow{BaseCapacity: 16, HealthMultiplier: 1, AgeMultiplier: 1.0 / 72, LoadScore: 1})
+	newNode := PlacementCandidate{WorkerID: fresh, Health: models.WorkerHealthHealthy, Capacity: n}
+	full := candidate(mature, 16, 20)
+
+	got := SelectPlacement([]PlacementCandidate{full, newNode}, PlacementRequest{Weight: 1.0})
+	if got == nil || got.WorkerID != fresh {
+		t.Fatal("a freshly joined node must be able to relieve an over-target fleet")
+	}
+}
+
+func TestYouthIsAPreferenceNotABarrier(t *testing.T) {
+	fresh, mature := uuid.New(), uuid.New()
+
+	young := candidate(fresh, 16, 0)
+	young.Capacity.AgeMul = 0
+	old := candidate(mature, 16, 0)
+
+	got := SelectPlacement([]PlacementCandidate{young, old}, PlacementRequest{Weight: 1.0})
+	if got == nil || got.WorkerID != mature {
+		t.Fatal("between two empty workers the proven one should win")
 	}
 }

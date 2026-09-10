@@ -199,28 +199,28 @@ func TestComputeCapacity_HealthStatesArePassedThrough(t *testing.T) {
 	}
 }
 
-func TestComputeAuthPressure(t *testing.T) {
-	cases := []struct {
-		name       string
-		authErrors int64
-		attempted  int64
-		want       float64
-	}{
-		{"clean worker", 0, 500, 0},
-		{"one error in a thousand", 1, 1000, 0.02},
-		{"one percent", 10, 1000, 0.2},
-		{"full scale at five percent", 50, 1000, 1},
-		{"saturates past full scale", 500, 1000, 1},
-		// Sync auth failures arrive on a worker that sent nothing; the
-		// denominator floor makes that saturate rather than divide by zero.
-		{"errors with no attempts", 3, 0, 1},
+func TestComputeCapacity_TargetIgnoresTheAgeRamp(t *testing.T) {
+	// One hour into the 72h ramp. Effective collapses to its floor, which is
+	// what the placer used to divide by; Target must not.
+	c := ComputeCapacity(WorkerCapacityRow{
+		BaseCapacity: 16, HealthMultiplier: 1, AgeMultiplier: 1.0 / 72, LoadScore: 0,
+	})
+	if c.Effective != 1 {
+		t.Fatalf("effective: got %v want the floor of 1", c.Effective)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := computeAuthPressure(tc.authErrors, tc.attempted)
-			if math.Abs(got-tc.want) > 1e-9 {
-				t.Fatalf("got %v want %v", got, tc.want)
-			}
-		})
+	if c.Target != 16 {
+		t.Fatalf("target: got %v want 16", c.Target)
+	}
+
+	// Health still shrinks the target: that is about the worker, not its age.
+	sick := ComputeCapacity(WorkerCapacityRow{BaseCapacity: 16, HealthMultiplier: 0.5, AgeMultiplier: 1})
+	if sick.Target != 8 {
+		t.Fatalf("target: got %v want 8", sick.Target)
+	}
+
+	// And it never reaches zero, or projected utilization divides by nothing.
+	dead := ComputeCapacity(WorkerCapacityRow{BaseCapacity: 16, HealthMultiplier: 0, AgeMultiplier: 1})
+	if dead.Target != 1 {
+		t.Fatalf("target: got %v want the floor of 1", dead.Target)
 	}
 }

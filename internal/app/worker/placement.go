@@ -41,7 +41,7 @@ const (
 	weightIsolation    = 1.5
 	weightBlastRadius  = 0.8
 	weightProviderLoad = 0.7
-	weightAuthPressure = 1.2
+	weightNewWorker    = 0.5
 	weightOverTarget   = 3.0
 	weightOverload     = 4.0
 )
@@ -109,6 +109,22 @@ func (c PlacementCandidate) Eligible(req PlacementRequest) bool {
 	}
 }
 
+// Projected is the worker's utilization against its capacity target once this
+// mailbox lands on it.
+func (c PlacementCandidate) Projected(req PlacementRequest) float64 {
+	if c.Capacity.Target <= 0 {
+		return c.Capacity.Utilization
+	}
+	return (c.Capacity.Load + req.Weight) / c.Capacity.Target
+}
+
+// OverTarget reports whether taking this mailbox would put the worker past its
+// capacity target. Never refuses a placement on its own; it is what the
+// isolated-egress override consults before skipping the score entirely.
+func (c PlacementCandidate) OverTarget(req PlacementRequest) bool {
+	return c.Projected(req) > 1
+}
+
 // Score ranks an eligible candidate. Higher is better. The terms are additive
 // and each one is traceable to a specific provider behaviour, which is what
 // makes the number explainable in the decision log.
@@ -118,26 +134,25 @@ func (c PlacementCandidate) Score(req PlacementRequest) float64 {
 	// Capacity: prefer the worker with the most room, so the fleet fills
 	// evenly. Projected, so the incoming mailbox's own weight counts - Eligible
 	// used to be the only thing that read req.Weight.
-	projected := c.Capacity.Utilization
-	if c.Capacity.Effective > 0 {
-		projected = (c.Capacity.Load + req.Weight) / c.Capacity.Effective
-	}
+	projected := c.Projected(req)
 	if projected <= 1 {
 		score += weightHeadroom * (1 - projected)
 	} else {
-		// A soft wall: the flat cost exceeds the largest bonus a candidate can
-		// earn (incumbency 2.0 + region 0.6), so anything with room wins when
-		// it exists, and the ramp still ranks the overloaded against each
-		// other when nothing does.
-		over := projected - 1
-		score -= weightOverTarget + weightOverload*over
+		// A soft wall: the flat cost exceeds every bonus a candidate can earn
+		// (incumbency 2.0 + region 0.6), so being over target can never be
+		// outweighed by stickiness. It does not dominate the penalty terms, so
+		// a worker with room but carrying foreign tenants, org concentration
+		// and provider crowding can still lose - those are real costs too. The
+		// ramp keeps ranking the overloaded against each other when nothing
+		// has room, which is the case the old hard check handled by giving up.
+		score -= weightOverTarget + weightOverload*(projected-1)
 	}
 
-	// Provider pushback: 454/421 auth throttles mean this address is signing
-	// in too much, so steer new mailboxes away. Below incumbency on purpose -
-	// evacuating a throttled worker is rotation's call, behind a residency
-	// floor, not a per-mailbox sign-in challenge paid here.
-	score -= weightAuthPressure * c.Capacity.AuthPressure
+	// Youth: a node that enrolled minutes ago has proved nothing, so probe it
+	// gently rather than handing it every placement for being empty. Small on
+	// purpose - it must never outweigh the over-target cost, or a full fleet
+	// could not be relieved by joining a worker, which is the whole remedy.
+	score -= weightNewWorker * (1 - c.Capacity.AgeMul)
 
 	// Stickiness: the incumbent wins ties and most non-ties. A mailbox that
 	// stays put keeps presenting the same client IP to its provider.

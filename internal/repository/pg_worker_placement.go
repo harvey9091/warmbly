@@ -94,9 +94,9 @@ const placementCandidateSelect = `
 `
 
 // ListPlacementCandidates returns every worker that may host a mailbox for the
-// given org and provider, with the neighbour counts attached. Filtering on
-// capacity headroom and ranking both happen in app code (worker.SelectPlacement)
-// so the scoring model can change without a migration.
+// given org and provider, with the neighbour counts attached. Ranking happens
+// entirely in app code (worker.SelectPlacement) so the scoring model can change
+// without a migration; capacity is one of the scored terms, not a filter.
 func (r *workerRepository) ListPlacementCandidates(
 	ctx context.Context,
 	orgID uuid.UUID,
