@@ -156,15 +156,9 @@ function ContactEditPanel({
         if (company !== contact.company) return true;
         if (phone !== contact.phone) return true;
         if (subscribed !== contact.subscribed) return true;
-        if (JSON.stringify(recordFromCF(customFields)) !== JSON.stringify(contact.custom_fields ?? {})) return true;
-        const curC = new Set(contact.campaigns.map((c) => c.id));
-        const nextC = new Set(campaigns.map((c) => c.id));
-        if (curC.size !== nextC.size) return true;
-        for (const id of curC) if (!nextC.has(id)) return true;
-        const curCat = new Set((contact.categories ?? []).map((c) => c.id));
-        const nextCat = new Set(categoryIds);
-        if (curCat.size !== nextCat.size) return true;
-        for (const id of curCat) if (!nextCat.has(id)) return true;
+        if (!sameFields(customFields, fieldsOf(contact.custom_fields))) return true;
+        if (!sameCampaigns(campaigns, contact.campaigns ?? [])) return true;
+        if (!sameIDs(categoryIds, idsOf(contact.categories ?? []))) return true;
         return false;
     }, [contact, firstName, lastName, email, company, phone, subscribed, customFields, campaigns, categoryIds]);
 
@@ -177,19 +171,13 @@ function ContactEditPanel({
         if (company !== contact.company) data.company = company;
         if (phone !== contact.phone) data.phone = phone;
         if (subscribed !== contact.subscribed) data.subscribed = subscribed;
-        const cf = recordFromCF(customFields);
-        if (JSON.stringify(cf) !== JSON.stringify(contact.custom_fields ?? {})) data.custom_fields = cf;
-        const cur = new Set(contact.campaigns.map((c) => c.id));
-        const next = new Set(campaigns.map((c) => c.id));
-        let campaignsChanged = cur.size !== next.size;
-        if (!campaignsChanged) for (const id of cur) if (!next.has(id)) { campaignsChanged = true; break; }
-        if (campaignsChanged) data.campaigns = campaigns.map((c) => c.id);
-
-        const curCat = new Set((contact.categories ?? []).map((c) => c.id));
-        const nextCat = new Set(categoryIds);
-        let categoriesChanged = curCat.size !== nextCat.size;
-        if (!categoriesChanged) for (const id of curCat) if (!nextCat.has(id)) { categoriesChanged = true; break; }
-        if (categoriesChanged) data.categories = categoryIds;
+        // Same comparisons `dirty` and the rebase use, so what counts as
+        // changed is decided in exactly one place.
+        if (!sameFields(customFields, fieldsOf(contact.custom_fields))) {
+            data.custom_fields = recordFromCF(customFields);
+        }
+        if (!sameCampaigns(campaigns, contact.campaigns ?? [])) data.campaigns = idsOf(campaigns);
+        if (!sameIDs(categoryIds, idsOf(contact.categories ?? []))) data.categories = categoryIds;
 
         try {
             await toast.promise(update.mutateAsync(data), {

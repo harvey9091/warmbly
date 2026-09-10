@@ -8,12 +8,19 @@
 
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type Contact from "@/lib/api/models/app/contacts/Contact";
 
+const requested: { url?: string; data?: unknown }[] = [];
 vi.mock("@/lib/api/client/Request", () => ({
-    default: () => new Promise(() => {}),
+    default: (cfg: { url?: string; method?: string; data?: unknown }) => {
+        if (cfg?.method === "PATCH") {
+            requested.push({ url: cfg.url, data: cfg.data });
+            return Promise.resolve({});
+        }
+        return new Promise(() => {});
+    },
 }));
 
 const confirmShow = vi.fn();
@@ -34,10 +41,21 @@ vi.mock("./contact-edit/ActivityTab", () => ({ default: () => <div>activity</div
 vi.mock("./contact-edit/NotesTab", () => ({ default: () => <div>notes</div> }));
 vi.mock("./contact-edit/ResearchTab", () => ({ default: () => <div>research</div> }));
 vi.mock("./contact-edit/DetailsTab", () => ({
-    default: ({ setFirstName }: { setFirstName: (v: string) => void }) => (
-        <button type="button" onClick={() => setFirstName("Edited")}>
-            rename
-        </button>
+    default: ({
+        setFirstName,
+        setCategoryIds,
+    }: {
+        setFirstName: (v: string) => void;
+        setCategoryIds: (v: string[]) => void;
+    }) => (
+        <>
+            <button type="button" onClick={() => setFirstName("Edited")}>
+                rename
+            </button>
+            <button type="button" onClick={() => setCategoryIds(["cat-2"])}>
+                recategorise
+            </button>
+        </>
     ),
 }));
 
@@ -79,7 +97,10 @@ function clickBackdrop(container: HTMLElement) {
 }
 
 describe("the contact 360 panel", () => {
-    beforeEach(() => confirmShow.mockClear());
+    beforeEach(() => {
+        confirmShow.mockClear();
+        requested.length = 0;
+    });
 
     it("closes without asking when the contact was re-subscribed elsewhere", () => {
         const { rerender, container } = render(<Panel contacts={[contact()]} />);
@@ -127,5 +148,22 @@ describe("the contact 360 panel", () => {
         // The name edit survives; the subscription follows the server.
         expect(screen.getByText("Edited Demo")).toBeTruthy();
         expect(screen.queryByText("Unsubscribed")).toBeNull();
+    });
+});
+
+describe("saving the contact 360 panel", () => {
+    beforeEach(() => {
+        confirmShow.mockClear();
+        requested.length = 0;
+    });
+
+    it("sends only the fields the user changed", async () => {
+        render(<Panel contacts={[contact({ categories: [{ id: "cat-1", title: "Agency", color: "#38bdf8" }] })]} />);
+        fireEvent.click(screen.getByText("recategorise"));
+        fireEvent.click(screen.getByText("Save changes"));
+
+        await waitFor(() => expect(requested.length).toBe(1));
+        expect(requested[0].url).toBe("/contacts/contact-1");
+        expect(requested[0].data).toEqual({ categories: ["cat-2"] });
     });
 });
