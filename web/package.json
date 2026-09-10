@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "build:pages": "vite build && WARMBLY_CONFIG_OUT=dist/config.js sh ./docker-entrypoint.sh"
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.0.0",

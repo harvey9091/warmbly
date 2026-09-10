@@ -1,0 +1,7 @@
+# Client-side routing on a static host. Without this, every route below the
+# root 404s on a refresh or a shared link: the file genuinely does not exist,
+# and only the app knows the route. nginx does the same thing with try_files.
+#
+# 200, not 301: the URL has to stay what the user asked for, or the router
+# lands on the wrong route.
+/*  /index.html  200
