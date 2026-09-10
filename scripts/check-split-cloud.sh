@@ -48,6 +48,20 @@ else
   skip "shellcheck not installed; skipped"
 fi
 
+# The exec bit has to be what git RECORDS, not what the working tree happens to
+# have: a checkout on a filesystem that does not preserve it silently drops the
+# mode, and the Makefile then fails with "Permission denied" in CI only. This
+# already shipped once.
+for f in "$BUNDLE/setup.sh" "$BUNDLE/certbot-deploy-hook.sh" "$0"; do
+  mode=$(git ls-files -s "$f" 2>/dev/null | awk '{print $1}')
+  [ -n "$mode" ] || continue
+  case "$mode" in
+    100755) ;;
+    *) fail "$f is recorded as $mode; it is executed directly, so it needs 100755 (git update-index --chmod=+x $f)" ;;
+  esac
+done
+ok "scripts are recorded executable"
+
 out=$(sh "$BUNDLE/setup.sh" --help) || fail "--help exited non-zero"
 printf '%s' "$out" | grep -q -- "--domain" || fail "--help does not document --domain"
 ok "--help"
