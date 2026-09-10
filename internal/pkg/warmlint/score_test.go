@@ -461,3 +461,41 @@ func TestLeadIssueNamesBothHalvesWhenTheIssueStraddles(t *testing.T) {
 		t.Errorf("lead issue = %q, want it to name both halves", got)
 	}
 }
+
+// The whole offset map rests on foldIndex producing exactly what strings.ToLower
+// produces: the terms are found in one and counted against the other. Invalid
+// UTF-8 is in the table because a range loop and strings.Map both turn a bad
+// byte into U+FFFD, which is three bytes where the original was one.
+func TestFoldIndexMatchesStringsToLower(t *testing.T) {
+	cases := []string{
+		"", "plain ascii text", "FREE CASH", "İİİ free", "KKK cash", "café",
+		"🎉 free", "Straße", "ǅungla", "ﬁ ligature", "\xff\xfe bad bytes",
+		"mixed İ \xc3\x28 free", strings.Repeat("İ", 40) + " free",
+	}
+	for _, s := range cases {
+		lower, offsets := foldIndex(s)
+		if want := strings.ToLower(s); lower != want {
+			t.Errorf("foldIndex(%q) folded to %q, want %q", s, lower, want)
+		}
+		if offsets == nil {
+			continue
+		}
+		if len(offsets) != len(lower)+1 {
+			t.Errorf("foldIndex(%q): %d offsets for %d bytes", s, len(offsets), len(lower))
+			continue
+		}
+		// Every offset must land on a rune boundary in the original, or a
+		// slice taken at it cuts a rune in half.
+		for i, at := range offsets {
+			if at < 0 || at > len(s) {
+				t.Fatalf("foldIndex(%q): offset %d out of range at %d", s, at, i)
+			}
+			if at < len(s) && !utf8.RuneStart(s[at]) {
+				t.Errorf("foldIndex(%q): offset %d at index %d is mid-rune", s, at, i)
+			}
+		}
+		if offsets[len(offsets)-1] != len(s) {
+			t.Errorf("foldIndex(%q): last offset %d, want %d", s, offsets[len(offsets)-1], len(s))
+		}
+	}
+}
