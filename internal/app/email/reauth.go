@@ -68,13 +68,7 @@ func (s *emailService) OAuthReauth(ctx context.Context, userID string, orgID *uu
 		return nil, xerr
 	}
 
-	url := cfg.AuthCodeURL(
-		state,
-		oauth2.AccessTypeOffline,
-		oauth2.ApprovalForce, // force refresh_token issuance on reconnect
-		// Preselect the mailbox being renewed in the provider's picker.
-		oauth2.SetAuthURLParam("login_hint", account.Email),
-	)
+	url := cfg.AuthCodeURL(state, authCodeOptions(provider, account.Email)...)
 	return &models.EmailOnboardingStartResponse{URL: url, State: state}, nil
 }
 
