@@ -45,10 +45,10 @@ type BrokeredProvider struct {
 // internal API token both sides share.
 func NewBrokered(baseURL, token string) (*BrokeredProvider, error) {
 	if baseURL == "" {
-		return nil, errors.New("kms.brokered: baseURL is required")
+		return nil, errors.New("kms.brokered: no control plane address; set ENCRYPTED_KEYS_BACKEND_URL on the backend to a URL this machine can reach, then re-join this node")
 	}
 	if token == "" {
-		return nil, errors.New("kms.brokered: token is required")
+		return nil, errors.New("kms.brokered: no credential; set INTERNAL_API_TOKEN (or NODE_BROKER_TOKEN) to the same value the backend uses")
 	}
 	if _, err := url.Parse(baseURL); err != nil {
 		return nil, fmt.Errorf("kms.brokered: invalid baseURL: %w", err)

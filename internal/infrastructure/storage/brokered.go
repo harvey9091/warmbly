@@ -36,7 +36,12 @@ import (
 type BrokeredStore struct {
 	baseURL string
 	token   string
-	client  *http.Client
+	// broker talks to the control plane, transfer talks to the object store.
+	// Two clients because the deadlines are not the same question: a presign
+	// is a small local call, a transfer can legitimately be a large object on
+	// a bad link.
+	broker   *http.Client
+	transfer *http.Client
 }
 
 // maxBrokeredBody caps what Put will buffer when the caller's reader cannot
@@ -50,31 +55,38 @@ const maxBrokeredBody = 64 << 20
 // time anyone reads it.
 const brokerTTL = 5 * time.Minute
 
+// Timeouts, because the callers do not supply one. The mailbox sync loop runs
+// on a context derived from context.Background(), so a request that never
+// answers wedges that mailbox forever rather than failing and being retried.
+const (
+	brokerCallTimeout = 15 * time.Second
+	transferTimeout   = 5 * time.Minute
+)
+
 // BrokeredOption configures a BrokeredStore.
 type BrokeredOption func(*BrokeredStore)
 
-// WithBrokeredHTTPClient overrides the client used for both the broker call
-// and the transfer itself.
+// WithBrokeredHTTPClient overrides both clients, for tests and for callers
+// that need a custom transport.
 func WithBrokeredHTTPClient(c *http.Client) BrokeredOption {
-	return func(s *BrokeredStore) { s.client = c }
+	return func(s *BrokeredStore) { s.broker, s.transfer = c, c }
 }
 
 func NewBrokered(baseURL, token string, opts ...BrokeredOption) (*BrokeredStore, error) {
 	if baseURL == "" {
-		return nil, errors.New("storage.brokered: baseURL is required")
+		return nil, errors.New("storage.brokered: no control plane address; set ENCRYPTED_KEYS_BACKEND_URL on the backend to a URL this machine can reach, then re-join this node")
 	}
 	if token == "" {
-		return nil, errors.New("storage.brokered: token is required")
+		return nil, errors.New("storage.brokered: no credential; set INTERNAL_API_TOKEN (or NODE_BROKER_TOKEN) to the same value the backend uses")
 	}
 	if _, err := url.Parse(baseURL); err != nil {
 		return nil, fmt.Errorf("storage.brokered: invalid baseURL: %w", err)
 	}
 	s := &BrokeredStore{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		token:   token,
-		// No global timeout: a large attachment on a slow link is a legitimate
-		// long request, and the per-call context already bounds it.
-		client: &http.Client{},
+		baseURL:  strings.TrimRight(baseURL, "/"),
+		token:    token,
+		broker:   &http.Client{Timeout: brokerCallTimeout},
+		transfer: &http.Client{Timeout: transferTimeout},
 	}
 	for _, o := range opts {
 		o(s)
@@ -115,7 +127,7 @@ func (s *BrokeredStore) presign(ctx context.Context, op PresignOp, key, contentT
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "warmbly-node/storage-brokered")
 
-	resp, err := s.client.Do(req)
+	resp, err := s.broker.Do(req)
 	if err != nil {
 		return out, fmt.Errorf("storage.brokered: presign %s: %w", op, err)
 	}
@@ -152,7 +164,7 @@ func (s *BrokeredStore) do(ctx context.Context, signed presignResponse, body io.
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	return s.client.Do(req)
+	return s.transfer.Do(req)
 }
 
 func (s *BrokeredStore) Get(ctx context.Context, key string) (io.ReadCloser, error) {
@@ -167,12 +179,17 @@ func (s *BrokeredStore) Get(ctx context.Context, key string) (io.ReadCloser, err
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusPartialContent:
 		return resp.Body, nil
-	case http.StatusNotFound, http.StatusForbidden:
-		// A bucket with ListBucket withheld answers a missing key with 403
-		// rather than 404, and a caller checking for ErrNotFound must not have
-		// to know which of the two it is talking to.
+	case http.StatusNotFound:
 		resp.Body.Close()
 		return nil, ErrNotFound
+	case http.StatusForbidden:
+		// Not "missing". The URL is signed for this exact key, so an absent
+		// object answers 404; a 403 means the signature expired in flight or
+		// the signing principal has lost its permission. Reporting that as
+		// ErrNotFound would turn a config error into "the body is gone" on
+		// every send, which is the wrong thing to go looking for.
+		resp.Body.Close()
+		return nil, fmt.Errorf("storage.brokered: get: refused by the object store (403); the signature expired in flight or the control plane's credential no longer grants this bucket")
 	default:
 		resp.Body.Close()
 		return nil, fmt.Errorf("storage.brokered: get: unexpected status %d", resp.StatusCode)
@@ -237,8 +254,13 @@ func (s *BrokeredStore) Has(ctx context.Context, key string) (bool, error) {
 	switch resp.StatusCode {
 	case http.StatusOK:
 		return true, nil
-	case http.StatusNotFound, http.StatusForbidden:
+	case http.StatusNotFound:
 		return false, nil
+	case http.StatusForbidden:
+		// Same reasoning as Get: reporting this as "no such object" would make
+		// a broken credential look like an empty bucket, and the caller would
+		// happily re-store everything it already had.
+		return false, fmt.Errorf("storage.brokered: has: refused by the object store (403); the signature expired in flight or the control plane's credential no longer grants this bucket")
 	default:
 		return false, fmt.Errorf("storage.brokered: has: unexpected status %d", resp.StatusCode)
 	}

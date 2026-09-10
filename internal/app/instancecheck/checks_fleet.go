@@ -68,14 +68,29 @@ func checkFleetBlobsNotShared(ctx context.Context, d Deps, _ Input) *Finding {
 // It keeps heartbeating over HTTP the whole time, so the fleet looks healthy.
 func checkFleetInfraUnreachable(ctx context.Context, d Deps, _ Input) *Finding {
 	var bad []string
-	for _, key := range []string{"NATS_URL", "REDIS", "ENCRYPTED_KEYS_BACKEND_URL"} {
+	for _, key := range []string{"NATS_URL", "REDIS"} {
 		v := env(key)
 		if v == "" {
 			continue
 		}
-		if isLoopbackURL(v) || isContainerInternalURL(v) {
+		if unreachableOffHost(v) {
 			bad = append(bad, fmt.Sprintf("%s=%s", key, v))
 		}
+	}
+	// renderNodeEnv falls back to APP_INTERNAL_URL, so checking only the first
+	// name would pass every instance that uses the second one.
+	backendKey, backendURL := "ENCRYPTED_KEYS_BACKEND_URL", env("ENCRYPTED_KEYS_BACKEND_URL")
+	if backendURL == "" {
+		backendKey, backendURL = "APP_INTERNAL_URL", env("APP_INTERNAL_URL")
+	}
+	switch {
+	case backendURL == "":
+		// Neither is set, so a node is told to call back on nothing. With the
+		// brokered providers that is not a degraded node but one that cannot
+		// open a single key.
+		bad = append(bad, "ENCRYPTED_KEYS_BACKEND_URL is unset")
+	case unreachableOffHost(backendURL):
+		bad = append(bad, fmt.Sprintf("%s=%s", backendKey, backendURL))
 	}
 	if len(bad) == 0 {
 		return nil
@@ -89,6 +104,23 @@ func checkFleetInfraUnreachable(ctx context.Context, d Deps, _ Input) *Finding {
 			"heartbeating over HTTP, and silently reaches neither the bus nor the cache. Set them to addresses "+
 			"every machine in the fleet can use, then re-join the affected nodes.",
 		docsSplitDeployment)
+}
+
+// unreachableOffHost reports whether a value names something only this machine
+// can resolve.
+//
+// isLoopbackURL needs a scheme, and REDIS is sometimes written bare, so the
+// host is recovered either way before it is judged. Missing that meant
+// REDIS=localhost:6379 read as reachable, which is precisely the value most
+// likely to be sitting there.
+func unreachableOffHost(raw string) bool {
+	if isLoopbackURL(raw) || isContainerInternalURL(raw) {
+		return true
+	}
+	if strings.Contains(raw, "://") {
+		return false
+	}
+	return isLoopbackHost(hostOnly(raw))
 }
 
 // isContainerInternalURL matches the service names the shipped compose file

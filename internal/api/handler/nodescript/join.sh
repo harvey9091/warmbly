@@ -178,7 +178,7 @@ write_config() {
   if [ "$DRY_RUN" = "true" ]; then
     log ""
     log "--dry-run: would write $CONFIG_DIR/node.env with:"
-    printf '%s\n' "$NODE_ENV" | sed 's/\(TOKEN=\|KEY=\|SECRET=\|PASSWORD=\).*/\1***/' | sed 's/^/    /'
+    printf '%s\n' "$NODE_ENV" | redact | sed 's/^/    /'
     log ""
     log "--dry-run: would create $CONFIG_DIR/node.local.env if absent, and leave it"
     log "           alone if present. Both files are passed to the container."
@@ -231,6 +231,33 @@ write_config() {
   printf 'WARMBLY_IMAGE_REF=%s/%s:%s\n' \
     "$WARMBLY_IMAGE_REPO" "$WARMBLY_ROLE" "$DESIRED_VERSION" > "$STATE_DIR/image-ref"
   log "Wrote $CONFIG_DIR/node.env"
+}
+
+# redact masks every value in the env that carries a credential, for the
+# --dry-run listing. Two shapes, because they leak differently:
+#
+#   NAME_TOKEN=secret             the whole value goes
+#   NAME=scheme://user:pass@host  only the userinfo goes, so the address the
+#                                 node will actually use stays readable, which
+#                                 is the thing --dry-run exists to show
+#
+# The second shape is why a name list is not enough on its own: PRIMARY_DB,
+# NATS_URL, REDIS and SENTRY_DSN all carry their credential inside a URL and
+# none of them is called TOKEN, KEY, SECRET or PASSWORD.
+#
+# One -e per word rather than a `\|` alternation: alternation in a BRE is a GNU
+# extension, and on a sed without it the expression matches nothing and every
+# secret prints in clear, which is the failure mode this function exists to
+# prevent. Matched as a SUFFIX so ENCRYPTED_KEYS_BACKEND_URL, an address worth
+# reading, is not masked for containing "KEY".
+redact() {
+  sed -e 's/^\([A-Z0-9_]*TOKEN\)=.*/\1=***/' \
+      -e 's/^\([A-Z0-9_]*KEY\)=.*/\1=***/' \
+      -e 's/^\([A-Z0-9_]*SECRET\)=.*/\1=***/' \
+      -e 's/^\([A-Z0-9_]*PASSWORD\)=.*/\1=***/' \
+      -e 's/^\([A-Z0-9_]*DSN\)=.*/\1=***/' \
+      -e 's|^\([A-Z0-9_]*\)=\([a-z][a-z0-9+.-]*://\)[^:/@]*:[^@]*@|\1=\2***:***@|' \
+      -e 's|^\([A-Z0-9_]*\)=\([a-z][a-z0-9+.-]*://\)[^:/@]*@|\1=\2***@|'
 }
 
 # ensure_local_env creates the operator's own env file, once. node.env is

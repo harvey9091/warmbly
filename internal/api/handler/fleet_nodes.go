@@ -308,6 +308,13 @@ func renderNodeEnv(nodeID uuid.UUID, role models.NodeRole, region string) string
 	fmt.Fprintf(&b, "KMS_PROVIDER=%s\n", kmsProvider)
 	fmt.Fprintf(&b, "BLOB_PROVIDER=%s\n", blobProvider)
 
+	// The credential for the two endpoints that open a key and sign a blob
+	// operation. Sent only when the instance issues a separate one; otherwise
+	// the node falls back to the internal token it already has.
+	if v := os.Getenv("NODE_BROKER_TOKEN"); v != "" {
+		fmt.Fprintf(&b, "NODE_BROKER_TOKEN=%s\n", v)
+	}
+
 	for _, k := range nodeEnvKeys {
 		if v := os.Getenv(k); v != "" {
 			fmt.Fprintf(&b, "%s=%s\n", k, v)

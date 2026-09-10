@@ -18,6 +18,8 @@
 #   - a relative BLOB_FS_ROOT is refused rather than mounted
 #   - the local override env file is passed AFTER node.env, so it wins, and is
 #     created without ever truncating one that is already there
+#   - --dry-run masks every credential, including the ones that hide inside a
+#     URL, and does it with an expression this sed actually supports
 set -eu
 
 SCRIPT="internal/api/handler/nodescript/join.sh"
@@ -126,6 +128,39 @@ for variant_env in "" "$FS_BLOB_ENV"; do
   fi
 done
 ok "no EnvironmentFile is node-writable (every render)"
+
+# --dry-run prints the config a node would receive, which now includes a
+# database DSN. Run the real function against the shapes a node is actually
+# sent, rather than reading the expression: the first version of it used a BRE
+# alternation, which is a GNU extension, so on any other sed it matched nothing
+# and printed every secret in clear while looking correct in review.
+redact_fn=$(awk '/^redact\(\) \{/ { inside = 1 } inside { print } inside && $0 == "}" { exit }' "$SCRIPT")
+[ -n "$redact_fn" ] || fail "function redact() not found in $SCRIPT"
+
+redacted=$(printf '%s\n' "$redact_fn" > /tmp/warmbly-redact.$$ && \
+  printf '%s\n' \
+    'PRIMARY_DB=postgres://warmbly:dbsecret@db.example.com:5432/warmbly' \
+    'NATS_URL=tls://bussecret@bus.example.com:4222' \
+    'REDIS=rediss://:cachesecret@bus.example.com:6380' \
+    'INTERNAL_API_TOKEN=tokensecret' \
+    'NODE_BROKER_TOKEN=brokersecret' \
+    'CREDENTIALS_ENCRYPTION_KEY=keysecret' \
+    'BOX_GOOGLE_CLIENT_SECRET=oauthsecret' \
+    'ENCRYPTED_KEYS_BACKEND_URL=https://api.example.com' \
+  | sh -c ". /tmp/warmbly-redact.$$; redact")
+rm -f "/tmp/warmbly-redact.$$"
+
+for leaked in dbsecret bussecret cachesecret tokensecret brokersecret keysecret oauthsecret; do
+  if printf '%s\n' "$redacted" | grep -q "$leaked"; then
+    fail "--dry-run prints $leaked in clear; the redaction does not cover it on this sed"
+  fi
+done
+# The addresses are the reason --dry-run exists, so they have to survive.
+printf '%s\n' "$redacted" | grep -q 'db.example.com:5432' \
+  || fail "redaction ate the database host; only the credential should go"
+printf '%s\n' "$redacted" | grep -q '^ENCRYPTED_KEYS_BACKEND_URL=https://api.example.com$' \
+  || fail "redaction masked an address that carries no credential"
+ok "--dry-run masks every credential and keeps the addresses"
 
 # Two invariants that leave no trace in the rendered unit and so cannot be
 # caught above: both were real defects, so they are asserted at their call

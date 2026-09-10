@@ -73,16 +73,59 @@ func TestBrokeredGet(t *testing.T) {
 	}
 }
 
-// A bucket that withholds ListBucket answers a missing key with 403 rather
-// than 404, and callers check for ErrNotFound without knowing which.
+// A URL signed for one key answers a missing object with 404.
 func TestBrokeredGetMissingIsNotFound(t *testing.T) {
-	for _, status := range []int{http.StatusNotFound, http.StatusForbidden} {
-		s, _ := brokerFor(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(status)
-		}))
-		if _, err := s.Get(context.Background(), "gone"); !errors.Is(err, ErrNotFound) {
-			t.Errorf("status %d: got %v, want ErrNotFound", status, err)
-		}
+	s, _ := brokerFor(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	if _, err := s.Get(context.Background(), "gone"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("got %v, want ErrNotFound", err)
+	}
+}
+
+// A 403 is an expired signature or a credential that lost the bucket, not a
+// missing object. Reporting it as ErrNotFound turns a config error into "the
+// body is gone" on every send, and sends the operator looking for the wrong
+// thing entirely.
+func TestBrokeredRefusedIsNotMissing(t *testing.T) {
+	s, _ := brokerFor(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	_, err := s.Get(context.Background(), "k")
+	if err == nil {
+		t.Fatal("a 403 was accepted")
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Error("a 403 was reported as a missing object")
+	}
+	if !strings.Contains(err.Error(), "403") {
+		t.Errorf("error does not name the status: %v", err)
+	}
+
+	// Has must not answer "no such object" either, or a caller re-stores
+	// everything it already had.
+	ok, err := s.Has(context.Background(), "k")
+	if err == nil {
+		t.Fatal("Has accepted a 403")
+	}
+	if ok {
+		t.Error("Has reported true on a refusal")
+	}
+}
+
+// The callers do not supply a deadline: the mailbox sync loop runs on a
+// context derived from Background, so a request that never answers has to be
+// bounded here or it wedges that mailbox forever.
+func TestBrokeredClientsHaveTimeouts(t *testing.T) {
+	s, err := NewBrokered("https://x", "tok")
+	if err != nil {
+		t.Fatalf("NewBrokered: %v", err)
+	}
+	if s.broker.Timeout == 0 {
+		t.Error("the broker client has no timeout")
+	}
+	if s.transfer.Timeout == 0 {
+		t.Error("the transfer client has no timeout")
 	}
 }
 

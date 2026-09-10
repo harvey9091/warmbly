@@ -88,11 +88,14 @@ create_kms() {
   KEY_ALIAS="alias/$PREFIX"
   if aws kms describe-key --key-id "$KEY_ALIAS" --region "$REGION" >/dev/null 2>&1; then
     log "KMS: $KEY_ALIAS already exists"
+    KEY_ARN=$(aws kms describe-key --key-id "$KEY_ALIAS" --region "$REGION" \
+      --query 'KeyMetadata.Arn' --output text)
     return 0
   fi
   log "KMS: creating $KEY_ALIAS"
   if [ "$DRY_RUN" = "true" ]; then
     log "  would create a symmetric key and alias it $KEY_ALIAS"
+    KEY_ARN="arn:aws:kms:$REGION:$ACCOUNT_ID:key/<created>"
     return 0
   fi
   key_id=$(aws kms create-key \
@@ -100,6 +103,8 @@ create_kms() {
     --region "$REGION" \
     --query 'KeyMetadata.KeyId' --output text)
   aws kms create-alias --alias-name "$KEY_ALIAS" --target-key-id "$key_id" --region "$REGION"
+  KEY_ARN=$(aws kms describe-key --key-id "$key_id" --region "$REGION" \
+    --query 'KeyMetadata.Arn' --output text)
   # Losing this key makes every stored mailbox credential unreadable, so it
   # gets the longest window AWS offers against an accidental delete.
   aws kms enable-key-rotation --key-id "$key_id" --region "$REGION" || true
@@ -138,6 +143,10 @@ create_bucket() {
 
 # control_policy is what the backend and consumer need: mint and open data
 # keys, read and write the bucket, send platform mail.
+#
+# Resource is the key ARN, never the alias ARN. IAM does not resolve an alias
+# in a Resource element, so a policy naming one grants nothing and the first
+# GenerateDataKey fails with AccessDenied against a policy that reads correctly.
 control_policy() {
   cat <<POLICY
 {
@@ -147,7 +156,7 @@ control_policy() {
       "Sid": "DataKeys",
       "Effect": "Allow",
       "Action": ["kms:GenerateDataKey", "kms:GenerateDataKeyWithoutPlaintext", "kms:Decrypt", "kms:DescribeKey"],
-      "Resource": "arn:aws:kms:$REGION:$ACCOUNT_ID:alias/$PREFIX"
+      "Resource": "$KEY_ARN"
     },
     {
       "Sid": "Blobs",
@@ -183,7 +192,7 @@ node_policy() {
       "Sid": "OpenDataKeys",
       "Effect": "Allow",
       "Action": ["kms:Decrypt"],
-      "Resource": "arn:aws:kms:$REGION:$ACCOUNT_ID:alias/$PREFIX"
+      "Resource": "$KEY_ARN"
     },
     {
       "Sid": "Blobs",
@@ -216,6 +225,7 @@ create_user() {
 }
 
 create_users() {
+  [ -n "${KEY_ARN:-}" ] || die "internal: the key ARN was not resolved before the policies were built"
   create_user "$PREFIX-control" "$(control_policy)"
   if [ "$WITH_NODE_USER" = "true" ]; then
     create_user "$PREFIX-node" "$(node_policy)"

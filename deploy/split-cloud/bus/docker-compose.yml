@@ -8,8 +8,9 @@
 # Before the first start:
 #   1. point bus.example.com at this machine
 #   2. get a certificate for it (certbot certonly --standalone -d bus.example.com)
-#   3. install certbot-deploy-hook.sh so renewals land in /opt/warmbly/certs
-#   4. write .env next to this file with NATS_TOKEN and REDIS_PASSWORD
+#   3. groupadd -g 2000 warmbly-certs, the group that may read the private key
+#   4. install certbot-deploy-hook.sh so renewals land in /opt/warmbly/certs
+#   5. write .env next to this file with NATS_TOKEN and REDIS_PASSWORD
 #
 #   NATS_TOKEN=$(openssl rand -hex 32)
 #   REDIS_PASSWORD=$(openssl rand -hex 32)
@@ -21,6 +22,10 @@ services:
     command: ["-c", "/etc/nats/nats.conf", "-js", "-sd", "/data", "-m", "8222"]
     environment:
       NATS_TOKEN: ${NATS_TOKEN:?set NATS_TOKEN in .env}
+    # The private key is 0640 and owned by this group, so neither container
+    # needs it world-readable and nothing else on the box can read it.
+    group_add:
+      - "2000"
     volumes:
       - ./nats.conf:/etc/nats/nats.conf:ro
       - /opt/warmbly/certs:/certs:ro
@@ -54,6 +59,8 @@ services:
       --requirepass ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
       --appendonly yes
       --maxmemory-policy noeviction
+    group_add:
+      - "2000"
     volumes:
       - /opt/warmbly/certs:/certs:ro
       - redis_data:/data

@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -21,6 +22,38 @@ import (
 //	  body {"op":"get|put|head|delete","key":"...","content_type":"..."}
 //	  200  {"url":"...","method":"GET","expires_in":300}
 //	  501  the instance's blob backend cannot sign (filesystem)
+
+// nodeKeyPrefixes are the object prefixes a node may have signed. A signed URL
+// is the whole authorisation, so without this the broker turns one token into
+// read, write and delete over every object in the bucket, including avatars,
+// form assets and workspace export archives that no node has any business
+// touching.
+//
+// The list is what a node actually reaches:
+//
+//	emails/       transport bodies the backend wrote for a send
+//	attachments/  campaign attachments the send pipeline references
+//	users/        mailbox bodies a sync stores
+//
+// It has to grow when a node starts touching a new prefix. A miss is a refused
+// operation that names the key, not a mystery, which is the tradeoff being
+// bought here.
+var nodeKeyPrefixes = []string{"emails/", "attachments/", "users/"}
+
+// keyAllowedForNode reports whether key sits under a prefix a node may reach.
+// Traversal is rejected outright rather than cleaned: no legitimate key
+// contains "..", so the only caller producing one is probing.
+func keyAllowedForNode(key string) bool {
+	if strings.Contains(key, "..") {
+		return false
+	}
+	for _, p := range nodeKeyPrefixes {
+		if strings.HasPrefix(key, p) {
+			return true
+		}
+	}
+	return false
+}
 
 // blobPresignTTL is how long a signed URL lives. Long enough for a large
 // attachment over a slow link, short enough that one captured in a log is
@@ -57,6 +90,12 @@ func (h *Handler) InternalPresignBlob(c *gin.Context) {
 	}
 	if req.Key == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "key required"})
+		return
+	}
+	if !keyAllowedForNode(req.Key) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "key " + req.Key + " is outside the prefixes a node may reach",
+		})
 		return
 	}
 

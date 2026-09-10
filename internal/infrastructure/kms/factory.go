@@ -42,7 +42,13 @@ func FromEnv(ctx context.Context, awscfg aws.Config, fallbackAWSKeyID string) (P
 		if baseURL == "" {
 			baseURL = os.Getenv("WARMBLY_BACKEND_URL")
 		}
-		token := os.Getenv("INTERNAL_API_TOKEN")
+		// The broker endpoints take their own credential when the instance
+		// issues one, so a split deployment can keep this off the edge
+		// services. It falls back to the shared internal token.
+		token := os.Getenv("NODE_BROKER_TOKEN")
+		if token == "" {
+			token = os.Getenv("INTERNAL_API_TOKEN")
+		}
 		if token == "" {
 			token = os.Getenv("ENCRYPTED_KEYS_WORKER_TOKEN")
 		}
