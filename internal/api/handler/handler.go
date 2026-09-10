@@ -72,6 +72,7 @@ import (
 	"github.com/warmbly/warmbly/internal/pkg/generation"
 
 	"github.com/warmbly/warmbly/internal/infrastructure/encryptedkeys"
+	"github.com/warmbly/warmbly/internal/infrastructure/kms"
 	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
 	"github.com/warmbly/warmbly/internal/infrastructure/storage"
 	"github.com/warmbly/warmbly/internal/models"
@@ -274,6 +275,12 @@ type Handler struct {
 	// access. Backend processes use Postgres directly; workers use the
 	// HTTP-proxy implementation.
 	EncryptedKeys encryptedkeys.Store
+
+	// The instance's root of trust, used by /api/v1/internal/dek/decrypt to
+	// open a sealed key for a node that holds no KMS credential of its own.
+	// Nothing else in the handler layer touches it: application crypto goes
+	// through the cipher service.
+	KMS kms.Provider
 
 	// Worker messageId -> internal email map, served to workers over HTTPS at
 	// /api/v1/internal/email-message-map for the same no-direct-Postgres reason

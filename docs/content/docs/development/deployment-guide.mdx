@@ -727,7 +727,13 @@ The script enrols the node, writes the config the control plane hands back to `/
 The config handed to a node is generated from the backend's own environment. On a stock local install that means `ENCRYPTED_KEYS_BACKEND_URL=http://localhost:8080`, `NATS_URL=nats://nats:4222`, and `REDIS=redis://redis:6379`, none of which resolve on another machine. Before adding a remote node, set `API_PUBLIC_URL`, `NATS_URL`, and `REDIS` on the backend to addresses the machine can actually reach, and open those ports.
 </Callout>
 
-That config carries the decryption material the node needs: the internal API token, `KMS_LOCAL_MASTER_KEY`, and `CREDENTIALS_ENCRYPTION_KEY`. Serve the API over HTTPS before adding a node across a network you do not control. It deliberately does not include `PRIMARY_DB`: a worker reaches relational data through the internal API and nothing else.
+That config carries the decryption material the node needs: the internal API token, `KMS_LOCAL_MASTER_KEY`, and `CREDENTIALS_ENCRYPTION_KEY`. Serve the API over HTTPS before adding a node across a network you do not control.
+
+`PRIMARY_DB` reaches a consumer, which opens Postgres itself, and never a worker, which reaches relational data through the internal API and nothing else.
+
+Nothing else in the config needs a credential either. An instance running `KMS_PROVIDER=aws` or `BLOB_PROVIDER=s3` hands its nodes the brokered form of each, so a machine in the fleet opens sealed keys and signs blob operations through the internal API rather than carrying a cloud credential of its own. Blob bytes still go directly between the node and the object store. [Split deployment](/development/split-deployment/) covers the whole shape.
+
+`/etc/warmbly/node.local.env`, next to the generated file, is created once and never rewritten, and the container reads it second. Anything you add there survives a re-join and wins over the generated value.
 
 `BLOB_PROVIDER=filesystem` does not survive a fleet. A worker reads the message body the backend wrote, so the two need the same storage with permissions that let both reach it, and a node on another machine has neither. The join script creates and mounts `BLOB_FS_ROOT` so the node starts, and warns you, but sends will fail when the worker cannot read the body. Use `BLOB_PROVIDER=s3` with a bucket both sides can reach before running nodes off-host.
 

@@ -52,3 +52,53 @@ func internalAuth(c *gin.Context) {
 	}
 	c.Next()
 }
+
+// NodeBrokerAuthMiddleware protects the two endpoints that perform a
+// privileged operation on a caller's behalf: opening a sealed data key, and
+// signing a blob operation.
+//
+// They are a step up from the rest of the internal API, which only moves
+// records around. A caller here gets plaintext key material and a URL into the
+// object store, so the token that opens them should not have to be the same
+// one the tracking and forms services carry: those are internet-facing, and
+// widening what their credential is worth is the whole risk.
+//
+// NODE_BROKER_TOKEN is that separate credential. It falls back to
+// INTERNAL_API_TOKEN when unset, so an existing single-token deployment keeps
+// working, and a split deployment can hand nodes something the edge services
+// never see.
+func (h *Handler) NodeBrokerAuthMiddleware() gin.HandlerFunc {
+	return nodeBrokerAuth
+}
+
+var (
+	brokerTokenOnce sync.Once
+	brokerToken     []byte
+)
+
+func loadBrokerToken() {
+	if v := os.Getenv("NODE_BROKER_TOKEN"); v != "" {
+		brokerToken = []byte(v)
+		return
+	}
+	brokerToken = []byte(os.Getenv("INTERNAL_API_TOKEN"))
+}
+
+func nodeBrokerAuth(c *gin.Context) {
+	brokerTokenOnce.Do(loadBrokerToken)
+	if len(brokerToken) == 0 {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "internal auth not configured"})
+		return
+	}
+	header := c.GetHeader("Authorization")
+	if !strings.HasPrefix(header, "Bearer ") {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
+		return
+	}
+	provided := []byte(strings.TrimPrefix(header, "Bearer "))
+	if subtle.ConstantTimeCompare(provided, brokerToken) != 1 {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid bearer token"})
+		return
+	}
+	c.Next()
+}

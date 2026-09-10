@@ -3,8 +3,45 @@ package storage
 import (
 	"context"
 	"io"
+	"net/http"
 	"time"
 )
+
+// PresignOp is the verb a presigned URL authorises. The set is what a node
+// running against object storage it has no credentials for actually needs:
+// read a body, write one, check existence, remove it.
+type PresignOp string
+
+const (
+	PresignOpGet    PresignOp = "get"
+	PresignOpPut    PresignOp = "put"
+	PresignOpHead   PresignOp = "head"
+	PresignOpDelete PresignOp = "delete"
+)
+
+// Valid reports whether op is one this package knows how to sign. Callers that
+// take an op off the wire must check it before use.
+func (o PresignOp) Valid() bool {
+	switch o {
+	case PresignOpGet, PresignOpPut, PresignOpHead, PresignOpDelete:
+		return true
+	}
+	return false
+}
+
+// Method is the HTTP verb a caller sends to a URL signed for op.
+func (o PresignOp) Method() string {
+	switch o {
+	case PresignOpPut:
+		return http.MethodPut
+	case PresignOpHead:
+		return http.MethodHead
+	case PresignOpDelete:
+		return http.MethodDelete
+	default:
+		return http.MethodGet
+	}
+}
 
 // Store is the abstraction over blob storage. One implementation suffices for
 // AWS S3, MinIO, Cloudflare R2, Backblaze B2, and Hetzner Object Storage — all
@@ -40,6 +77,13 @@ type Store interface {
 	// the browser) to fetch the object directly. Implementations that can't
 	// produce one (filesystem, in particular) should return ErrUnsupported.
 	PresignedGetURL(ctx context.Context, key string, ttl time.Duration) (string, error)
+
+	// PresignedURL is PresignedGetURL generalised to the other verbs, so a
+	// caller that holds no credential for the bucket can still work against it
+	// through a party that does. contentType applies to PresignOpPut and is
+	// ignored otherwise. Same contract on backends that cannot sign:
+	// ErrUnsupported.
+	PresignedURL(ctx context.Context, op PresignOp, key, contentType string, ttl time.Duration) (string, error)
 
 	// Name returns the implementation identifier for admin UI / audit logs.
 	Name() string

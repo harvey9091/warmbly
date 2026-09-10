@@ -16,6 +16,10 @@
 #     systemd variable, not a command substitution systemd would never expand
 #   - the mount list always includes the agent directory
 #   - a relative BLOB_FS_ROOT is refused rather than mounted
+#   - the local override env file is passed AFTER node.env, so it wins, and is
+#     created without ever truncating one that is already there
+#   - --dry-run masks every credential, including the ones that hide inside a
+#     URL, and does it with an expression this sed actually supports
 set -eu
 
 SCRIPT="internal/api/handler/nodescript/join.sh"
@@ -85,6 +89,15 @@ printf '%s\n' "$unit" | grep -q 'ExecStart=.*-v /var/lib/warmbly/node:/var/lib/w
   || fail "the agent directory must always be mounted, or auto-update stops silently"
 ok "rendered unit (no blob mount)"
 
+# node.local.env is the operator's half of the config and the only one a
+# re-join does not rewrite. Docker applies --env-file in order, so it has to
+# come AFTER node.env or an override silently loses to the generated value.
+# Matched as one ordered pattern rather than two greps, which would pass with
+# the files reversed.
+printf '%s\n' "$unit" | grep -q 'ExecStart=.*--env-file /etc/warmbly/node.env .*--env-file /etc/warmbly/node.local.env' \
+  || fail "node.local.env must be passed after node.env, or a local override loses to the generated value"
+ok "local override env file is passed last"
+
 # With local blobs the root has to be mounted too, and the line must still be
 # one line: a multi-line mount list is how the continuation collapsed before.
 unit=$(NODE_ENV="$FS_BLOB_ENV" sh "$SCRIPT" --print-unit) || fail "--print-unit with blobs failed"
@@ -115,6 +128,39 @@ for variant_env in "" "$FS_BLOB_ENV"; do
   fi
 done
 ok "no EnvironmentFile is node-writable (every render)"
+
+# --dry-run prints the config a node would receive, which now includes a
+# database DSN. Run the real function against the shapes a node is actually
+# sent, rather than reading the expression: the first version of it used a BRE
+# alternation, which is a GNU extension, so on any other sed it matched nothing
+# and printed every secret in clear while looking correct in review.
+redact_fn=$(awk '/^redact\(\) \{/ { inside = 1 } inside { print } inside && $0 == "}" { exit }' "$SCRIPT")
+[ -n "$redact_fn" ] || fail "function redact() not found in $SCRIPT"
+
+redacted=$(printf '%s\n' "$redact_fn" > /tmp/warmbly-redact.$$ && \
+  printf '%s\n' \
+    'PRIMARY_DB=postgres://warmbly:dbsecret@db.example.com:5432/warmbly' \
+    'NATS_URL=tls://bussecret@bus.example.com:4222' \
+    'REDIS=rediss://:cachesecret@bus.example.com:6380' \
+    'INTERNAL_API_TOKEN=tokensecret' \
+    'NODE_BROKER_TOKEN=brokersecret' \
+    'CREDENTIALS_ENCRYPTION_KEY=keysecret' \
+    'BOX_GOOGLE_CLIENT_SECRET=oauthsecret' \
+    'ENCRYPTED_KEYS_BACKEND_URL=https://api.example.com' \
+  | sh -c ". /tmp/warmbly-redact.$$; redact")
+rm -f "/tmp/warmbly-redact.$$"
+
+for leaked in dbsecret bussecret cachesecret tokensecret brokersecret keysecret oauthsecret; do
+  if printf '%s\n' "$redacted" | grep -q "$leaked"; then
+    fail "--dry-run prints $leaked in clear; the redaction does not cover it on this sed"
+  fi
+done
+# The addresses are the reason --dry-run exists, so they have to survive.
+printf '%s\n' "$redacted" | grep -q 'db.example.com:5432' \
+  || fail "redaction ate the database host; only the credential should go"
+printf '%s\n' "$redacted" | grep -q '^ENCRYPTED_KEYS_BACKEND_URL=https://api.example.com$' \
+  || fail "redaction masked an address that carries no credential"
+ok "--dry-run masks every credential and keeps the addresses"
 
 # Two invariants that leave no trace in the rendered unit and so cannot be
 # caught above: both were real defects, so they are asserted at their call
@@ -155,5 +201,27 @@ install_body=$(body_of install_units)
 printf '%s\n' "$install_body" | awk '$1 == "ensure_blob_root" { found = 1 } END { exit !found }' \
   || fail "install_units must call ensure_blob_root as a standalone statement, or a filesystem-blob node restart-loops"
 ok "blob root is prepared before the unit is installed"
+
+# The unit names node.local.env, so a join that does not create it leaves the
+# service unable to start at all: docker refuses a missing --env-file.
+write_body=$(body_of write_config)
+printf '%s\n' "$write_body" | awk '$1 == "ensure_local_env" { found = 1 } END { exit !found }' \
+  || fail "write_config must call ensure_local_env as a standalone statement; the unit names the file and docker refuses a missing --env-file"
+ok "local override env file is created on join"
+
+# The whole point of the file is that a re-join keeps it. A creation path that
+# can truncate would discard the credential an operator put there, which is
+# both silent and unrecoverable.
+# Matched on the shape of the invariant rather than one spelling of it: some
+# existence test naming the file, before the line that writes it. `if [ -f ]`,
+# `if ! test -f` and an AND-OR all satisfy this; only dropping the guard does
+# not.
+local_body=$(body_of ensure_local_env)
+printf '%s\n' "$local_body" | awk '
+  /-f .*node\.local\.env/                  { guard = NR }
+  /> *"?\$CONFIG_DIR\/node\.local\.env"?/ { write = NR }
+  END { exit !(guard && write && guard < write) }' \
+  || fail "ensure_local_env must test for an existing file before writing one, or a re-join truncates the operator's file"
+ok "an existing local override file is never truncated"
 
 printf 'check-join-script: all checks passed\n'

@@ -121,6 +121,23 @@ func Run(
 	// Internal backend-to-backend endpoints. Workers call these instead of
 	// touching Postgres directly, per the no-direct-data-services rule in
 	// CLAUDE.md. Auth: shared bearer token (INTERNAL_API_TOKEN).
+	// The two broker endpoints sit in their own group. They perform a
+	// privileged operation for the caller rather than moving a record, so they
+	// take NODE_BROKER_TOKEN, which falls back to INTERNAL_API_TOKEN but lets a
+	// split deployment keep the edge services off this credential.
+	broker := r.Group("/api/v1/internal")
+	broker.Use(m.NodeBrokerAuthMiddleware())
+	{
+		// Opens a sealed data key for a node running KMS_PROVIDER=brokered, so
+		// a machine you own needs no cloud credential of its own.
+		broker.POST("/dek/decrypt", h.InternalDecryptDEK)
+
+		// Signs one blob operation for a node running BLOB_PROVIDER=brokered.
+		// The node then transfers directly against the object store, so bodies
+		// and attachments never pass through here.
+		broker.POST("/blobs/presign", h.InternalPresignBlob)
+	}
+
 	internal := r.Group("/api/v1/internal")
 	internal.Use(m.InternalAuthMiddleware())
 	{
