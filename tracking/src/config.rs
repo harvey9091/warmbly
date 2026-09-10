@@ -225,9 +225,10 @@ impl Config {
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| internal_api_token.clone());
 
-        let scanner_builtins = env::var("TRACKING_SCANNER_BUILTINS")
-            .map(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "false" | "0" | "no"))
-            .unwrap_or(true);
+        let scanner_builtins = parse_bool(
+            &env::var("TRACKING_SCANNER_BUILTINS").unwrap_or_default(),
+            true,
+        );
         let scanner_networks = env::var("TRACKING_SCANNER_NETWORKS").unwrap_or_default();
         let scanner_click_networks =
             env::var("TRACKING_SCANNER_CLICK_NETWORKS").unwrap_or_default();
@@ -360,9 +361,10 @@ impl Config {
             client_ip_header: env::var("TRACKING_CLIENT_IP_HEADER")
                 .unwrap_or_else(|_| "x-forwarded-for".to_string())
                 .to_ascii_lowercase(),
-            scanner_builtins: env::var("TRACKING_SCANNER_BUILTINS")
-                .map(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "false" | "0" | "no"))
-                .unwrap_or(true),
+            scanner_builtins: parse_bool(
+                &env::var("TRACKING_SCANNER_BUILTINS").unwrap_or_default(),
+                true,
+            ),
             scanner_networks: env::var("TRACKING_SCANNER_NETWORKS").unwrap_or_default(),
             scanner_click_networks: env::var("TRACKING_SCANNER_CLICK_NETWORKS").unwrap_or_default(),
             scanner_asn_header: env::var("TRACKING_SCANNER_ASN_HEADER")
@@ -484,4 +486,38 @@ pub fn parse_trusted_proxies(raw: &str) -> Vec<ipnet::IpNet> {
                 .or_else(|| v.parse::<std::net::IpAddr>().ok().map(ipnet::IpNet::from))
         })
         .collect()
+}
+
+/// Reads an on/off variable the way the backend's own configuration registry
+/// does, so the value the admin panel reports and the value this service acts
+/// on can never disagree: only those words decide, anything else is the
+/// default. `off` in particular reads as false there, and used to read as true
+/// here.
+fn parse_bool(raw: &str, default: bool) -> bool {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => true,
+        "0" | "false" | "no" | "off" => false,
+        _ => default,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_bool;
+
+    #[test]
+    fn parse_bool_agrees_with_the_backend_registry() {
+        for on in ["1", "true", "TRUE", "yes", "on", " On "] {
+            assert!(parse_bool(on, false), "{on:?} should be true");
+        }
+        for off in ["0", "false", "FALSE", "no", "off", " Off "] {
+            assert!(!parse_bool(off, true), "{off:?} should be false");
+        }
+        // Anything else, empty included, leaves the default standing rather
+        // than being read as a value.
+        for other in ["", "  ", "maybe", "2"] {
+            assert!(parse_bool(other, true), "{other:?} should keep true");
+            assert!(!parse_bool(other, false), "{other:?} should keep false");
+        }
+    }
 }

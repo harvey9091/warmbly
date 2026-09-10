@@ -269,16 +269,6 @@ pub async fn track_click(
         return Redirect::temporary(&link.destination).into_response();
     }
 
-    // When the workspace registered the destination's host for website
-    // tracking, the ticket rides along so the snippet can tie the browser to
-    // the recipient. The ticket is opaque and per-recipient: it names no
-    // destination and no secret, only "the click the backend already knows".
-    let target = if link.identify {
-        with_identify_param(&link.destination, &link_id)
-    } else {
-        link.destination.clone()
-    };
-
     // Safe Links and its peers redirect the browser to the destination rather
     // than fetching it, so a person's click always reaches us from the
     // person's own address. A ticket walked from a mail-filtering network is
@@ -287,6 +277,13 @@ pub async fn track_click(
         .scanners
         .classify(&ip, &headers, trusted, Request::Click)
         .map(|label| label.to_string());
+
+    let target = redirect_target(
+        &link.destination,
+        &link_id,
+        link.identify,
+        scanner.as_deref(),
+    );
 
     // Dedupe repeat clicks of the same ticket from the same source
     if state.is_duplicate("CLICK", &link_id, &ip_hash).await {
@@ -394,6 +391,30 @@ async fn spend_unsubscribe_budget(
         return None;
     }
     Some((StatusCode::TOO_MANY_REQUESTS, "Slow down").into_response())
+}
+
+/// Where a click is sent. When the workspace registered the destination's host
+/// for website tracking, the identification ticket rides along so the snippet
+/// can tie the browser to the recipient; it is opaque and per-recipient,
+/// naming no destination and no secret, only "the click the backend already
+/// knows".
+///
+/// A recognised scanner is sent to the bare destination, the same as one
+/// caught by its user agent: the ticket reaches the page's snippet, which
+/// posts it to the hit endpoint, and the backend files that page view against
+/// the recipient. A gateway walking the link would show up as the person
+/// browsing the site.
+fn redirect_target(
+    destination: &str,
+    ticket: &str,
+    identify: bool,
+    scanner: Option<&str>,
+) -> String {
+    if identify && scanner.is_none() {
+        with_identify_param(destination, ticket)
+    } else {
+        destination.to_string()
+    }
 }
 
 /// Query parameter the click redirect appends and the snippet strips.
@@ -641,6 +662,37 @@ fn hash_ip(key: &str, ip: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The ticket identifies the recipient to the destination's own analytics.
+    // Handing it to a security gateway files the gateway's fetch as that
+    // person's visit, which is the same reason the user-agent path above
+    // redirects scanners to the bare destination.
+    #[test]
+    fn a_scanner_is_never_handed_the_identification_ticket() {
+        assert_eq!(
+            redirect_target("https://x.com/p", "abc", true, None),
+            "https://x.com/p?wbly_t=abc"
+        );
+        assert_eq!(
+            redirect_target(
+                "https://x.com/p",
+                "abc",
+                true,
+                Some("microsoft-365-protection")
+            ),
+            "https://x.com/p"
+        );
+        // A destination the workspace never registered carries no ticket
+        // either way, and the redirect itself always happens.
+        assert_eq!(
+            redirect_target("https://x.com/p", "abc", false, None),
+            "https://x.com/p"
+        );
+        assert_eq!(
+            redirect_target("https://x.com/p", "abc", false, Some("scanner")),
+            "https://x.com/p"
+        );
+    }
 
     #[test]
     fn identify_param_keeps_query_and_fragment() {

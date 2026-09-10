@@ -31,18 +31,21 @@
 2a01:111:f400::/48  all     microsoft-365-protection
 2a01:111:f403::/48  all     microsoft-365-protection
 
-# The rest of Microsoft's network, by ASN. Defender detonation is not confined
-# to the ranges above, so this is what catches a scan from Azure. Clicks only:
-# the same ASNs carry Outlook on the web's image proxy, and treating their
-# pixel fetches as machines would zero the open rate of every Outlook.com and
-# Microsoft 365 recipient. A click ticket is different: Safe Links redirects
-# the browser to the destination rather than fetching it, so a person's own
-# click always arrives from the person's own address.
-asn:8075            clicks  microsoft
-asn:8074            clicks  microsoft
-asn:12076           clicks  microsoft
-
-# Google, for the same reason and with the same asymmetry: Gmail's image proxy
-# is the only open signal Gmail exposes and must keep counting, while a
-# person's click on a Gmail link comes from their own browser.
-asn:15169           clicks  google
+# The rest of Microsoft's and Google's networks, by ASN. Defender detonation is
+# not confined to the ranges above, so these catch a scan that runs from Azure
+# instead. They are NOT enabled by default and are here to be uncommented, or
+# set through TRACKING_SCANNER_CLICK_NETWORKS, as a deliberate trade-off:
+#
+#   - clicks only, never opens. Both companies proxy external images for their
+#     web mail, so counting their pixel fetches as machines would zero the open
+#     rate of every Outlook.com, Microsoft 365 and Gmail recipient.
+#   - even on clicks these are whole cloud allocations, not scanner ranges.
+#     A recipient whose browser egresses through Azure (Windows 365, Azure
+#     Virtual Desktop, a NAT gateway) or Google Cloud is inside them, and their
+#     real click would be recorded as automated and fire nothing. Turn these on
+#     when your recipients' scanner noise costs you more than that.
+#
+# asn:8075          clicks  microsoft
+# asn:8074          clicks  microsoft
+# asn:12076         clicks  microsoft
+# asn:15169         clicks  google

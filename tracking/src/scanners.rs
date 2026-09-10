@@ -255,12 +255,24 @@ mod tests {
         );
     }
 
-    // The whole of Microsoft's network is a scanner for click tickets and must
-    // never be one for pixels: Outlook on the web fetches external images
-    // through Microsoft's own proxy, so a genuine open arrives from there.
+    // A whole cloud allocation is too broad to ship on: a recipient whose
+    // browser egresses through Azure or Google Cloud is inside one, and their
+    // real click would be recorded as automated. The catalogue documents them
+    // and leaves them commented; an operator opts in per entry.
     #[test]
-    fn microsoft_asn_is_clicks_only() {
+    fn whole_cloud_asns_are_not_on_by_default() {
         let s = builtins();
+        let h = hdr(&[("cf-asn", "8075")]);
+        assert_eq!(s.classify("13.107.128.5", &h, true, Request::Click), None);
+        assert_eq!(s.classify("13.107.128.5", &h, true, Request::Open), None);
+    }
+
+    // Opted into, an ASN is a scanner for click tickets and must never be one
+    // for pixels: Outlook on the web fetches external images through
+    // Microsoft's own proxy, so a genuine open arrives from there.
+    #[test]
+    fn an_opted_in_asn_is_clicks_only() {
+        let s = ScannerNetworks::new(false, "", "asn:8075 microsoft", Some("cf-asn".into()));
         let h = hdr(&[("cf-asn", "8075")]);
         assert_eq!(
             s.classify("13.107.128.5", &h, true, Request::Click)
@@ -290,7 +302,7 @@ mod tests {
     // not to be labelled at all.
     #[test]
     fn asn_header_is_ignored_from_an_untrusted_peer() {
-        let s = builtins();
+        let s = ScannerNetworks::new(false, "", "asn:8075 microsoft", Some("cf-asn".into()));
         let h = hdr(&[("cf-asn", "8075")]);
         assert_eq!(s.classify("203.0.113.9", &h, false, Request::Click), None);
         assert_eq!(
@@ -304,7 +316,7 @@ mod tests {
     // catalogue's ASN entries are inert.
     #[test]
     fn asn_entries_need_a_configured_header() {
-        let s = ScannerNetworks::new(true, "", "", None);
+        let s = ScannerNetworks::new(false, "", "asn:8075 microsoft", None);
         let h = hdr(&[("cf-asn", "8075")]);
         assert_eq!(s.classify("203.0.113.9", &h, true, Request::Click), None);
     }
