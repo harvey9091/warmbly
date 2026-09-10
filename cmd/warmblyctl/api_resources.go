@@ -146,12 +146,14 @@ var apiSpecs = []apiSpec{
 	{name: "webhook deliveries", summary: "Recent deliveries across endpoints", method: "GET", path: "/webhooks/deliveries", query: []string{"limit", "cursor"}},
 	{name: "webhook event-types", summary: "Every event type a webhook can subscribe to", method: "GET", path: "/webhooks/event-types"},
 
-	// API keys (self-service).
+	// API keys (self-service). `purge` rather than `delete` to match
+	// `warmbly key purge`, where `delete` is already an alias of `revoke`.
 	{name: "apikey list", summary: "List the organization's API keys", method: "GET", path: "/api-keys"},
 	{name: "apikey get", summary: "Get one API key", method: "GET", path: "/api-keys/{id}"},
 	{name: "apikey create", summary: "Create an API key; the secret is only ever in this response", method: "POST", path: "/api-keys", body: bodyRequired},
 	{name: "apikey update", summary: "Update an API key's name, scopes or restrictions", method: "PATCH", path: "/api-keys/{id}", body: bodyRequired},
 	{name: "apikey revoke", summary: "Revoke an API key", method: "DELETE", path: "/api-keys/{id}"},
+	{name: "apikey purge", summary: "Delete a revoked API key for good, with its usage logs; a key that can still authenticate is refused", method: "DELETE", path: "/api-keys/{id}/permanent"},
 	{name: "apikey permissions", summary: "Every grantable scope with its bit value", method: "GET", path: "/api-keys/permissions"},
 
 	// Templates.
