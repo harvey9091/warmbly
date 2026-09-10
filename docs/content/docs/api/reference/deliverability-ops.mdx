@@ -810,7 +810,7 @@ At least one of the three must carry something, and the three together are cappe
 |-------|-------------|
 | `score` | Overall deliverability score, 0 to 100, higher is safer. Grounded on `rules`, never argued against it. |
 | `verdict` | One sentence on how the email will land. |
-| `findings` | Located problems, most severe first. `severity` is `high`, `warn` or `info`; `field` is `subject` or `body`; `category` is one of `trigger_word`, `tone`, `formatting`, `links`, `structure`, `authenticity`. |
+| `findings` | Located problems, most severe first. `severity` is `high`, `warn` or `info`; `field` is `subject` or `body`, absent only when the model labelled neither and nothing in the finding could be anchored in the copy; `category` is one of `trigger_word`, `tone`, `formatting`, `links`, `structure`, `authenticity`. |
 | `findings[].text` | The fragment quoted from your copy. Absent when the finding is about the email as a whole. |
 | `suggested_subject` | A rewritten subject, or absent when the current one is fine. |
 | `improvements` | Copy-level advice with no single fragment to quote. |

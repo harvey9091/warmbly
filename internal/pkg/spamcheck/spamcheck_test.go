@@ -317,3 +317,26 @@ func TestAnalyzeAcceptsAZeroScore(t *testing.T) {
 		t.Errorf("score = %d, want the model's own 0", res.Score)
 	}
 }
+
+// A finding the model left unlabelled must not be given a half at random. With
+// a quote, verify anchors it; without one, it carries no field rather than a
+// badge sending the writer to the wrong box.
+func TestVerifyDoesNotGuessAnUnlabelledField(t *testing.T) {
+	res := analyzed(t, `{
+	  "score": 60,
+	  "findings": [
+	    {"severity":"warn","text":"limited time offer","issue":"Anchored, so the half is known."},
+	    {"severity":"warn","issue":"Nothing to anchor and no label."}
+	  ]
+	}`, "Quick question", testBody)
+
+	if len(res.Findings) != 2 {
+		t.Fatalf("got %d findings: %+v", len(res.Findings), res.Findings)
+	}
+	if res.Findings[0].Field != "body" {
+		t.Errorf("anchored finding field = %q, want body", res.Findings[0].Field)
+	}
+	if res.Findings[1].Field != "" {
+		t.Errorf("unanchored, unlabelled finding field = %q, want empty", res.Findings[1].Field)
+	}
+}

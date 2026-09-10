@@ -42,7 +42,10 @@ export interface ScoreTemplateRequest {
 // One located problem the AI analysis found in the copy.
 export interface SpamFinding {
     severity: "high" | "warn" | "info";
-    field: TemplateField;
+    /** Absent when the model labelled neither half and nothing in the finding
+     *  could be anchored in the copy, so no badge is shown rather than one
+     *  naming the wrong box. */
+    field?: TemplateField;
     /** The exact fragment quoted from the copy, absent when the finding is
      *  about the email as a whole. Verified server-side against the template,
      *  so it is never a sentence the writer did not write. */

@@ -52,8 +52,9 @@ type Input struct {
 type Finding struct {
 	// Severity is "high", "warn" or "info".
 	Severity string `json:"severity"`
-	// Field is "subject" or "body".
-	Field string `json:"field"`
+	// Field is "subject" or "body", empty when the model labelled neither and
+	// nothing in the finding could be anchored in the copy.
+	Field string `json:"field,omitempty"`
 	// Text is the exact fragment quoted from the copy, empty when the finding
 	// is about the email as a whole.
 	Text string `json:"text,omitempty"`
@@ -407,11 +408,19 @@ func severity(s string) string {
 	}
 }
 
+// field reads the half the model named. Anything it did not clearly label comes
+// back empty rather than guessed: verify fills it in from the quote when there
+// is one, and a badge naming the wrong box on a finding nothing anchored is the
+// exact error this whole panel exists to avoid.
 func field(s string) string {
-	if strings.Contains(strings.ToLower(strings.TrimSpace(s)), "subject") {
+	switch v := strings.ToLower(strings.TrimSpace(s)); {
+	case strings.Contains(v, "subject"):
 		return warmlint.FieldSubject
+	case strings.Contains(v, "body"):
+		return warmlint.FieldBody
+	default:
+		return ""
 	}
-	return warmlint.FieldBody
 }
 
 func clamp(n int) int {

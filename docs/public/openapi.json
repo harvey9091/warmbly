@@ -29089,7 +29089,6 @@
         "description": "One located problem the AI analysis found. `text` is verified against the submitted copy before it is returned, so it is never a fragment the caller did not send.",
         "required": [
           "severity",
-          "field",
           "issue"
         ],
         "properties": {
@@ -29103,6 +29102,7 @@
           },
           "field": {
             "type": "string",
+            "description": "Absent when the model labelled neither half and nothing in the finding could be anchored in the copy.",
             "enum": [
               "subject",
               "body"
