@@ -45,10 +45,21 @@ func isInstant(sentAt *time.Time, at time.Time) bool {
 	return at.Sub(*sentAt) < time.Duration(config.TrackingMachineWindowSeconds)*time.Second
 }
 
+// isScannerSource reports whether the tracking edge recognised the request's
+// source as a mail-filtering network. That verdict outranks the user agent:
+// the whole point of the network rules is that a security gateway walks a
+// message with an ordinary browser's user agent.
+func isScannerSource(scanner *string) bool {
+	return scanner != nil && strings.TrimSpace(*scanner) != ""
+}
+
 // classifyClick applies the per-event click rules (the burst rule needs the
 // click log and lives in the consumer). It returns whether the click is
 // automated and the reason recorded with it; an empty reason is a person.
-func classifyClick(userAgent *string, sentAt *time.Time, at time.Time) (bool, string) {
+func classifyClick(userAgent, scanner *string, sentAt *time.Time, at time.Time) (bool, string) {
+	if isScannerSource(scanner) {
+		return true, repository.LinkClickReasonScanner
+	}
 	if userAgent == nil || strings.TrimSpace(*userAgent) == "" {
 		return true, repository.LinkClickReasonPrefetch
 	}
@@ -72,10 +83,13 @@ func eventTime(stamp string) time.Time {
 }
 
 // classifyOpen applies the per-event open rules and names the one that
-// caught it: prefetch for a mail proxy or a fetch with no browser, instant
-// for a fetch inside the machine window after dispatch. An empty reason is
-// a person.
-func classifyOpen(userAgent *string, sentAt *time.Time, at time.Time) (bool, string) {
+// caught it: scanner for a fetch from a known mail-filtering network,
+// prefetch for a mail proxy or a fetch with no browser, instant for a fetch
+// inside the machine window after dispatch. An empty reason is a person.
+func classifyOpen(userAgent, scanner *string, sentAt *time.Time, at time.Time) (bool, string) {
+	if isScannerSource(scanner) {
+		return true, repository.EmailOpenReasonScanner
+	}
 	if isMachineOpen(userAgent) {
 		return true, repository.EmailOpenReasonPrefetch
 	}

@@ -69,6 +69,18 @@ pub struct Config {
     /// header is read, so a client-supplied CF-Connecting-IP behind a generic
     /// proxy is ignored. For x-forwarded-for the proxy-appended last entry wins.
     pub client_ip_header: String,
+    /// Whether the scanner catalogue shipped with the service is loaded.
+    pub scanner_builtins: bool,
+    /// Extra scanner sources (CIDR or `asn:<n>`) that never carry a person's
+    /// own request, so both their pixel fetches and their clicks are machines.
+    pub scanner_networks: String,
+    /// Extra scanner sources judged on click tickets only, for networks that
+    /// also proxy a mail client's own image fetches.
+    pub scanner_click_networks: String,
+    /// Header a trusted proxy sets with the source ASN (Cloudflare:
+    /// ip.src.asnum). Empty, the default, disables ASN matching: an ASN is not
+    /// something this service can work out on its own.
+    pub scanner_asn_header: String,
     /// Where errors and panics are reported. Empty, the default, means nowhere:
     /// the SDK is never initialised and no host is contacted.
     pub sentry_dsn: String,
@@ -213,6 +225,17 @@ impl Config {
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| internal_api_token.clone());
 
+        let scanner_builtins = env::var("TRACKING_SCANNER_BUILTINS")
+            .map(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "false" | "0" | "no"))
+            .unwrap_or(true);
+        let scanner_networks = env::var("TRACKING_SCANNER_NETWORKS").unwrap_or_default();
+        let scanner_click_networks =
+            env::var("TRACKING_SCANNER_CLICK_NETWORKS").unwrap_or_default();
+        let scanner_asn_header = env::var("TRACKING_SCANNER_ASN_HEADER")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+
         // Error reporting. Read from the environment only: a DSN in SSM would
         // make a self-host that never sets one still pay an AWS lookup.
         let sentry_dsn = env::var("SENTRY_DSN")
@@ -246,6 +269,10 @@ impl Config {
             pagehit_rate_limit_per_min,
             trusted_proxies,
             client_ip_header,
+            scanner_builtins,
+            scanner_networks,
+            scanner_click_networks,
+            scanner_asn_header,
             sentry_dsn,
             release,
         })
@@ -332,6 +359,15 @@ impl Config {
             ),
             client_ip_header: env::var("TRACKING_CLIENT_IP_HEADER")
                 .unwrap_or_else(|_| "x-forwarded-for".to_string())
+                .to_ascii_lowercase(),
+            scanner_builtins: env::var("TRACKING_SCANNER_BUILTINS")
+                .map(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "false" | "0" | "no"))
+                .unwrap_or(true),
+            scanner_networks: env::var("TRACKING_SCANNER_NETWORKS").unwrap_or_default(),
+            scanner_click_networks: env::var("TRACKING_SCANNER_CLICK_NETWORKS").unwrap_or_default(),
+            scanner_asn_header: env::var("TRACKING_SCANNER_ASN_HEADER")
+                .unwrap_or_default()
+                .trim()
                 .to_ascii_lowercase(),
             sentry_dsn: env::var("SENTRY_DSN")
                 .unwrap_or_default()

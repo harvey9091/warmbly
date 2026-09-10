@@ -10,6 +10,7 @@ mod links;
 mod nats;
 mod observability;
 mod producer;
+mod scanners;
 mod unsubscribe;
 
 use axum::{

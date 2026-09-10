@@ -63,4 +63,9 @@ type TrackingEvent struct {
 	// consumer resolves it to a location and does not store it. Nullable and
 	// absent from events written before the field existed.
 	ClientIP *string `json:"client_ip" avro:"client_ip"`
+	// Scanner names the known-scanner source the request came from, when the
+	// tracking edge recognised one: a mail-filtering network rather than a
+	// person's own device. Set means machine, whatever the user agent claims.
+	// Nullable and absent from events written before the field existed.
+	Scanner *string `json:"scanner" avro:"scanner"`
 }

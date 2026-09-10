@@ -1,0 +1,48 @@
+# Known automated-scanner sources, shipped with Warmbly and applied by the
+# tracking service. Set TRACKING_SCANNER_BUILTINS=false to ignore this file,
+# TRACKING_SCANNER_NETWORKS / TRACKING_SCANNER_CLICK_NETWORKS to add your own.
+#
+# Format, one entry per line:   <source> <scope> <label>
+#   source  a CIDR (v4 or v6), or asn:<number>
+#   scope   all    the source never carries a person's own request
+#           clicks the source also carries a mail client's own image fetches,
+#                  so only its click tickets may be treated as automated
+#   label   what is recorded on the event
+#
+# An ASN entry does nothing unless TRACKING_SCANNER_ASN_HEADER names a header
+# your edge sets with the source ASN (Cloudflare: ip.src.asnum).
+#
+# A match never changes the response. The pixel is still served and the click
+# is still redirected; only the analytics event is labelled as automated.
+
+# Microsoft 365 Defender / Exchange Online Protection. This is the mail
+# filtering layer: Safe Links rewriting and delivery-time URL detonation run
+# here, and no mailbox is ever read from it, so both its pixel fetches and its
+# click tickets are machines. Published by Microsoft as endpoint sets 9 and 10
+# of the Microsoft 365 worldwide endpoint list (*.protection.outlook.com).
+# The Exchange Online ranges are deliberately NOT here: Outlook on the web is
+# served from those, and it fetches external images through Microsoft's own
+# proxy, so a genuine open by an Outlook.com recipient comes from them.
+40.92.0.0/15        all     microsoft-365-protection
+40.107.0.0/16       all     microsoft-365-protection
+52.100.0.0/14       all     microsoft-365-protection
+52.238.78.88/32     all     microsoft-365-protection
+104.47.0.0/17       all     microsoft-365-protection
+2a01:111:f400::/48  all     microsoft-365-protection
+2a01:111:f403::/48  all     microsoft-365-protection
+
+# The rest of Microsoft's network, by ASN. Defender detonation is not confined
+# to the ranges above, so this is what catches a scan from Azure. Clicks only:
+# the same ASNs carry Outlook on the web's image proxy, and treating their
+# pixel fetches as machines would zero the open rate of every Outlook.com and
+# Microsoft 365 recipient. A click ticket is different: Safe Links redirects
+# the browser to the destination rather than fetching it, so a person's own
+# click always arrives from the person's own address.
+asn:8075            clicks  microsoft
+asn:8074            clicks  microsoft
+asn:12076           clicks  microsoft
+
+# Google, for the same reason and with the same asymmetry: Gmail's image proxy
+# is the only open signal Gmail exposes and must keep counting, while a
+# person's click on a Gmail link comes from their own browser.
+asn:15169           clicks  google
