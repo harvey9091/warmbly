@@ -340,3 +340,20 @@ func TestVerifyDoesNotGuessAnUnlabelledField(t *testing.T) {
 		t.Errorf("unanchored, unlabelled finding field = %q, want empty", res.Findings[1].Field)
 	}
 }
+
+// category is documented as a closed set, so a response cannot be allowed to
+// break the schema it is validated against.
+func TestParseKeepsCategoryInsideItsEnum(t *testing.T) {
+	res := parse(`{"score": 50, "findings": [
+	    {"severity":"warn","field":"body","issue":"a","category":"Trigger Word"},
+	    {"severity":"warn","field":"body","issue":"b","category":"spammy vibes"},
+	    {"severity":"warn","field":"body","issue":"c","category":"links"}
+	]}`)
+	got := []string{}
+	for _, f := range res.Findings {
+		got = append(got, f.Category)
+	}
+	if strings.Join(got, ",") != "trigger_word,,links" {
+		t.Errorf("categories = %q, want the unknown one dropped", strings.Join(got, ","))
+	}
+}

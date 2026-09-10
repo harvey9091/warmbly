@@ -242,8 +242,9 @@ func quoteFragment(s string) string {
 }
 
 // parse reads the model's JSON, tolerating a ```json fence or a stray sentence
-// either side of the object. A response nothing can be read out of returns an
-// empty result rather than an error: the panel still has the rules pass.
+// either side of the object. A response nothing can be read out of comes back
+// with no score and no findings, which Analyze refuses so the credit is
+// refunded rather than spent on a report with nothing in it.
 func parse(text string) *Result {
 	text = strings.TrimSpace(text)
 	if i := strings.Index(text, "{"); i >= 0 {
@@ -296,7 +297,7 @@ func parse(text string) *Result {
 			Text:       cut(strings.TrimSpace(f.Text), maxTextRunes),
 			Issue:      issue,
 			Suggestion: truncate(strings.TrimSpace(f.Suggestion), 300),
-			Category:   truncate(strings.TrimSpace(strings.ToLower(f.Category)), 40),
+			Category:   category(f.Category),
 		})
 		if len(out.Findings) == maxFindings {
 			break
@@ -421,6 +422,23 @@ func field(s string) string {
 	default:
 		return ""
 	}
+}
+
+// categories is the closed set a finding may be grouped under. The field is
+// documented as an enum, so anything else is dropped rather than passed
+// through: a client validating the response against that set should never be
+// handed something outside it.
+var categories = map[string]struct{}{
+	"trigger_word": {}, "tone": {}, "formatting": {},
+	"links": {}, "structure": {}, "authenticity": {},
+}
+
+func category(s string) string {
+	v := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), " ", "_")
+	if _, ok := categories[v]; ok {
+		return v
+	}
+	return ""
 }
 
 func clamp(n int) int {
