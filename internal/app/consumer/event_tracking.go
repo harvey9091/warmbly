@@ -218,10 +218,11 @@ func (tc *TrackingConsumer) receive(_ context.Context, msg eventbus.Message) err
 // HandleTrackingEvent processes a tracking event.
 //
 // Opens and clicks are classified before they count. The edge already drops
-// crawlers and security scanners it can name; here the ones it cannot are
-// caught by what they do: a fetch with no browser, a fetch inside the
-// machine window after dispatch (nobody reads that fast), and clicks on
-// several links of one email within seconds (a gateway walking the message).
+// crawlers and security scanners it can name by user agent, and labels the
+// ones it recognises by source network; here the ones it cannot are caught by
+// what they do: a fetch with no browser, a fetch inside the machine window
+// after dispatch (nobody reads that fast), and clicks on several links of one
+// email within seconds (a gateway walking the message).
 // A machine open is still recorded, labelled, because it proves delivery. A
 // machine click is logged per link with its reason but never stamps the step
 // as clicked, fires no automation, and sends no webhook: "clicked" keeps
@@ -274,9 +275,9 @@ func (tc *TrackingConsumer) HandleTrackingEvent(ctx context.Context, event *even
 	var reason string
 	switch event.EventType {
 	case events.EventTypeEmailOpened:
-		machine, reason = classifyOpen(event.UserAgent, sentAt, at)
+		machine, reason = classifyOpen(event.UserAgent, event.Scanner, sentAt, at)
 	case events.EventTypeEmailClicked:
-		machine, reason = classifyClick(event.UserAgent, sentAt, at)
+		machine, reason = classifyClick(event.UserAgent, event.Scanner, sentAt, at)
 	default:
 		// Unknown event type, skip
 		return nil

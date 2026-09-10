@@ -87,7 +87,8 @@ export default interface ContactTimelineEvent {
 
     // Engagement classification (email_opened / email_clicked): true when an
     // automated fetcher (mail privacy proxy, security gateway) did it rather
-    // than a person; machine_reason names the rule (prefetch / instant / burst).
+    // than a person; machine_reason names the rule (scanner / prefetch / instant
+    // / burst).
     machine?: boolean;
     machine_reason?: string | null;
 

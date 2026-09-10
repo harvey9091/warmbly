@@ -31,6 +31,7 @@ type EmailOpen struct {
 const (
 	EmailOpenReasonPrefetch = "prefetch" // a mail client prefetch or a fetch with no browser
 	EmailOpenReasonInstant  = "instant"  // arrived inside the machine window after dispatch
+	EmailOpenReasonScanner  = "scanner"  // fetched from a known mail-filtering network
 )
 
 // EmailOpenRepository is the per-event open log. Only the tracking consumer
