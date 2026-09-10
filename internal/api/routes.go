@@ -793,6 +793,9 @@ func Run(
 				apiKeys.GET("/:id", h.GetAPIKey)
 				apiKeys.PATCH("/:id", h.UpdateAPIKey)
 				apiKeys.DELETE("/:id", h.RevokeAPIKey)
+				// Revoking ends a key; deleting removes the row and its usage
+				// logs. Separate paths so neither can be reached by accident.
+				apiKeys.DELETE("/:id/permanent", h.DeleteAPIKey)
 				apiKeys.GET("/:id/analytics", h.GetAPIKeyAnalytics)
 				apiKeys.GET("/:id/logs", h.ListAPIKeyUsageLogs)
 			}

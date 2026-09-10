@@ -6,7 +6,7 @@
 //   - usage graph (24h request volume, status-code split)
 //   - top endpoints
 //   - recent request log
-//   - actions (revoke, edit name/description)
+//   - actions (revoke, delete once revoked, edit name/description)
 //
 // Slides in from the right; closes on backdrop click or Escape.
 
@@ -23,6 +23,7 @@ import {
     NetworkIcon,
     RefreshCwIcon,
     ShieldCheckIcon,
+    Trash2Icon,
     TrashIcon,
     XIcon,
 } from "lucide-react";
@@ -33,9 +34,12 @@ import useAPIKeyAnalytics from "@/lib/api/hooks/app/api-keys/useAPIKeyAnalytics"
 import useAPIKeyUsageLogs from "@/lib/api/hooks/app/api-keys/useAPIKeyUsageLogs";
 import useAPIPermissions from "@/lib/api/hooks/app/api-keys/useAPIPermissions";
 import useRevokeAPIKey from "@/lib/api/hooks/app/api-keys/useRevokeAPIKey";
+import useDeleteAPIKey from "@/lib/api/hooks/app/api-keys/useDeleteAPIKey";
 import useUpdateAPIKey from "@/lib/api/hooks/app/api-keys/useUpdateAPIKey";
 import { StackedBars } from "./Sparkline";
 import { useConfirm } from "@/hooks/context/confirm";
+import type { AppError } from "@/lib/api/client/normalizeError";
+import buildError from "@/lib/helper/buildError";
 
 export default function KeyDetailDrawer({
     apiKey,
@@ -84,6 +88,7 @@ function Inner({ apiKey, onClose }: { apiKey: APIKey; onClose: () => void }) {
     const logs = useAPIKeyUsageLogs(apiKey.id, { limit: 50 });
     const perms = useAPIPermissions();
     const revoke = useRevokeAPIKey();
+    const remove = useDeleteAPIKey();
     const update = useUpdateAPIKey();
     const confirm = useConfirm();
 
@@ -126,6 +131,23 @@ function Inner({ apiKey, onClose }: { apiKey: APIKey; onClose: () => void }) {
                     onClose();
                 } catch {
                     toast.error("Failed to revoke");
+                }
+            },
+        );
+    }
+
+    // Deleting is the second step after revoking, never a shortcut past it:
+    // the backend refuses a key that can still authenticate.
+    function confirmDelete() {
+        confirm.show(
+            `Delete "${apiKey.name}" for good? The key and its request history are removed, and that cannot be undone.`,
+            async () => {
+                try {
+                    await remove.mutateAsync(apiKey.id);
+                    toast.success("Key deleted");
+                    onClose();
+                } catch (err) {
+                    toast.error(buildError(err as AppError));
                 }
             },
         );
@@ -385,7 +407,7 @@ function Inner({ apiKey, onClose }: { apiKey: APIKey; onClose: () => void }) {
             </div>
 
             {/* Footer */}
-            <div className="h-12 px-4 border-t border-slate-200 flex items-center bg-white shrink-0">
+            <div className="h-12 px-4 border-t border-slate-200 flex items-center gap-2 bg-white shrink-0">
                 {apiKey.status === "active" ? (
                     <button
                         type="button"
@@ -397,13 +419,26 @@ function Inner({ apiKey, onClose }: { apiKey: APIKey; onClose: () => void }) {
                         Revoke key
                     </button>
                 ) : (
-                    <span className="text-[11.5px] text-slate-500 inline-flex items-center gap-1.5">
-                        <span className="size-1.5 rounded-full bg-rose-500" />
-                        Revoked {apiKey.revoked_at ? fmtRelative(apiKey.revoked_at) : ""}
-                        {apiKey.revoked_reason ? ` · ${apiKey.revoked_reason}` : ""}
-                    </span>
+                    <>
+                        <span className="min-w-0 text-[11.5px] text-slate-500 inline-flex items-center gap-1.5">
+                            <span className="size-1.5 rounded-full bg-rose-500 shrink-0" />
+                            <span className="truncate">
+                                Revoked {apiKey.revoked_at ? fmtRelative(apiKey.revoked_at) : ""}
+                                {apiKey.revoked_reason ? ` · ${apiKey.revoked_reason}` : ""}
+                            </span>
+                        </span>
+                        <button
+                            type="button"
+                            onClick={confirmDelete}
+                            disabled={remove.isPending}
+                            className="ml-auto shrink-0 h-7 px-3 rounded-md border border-rose-200 text-rose-700 hover:bg-rose-50 hover:border-rose-300 text-[12px] inline-flex items-center gap-1.5 transition-colors disabled:opacity-60"
+                        >
+                            {remove.isPending ? <Loader2Icon className="w-3 h-3 animate-spin" /> : <Trash2Icon className="w-3 h-3" />}
+                            Delete key
+                        </button>
+                    </>
                 )}
-                <ChevronRightIcon className="w-3 h-3 text-slate-300 ml-auto" />
+                <ChevronRightIcon className="w-3 h-3 text-slate-300 ml-auto shrink-0" />
             </div>
         </>
     );

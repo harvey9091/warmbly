@@ -22,6 +22,7 @@ type APIKeyRepository interface {
 	List(ctx context.Context, orgID uuid.UUID, limit int, cursor *uuid.UUID) (*models.APIKeysResult, *errx.Error)
 	Update(ctx context.Context, orgID, keyID uuid.UUID, data *models.UpdateAPIKey) (*models.APIKey, *errx.Error)
 	Revoke(ctx context.Context, orgID, keyID uuid.UUID, reason string) *errx.Error
+	Delete(ctx context.Context, orgID, keyID uuid.UUID) *errx.Error
 	UpdateLastUsed(ctx context.Context, keyID uuid.UUID, ip string) error
 	LogUsage(ctx context.Context, log *models.APIKeyUsageLog) error
 
@@ -268,6 +269,33 @@ func (r *apiKeyRepository) Revoke(ctx context.Context, orgID, keyID uuid.UUID, r
 	`
 
 	params := []any{orgID, keyID, reason}
+
+	cmd, err := r.DB.Exec(ctx, query, params...)
+	if err != nil {
+		db.CaptureError(err, query, params, "exec")
+		return errx.InternalError()
+	}
+
+	if cmd.RowsAffected() == 0 {
+		return errx.ErrNotFound
+	}
+
+	return nil
+}
+
+// Delete removes a key row for good. It refuses a key that can still
+// authenticate: ending a live credential is Revoke's job, which leaves the row
+// and the reason behind. A key past its expires_at is already dead even though
+// the status column still reads 'active', so that one is deletable. The usage
+// logs go with the row through the FK's ON DELETE CASCADE.
+func (r *apiKeyRepository) Delete(ctx context.Context, orgID, keyID uuid.UUID) *errx.Error {
+	query := `
+		DELETE FROM api_keys
+		WHERE organization_id = $1 AND id = $2
+		  AND (status <> 'active' OR (expires_at IS NOT NULL AND expires_at <= now()))
+	`
+
+	params := []any{orgID, keyID}
 
 	cmd, err := r.DB.Exec(ctx, query, params...)
 	if err != nil {
