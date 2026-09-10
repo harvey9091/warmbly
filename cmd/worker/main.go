@@ -47,8 +47,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Sentry
-	if err := observability.InitSentry(ctx, cfg, "worker"); err != nil {
+	// Error reporting
+	if err := observability.Init(ctx, cfg, "worker"); err != nil {
 		log.Fatal(err)
 	}
 

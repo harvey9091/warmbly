@@ -41,6 +41,29 @@ func setInstanceEnv(t *testing.T) {
 	t.Setenv("REDIS", "rediss://bus.example.com:6380")
 }
 
+// A node reports its own crashes, and the only place it can learn where to send
+// them is the env the join endpoint renders. Both backends travel: an instance
+// on PostHog and an instance on Sentry each get a fleet that reports.
+func TestRenderNodeEnvCarriesErrorTracking(t *testing.T) {
+	t.Setenv("POSTHOG_KEY", "phc_example")
+	t.Setenv("POSTHOG_HOST", "https://eu.i.posthog.com")
+	t.Setenv("POSTHOG_ERROR_TRACKING", "false")
+	t.Setenv("SENTRY_DSN", "https://k@example.invalid/1")
+
+	env := envLines(t, renderNodeEnv(uuid.New(), models.NodeRoleWorker, ""))
+
+	for key, want := range map[string]string{
+		"POSTHOG_KEY":            "phc_example",
+		"POSTHOG_HOST":           "https://eu.i.posthog.com",
+		"POSTHOG_ERROR_TRACKING": "false",
+		"SENTRY_DSN":             "https://k@example.invalid/1",
+	} {
+		if env[key] != want {
+			t.Errorf("%s = %q, want %q", key, env[key], want)
+		}
+	}
+}
+
 // A node has no cloud credential and no way to be given one, so a provider
 // that needs a credential has to arrive translated. Shipping "aws" here is how
 // a joined node ends up unable to open a single mailbox.

@@ -802,8 +802,26 @@ var table = []Entry{
 
 	// Observability.
 	{
+		Key: "POSTHOG_KEY", Group: GroupObservability, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "PostHog project key. Carries error tracking and product analytics; unset means neither is sent and no host is contacted.",
+		DocsAnchor: docsDeployment,
+		Resolve:    envValue("POSTHOG_KEY"),
+	},
+	{
+		Key: "POSTHOG_HOST", Group: GroupObservability, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Where those events go. Empty means PostHog Cloud US; set it to your own PostHog.",
+		DocsAnchor: docsDeployment,
+		Resolve:    envValue("POSTHOG_HOST"),
+	},
+	{
+		Key: "POSTHOG_ERROR_TRACKING", Group: GroupObservability, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "false keeps the key for product analytics and reports no exceptions to PostHog.",
+		DocsAnchor: docsDeployment,
+		Resolve:    boolOr("POSTHOG_ERROR_TRACKING", true),
+	},
+	{
 		Key: "SENTRY_DSN", Group: GroupObservability, RuntimeChangeable: ChangeBootOnly,
-		Effect:     "Error reporting. Optional in every environment; unset simply logs instead.",
+		Effect:     "Error reporting to Sentry, alongside or instead of PostHog. Optional in every environment; unset simply logs instead.",
 		DocsAnchor: docsDeployment,
 		Resolve:    envValue("SENTRY_DSN"),
 	},

@@ -82,7 +82,11 @@ pub struct Config {
     /// something this service can work out on its own.
     pub scanner_asn_header: String,
     /// Where errors and panics are reported. Empty, the default, means nowhere:
-    /// the SDK is never initialised and no host is contacted.
+    /// no backend is initialised and no host is contacted.
+    pub posthog_key: String,
+    /// The capture host for those events. Empty means PostHog Cloud US.
+    pub posthog_host: String,
+    /// The other backend, for an operator who reports to Sentry instead.
     pub sentry_dsn: String,
     /// The build events are tagged with, so a stack trace names a commit. The
     /// image sets it from the same VERSION the Go services are stamped with.
@@ -237,8 +241,27 @@ impl Config {
             .trim()
             .to_ascii_lowercase();
 
-        // Error reporting. Read from the environment only: a DSN in SSM would
-        // make a self-host that never sets one still pay an AWS lookup.
+        // Error reporting. Read from the environment only: a key or a DSN in
+        // SSM would make a self-host that never sets one still pay an AWS
+        // lookup.
+        //
+        // POSTHOG_KEY also carries product analytics elsewhere in the platform,
+        // so POSTHOG_ERROR_TRACKING=false keeps the key and reports nothing.
+        let posthog_key = if parse_bool(
+            &env::var("POSTHOG_ERROR_TRACKING").unwrap_or_default(),
+            true,
+        ) {
+            env::var("POSTHOG_KEY")
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        } else {
+            String::new()
+        };
+        let posthog_host = env::var("POSTHOG_HOST")
+            .unwrap_or_default()
+            .trim()
+            .to_string();
         let sentry_dsn = env::var("SENTRY_DSN")
             .unwrap_or_default()
             .trim()
@@ -274,6 +297,8 @@ impl Config {
             scanner_networks,
             scanner_click_networks,
             scanner_asn_header,
+            posthog_key,
+            posthog_host,
             sentry_dsn,
             release,
         })
@@ -371,6 +396,21 @@ impl Config {
                 .unwrap_or_default()
                 .trim()
                 .to_ascii_lowercase(),
+            posthog_key: if parse_bool(
+                &env::var("POSTHOG_ERROR_TRACKING").unwrap_or_default(),
+                true,
+            ) {
+                env::var("POSTHOG_KEY")
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string()
+            } else {
+                String::new()
+            },
+            posthog_host: env::var("POSTHOG_HOST")
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
             sentry_dsn: env::var("SENTRY_DSN")
                 .unwrap_or_default()
                 .trim()

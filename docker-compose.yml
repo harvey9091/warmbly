@@ -221,12 +221,17 @@ x-selfhost-env: &selfhost-env
   NOTIFICATION_PUSH_WINDOW: ${NOTIFICATION_PUSH_WINDOW:-}
   NOTIFICATION_EMAIL_DAILY_CAP: ${NOTIFICATION_EMAIL_DAILY_CAP:-}
 
-  SENTRY_DSN: ${SENTRY_DSN:-}
-
-  # Server-side product analytics, hosted-only. Unset (the default, and what
-  # every self-host has) means no client is built and nothing is ever sent.
+  # Error tracking and server-side product analytics, one key for both. Unset
+  # (the default, and what every self-host has) means no client is built and
+  # nothing is ever sent. POSTHOG_ERROR_TRACKING=false keeps the key for
+  # analytics and reports no exceptions, which is what an instance already
+  # reporting to Sentry wants.
   POSTHOG_KEY: ${POSTHOG_KEY:-}
   POSTHOG_HOST: ${POSTHOG_HOST:-}
+  POSTHOG_ERROR_TRACKING: ${POSTHOG_ERROR_TRACKING:-}
+
+  # The other error-tracking backend. Either, both or neither.
+  SENTRY_DSN: ${SENTRY_DSN:-}
 
 services:
 
@@ -419,10 +424,17 @@ services:
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8080}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-local-dev-internal-token}
       APP_ENV: ${APP_ENV:-dev}
-      # Two DSNs, two audiences: SENTRY_DSN is this Go process, and
-      # WARMBLY_SENTRY_DSN is stamped into the public form page for the browser
-      # app. Both unset means neither reports and no host is contacted.
+      # Two audiences, two sets of credentials: the bare names are this Go
+      # process, and the WARMBLY_ ones are stamped into the public form page
+      # for the browser app. All unset means neither reports and no host is
+      # contacted.
+      POSTHOG_KEY: ${POSTHOG_KEY:-}
+      POSTHOG_HOST: ${POSTHOG_HOST:-}
+      POSTHOG_ERROR_TRACKING: ${POSTHOG_ERROR_TRACKING:-}
       SENTRY_DSN: ${SENTRY_DSN:-}
+      WARMBLY_POSTHOG_KEY: ${WARMBLY_POSTHOG_KEY:-}
+      WARMBLY_POSTHOG_HOST: ${WARMBLY_POSTHOG_HOST:-}
+      WARMBLY_POSTHOG_ERROR_TRACKING: ${WARMBLY_POSTHOG_ERROR_TRACKING:-}
       WARMBLY_SENTRY_DSN: ${WARMBLY_SENTRY_DSN:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -523,6 +535,9 @@ services:
       TRACKING_SCANNER_CLICK_NETWORKS: ${TRACKING_SCANNER_CLICK_NETWORKS:-}
       TRACKING_SCANNER_ASN_HEADER: ${TRACKING_SCANNER_ASN_HEADER:-}
       TRACKING_IP_HASH_KEY: ${TRACKING_IP_HASH_KEY:-}
+      POSTHOG_KEY: ${POSTHOG_KEY:-}
+      POSTHOG_HOST: ${POSTHOG_HOST:-}
+      POSTHOG_ERROR_TRACKING: ${POSTHOG_ERROR_TRACKING:-}
       SENTRY_DSN: ${SENTRY_DSN:-}
       # Overridable so `make dev` (native backend) can point at
       # host.docker.internal:8080 while `docker compose up` uses the container.
@@ -557,9 +572,14 @@ services:
       # The environment label events are tagged with, matching every other
       # service in this file.
       APP_ENV: ${APP_ENV:-dev}
+      POSTHOG_KEY: ${POSTHOG_KEY:-}
+      POSTHOG_HOST: ${POSTHOG_HOST:-}
+      POSTHOG_ERROR_TRACKING: ${POSTHOG_ERROR_TRACKING:-}
     # SENTRY_DSN deliberately arrives via env_file, not the mapping above: the
     # Elixir Sentry library reads the variable itself and refuses to start on an
-    # empty string, so it has to be genuinely absent rather than "".
+    # empty string, so it has to be genuinely absent rather than "". The PostHog
+    # names above are safe in the mapping because the config reads them itself
+    # and treats a blank value as unset.
     env_file:
       - path: .env
         required: false
@@ -585,14 +605,15 @@ services:
       # captcha is off server-side. Set WARMBLY_TURNSTILE_KEY to your site key
       # when you set CAPTCHA_PROVIDER=turnstile.
       WARMBLY_TURNSTILE_KEY: ${WARMBLY_TURNSTILE_KEY:-1x00000000000000000000AA}
-      # Unset means the dashboard initialises no error reporting and contacts
-      # no Sentry host. Point it at your own project to collect browser errors.
-      WARMBLY_SENTRY_DSN: ${WARMBLY_SENTRY_DSN:-}
-      # Cookieless product analytics, hosted-only. Unset (the default, and what
-      # every self-host has) means the SDK chunk is never fetched and no
-      # PostHog host is contacted.
+      # Cookieless product analytics and browser error tracking, one key for
+      # both. Unset (the default, and what every self-host has) means the SDK
+      # chunk is never fetched and no PostHog host is contacted.
       WARMBLY_POSTHOG_KEY: ${WARMBLY_POSTHOG_KEY:-}
       WARMBLY_POSTHOG_HOST: ${WARMBLY_POSTHOG_HOST:-}
+      WARMBLY_POSTHOG_ERROR_TRACKING: ${WARMBLY_POSTHOG_ERROR_TRACKING:-}
+      # The other error-tracking backend. Unset means the dashboard contacts no
+      # Sentry host. Point it at your own project to collect browser errors.
+      WARMBLY_SENTRY_DSN: ${WARMBLY_SENTRY_DSN:-}
     depends_on:
       backend: { condition: service_healthy }
 
@@ -609,7 +630,11 @@ services:
       WARMBLY_ENV_LABEL: ${ENV_LABEL:-development}
       WARMBLY_TURNSTILE_KEY: ${WARMBLY_TURNSTILE_KEY:-1x00000000000000000000AA}
       # Unset means the panel initialises no error reporting and contacts no
-      # Sentry host, exactly like the dashboard above.
+      # host at all, exactly like the dashboard above. The panel reports only
+      # exceptions: it measures nothing about an operator's session.
+      WARMBLY_POSTHOG_KEY: ${WARMBLY_POSTHOG_KEY:-}
+      WARMBLY_POSTHOG_HOST: ${WARMBLY_POSTHOG_HOST:-}
+      WARMBLY_POSTHOG_ERROR_TRACKING: ${WARMBLY_POSTHOG_ERROR_TRACKING:-}
       WARMBLY_SENTRY_DSN: ${WARMBLY_SENTRY_DSN:-}
     depends_on:
       backend: { condition: service_healthy }

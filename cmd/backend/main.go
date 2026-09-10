@@ -327,7 +327,7 @@ func main() {
 			log.Fatal(err)
 		}
 
-		if err := observability.InitSentry(ctx, cfg, "backend"); err != nil {
+		if err := observability.Init(ctx, cfg, "backend"); err != nil {
 			log.Fatal(err)
 		}
 

@@ -46,9 +46,13 @@ type Config struct {
 	// endpoints, the service's only dependency.
 	BackendURL    string
 	InternalToken string
-	// BrowserSentryDSN is stamped into the page shell so the form app can
-	// report browser errors. Empty, which is the default, means the app never
-	// loads the SDK.
+	// BrowserPostHogKey and BrowserPostHogHost are stamped into the page shell
+	// so the form app can report browser errors to PostHog. An empty key, which
+	// is the default, means the app never loads the SDK.
+	BrowserPostHogKey  string
+	BrowserPostHogHost string
+	// BrowserSentryDSN is the same for an operator who reports to Sentry
+	// instead. Either backend, both, or neither.
 	BrowserSentryDSN string
 	// Release tags those browser events with the build serving them.
 	Release string
@@ -87,9 +91,11 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("formserver: cannot read %s/index.html (run `pnpm build` in forms/): %w", cfg.StaticDir, err)
 	}
-	// The browser DSN and the release are the same for every request, so they
-	// are stamped once here rather than per shell serve. An empty DSN leaves
-	// the placeholder empty and the page loads no reporting SDK at all.
+	// The browser credentials and the release are the same for every request,
+	// so they are stamped once here rather than per shell serve. Left empty the
+	// placeholders stay empty and the page loads no reporting SDK at all.
+	shell = stampMeta(shell, "wf-posthog-key", cfg.BrowserPostHogKey)
+	shell = stampMeta(shell, "wf-posthog-host", cfg.BrowserPostHogHost)
 	shell = stampMeta(shell, "wf-sentry-dsn", cfg.BrowserSentryDSN)
 	shell = stampMeta(shell, "wf-release", cfg.Release)
 	shell = stampMeta(shell, "wf-environment", cfg.Environment)

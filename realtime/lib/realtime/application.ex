@@ -38,7 +38,7 @@ defmodule Realtime.Application do
 
         # Google Pub/Sub subscriber supervisor
         {Realtime.CloudPubSub.Supervisor, []}
-      ] ++ event_bridge_children()
+      ] ++ Realtime.PostHog.children() ++ event_bridge_children()
 
     opts = [strategy: :one_for_one, name: Realtime.Supervisor]
 

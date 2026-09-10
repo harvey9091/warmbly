@@ -128,7 +128,7 @@ func (j *TrialExpirationJob) notifyTrialExpired(ctx context.Context, userID inte
 	subject := "Your Warmbly trial has expired"
 	body, err := templates.GenerateTrialExpiredHTML()
 	if err != nil {
-		// GenerateTrialExpiredHTML already reported to Sentry.
+		// GenerateTrialExpiredHTML already reported it.
 		return
 	}
 

@@ -208,20 +208,32 @@ Everything else is you: mail through the mailboxes you connect, DNS lookups for 
 
 ### Error reporting
 
-An instance reports errors nowhere unless you point it somewhere. Every service reads its own DSN and none of them ship with one, so a default install sends no crash, no stack trace and no browser error to anybody, including us.
+An instance reports errors nowhere unless you point it somewhere. Every service reads its own credentials and none of them ship with any, so a default install sends no crash, no stack trace and no browser error to anybody, including us.
 
-| Service | Variable |
-|---|---|
-| Backend, consumer, worker | `SENTRY_DSN` |
-| Forms service | `SENTRY_DSN` |
-| Tracking service | `SENTRY_DSN` |
-| Realtime service | `SENTRY_DSN` |
-| Dashboard and admin containers | `WARMBLY_SENTRY_DSN` |
-| Public form pages | `WARMBLY_SENTRY_DSN` on the forms service |
+Two backends are supported and you choose either, both, or neither. PostHog is the default one; Sentry works exactly as it always has.
 
-Set one and that service reports to whatever Sentry Cloud project, self-hosted Sentry or Sentry-compatible server you name. Leave it unset, which is the default the installer writes, and nothing leaves the process: there is no host to contact and nothing to opt out of. Errors still reach that service's own log, as they always did. The dashboard, the admin panel and form pages go further and load no reporting code at all, so there is not even a script to block.
+| Service | PostHog | Sentry |
+|---|---|---|
+| Backend, consumer, worker | `POSTHOG_KEY` | `SENTRY_DSN` |
+| Forms service | `POSTHOG_KEY` | `SENTRY_DSN` |
+| Tracking service | `POSTHOG_KEY` | `SENTRY_DSN` |
+| Realtime service | `POSTHOG_KEY` | `SENTRY_DSN` |
+| Dashboard and admin containers | `WARMBLY_POSTHOG_KEY` | `WARMBLY_SENTRY_DSN` |
+| Public form pages | `WARMBLY_POSTHOG_KEY` on the forms service | `WARMBLY_SENTRY_DSN` on the forms service |
 
-The `warmbly` CLI runs on your own machine and reports nowhere, ever. It has no DSN to set.
+`POSTHOG_HOST` decides which PostHog receives them, including one you run yourself, and `POSTHOG_ERROR_TRACKING=false` turns error reporting off while leaving the key configured for the product analytics below. A Sentry DSN names whatever Sentry Cloud project, self-hosted Sentry or Sentry-compatible server you like.
+
+Leave them unset, which is the default the installer writes, and nothing leaves the process: there is no host to contact and nothing to opt out of. Errors still reach that service's own log, as they always did. The dashboard, the admin panel and form pages go further and load no reporting code at all, so there is not even a script to block.
+
+What a reported error carries is the exception, its stack trace, the service, the environment and the build, plus enough context to answer it:
+
+- **Which workspace and user.** A browser exception carries the organization id and user id of whoever hit it, and a server-side one carries them for the request that panicked, along with its route and request id. That is what makes "this customer says campaigns are broken" a search rather than a guess. It is a property on the exception, not an identity: no `identify` call is ever made, no person profile is created, and nothing is stored in the visitor's browser.
+- **What led to it.** The last routes visited and the last API calls that failed, with their method, route, status and request id. Ids in a path are masked to `:id` first, so a report names the screen and never the record.
+- **Nothing else about the request.** No headers, no bodies, no query strings, and no session recording: the dashboard renders mailboxes and contacts, so it is never recorded.
+
+Server-side reports that belong to no request, a scheduled job or a worker, are attributed to the process that raised them and to nobody.
+
+The `warmbly` CLI runs on your own machine and reports nowhere, ever. It has nothing to set.
 
 ### Usage analytics
 
@@ -229,7 +241,7 @@ There are none. A self-hosted instance loads no analytics script and sends no us
 
 The hosted service at warmbly.com does measure its own marketing site and dashboard, and the code for that ships in the same images you run. It is inert without a key: the installer never asks for one, the `.env` template does not mention it, and a build without one contains no analytics script for you to block. If you want to check, `grep posthog` the served assets of your own dashboard.
 
-If you do want product analytics on your own instance, the variables are on [configuration](/development/configuration/#product-analytics) and they accept a self-hosted PostHog. That is your decision to make, and nothing about it points at us.
+If you do want product analytics on your own instance, the variables are on [configuration](/development/configuration/#product-analytics) and they accept a self-hosted PostHog. It is the same key as the error tracking above, so setting one for errors also enables the handful of product events; `POSTHOG_ERROR_TRACKING` and the analytics variables are separate switches if you want only one of the two. That is your decision to make, and nothing about it points at us.
 
 ## See also
 

@@ -85,7 +85,7 @@ defmodule Realtime.OAuthToken do
   rescue
     e ->
       Logger.error("OAuth token query failed: #{inspect(e)}")
-      ErrorReporter.capture_exception(e)
+      ErrorReporter.capture_exception(e, stacktrace: __STACKTRACE__)
       {:error, :database_error}
   end
 

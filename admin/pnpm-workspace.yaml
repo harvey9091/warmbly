@@ -8,6 +8,9 @@ allowBuilds:
   # (which fetches the binary) has to run or the optional source-map upload
   # has nothing to invoke.
   '@sentry/cli': true
+  # posthog-js pulls core-js in transitively; its postinstall only prints a
+  # funding banner, so there is nothing to run.
+  core-js: false
   esbuild: true
 
 # Match the dashboard's overrides so transitive deps don't drift.
