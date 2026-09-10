@@ -29,7 +29,16 @@ func TestNoBackendReportsToTheLog(t *testing.T) {
 	CaptureMessage("starting")
 	Recover("panicked")
 
+	// A caller that reports unconditionally must not mint an issue with
+	// nothing in it.
+	CaptureException(nil)
+	CaptureMessage("")
+	Recover(nil)
+
 	got := buf.String()
+	if strings.Count(got, "[issue-local]") != 3 {
+		t.Errorf("an empty report was logged: %s", got)
+	}
 	for _, want := range []string{"[issue-local][backend][error] boom", "[issue-local][backend][info] starting", "[issue-local][backend][panic] panicked"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("log is missing %q, got %s", want, got)

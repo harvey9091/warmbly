@@ -133,24 +133,37 @@ type event struct {
 	scope   scope
 }
 
-// CaptureException reports err.
+// CaptureException reports err. A nil error is dropped: a caller that reports
+// unconditionally should not mint an issue with nothing in it.
 func CaptureException(err error, opts ...Option) {
+	if err == nil {
+		return
+	}
 	report(event{err: err, scope: build(opts)})
 }
 
 // CaptureExceptionContext reports err on the reporting state carried by ctx
 // when there is one, so a request's scope travels with the event.
 func CaptureExceptionContext(ctx context.Context, err error, opts ...Option) {
+	if err == nil {
+		return
+	}
 	report(event{ctx: ctx, err: err, scope: build(opts)})
 }
 
 // CaptureMessage reports a message with no error attached.
 func CaptureMessage(message string, opts ...Option) {
+	if message == "" {
+		return
+	}
 	report(event{message: message, scope: build(opts)})
 }
 
 // CaptureMessageContext is CaptureMessage on ctx's reporting state.
 func CaptureMessageContext(ctx context.Context, message string, opts ...Option) {
+	if message == "" {
+		return
+	}
 	report(event{ctx: ctx, message: message, scope: build(opts)})
 }
 
