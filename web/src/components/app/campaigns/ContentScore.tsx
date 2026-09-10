@@ -211,6 +211,11 @@ export default function ContentScore({
     // a debounced keystroke can be in flight together, and the slower one
     // landing last would show a score for copy that is no longer there.
     const runID = React.useRef(0);
+    // What is in the editor right now, readable from a callback that closed
+    // over an older draft. An analysis takes seconds, and the writer can edit
+    // while it runs.
+    const latestCopy = React.useRef(currentCopy);
+    latestCopy.current = currentCopy;
     const runScore = React.useCallback(() => {
         const id = ++runID.current;
         setPending(true);
@@ -256,12 +261,19 @@ export default function ContentScore({
                     setPreviousAiScore(analysis ? analysis.score : null);
                     setAnalysis(res);
                     setAnalyzedCopy(copy);
-                    // One request scored both passes; keep them in step, and
-                    // retire any rules request still in flight behind it.
-                    runID.current++;
-                    setData(res.rules);
-                    setPending(false);
-                    setFailed(false);
+                    // One request scored both passes, so the rules half comes
+                    // free with it. Only while the draft has not moved on: the
+                    // writer can edit during an analysis, and adopting the old
+                    // rules score would both show the wrong number and retire
+                    // the newer request that was about to produce the right
+                    // one, leaving nothing to retry it. The analysis itself is
+                    // still kept, and the panel marks it stale.
+                    if (copy === latestCopy.current) {
+                        runID.current++;
+                        setData(res.rules);
+                        setPending(false);
+                        setFailed(false);
+                    }
                 },
                 onError: (e) => {
                     const err = e as unknown as AppError;

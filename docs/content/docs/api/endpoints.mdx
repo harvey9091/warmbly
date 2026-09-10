@@ -226,7 +226,8 @@ The `agent-drafts` endpoints back the [inbox agent](/guides/inbox-agent/): the a
 | Method | Path | API Permission |
 |--------|------|----------------|
 | GET | `/templates`, `/templates/:id` | `READ_TEMPLATES` |
-| POST | `/templates/score`, `/templates/analyze` | `READ_TEMPLATES` |
+| POST | `/templates/score` | `READ_TEMPLATES` |
+| POST | `/templates/analyze` | `WRITE_TEMPLATES` (it spends AI credits) |
 | POST/PATCH/DELETE | `/templates[/:id]` | `WRITE_TEMPLATES` |
 | GET | `/crm/pipelines`, `/crm/pipelines/:id` | `READ_CRM` |
 | POST/PATCH/DELETE | `/crm/pipelines[/:id][/stages[/:stageId]]` | `WRITE_CRM` |

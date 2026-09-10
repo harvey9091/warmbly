@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"unicode"
+
+	"github.com/warmbly/warmbly/internal/pkg/casefold"
 )
 
 // This file turns each heuristic in Score into a location. A score with no
@@ -127,55 +128,6 @@ type termHit struct {
 	at   int
 }
 
-// foldIndex lowercases the text and records, for every byte offset in the
-// result, the offset it came from in the original.
-//
-// strings.ToLower maps rune by rune, and a rune can change byte length doing it
-// (U+0130 is two bytes and lowercases to one, U+212A is three), so an offset
-// found in the folded copy cannot be used to slice the original: past the first
-// such rune it lands mid-rune and quotes bytes the writer never typed, or cuts
-// one in half and produces invalid UTF-8. The map is only built when the text
-// has non-ASCII in it, which is where offsets can move at all.
-func foldIndex(s string) (string, []int) {
-	if isASCII(s) {
-		return strings.ToLower(s), nil
-	}
-	var b strings.Builder
-	b.Grow(len(s))
-	offsets := make([]int, 0, len(s)+1)
-	for i, r := range s {
-		before := b.Len()
-		b.WriteRune(unicode.ToLower(r))
-		for n := b.Len() - before; n > 0; n-- {
-			offsets = append(offsets, i)
-		}
-	}
-	// One past the end, so the end of a match at the end of the text maps too.
-	offsets = append(offsets, len(s))
-	return b.String(), offsets
-}
-
-// unfold translates a byte offset in the folded copy back to the original. A
-// nil map means the two are byte-for-byte aligned (the ASCII path).
-func unfold(offsets []int, at int) int {
-	if offsets == nil {
-		return at
-	}
-	if at < 0 || at >= len(offsets) {
-		return -1
-	}
-	return offsets[at]
-}
-
-func isASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] >= 0x80 {
-			return false
-		}
-	}
-	return true
-}
-
 // triggerTermsIn returns the distinct trigger terms in already-folded text, in
 // order of first appearance. It matches countTriggerTerms exactly on which
 // terms count; only the ordering and the offsets are extra.
@@ -210,24 +162,27 @@ func triggerTermsIn(lower string) []termHit {
 	return hits
 }
 
-// triggerSpans returns the distinct trigger terms across the template and where
-// each one is. A term written in both halves counts once and is shown where it
-// appears first, which keeps the count identical to countTriggerTerms over the
-// two joined together.
+// triggerSpans returns the distinct trigger terms across the template and every
+// place each one appears.
+//
+// The two halves are separate on purpose. A term counts ONCE towards the score
+// however often it is written, which keeps the count identical to
+// countTriggerTerms over the two joined together, but it gets a span in each
+// half it appears in: deduplicating the spans as well lost the body occurrence
+// of a word written in both, and then labelled the whole issue "subject".
 func triggerSpans(subject, body string) (terms []string, spans []Span) {
-	seen := map[string]struct{}{}
+	counted := map[string]struct{}{}
 	for _, f := range []scanned{
 		{FieldSubject, withoutURLs(subject), subject},
 		{FieldBody, withoutURLs(body), body},
 	} {
-		lower, offsets := foldIndex(f.scan)
+		lower, offsets := casefold.Index(f.scan)
 		for _, hit := range triggerTermsIn(lower) {
-			if _, dup := seen[hit.term]; dup {
-				continue
+			if _, dup := counted[hit.term]; !dup {
+				counted[hit.term] = struct{}{}
+				terms = append(terms, hit.term)
 			}
-			seen[hit.term] = struct{}{}
-			terms = append(terms, hit.term)
-			start, end := unfold(offsets, hit.at), unfold(offsets, hit.at+len(hit.term))
+			start, end := casefold.Origin(offsets, hit.at), casefold.Origin(offsets, hit.at+len(hit.term))
 			spans = append(spans, spanAt(f.field, f.scan, f.display, start, end))
 		}
 	}
@@ -249,21 +204,33 @@ func joinTerms(terms []string) string {
 // as its own anchor text from counting twice. The caller counts the result, so
 // this returns one entry per link before any display cap.
 func linkSpans(subject, body, bodyHTML string) []Span {
+	// Destinations first and separately: a bare URL only counts when it is not
+	// already an anchor's target, and that has to be known before the subject
+	// is scanned.
 	destinations := map[string]struct{}{}
-	var spans []Span
+	anchors := make([]Span, 0)
 	for _, m := range hrefPattern.FindAllStringSubmatch(bodyHTML, -1) {
 		destinations[trimURL(m[1])] = struct{}{}
 		// An href lives in markup, not in a line of copy, so it carries the
 		// destination and no excerpt.
-		spans = append(spans, Span{Field: FieldBody, Text: m[1]})
+		anchors = append(anchors, Span{Field: FieldBody, Text: m[1]})
 	}
-	for _, f := range []scanned{{FieldSubject, subject, subject}, {FieldBody, body, body}} {
+
+	bare := func(f scanned) []Span {
+		var out []Span
 		for _, loc := range linkPattern.FindAllStringIndex(f.scan, -1) {
 			if _, seen := destinations[trimURL(f.scan[loc[0]:loc[1]])]; seen {
 				continue
 			}
-			spans = append(spans, spanAt(f.field, f.scan, f.display, loc[0], loc[1]))
+			out = append(out, spanAt(f.field, f.scan, f.display, loc[0], loc[1]))
 		}
+		return out
 	}
-	return spans
+
+	// Subject first, like every other span list: a body with more anchors than
+	// the display cap would otherwise push the subject's own link off the end
+	// while the issue still claims to cover both halves.
+	spans := bare(scanned{FieldSubject, subject, subject})
+	spans = append(spans, anchors...)
+	return append(spans, bare(scanned{FieldBody, body, body})...)
 }

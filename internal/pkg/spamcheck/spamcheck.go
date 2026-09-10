@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/warmbly/warmbly/internal/pkg/casefold"
 	"github.com/warmbly/warmbly/internal/pkg/generation"
 	"github.com/warmbly/warmbly/internal/pkg/mailhtml"
 	"github.com/warmbly/warmbly/internal/pkg/warmlint"
@@ -315,8 +316,12 @@ func verify(res *Result, subject, body string) {
 	seen := map[string]struct{}{}
 	for _, f := range res.Findings {
 		if f.Text != "" {
-			if fld, line, excerpt, ok := locate(subject, body, f.Text, f.Field); ok {
-				f.Field, f.Line, f.Excerpt = fld, line, excerpt
+			if m, ok := locate(subject, body, f.Text, f.Field); ok {
+				// The copy's own casing, not the model's retyping of it. The
+				// fragment is documented as quoted character for character and
+				// the editor highlights it, so "free bonus" standing in for
+				// "FREE BONUS" both breaks the contract and fails to match.
+				f.Text, f.Field, f.Line, f.Excerpt = m.text, m.field, m.line, m.excerpt
 			} else {
 				f.Text, f.Line, f.Excerpt = "", 0, ""
 			}
@@ -343,11 +348,21 @@ func verify(res *Result, subject, body string) {
 	}
 }
 
+// match is where a fragment was found and how it is actually written there.
+type match struct {
+	field   string
+	text    string
+	line    int
+	excerpt string
+}
+
 // locate finds the fragment in the copy, preferring the field the model named
 // and falling back to the other one (the analysis is still right, the label was
-// wrong). Matching is case-insensitive: a model retyping a quote tends to
-// normalize its capitalization.
-func locate(subject, body, text, preferred string) (field string, line int, excerpt string, ok bool) {
+// wrong). Matching is case-insensitive because a model retyping a quote tends to
+// normalize its capitalization, and what comes back is the copy's own wording:
+// the offsets are mapped out of the fold before anything is sliced, so a rune
+// that changes byte length when lowercased cannot shift the quote.
+func locate(subject, body, text, preferred string) (match, bool) {
 	order := []struct{ name, text string }{
 		{warmlint.FieldSubject, subject},
 		{warmlint.FieldBody, body},
@@ -357,18 +372,23 @@ func locate(subject, body, text, preferred string) (field string, line int, exce
 	}
 	needle := strings.ToLower(strings.TrimSpace(text))
 	if needle == "" {
-		return "", 0, "", false
+		return match{}, false
 	}
 	for _, o := range order {
-		lower := strings.ToLower(o.text)
+		lower, offsets := casefold.Index(o.text)
 		i := strings.Index(lower, needle)
 		if i < 0 {
 			continue
 		}
 		n := 1 + strings.Count(lower[:i], "\n")
-		return o.name, n, lineText(o.text, n), true
+		found := match{field: o.name, text: strings.TrimSpace(text), line: n, excerpt: lineText(o.text, n)}
+		start, end := casefold.Origin(offsets, i), casefold.Origin(offsets, i+len(needle))
+		if start >= 0 && end <= len(o.text) && start < end {
+			found.text = o.text[start:end]
+		}
+		return found, true
 	}
-	return "", 0, "", false
+	return match{}, false
 }
 
 // lineText returns one line of a field, trimmed and capped for display.

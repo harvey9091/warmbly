@@ -17515,7 +17515,7 @@
       "post": {
         "operationId": "deliverability-ops_analyze_template",
         "summary": "Analyze template content with AI",
-        "description": "Runs the deployment's configured AI provider over a subject and body and returns the specific words and sentences that hurt deliverability, quoted from the copy, with whether each one is in the subject or the body and what to write instead. The rules-based score runs in the same request and comes back under `rules`. Advisory only and never blocks sending. Spends AI credits; honors `Idempotency-Key`. Requires READ_TEMPLATES scope, and the view_campaigns and use_ai permissions.",
+        "description": "Runs the deployment's configured AI provider over a subject and body and returns the specific words and sentences that hurt deliverability, quoted from the copy, with whether each one is in the subject or the body and what to write instead. The rules-based score runs in the same request and comes back under `rules`. Advisory only and never blocks sending. Spends AI credits; honors `Idempotency-Key`. Requires WRITE_TEMPLATES scope (it writes no template, but a read-only key must not be able to spend the workspace credits), and the view_campaigns and use_ai permissions.",
         "tags": [
           "deliverability-ops"
         ],

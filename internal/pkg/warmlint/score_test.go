@@ -2,6 +2,7 @@ package warmlint
 
 import (
 	"fmt"
+	"math/rand"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -241,22 +242,30 @@ func TestScoreLocatesTriggerTermsInTheBodyByLine(t *testing.T) {
 	}
 }
 
-// A term in both halves counts once, as it always has, and is shown where the
-// reader meets it first.
-func TestScoreCountsATermInBothHalvesOnce(t *testing.T) {
+// A term in both halves counts once towards the score, as it always has, but is
+// shown in both places. Deduplicating the spans too lost the body occurrence and
+// then labelled the whole issue "subject", sending the writer to one of the two
+// boxes the word is actually in.
+func TestScoreCountsATermInBothHalvesOnceButShowsBoth(t *testing.T) {
 	res := Score("A free look", "", "Here is a free look at it.")
 	issue, ok := issueByCode(res, "spam_trigger_terms")
 	if !ok {
 		t.Fatalf("trigger term not flagged: %+v", res.Issues)
 	}
-	if len(issue.Spans) != 1 {
-		t.Fatalf("got %d spans for one distinct term: %+v", len(issue.Spans), issue.Spans)
-	}
-	if issue.Spans[0].Field != FieldSubject {
-		t.Errorf("span field = %q, want the subject occurrence", issue.Spans[0].Field)
-	}
 	if res.Score != 92 {
 		t.Errorf("score = %d, want one term's deduction only", res.Score)
+	}
+	if !strings.HasPrefix(issue.Message, "1 spam-trigger term(s)") {
+		t.Errorf("message = %q, want it to count the term once", issue.Message)
+	}
+	if len(issue.Spans) != 2 {
+		t.Fatalf("got %d spans, want the word shown in both halves: %+v", len(issue.Spans), issue.Spans)
+	}
+	if issue.Spans[0].Field != FieldSubject || issue.Spans[1].Field != FieldBody {
+		t.Errorf("spans = %+v, want the subject one first", issue.Spans)
+	}
+	if issue.Field != "" {
+		t.Errorf("field = %q, want empty: the word is in both halves", issue.Field)
 	}
 }
 
@@ -462,40 +471,85 @@ func TestLeadIssueNamesBothHalvesWhenTheIssueStraddles(t *testing.T) {
 	}
 }
 
-// The whole offset map rests on foldIndex producing exactly what strings.ToLower
-// produces: the terms are found in one and counted against the other. Invalid
-// UTF-8 is in the table because a range loop and strings.Map both turn a bad
-// byte into U+FFFD, which is three bytes where the original was one.
-func TestFoldIndexMatchesStringsToLower(t *testing.T) {
-	cases := []string{
-		"", "plain ascii text", "FREE CASH", "İİİ free", "KKK cash", "café",
-		"🎉 free", "Straße", "ǅungla", "ﬁ ligature", "\xff\xfe bad bytes",
-		"mixed İ \xc3\x28 free", strings.Repeat("İ", 40) + " free",
+// The display cap keeps the first maxSpans, so a body carrying more anchors
+// than that would drop the subject's own link and leave the issue claiming a
+// half it no longer shows.
+func TestScoreLinkSpansPutTheSubjectFirst(t *testing.T) {
+	body := strings.Repeat("A real sentence about the recipient's work. ", 10)
+	links := ""
+	for i := 0; i < 12; i++ {
+		links += fmt.Sprintf(`<a href="https://example.com/%d">link</a> `, i)
 	}
-	for _, s := range cases {
-		lower, offsets := foldIndex(s)
-		if want := strings.ToLower(s); lower != want {
-			t.Errorf("foldIndex(%q) folded to %q, want %q", s, lower, want)
+	res := Score("Quick question https://sub.example.com/x", "<p>"+body+"</p><p>"+links+"</p>", body)
+	issue, ok := issueByCode(res, "too_many_links")
+	if !ok {
+		t.Fatalf("links not flagged: %+v", res.Issues)
+	}
+	if issue.Spans[0].Field != FieldSubject {
+		t.Errorf("first span is in %q, want the subject's link kept: %+v", issue.Spans[0].Field, issue.Spans)
+	}
+	if issue.Field != "" {
+		t.Errorf("field = %q, want empty: the links straddle both halves", issue.Field)
+	}
+	if !strings.HasPrefix(issue.Message, "13 links") {
+		t.Errorf("message = %q, want all thirteen counted", issue.Message)
+	}
+}
+
+// spanFragments are the pieces the fuzz below builds copy from: trigger words
+// and phrases, punctuation, markup, links, and the runes whose byte length
+// changes when they are lowercased.
+var spanFragments = []string{
+	"free", "FREE", "Cash", "act now", "click here", "100% free", "limited time",
+	"Hi Ada,", "worth a chat?", "!!!", "?!", "\n", "\n\n", " ", "café", "İstanbul",
+	"KKK", "🎉", "https://a.com/free-trial", "https://b.co/x.", "risk-free",
+	"a real sentence about the recipient's work.", "GUARANTEED", "no cost",
+	"<p>hello</p>", `<a href="https://c.io/1">one</a>`, `<img src="x.png">`,
+	`<style>.free-banner{color:red}</style>`, "Straße", "ﬁ", "%", "100%", "free cash",
+}
+
+func randCopy(r *rand.Rand, n int) string {
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		b.WriteString(spanFragments[r.Intn(len(spanFragments))])
+	}
+	return b.String()
+}
+
+// The panel highlights a span's text as the writer's own words, so every span
+// has to be real bytes of the half it names. A quote assembled from a shifted
+// offset is not, and neither is an empty one.
+func TestEverySpanQuotesTheHalfItNames(t *testing.T) {
+	r := rand.New(rand.NewSource(20260910))
+	for i := 0; i < 20000; i++ {
+		subject := randCopy(r, r.Intn(6))
+		html := randCopy(r, r.Intn(8))
+		plain := ""
+		if r.Intn(3) > 0 {
+			plain = randCopy(r, r.Intn(8))
 		}
-		if offsets == nil {
-			continue
-		}
-		if len(offsets) != len(lower)+1 {
-			t.Errorf("foldIndex(%q): %d offsets for %d bytes", s, len(offsets), len(lower))
-			continue
-		}
-		// Every offset must land on a rune boundary in the original, or a
-		// slice taken at it cuts a rune in half.
-		for i, at := range offsets {
-			if at < 0 || at > len(s) {
-				t.Fatalf("foldIndex(%q): offset %d out of range at %d", s, at, i)
+		for _, issue := range Score(subject, html, plain).Issues {
+			for _, sp := range issue.Spans {
+				if sp.Text == "" {
+					t.Fatalf("case %d: empty span on %s", i, issue.Code)
+				}
+				if issue.Code == "too_many_links" {
+					continue // an href is quoted from the markup, not the copy
+				}
+				hay := plain
+				if sp.Field == FieldSubject {
+					hay = strings.TrimSpace(subject)
+				} else if strings.TrimSpace(plain) == "" {
+					hay = stripTags(html)
+				}
+				if !strings.Contains(hay, sp.Text) {
+					t.Fatalf("case %d: %s span %q is not in the %s\nsubject=%q\nhtml=%q\nplain=%q",
+						i, issue.Code, sp.Text, sp.Field, subject, html, plain)
+				}
+				if !utf8.ValidString(sp.Text) {
+					t.Fatalf("case %d: %s span is not valid UTF-8: %q", i, issue.Code, sp.Text)
+				}
 			}
-			if at < len(s) && !utf8.RuneStart(s[at]) {
-				t.Errorf("foldIndex(%q): offset %d at index %d is mid-rune", s, at, i)
-			}
-		}
-		if offsets[len(offsets)-1] != len(s) {
-			t.Errorf("foldIndex(%q): last offset %d, want %d", s, offsets[len(offsets)-1], len(s))
 		}
 	}
 }

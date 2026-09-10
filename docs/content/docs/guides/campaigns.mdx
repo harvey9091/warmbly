@@ -225,7 +225,9 @@ If scheduling stalls on a transient infrastructure hiccup, Warmbly re-seeds with
 
 Warmbly scores each step's copy out of 100 for the signals spam filters weight: trigger wording, stacked punctuation, ALL-CAPS subjects, link and image counts, image-only bodies, empty or oversized bodies, and attachments.
 
-Every issue says **where** it is and **what** caused it: the badge names the subject or the body (or both, when the wording straddles the two), the offending words are quoted back exactly as you typed them, the line they sit in is shown for context, and each one carries the fix in a sentence. You never have to hunt through your own copy for a word the checker already found.
+Anything the checker can point at, it points at: the badge names the subject or the body (or both, when the wording straddles the two), the offending words are quoted back exactly as you typed them, and the line they sit in is shown for context. You never have to hunt through your own copy for a word the checker already found.
+
+A few issues are about the message as a whole rather than any wording in it. An empty subject, an empty or oversized body and an image-heavy layout name the half they concern but have nothing to quote; an attachment on a cold email concerns neither half, so it shows as a plain line with no badge. Every issue, located or not, carries its fix in a sentence.
 
 You see it in three places:
 

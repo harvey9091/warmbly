@@ -97,6 +97,26 @@ func TestVerifyMatchesAQuoteCaseInsensitively(t *testing.T) {
 	if f.Field != "subject" || f.Excerpt != "Your FREE BONUS inside" {
 		t.Errorf("quote was not matched against the subject: %+v", f)
 	}
+	// The fragment is documented as quoted character for character and the
+	// editor highlights it, so it has to come back in the copy's own casing.
+	if f.Text != "FREE BONUS" {
+		t.Errorf("quoted %q, want the copy's own %q", f.Text, "FREE BONUS")
+	}
+}
+
+// The quote is sliced out of the copy, so the offsets have to survive a rune
+// that changes byte length when it is lowercased.
+func TestVerifyQuotesTheCopyAcrossACaseFold(t *testing.T) {
+	res := analyzed(t, `{
+	  "score": 60,
+	  "findings": [
+	    {"severity":"warn","field":"subject","text":"free bonus","issue":"Trigger wording."}
+	  ]
+	}`, "İstanbul FREE BONUS inside", testBody)
+
+	if got := res.Findings[0].Text; got != "FREE BONUS" {
+		t.Errorf("quoted %q, want %q", got, "FREE BONUS")
+	}
 }
 
 func TestVerifyOrdersFindingsBySeverity(t *testing.T) {

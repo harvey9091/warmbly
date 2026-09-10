@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog/log"
 
 	"github.com/warmbly/warmbly/internal/api/middleware"
 	"github.com/warmbly/warmbly/internal/app/credits"
@@ -112,10 +113,24 @@ func (h *Handler) AnalyzeTemplateContent(c *gin.Context) {
 		Voice:     h.orgVoice(c.Request.Context(), *orgID, ""),
 	})
 	if aerr != nil {
+		refunded := local
 		if !local {
-			if bal, rerr := h.CreditService.Grant(reqCtx, *orgID, credits.CostSpamAnalysis, "spam_analysis_refund"); rerr == nil {
-				remaining = bal
+			bal, rerr := h.CreditService.Grant(reqCtx, *orgID, credits.CostSpamAnalysis, "spam_analysis_refund")
+			if rerr == nil {
+				remaining, refunded = bal, true
+			} else {
+				// Do not tell the customer their credits came back when the
+				// refund is what failed. Logged so it can be reconciled from
+				// the ledger rather than discovered from a support ticket.
+				log.Error().Err(rerr).Str("organization_id", orgID.String()).
+					Int("credits", credits.CostSpamAnalysis).
+					Msg("spam analysis refund failed after a provider error")
 			}
+		}
+		if !refunded {
+			errx.JSON(c, errx.New(errx.ServiceUnavailable,
+				"The spam analyzer is temporarily unavailable, and the credits it reserved could not be returned automatically. Contact support and they will be refunded."))
+			return
 		}
 		errx.JSON(c, errx.New(errx.ServiceUnavailable, "The spam analyzer is temporarily unavailable. Your credits were not charged."))
 		return

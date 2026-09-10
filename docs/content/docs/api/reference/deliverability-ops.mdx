@@ -755,9 +755,11 @@ Runs the deployment's configured AI provider over the same subject and body and 
 
 Advisory only, exactly like `/templates/score`: nothing here blocks or delays a send.
 
-Auth: **Scope** `READ_TEMPLATES` · **Org permission** `view_campaigns` and `use_ai`
+Auth: **Scope** `WRITE_TEMPLATES` · **Org permission** `view_campaigns` and `use_ai`
 
-This endpoint spends AI credits (see [AI credits](/guides/ai-credits/)). Send an `Idempotency-Key` header to make a retry safe; the same key is never charged twice.
+It writes no template, but it spends the workspace's AI credits, so it takes the write scope: a read-only key must not be able to spend money. A signed-in member still needs only `view_campaigns`, plus `use_ai`.
+
+This endpoint spends AI credits (see [AI credits](/guides/ai-credits/)), unless the deployment runs an unmetered model (`AI_PROVIDER=ollama`, or any provider with `AI_FREE=true`), where `credits_charged` comes back `0`. Send an `Idempotency-Key` header to make a retry safe; the same key is never charged twice.
 
 ### Request body
 
