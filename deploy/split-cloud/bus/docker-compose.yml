@@ -1,0 +1,77 @@
+# The bus box: NATS JetStream and Redis, reachable by the control plane on one
+# host and the fleet on others.
+#
+# Run this on a machine of its own once you have more than one worker. The
+# whole control plane depends on it, so it should not also be the box you
+# restart when you redeploy a worker.
+#
+# Before the first start:
+#   1. point bus.example.com at this machine
+#   2. get a certificate for it (certbot certonly --standalone -d bus.example.com)
+#   3. groupadd -g 2000 warmbly-certs, the group that may read the private key
+#   4. install certbot-deploy-hook.sh so renewals land in /opt/warmbly/certs
+#   5. write .env next to this file with NATS_TOKEN and REDIS_PASSWORD
+#
+#   NATS_TOKEN=$(openssl rand -hex 32)
+#   REDIS_PASSWORD=$(openssl rand -hex 32)
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    restart: unless-stopped
+    command: ["-c", "/etc/nats/nats.conf", "-js", "-sd", "/data", "-m", "8222"]
+    environment:
+      NATS_TOKEN: ${NATS_TOKEN:?set NATS_TOKEN in .env}
+    # The private key is 0640 and owned by this group, so neither container
+    # needs it world-readable and nothing else on the box can read it.
+    group_add:
+      - "2000"
+    volumes:
+      - ./nats.conf:/etc/nats/nats.conf:ro
+      - /opt/warmbly/certs:/certs:ro
+      - nats_data:/data
+    ports:
+      - "4222:4222"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # TLS is not optional on this box. Redis holds each organization's
+    # decrypted data key for the life of its cache entry, so a plaintext
+    # connection across the internet publishes key material. The password
+    # protects access; only TLS protects the traffic.
+    #
+    # 6379 stays open for containers on this host and is never published;
+    # 6380 is the port the control plane connects to.
+    command: >
+      redis-server
+      --port 6379
+      --tls-port 6380
+      --tls-cert-file /certs/fullchain.pem
+      --tls-key-file /certs/privkey.pem
+      --tls-ca-cert-file /certs/chain.pem
+      --tls-auth-clients no
+      --requirepass ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+      --appendonly yes
+      --maxmemory-policy noeviction
+    group_add:
+      - "2000"
+    volumes:
+      - /opt/warmbly/certs:/certs:ro
+      - redis_data:/data
+    ports:
+      - "6380:6380"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  nats_data:
+  redis_data:

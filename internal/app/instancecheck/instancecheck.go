@@ -105,6 +105,7 @@ func New(deps Deps) *Registry {
 	r.checks = append(r.checks, mailChecks()...)
 	r.checks = append(r.checks, accessChecks()...)
 	r.checks = append(r.checks, infraChecks()...)
+	r.checks = append(r.checks, fleetChecks()...)
 	r.checks = append(r.checks, updateChecks()...)
 	return r
 }

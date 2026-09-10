@@ -86,13 +86,68 @@ func (c *Client) Has(ctx context.Context, key string) (bool, error) {
 }
 
 func (c *Client) PresignedGetURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	return c.PresignedURL(ctx, PresignOpGet, key, "", ttl)
+}
+
+// PresignedURL signs one operation on one key. This is what lets a worker hold
+// no bucket credentials at all: the control plane signs, the node sends the
+// bytes straight to the store, and nothing is proxied.
+//
+// A signature covers the verb, so a URL minted for a read cannot be used to
+// overwrite.
+func (c *Client) PresignedURL(ctx context.Context, op PresignOp, key, contentType string, ttl time.Duration) (string, error) {
 	ps := s3.NewPresignClient(c.Client)
-	out, err := ps.PresignGetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(c.Bucket),
-		Key:    aws.String(key),
-	}, s3.WithPresignExpires(ttl))
-	if err != nil {
-		return "", err
+	expires := s3.WithPresignExpires(ttl)
+
+	switch op {
+	case PresignOpGet:
+		out, err := ps.PresignGetObject(ctx, &s3.GetObjectInput{
+			Bucket: aws.String(c.Bucket),
+			Key:    aws.String(key),
+		}, expires)
+		if err != nil {
+			return "", err
+		}
+		return out.URL, nil
+
+	case PresignOpPut:
+		in := &s3.PutObjectInput{
+			Bucket: aws.String(c.Bucket),
+			Key:    aws.String(key),
+		}
+		// Signed when present, so the sender must send the same header back.
+		// Left unsigned when empty rather than defaulted, which would make
+		// every unspecified upload fail the signature check.
+		if contentType != "" {
+			in.ContentType = aws.String(contentType)
+		}
+		out, err := ps.PresignPutObject(ctx, in, expires)
+		if err != nil {
+			return "", err
+		}
+		return out.URL, nil
+
+	case PresignOpHead:
+		out, err := ps.PresignHeadObject(ctx, &s3.HeadObjectInput{
+			Bucket: aws.String(c.Bucket),
+			Key:    aws.String(key),
+		}, expires)
+		if err != nil {
+			return "", err
+		}
+		return out.URL, nil
+
+	case PresignOpDelete:
+		out, err := ps.PresignDeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket: aws.String(c.Bucket),
+			Key:    aws.String(key),
+		}, expires)
+		if err != nil {
+			return "", err
+		}
+		return out.URL, nil
+
+	default:
+		return "", fmt.Errorf("storage: cannot presign unknown op %q", op)
 	}
-	return out.URL, nil
 }

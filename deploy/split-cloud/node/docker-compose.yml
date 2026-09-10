@@ -1,0 +1,26 @@
+# A worker box, run by hand instead of by `warmbly join`.
+#
+# The join script is the shorter path and gives you the auto-update timer:
+#
+#   curl -fsSL https://api.example.com/join.sh | sh -s -- \
+#     --url https://api.example.com --token <join-token> \
+#     --role worker --region eu-central
+#
+# Use this file when you want the node's configuration in version control, or
+# when you run several workers per host. You keep the version current yourself
+# with `docker compose pull && docker compose up -d`; `warmblyctl fleet version`
+# has no effect on a node that was not joined.
+
+services:
+  worker:
+    image: ghcr.io/warmbly/warmbly/worker:${WARMBLY_TAG:-prod}
+    restart: unless-stopped
+    env_file: ./worker.env
+    volumes:
+      # The worker claims a stable id from this volume, so a recreated
+      # container keeps its mailboxes instead of registering as a new machine
+      # and leaving the old row holding them.
+      - worker_state:/data/state
+
+volumes:
+  worker_state:

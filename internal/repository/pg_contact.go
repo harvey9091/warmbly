@@ -1038,6 +1038,21 @@ type contactFilter struct {
 	singleCampaign string
 }
 
+// contactSearchMaxTerms bounds how many words one search box turns into ILIKE
+// terms; past a handful the extra scans cost more than they narrow.
+const contactSearchMaxTerms = 6
+
+// contactSearchTerms splits a contact search into the words that must each
+// match some field. An empty or whitespace-only query yields no terms, which
+// leaves the search unfiltered exactly as before.
+func contactSearchTerms(query string) []string {
+	terms := strings.Fields(query)
+	if len(terms) > contactSearchMaxTerms {
+		terms = terms[:contactSearchMaxTerms]
+	}
+	return terms
+}
+
 // buildContactFilter compiles a search request into WHERE terms. Search and
 // SearchIDs share it so a "select all" bulk action resolves exactly the rows
 // the list was showing, filter for filter.
@@ -1056,17 +1071,20 @@ func (r *contactRepository) buildContactFilter(ctx context.Context, orgID string
 	// -----------------------------
 	// Text search across core fields
 	// -----------------------------
-	if filters.Query != "" {
-		q := "%" + filters.Query + "%"
+	// Every word of the query has to match one of the fields, rather than the
+	// query as a whole matching one of them: no single column holds both
+	// halves of a person's name, so "Test Demo" found nothing while "Test"
+	// found the contact (issue #413).
+	for _, term := range contactSearchTerms(filters.Query) {
 		whereClauses = append(whereClauses, fmt.Sprintf(`
 			(c.first_name ILIKE $%d OR
 			 c.last_name ILIKE $%d OR
 			 c.email ILIKE $%d OR
 			 c.company ILIKE $%d OR
 			 c.phone ILIKE $%d)
-		`, argIndex, argIndex+1, argIndex+2, argIndex+3, argIndex+4))
-		args = append(args, q, q, q, q, q)
-		argIndex += 5
+		`, argIndex, argIndex, argIndex, argIndex, argIndex))
+		args = append(args, "%"+term+"%")
+		argIndex++
 	}
 
 	// -----------------------------
