@@ -23,12 +23,14 @@ export function rebase<T>(
     return same(local, prevServer) ? nextServer : local;
 }
 
-// Set equality on ids: order is not meaningful for campaigns or categories,
-// and this is the comparison the panel's `dirty` check uses.
+// Set equality on ids: order is not meaningful for campaigns or categories.
+// Sorted rather than through a Set, so two lists of the same length cannot
+// compare equal just because one repeats an id the other does not.
 export function sameIDs(a: string[], b: string[]): boolean {
     if (a.length !== b.length) return false;
-    const set = new Set(b);
-    return a.every((id) => set.has(id));
+    const x = [...a].sort();
+    const y = [...b].sort();
+    return x.every((id, i) => id === y[i]);
 }
 
 export function idsOf(items: { id: string }[]): string[] {
@@ -54,6 +56,27 @@ export function fieldsOf(record: Record<string, string> | undefined): CustomFiel
     return Object.entries(record ?? {}).map(([name, value]) => ({ name, value }));
 }
 
+// Key by key, not through JSON: two records with the same entries in a
+// different order are the same record, and stringifying them says otherwise.
+// That is what left the panel permanently unsaved after a custom-field row was
+// removed and typed back in.
+export function sameRecords(a: Record<string, string>, b: Record<string, string>): boolean {
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) return false;
+    return keys.every((k) => Object.hasOwn(b, k) && a[k] === b[k]);
+}
+
+// Whether two sets of rows save as the same thing. This is the comparison for
+// `dirty` and the save payload, where a row with no name yet is nothing.
 export function sameFields(a: CustomField[], b: CustomField[]): boolean {
-    return JSON.stringify(recordFromCF(a)) === JSON.stringify(recordFromCF(b));
+    return sameRecords(recordFromCF(a), recordFromCF(b));
+}
+
+// Whether two sets of rows ARE the same, half-typed rows included. This is the
+// comparison for the rebase: a row whose name is still blank holds work the
+// user is in the middle of, and dropping it because it saves as nothing would
+// delete what they were typing.
+export function sameRows(a: CustomField[], b: CustomField[]): boolean {
+    if (a.length !== b.length) return false;
+    return a.every((f, i) => f.name === b[i].name && f.value === b[i].value);
 }

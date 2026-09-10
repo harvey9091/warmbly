@@ -44,6 +44,7 @@ import {
     sameCampaigns,
     sameFields,
     sameIDs,
+    sameRows,
 } from "./contact-edit/rebase";
 import {
     CONTACT_SLIDE_TABS,
@@ -144,8 +145,11 @@ function ContactEditPanel({
         setCategoryIds((v) =>
             rebase(v, idsOf(prev.categories ?? []), idsOf(contact.categories ?? []), sameIDs),
         );
+        // sameRows, not sameFields: a row the user has typed a value into but
+        // not yet named saves as nothing, so the save-shaped comparison would
+        // call the draft untouched and throw that row away.
         setCustomFields((v) =>
-            rebase(v, fieldsOf(prev.custom_fields), fieldsOf(contact.custom_fields), sameFields),
+            rebase(v, fieldsOf(prev.custom_fields), fieldsOf(contact.custom_fields), sameRows),
         );
     }, [contact]);
 

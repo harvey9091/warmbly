@@ -40,13 +40,18 @@ vi.mock("./contact-edit/OverviewTab", () => ({ default: () => <div>overview</div
 vi.mock("./contact-edit/ActivityTab", () => ({ default: () => <div>activity</div> }));
 vi.mock("./contact-edit/NotesTab", () => ({ default: () => <div>notes</div> }));
 vi.mock("./contact-edit/ResearchTab", () => ({ default: () => <div>research</div> }));
+type CF = { name: string; value: string };
 vi.mock("./contact-edit/DetailsTab", () => ({
     default: ({
         setFirstName,
         setCategoryIds,
+        customFields,
+        setCustomFields,
     }: {
         setFirstName: (v: string) => void;
         setCategoryIds: (v: string[]) => void;
+        customFields: CF[];
+        setCustomFields: (f: (prev: CF[]) => CF[]) => void;
     }) => (
         <>
             <button type="button" onClick={() => setFirstName("Edited")}>
@@ -55,6 +60,17 @@ vi.mock("./contact-edit/DetailsTab", () => ({
             <button type="button" onClick={() => setCategoryIds(["cat-2"])}>
                 recategorise
             </button>
+            <button
+                type="button"
+                onClick={() => setCustomFields((prev) => [...prev, { name: "", value: "half typed" }])}
+            >
+                add field
+            </button>
+            <ul>
+                {customFields.map((f, i) => (
+                    <li key={i}>{`row ${f.name}=${f.value}`}</li>
+                ))}
+            </ul>
         </>
     ),
 }));
@@ -148,6 +164,17 @@ describe("the contact 360 panel", () => {
         // The name edit survives; the subscription follows the server.
         expect(screen.getByText("Edited Demo")).toBeTruthy();
         expect(screen.queryByText("Unsubscribed")).toBeNull();
+    });
+
+    it("does not throw away a custom-field row that is still being typed", () => {
+        const { rerender } = render(<Panel contacts={[contact()]} />);
+        fireEvent.click(screen.getByText("add field"));
+        expect(screen.getByText("row =half typed")).toBeTruthy();
+
+        // A row with no name yet saves as nothing, so the save-shaped
+        // comparison calls the draft untouched. The rebase must not.
+        rerender(<Panel contacts={[contact({ company: "Globex" })]} />);
+        expect(screen.getByText("row =half typed")).toBeTruthy();
     });
 });
 

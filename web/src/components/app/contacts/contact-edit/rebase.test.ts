@@ -13,6 +13,8 @@ import {
     sameCampaigns,
     sameFields,
     sameIDs,
+    sameRecords,
+    sameRows,
 } from "./rebase";
 
 describe("rebase", () => {
@@ -58,6 +60,10 @@ describe("sameIDs", () => {
     it("treats two empty sets as equal", () => {
         expect(sameIDs([], [])).toBe(true);
     });
+
+    it("is not fooled by a repeated id", () => {
+        expect(sameIDs(["a", "a"], ["a", "b"])).toBe(false);
+    });
 });
 
 describe("idsOf", () => {
@@ -98,5 +104,63 @@ describe("custom fields", () => {
 
     it("survives an undefined record", () => {
         expect(fieldsOf(undefined)).toEqual([]);
+    });
+});
+
+describe("sameRecords", () => {
+    it("ignores key order", () => {
+        expect(sameRecords({ a: "1", b: "2" }, { b: "2", a: "1" })).toBe(true);
+    });
+
+    it("notices a changed value, an extra key and a missing one", () => {
+        expect(sameRecords({ a: "1" }, { a: "2" })).toBe(false);
+        expect(sameRecords({ a: "1" }, { a: "1", b: "2" })).toBe(false);
+        expect(sameRecords({ a: "1", b: "2" }, { a: "1" })).toBe(false);
+    });
+
+    it("does not mistake a key for one on the prototype", () => {
+        expect(sameRecords({ toString: "x" }, {} as Record<string, string>)).toBe(false);
+    });
+});
+
+describe("sameFields", () => {
+    // Removing a custom-field row and typing it back leaves the same record
+    // with its keys in a different order. Comparing the two as JSON said they
+    // differed, which left the panel permanently unsaved.
+    it("ignores the order the rows were entered in", () => {
+        expect(
+            sameFields(
+                [
+                    { name: "industry", value: "Freight" },
+                    { name: "tier", value: "A" },
+                ],
+                [
+                    { name: "tier", value: "A" },
+                    { name: "industry", value: "Freight" },
+                ],
+            ),
+        ).toBe(true);
+    });
+});
+
+describe("sameRows", () => {
+    // A row the user has typed a value into but not yet named saves as
+    // nothing, so `sameFields` calls it untouched. The rebase must not, or
+    // adopting a server change deletes what they were typing.
+    it("sees a half-typed row that sameFields does not", () => {
+        const draft = [
+            { name: "industry", value: "Freight" },
+            { name: "", value: "half typed" },
+        ];
+        const server = [{ name: "industry", value: "Freight" }];
+        expect(sameFields(draft, server)).toBe(true);
+        expect(sameRows(draft, server)).toBe(false);
+        expect(rebase(draft, server, [{ name: "industry", value: "Rail" }], sameRows)).toBe(draft);
+    });
+
+    it("adopts the server rows when the draft is untouched", () => {
+        const server = [{ name: "industry", value: "Freight" }];
+        const next = [{ name: "industry", value: "Rail" }];
+        expect(rebase([{ name: "industry", value: "Freight" }], server, next, sameRows)).toBe(next);
     });
 });
