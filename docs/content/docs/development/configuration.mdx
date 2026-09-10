@@ -428,7 +428,7 @@ Set both and every error goes to both. Each variable is read by one process, so 
 | `WARMBLY_POSTHOG_KEY` | web, admin containers | Browser error tracking, read at container start like the other `WARMBLY_*` values. On the dashboard the same key also carries the product analytics below; the admin panel reports only exceptions | unset |
 | `WARMBLY_POSTHOG_KEY` | forms service | Stamped into the public form page for the form app's browser errors. Separate from the forms service's own `POSTHOG_KEY`: one is a Go process, the other is a page a stranger loads | unset |
 | `WARMBLY_POSTHOG_HOST` | web, admin containers, forms service | Capture host for the browser | `https://us.i.posthog.com` |
-| `WARMBLY_POSTHOG_ERROR_TRACKING` | web, admin containers | `false` reports no browser exceptions to PostHog. The dashboard keeps sending product analytics | `true` |
+| `WARMBLY_POSTHOG_ERROR_TRACKING` | web, admin containers, forms service | `false` reports no browser exceptions to PostHog anywhere, including the form pages the forms service stamps. The dashboard keeps sending product analytics | `true` |
 | `WARMBLY_SENTRY_DSN` | web, admin containers | The Sentry half of the same thing. Unset means the SDK is never fetched and no host is contacted | unset |
 | `WARMBLY_SENTRY_DSN` | forms service | Stamped into the public form page, along with the service's `APP_ENV` as the environment | unset |
 | `WARMBLY_SENTRY_ENVIRONMENT` | web, admin containers | The environment label browser events carry, whichever backend receives them. Defaults to the build mode. Form pages do not read it: the forms service stamps its own `APP_ENV` into the page instead | unset |
@@ -514,7 +514,7 @@ The public face of hosted forms (`cmd/forms`): it serves the React (TanStack) fo
 | `FORM_IP_RATE_LIMIT` | Public form submissions allowed per source IP per 10 minutes, per forms-service instance | `30` |
 | `POSTHOG_KEY`, `POSTHOG_HOST`, `POSTHOG_ERROR_TRACKING` | The service's own error tracking. Unset means none | unset |
 | `SENTRY_DSN` | The same through Sentry, alongside PostHog or instead of it | unset |
-| `WARMBLY_POSTHOG_KEY`, `WARMBLY_POSTHOG_HOST` | Stamped into the form page so the browser app reports too. Unset means the page loads no reporting SDK at all | unset |
+| `WARMBLY_POSTHOG_KEY`, `WARMBLY_POSTHOG_HOST`, `WARMBLY_POSTHOG_ERROR_TRACKING` | Stamped into the form page so the browser app reports too. Unset, or error tracking off, means the page loads no reporting SDK at all | unset |
 | `WARMBLY_SENTRY_DSN` | The Sentry half of the same stamping | unset |
 | `TRUSTED_PROXIES` | CIDRs whose `X-Forwarded-For` the service believes, same convention as the backend. Empty trusts nothing and uses the socket peer; set it behind a reverse proxy or the submit limiter throttles the proxy's address instead of the visitor's | empty |
 

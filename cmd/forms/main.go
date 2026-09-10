@@ -62,7 +62,7 @@ func main() {
 		// own credentials: form pages are public and their errors belong in a
 		// frontend project, not the service's. Empty means the page loads no
 		// reporting SDK at all, which is the self-host default.
-		BrowserPostHogKey:  strings.TrimSpace(os.Getenv("WARMBLY_POSTHOG_KEY")),
+		BrowserPostHogKey:  browserPostHogKey(),
 		BrowserPostHogHost: strings.TrimSpace(os.Getenv("WARMBLY_POSTHOG_HOST")),
 		BrowserSentryDSN:   strings.TrimSpace(os.Getenv("WARMBLY_SENTRY_DSN")),
 		Release:            observability.Release(),
@@ -89,6 +89,23 @@ func main() {
 		errs.Flush(2 * time.Second)
 		log.Fatal(err)
 	}
+}
+
+// browserPostHogKey is the key stamped into the form page, or nothing when the
+// operator turned browser error tracking off.
+//
+// The toggle is applied here rather than in the page because the page has no
+// way to be told: it is served to a stranger's browser and the only thing it
+// can act on is whether a key arrived. Without this,
+// WARMBLY_POSTHOG_ERROR_TRACKING would silence the dashboard and the admin
+// panel and leave form pages reporting.
+func browserPostHogKey() string {
+	if raw := strings.TrimSpace(os.Getenv("WARMBLY_POSTHOG_ERROR_TRACKING")); raw != "" {
+		if enabled, err := strconv.ParseBool(raw); err == nil && !enabled {
+			return ""
+		}
+	}
+	return strings.TrimSpace(os.Getenv("WARMBLY_POSTHOG_KEY"))
 }
 
 // appEnv is the deployment label, matching what InitEnv reports for this
