@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // This file turns each heuristic in Score into a location. A score with no
@@ -40,23 +41,26 @@ func commonField(spans []Span) string {
 	return field
 }
 
-// capSpans drops anything that could not be quoted and trims the list to
-// maxSpans, in reading order. A span with no text is one spanAt could not slice
-// (a lowercased offset that moved under a non-ASCII rune); showing it would put
-// an empty highlight in the panel. Dropping it never moves the score, which is
-// computed from the counts, not from this list.
-func capSpans(spans []Span) []Span {
-	out := make([]Span, 0, min(len(spans), maxSpans))
+// quotableSpans drops anything with nothing to show. A span with no text would
+// render as an empty highlight, which reads as a bug rather than as a location.
+func quotableSpans(spans []Span) []Span {
+	out := make([]Span, 0, len(spans))
 	for _, s := range spans {
-		if s.Text == "" {
-			continue
-		}
-		out = append(out, s)
-		if len(out) == maxSpans {
-			break
+		if s.Text != "" {
+			out = append(out, s)
 		}
 	}
 	return out
+}
+
+// capSpans trims the list to maxSpans, in reading order. The field is read from
+// the full list before this runs: capping a subject-first list of twelve could
+// otherwise drop every body span and label a both-halves issue "subject".
+func capSpans(spans []Span) []Span {
+	if len(spans) <= maxSpans {
+		return spans
+	}
+	return spans[:maxSpans]
 }
 
 // spanAt describes scan[start:end] as a span. scan is what was searched and
@@ -113,20 +117,69 @@ func punctuationSpans(subject, body string) []Span {
 			spans = append(spans, spanAt(f.field, f.scan, f.display, loc[0], loc[1]))
 		}
 	}
-	return capSpans(spans)
+	return spans
 }
 
-// termHit is one trigger term and where it was first seen.
+// termHit is one trigger term and the offset it was first seen at, in the
+// folded text it was found in.
 type termHit struct {
 	term string
 	at   int
 }
 
-// triggerTermsIn returns the distinct trigger terms in the text, in order of
-// first appearance. It matches countTriggerTerms exactly on which terms count;
-// only the ordering and the offsets are extra.
-func triggerTermsIn(text string) []termHit {
-	lower := strings.ToLower(text)
+// foldIndex lowercases the text and records, for every byte offset in the
+// result, the offset it came from in the original.
+//
+// strings.ToLower maps rune by rune, and a rune can change byte length doing it
+// (U+0130 is two bytes and lowercases to one, U+212A is three), so an offset
+// found in the folded copy cannot be used to slice the original: past the first
+// such rune it lands mid-rune and quotes bytes the writer never typed, or cuts
+// one in half and produces invalid UTF-8. The map is only built when the text
+// has non-ASCII in it, which is where offsets can move at all.
+func foldIndex(s string) (string, []int) {
+	if isASCII(s) {
+		return strings.ToLower(s), nil
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	offsets := make([]int, 0, len(s)+1)
+	for i, r := range s {
+		before := b.Len()
+		b.WriteRune(unicode.ToLower(r))
+		for n := b.Len() - before; n > 0; n-- {
+			offsets = append(offsets, i)
+		}
+	}
+	// One past the end, so the end of a match at the end of the text maps too.
+	offsets = append(offsets, len(s))
+	return b.String(), offsets
+}
+
+// unfold translates a byte offset in the folded copy back to the original. A
+// nil map means the two are byte-for-byte aligned (the ASCII path).
+func unfold(offsets []int, at int) int {
+	if offsets == nil {
+		return at
+	}
+	if at < 0 || at >= len(offsets) {
+		return -1
+	}
+	return offsets[at]
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
+// triggerTermsIn returns the distinct trigger terms in already-folded text, in
+// order of first appearance. It matches countTriggerTerms exactly on which
+// terms count; only the ordering and the offsets are extra.
+func triggerTermsIn(lower string) []termHit {
 	first := map[string]int{}
 	for _, loc := range wordToken.FindAllStringIndex(lower, -1) {
 		w := lower[loc[0]:loc[1]]
@@ -167,16 +220,18 @@ func triggerSpans(subject, body string) (terms []string, spans []Span) {
 		{FieldSubject, withoutURLs(subject), subject},
 		{FieldBody, withoutURLs(body), body},
 	} {
-		for _, hit := range triggerTermsIn(f.scan) {
+		lower, offsets := foldIndex(f.scan)
+		for _, hit := range triggerTermsIn(lower) {
 			if _, dup := seen[hit.term]; dup {
 				continue
 			}
 			seen[hit.term] = struct{}{}
 			terms = append(terms, hit.term)
-			spans = append(spans, spanAt(f.field, f.scan, f.display, hit.at, hit.at+len(hit.term)))
+			start, end := unfold(offsets, hit.at), unfold(offsets, hit.at+len(hit.term))
+			spans = append(spans, spanAt(f.field, f.scan, f.display, start, end))
 		}
 	}
-	return terms, capSpans(spans)
+	return terms, spans
 }
 
 // joinTerms names the trigger terms found, counting the tail once the list gets

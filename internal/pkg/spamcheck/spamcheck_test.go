@@ -292,3 +292,28 @@ func TestVerifyKeepsALongQuoteThatHadToBeShortened(t *testing.T) {
 		t.Errorf("line = %d, want the line the sentence sits on", f.Line)
 	}
 }
+
+// A reply carrying only prose is not an analysis. Deriving a score from its
+// empty finding list put a confident 100/100 above a verdict saying the
+// opposite, and charged for it.
+func TestAnalyzeRefusesAVerdictWithNothingBehindIt(t *testing.T) {
+	_, err := Analyze(context.Background(), &stubProvider{
+		reply: `{"verdict": "This reads like a bulk promotion and will land in spam."}`,
+	}, "stub-model", Input{Subject: "Quick question", BodyPlain: testBody})
+	if err == nil {
+		t.Fatal("a verdict with no score and no findings was accepted as an analysis")
+	}
+}
+
+// A score of 0 is a real answer, not a missing one.
+func TestAnalyzeAcceptsAZeroScore(t *testing.T) {
+	res, err := Analyze(context.Background(), &stubProvider{
+		reply: `{"score": 0, "verdict": "Every signal here is bad."}`,
+	}, "stub-model", Input{Subject: "FREE CASH", BodyPlain: testBody})
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	if res.Score != 0 {
+		t.Errorf("score = %d, want the model's own 0", res.Score)
+	}
+}

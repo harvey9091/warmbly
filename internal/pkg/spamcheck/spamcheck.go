@@ -142,10 +142,11 @@ func Analyze(ctx context.Context, p generation.Provider, model string, in Input)
 	}
 
 	out := parse(res.Text)
-	// A response with no score, no verdict and no findings was not an analysis.
-	// Failing here refunds the credit; filling the gaps in would render as a
-	// confident 100/100 on copy nothing actually read.
-	if out.Score < 0 && out.Verdict == "" && len(out.Findings) == 0 {
+	// A response with no score and no findings is not an analysis, whatever
+	// else it carried. Failing here refunds the credit; deriving a score from
+	// an empty finding list would render as a confident 100/100 sitting above a
+	// verdict that says the opposite.
+	if out.Score < 0 && len(out.Findings) == 0 {
 		return nil, fmt.Errorf("spamcheck: could not read the model's response")
 	}
 	out.Model = res.Model
@@ -378,7 +379,8 @@ func lineText(s string, line int) string {
 }
 
 // scoreFromFindings is the fallback when the model returned findings but no
-// usable score.
+// usable score. Analyze refuses a response with neither, so this is never asked
+// to price an empty list into a clean 100.
 func scoreFromFindings(findings []Finding) int {
 	score := 100
 	for _, f := range findings {

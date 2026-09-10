@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func hasIssue(res ScoreResult, code string) bool {
@@ -371,5 +372,74 @@ func TestLeadIssuePrefersTheHighSeverityOne(t *testing.T) {
 	}}
 	if got := LeadIssue(res); got != "Body: Body has no text content." {
 		t.Errorf("lead issue = %q, want the high-severity one", got)
+	}
+}
+
+// A rune can change byte length when it is lowercased (U+0130 is two bytes and
+// folds to one, U+212A is three), so an offset found in the folded copy walks
+// off the original past the first one. Slicing on it quoted bytes the writer
+// never typed, and could cut a rune in half into invalid UTF-8.
+func TestScoreQuotesTheRightBytesAcrossACaseFold(t *testing.T) {
+	for _, tc := range []struct {
+		subject string
+		want    string
+	}{
+		{"İİİ free offer", "free"},
+		{"KKK cash prize", "cash"},
+		{"café free trial", "free"},
+		{"🎉 free bonus", "free"},
+	} {
+		issue, ok := issueByCode(Score(tc.subject, "", "Hi Ada, worth a chat?"), "spam_trigger_terms")
+		if !ok {
+			t.Fatalf("%q: trigger term not flagged", tc.subject)
+		}
+		span := issue.Spans[0]
+		if !utf8.ValidString(span.Text) {
+			t.Errorf("%q: span text is not valid UTF-8: %q", tc.subject, span.Text)
+		}
+		if span.Text != tc.want {
+			t.Errorf("%q: quoted %q, want %q", tc.subject, span.Text, tc.want)
+		}
+		if span.Excerpt != tc.subject {
+			t.Errorf("%q: excerpt = %q", tc.subject, span.Excerpt)
+		}
+	}
+}
+
+// The same offsets carry the line number, so a body with a fold-shifting rune
+// above the trigger term must still point at the right line.
+func TestScoreLinesSurviveACaseFold(t *testing.T) {
+	body := "Hi İIrem,\n\nStraße KKK notes.\n\nHere is a free look."
+	issue, ok := issueByCode(Score("Quick question", "", body), "spam_trigger_terms")
+	if !ok {
+		t.Fatalf("trigger term not flagged")
+	}
+	span := issue.Spans[0]
+	if span.Text != "free" {
+		t.Errorf("quoted %q, want %q", span.Text, "free")
+	}
+	if span.Line != 5 {
+		t.Errorf("line = %d, want 5", span.Line)
+	}
+	if span.Excerpt != "Here is a free look." {
+		t.Errorf("excerpt = %q", span.Excerpt)
+	}
+}
+
+// The field is read before the span list is trimmed. A subject-first list of
+// more than maxSpans in one half would otherwise lose every body span to the
+// cap and label a both-halves issue as a subject-only one.
+func TestScoreFieldSurvivesTheSpanCap(t *testing.T) {
+	subject := "free cash prize bonus discount promo sale deal loan credit"
+	body := "This is a limited time offer."
+	issue, ok := issueByCode(Score(subject, "", body), "spam_trigger_terms")
+	if !ok {
+		t.Fatalf("trigger terms not flagged")
+	}
+	if len(issue.Spans) != maxSpans {
+		t.Fatalf("got %d spans, want them capped at %d", len(issue.Spans), maxSpans)
+	}
+	if issue.Field != "" {
+		t.Errorf("field = %q, want empty: the terms straddle both halves", issue.Field)
 	}
 }

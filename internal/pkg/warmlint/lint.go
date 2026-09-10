@@ -118,11 +118,15 @@ type ScoreResult struct {
 // that caused it, because a score with no location is advice nobody can act on.
 func Score(subject, bodyHTML, bodyPlain string) ScoreResult {
 	res := ScoreResult{Score: 100, Issues: []Issue{}}
+	// The field is read from the whole span list and the list is trimmed after,
+	// so a cap that drops one half's spans can never relabel the issue.
 	deduct := func(n int, issue Issue) {
 		res.Score -= n
+		issue.Spans = quotableSpans(issue.Spans)
 		if issue.Field == "" {
 			issue.Field = commonField(issue.Spans)
 		}
+		issue.Spans = capSpans(issue.Spans)
 		res.Issues = append(res.Issues, issue)
 	}
 
@@ -180,7 +184,7 @@ func Score(subject, bodyHTML, bodyPlain string) ScoreResult {
 		deduct(d, Issue{
 			Severity: "warn", Code: "too_many_links",
 			Message:    fmt.Sprintf("%d links. Keep the link count low in cold email.", links),
-			Spans:      capSpans(linked),
+			Spans:      linked,
 			Suggestion: "Keep one link at most on a first touch, and cut the rest.",
 		})
 	}
