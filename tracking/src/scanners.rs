@@ -69,6 +69,9 @@ pub struct ScannerNetworks {
     /// matching entirely, which is the default: an ASN is not something the
     /// service can work out on its own.
     asn_header: Option<String>,
+    /// Entries that could not be read. Reported at startup so a typo in an
+    /// operator's list is visible rather than silently doing nothing.
+    skipped: usize,
 }
 
 impl ScannerNetworks {
@@ -95,9 +98,10 @@ impl ScannerNetworks {
         s.load_catalogue(all_networks, Some(Scope::All));
         s.load_catalogue(click_networks, Some(Scope::Clicks));
         tracing::info!(
-            "Scanner catalogue: {} networks, {} ASNs (asn header: {})",
+            "Scanner catalogue: {} networks, {} ASNs, {} unreadable (asn header: {})",
             s.nets.len(),
             s.asns.len(),
+            s.skipped,
             s.asn_header.as_deref().unwrap_or("none")
         );
         if !s.asns.is_empty() && s.asn_header.is_none() {
@@ -110,29 +114,38 @@ impl ScannerNetworks {
     /// `force` overrides the scope column, which is how the two operator
     /// variables get their meaning while sharing one parser with the file.
     fn load_catalogue(&mut self, text: &str, force: Option<Scope>) {
-        for raw in text.split(['\n', ',']) {
-            let line = raw.split('#').next().unwrap_or("").trim();
-            if line.is_empty() {
-                continue;
+        // A comment runs to the end of its LINE, so it is stripped before the
+        // line is split on commas. The other order turns every comma in a
+        // sentence into two more entries, none of which parse.
+        for line in text.lines() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            for entry in line.split(',') {
+                self.load_entry(entry.trim(), force);
             }
-            let mut fields = line.split_whitespace();
-            let Some(source) = fields.next() else {
-                continue;
-            };
-            // An entry that names no scope gets the cautious one.
-            let mut scope = force.unwrap_or(Scope::Clicks);
-            let mut label = None;
-            for field in fields {
-                match field {
-                    "all" | "clicks" if force.is_some() => {}
-                    "all" => scope = Scope::All,
-                    "clicks" => scope = Scope::Clicks,
-                    other if label.is_none() => label = Some(other),
-                    _ => {}
-                }
-            }
-            self.insert(source, scope, Arc::from(label.unwrap_or("scanner")));
         }
+    }
+
+    /// One `<source> [scope] [label]` entry, already stripped of its comment.
+    fn load_entry(&mut self, line: &str, force: Option<Scope>) {
+        let mut fields = line.split_whitespace();
+        let Some(source) = fields.next() else {
+            return;
+        };
+        // An entry that names no scope gets the cautious one.
+        let mut scope = force.unwrap_or(Scope::Clicks);
+        let mut label = None;
+        for field in fields {
+            match field {
+                // The variable an operator's entry arrived in decides its
+                // scope, so a scope word there is redundant, not a label.
+                "all" | "clicks" if force.is_some() => {}
+                "all" => scope = Scope::All,
+                "clicks" => scope = Scope::Clicks,
+                other if label.is_none() => label = Some(other),
+                _ => {}
+            }
+        }
+        self.insert(source, scope, Arc::from(label.unwrap_or("scanner")));
     }
 
     fn insert(&mut self, source: &str, scope: Scope, label: Arc<str>) {
@@ -144,7 +157,10 @@ impl ScannerNetworks {
                 Ok(asn) => {
                     self.asns.insert(asn, Entry { scope, label });
                 }
-                Err(_) => tracing::warn!("scanner catalogue: ignoring unparseable ASN {source:?}"),
+                Err(_) => {
+                    self.skipped += 1;
+                    tracing::warn!("scanner catalogue: ignoring unparseable ASN {source:?}");
+                }
             }
             return;
         }
@@ -154,7 +170,10 @@ impl ScannerNetworks {
             .or_else(|_| source.parse::<IpAddr>().map(IpNet::from));
         match parsed {
             Ok(net) => self.nets.push((net.trunc(), Entry { scope, label })),
-            Err(_) => tracing::warn!("scanner catalogue: ignoring unparseable network {source:?}"),
+            Err(_) => {
+                self.skipped += 1;
+                tracing::warn!("scanner catalogue: ignoring unparseable network {source:?}");
+            }
         }
     }
 
@@ -325,6 +344,7 @@ mod tests {
     #[test]
     fn unparseable_entries_are_skipped() {
         let s = ScannerNetworks::new(false, "not-a-cidr, 203.0.113.0/24 pf, asn:nope", "", None);
+        assert_eq!(s.skipped, 2);
         assert_eq!(
             s.classify("203.0.113.9", &hdr(&[]), false, Request::Open)
                 .as_deref(),
@@ -342,8 +362,10 @@ mod tests {
         );
     }
 
-    // The shipped file is parsed at compile time; a typo in it would silently
-    // disarm the default the whole feature rests on.
+    // The shipped file is read at compile time; a typo in it would silently
+    // disarm the default the whole feature rests on. `skipped` also catches
+    // the file's own prose being mistaken for entries, which is what happens
+    // if the comment is not stripped before the line is split on commas.
     #[test]
     fn shipped_catalogue_parses_completely() {
         let s = builtins();
@@ -355,5 +377,29 @@ mod tests {
             })
             .count();
         assert_eq!(s.nets.len() + s.asns.len(), lines, "every entry loaded");
+        assert_eq!(s.skipped, 0, "nothing in the shipped file was unreadable");
+    }
+
+    // An operator's list is one line of commas; the file is many lines, most
+    // of them prose. Both go through the same parser.
+    #[test]
+    fn a_comment_is_stripped_before_the_line_is_split_on_commas() {
+        let s = ScannerNetworks::new(
+            false,
+            "# a note, with a comma in it\n203.0.113.0/24 pf\n198.51.100.0/24 mc # trailing note, ignored",
+            "",
+            None,
+        );
+        assert_eq!(s.skipped, 0, "prose must not be read as entries");
+        assert_eq!(
+            s.classify("203.0.113.1", &hdr(&[]), false, Request::Open)
+                .as_deref(),
+            Some("pf")
+        );
+        assert_eq!(
+            s.classify("198.51.100.1", &hdr(&[]), false, Request::Open)
+                .as_deref(),
+            Some("mc")
+        );
     }
 }
