@@ -22,7 +22,7 @@ func NewCleanMyList(apiKey, baseURL string) *CleanMyList {
 	if baseURL == "" {
 		baseURL = "https://www.cleanmylist.io"
 	}
-	return &CleanMyList{apiKey: strings.TrimSpace(apiKey), baseURL: strings.TrimRight(baseURL, "/"), client: &http.Client{Timeout: 60 * time.Second}}
+	return &CleanMyList{apiKey: strings.TrimSpace(apiKey), baseURL: strings.TrimRight(baseURL, "/"), client: &http.Client{Timeout: 60 * time.Second, CheckRedirect: refuseInsecureRedirect}}
 }
 
 func (c *CleanMyList) Check(ctx context.Context, email string) (Result, error) {

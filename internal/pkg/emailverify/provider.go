@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 )
 
 var (
@@ -23,4 +24,17 @@ type ProviderClient interface {
 	// from a healthy one. When it cannot, only a real check reveals exhaustion,
 	// so a recorded one has to be held rather than re-derived from Account.
 	ObservesBalance() bool
+}
+
+// refuseInsecureRedirect stops a redirect that downgrades the scheme. Go keeps
+// the Authorization header across a redirect that stays on the same host, so an
+// http destination would put the API key on the wire in the clear.
+func refuseInsecureRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	if req.URL.Scheme != "https" && len(via) > 0 && via[0].URL.Scheme == "https" {
+		return fmt.Errorf("refusing a redirect from https to %s", req.URL.Scheme)
+	}
+	return nil
 }

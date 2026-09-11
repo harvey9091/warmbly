@@ -78,7 +78,7 @@ export default function VerificationSettings() {
                                 to="/app/integrations"
                                 className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-[12px] font-medium transition-colors"
                             >
-                                {paid ? "Manage connection" : "Connect verification service"}
+                                {data.connection_id ? "Manage connection" : "Connect verification service"}
                                 <ArrowRightIcon className="w-3.5 h-3.5" />
                             </Link>
                         </div>

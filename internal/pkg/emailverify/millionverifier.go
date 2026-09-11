@@ -36,7 +36,7 @@ func NewMillionVerifier(apiKey string, baseURL string) *MillionVerifier {
 	return &MillionVerifier{
 		apiKey:  strings.TrimSpace(apiKey),
 		baseURL: strings.TrimRight(baseURL, "/"),
-		client:  &http.Client{Timeout: millionVerifierTimeout},
+		client:  &http.Client{Timeout: millionVerifierTimeout, CheckRedirect: refuseInsecureRedirect},
 	}
 }
 
