@@ -420,18 +420,20 @@ func (d Deps) getCampaignStats(ctx context.Context, inv Invocation, args json.Ra
 	steps := make([]map[string]any, 0, len(a.Sequences))
 	for _, st := range a.Sequences {
 		steps = append(steps, map[string]any{
-			"step_id":     st.SequenceID.String(),
-			"name":        st.Name,
-			"position":    st.Position,
-			"emails_sent": st.EmailsSent,
-			"opens":       st.Opens,
-			"clicks":      st.Clicks,
-			"replies":     st.Replies,
-			"bounces":     st.Bounces,
-			"open_rate":   st.OpenRate,
-			"click_rate":  st.ClickRate,
-			"reply_rate":  st.ReplyRate,
-			"bounce_rate": st.BounceRate,
+			"step_id":        st.SequenceID.String(),
+			"name":           st.Name,
+			"position":       st.Position,
+			"emails_sent":    st.EmailsSent,
+			"opens":          st.Opens,
+			"machine_opens":  st.MachineOpens,
+			"clicks":         st.Clicks,
+			"machine_clicks": st.MachineClicks,
+			"replies":        st.Replies,
+			"bounces":        st.Bounces,
+			"open_rate":      st.OpenRate,
+			"click_rate":     st.ClickRate,
+			"reply_rate":     st.ReplyRate,
+			"bounce_rate":    st.BounceRate,
 		})
 	}
 	return jsonResult(map[string]any{
@@ -441,7 +443,9 @@ func (d Deps) getCampaignStats(ctx context.Context, inv Invocation, args json.Ra
 		"total_contacts": s.TotalContacts,
 		"emails_sent":    s.EmailsSent,
 		"unique_opens":   s.UniqueOpens,
+		"machine_opens":  s.MachineOpens,
 		"unique_clicks":  s.UniqueClicks,
+		"machine_clicks": s.MachineClicks,
 		"replies":        s.Replies,
 		"bounces":        s.Bounces,
 		"open_rate":      s.OpenRate,

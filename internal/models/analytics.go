@@ -79,9 +79,9 @@ type CampaignSummary struct {
 	// (Apple MPP prefetch, UA-less clients). Human opens = unique - machine.
 	MachineOpens int `json:"machine_opens"`
 	UniqueClicks int `json:"unique_clicks"`
-	// MachineClicks counts steps whose only clicks came from automated
-	// fetchers (security gateways walking the links). They are not part of
-	// UniqueClicks, which only ever counts a person's click.
+	// MachineClicks counts the contacts whose only clicks on a step came from
+	// automated fetchers (security gateways walking the links). They are not
+	// part of UniqueClicks, which only ever counts a person's click.
 	MachineClicks int `json:"machine_clicks"`
 	Replies       int `json:"replies"`
 	Bounces       int `json:"bounces"`
@@ -289,8 +289,8 @@ type DashboardOverallStats struct {
 	// MachineOpens is the subset of TotalOpens from automated fetchers.
 	MachineOpens int `json:"machine_opens"`
 	TotalClicks  int `json:"total_clicks"`
-	// MachineClicks counts steps clicked only by automated fetchers; they are
-	// not part of TotalClicks.
+	// MachineClicks counts the contacts whose only clicks on a step came from
+	// automated fetchers; they are not part of TotalClicks.
 	MachineClicks   int     `json:"machine_clicks"`
 	TotalReplies    int     `json:"total_replies"`
 	TotalBounces    int     `json:"total_bounces"`

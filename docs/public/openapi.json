@@ -26585,17 +26585,17 @@
           "click_rate": {
             "type": "number",
             "format": "double",
-            "description": "Clicks as a percentage of this step's own emails_sent."
+            "description": "Clicks as a percentage of this step's own emails_sent. 0 while the step has sent nothing."
           },
           "reply_rate": {
             "type": "number",
             "format": "double",
-            "description": "Replies as a percentage of this step's own emails_sent."
+            "description": "Replies as a percentage of this step's own emails_sent. 0 while the step has sent nothing."
           },
           "bounce_rate": {
             "type": "number",
             "format": "double",
-            "description": "Bounces as a percentage of this step's own emails_sent."
+            "description": "Bounces as a percentage of this step's own emails_sent. 0 while the step has sent nothing."
           }
         }
       },
