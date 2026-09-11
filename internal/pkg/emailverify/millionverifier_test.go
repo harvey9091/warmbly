@@ -49,12 +49,12 @@ func TestMillionVerifierMapsResults(t *testing.T) {
 		t.Fatalf("gone = %+v", res)
 	}
 	res, err = mv.Check(context.Background(), "broke@x.com")
-	if !errors.Is(err, ErrMillionVerifierCredits) || res.Status != StatusUnknown {
+	if !errors.Is(err, ErrProviderCredits) || res.Status != StatusUnknown {
 		t.Fatalf("no credits = %+v, %v", res, err)
 	}
 
 	bad := NewMillionVerifier("wrong", srv.URL)
-	if _, err := bad.Credits(context.Background()); !errors.Is(err, ErrMillionVerifierKey) {
+	if _, err := bad.Credits(context.Background()); !errors.Is(err, ErrProviderKey) {
 		t.Fatalf("bad key = %v", err)
 	}
 }

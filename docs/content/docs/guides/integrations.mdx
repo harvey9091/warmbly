@@ -22,6 +22,8 @@ The Integrations page is a searchable directory with your existing connections a
 | MillionVerifier | Verification | API key | Check every contact's address through your pay-as-you-go credits instead of the built-in probe |
 | CleanMyList | Verification | API key | Verify contacts using your CleanMyList plan allowance and credits |
 
+Only one Verification connection is active at a time; see [one verifier at a time](/guides/integrations/#one-verifier-at-a-time).
+
 Three connect styles appear on the catalog cards: `one-click` OAuth, `api_key` for providers without an OAuth app, and `webhook` for a minted inbound URL or a pasted channel URL.
 
 <Callout type="info" title="OAuth providers cannot be connected with a pasted key">
@@ -46,7 +48,11 @@ The key is tested against your MillionVerifier account when you connect, so a mi
 
 CleanMyList does not expose a balance through its API, so Warmbly omits the credit counter. View your allowance and credits in CleanMyList. If verification fails, including an exhausted account, Warmbly uses the built-in check. Fix the account or reconnect a revoked key to restore verification.
 
-If both verification services are connected, the most recently created connected or degraded connection takes precedence. Disconnect it to use the other service. See the [CleanMyList API documentation](https://www.cleanmylist.io/developers) and [address verification](/guides/deliverability/#address-verification).
+An account with nothing left is only visible when a check is refused, so Warmbly stops checking against it for 15 minutes rather than retrying every address. Topping up takes effect on the next pass after that. See the [CleanMyList API documentation](https://www.cleanmylist.io/developers) and [address verification](/guides/deliverability/#address-verification).
+
+### One verifier at a time
+
+A workspace uses one verification service. Connecting a second one is refused while the first is connected, because which one ran would otherwise be decided by connection order alone and every check would quietly move to a different bill. Disconnect the current service first, then connect the new one.
 
 ## CRM field mappings
 

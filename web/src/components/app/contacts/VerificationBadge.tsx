@@ -39,7 +39,9 @@ export function verificationTitle(c: Pick<Contact, "verification_status" | "veri
     const parts: string[] = [c.verification_confidence ? `${meta.label} (${c.verification_confidence}% sure)` : meta.label];
     if (c.verification_sub_status && SUB_LABEL[c.verification_sub_status]) parts.push(SUB_LABEL[c.verification_sub_status]);
     if (c.verification_source && SOURCE_LABEL[c.verification_source]) {
-        const providerName = PROVIDER_LABELS[c.verification_provider as IntegrationProvider] ?? c.verification_provider;
+        // Only a verifier we have a name for is named; anything else keeps the
+        // generic label rather than showing a raw identifier.
+        const providerName = PROVIDER_LABELS[c.verification_provider as IntegrationProvider];
         const src = c.verification_source === "provider" && providerName
             ? `checked by ${providerName}`
             : c.verification_source === "imported" && c.verification_provider && c.verification_provider !== "imported"

@@ -1,3 +1,7 @@
+// Address verification at a glance: who checks this workspace's contacts, what
+// it has found so far, and the one-click path to a connected verifier. Verdicts
+// change in the background, so the bar and the numbers animate as they land.
+
 import React from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
@@ -54,9 +58,9 @@ export default function VerificationSettings() {
                                 </p>
                                 <p className="text-[11.5px] text-slate-500 leading-snug">
                                     {paid
-                                        ? data.provider === "cleanmylist"
-                                            ? "Uses your CleanMyList plan allowance, then credits. View your balance in CleanMyList."
-                                            : `One credit per address, from your own ${providerName} balance.`
+                                        ? data.credits != null
+                                            ? `One credit per address, from your own ${providerName} balance.`
+                                            : `One check per address, from your own ${providerName} account. It publishes no balance, so view what is left in ${providerName}.`
                                         : data.builtin_ready
                                           ? "Syntax, mail server, disposable domains and a mailbox probe. Catch-all domains and Microsoft 365 stay unverified."
                                           : "Syntax, mail server and disposable-domain checks. The mailbox probe is off on this instance, so most addresses stay unverified."}

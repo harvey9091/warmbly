@@ -62,7 +62,11 @@ func (c *CleanMyList) Check(ctx context.Context, email string) (Result, error) {
 	}
 	res.IsCatchAll = res.SubStatus == SubStatusCatchAll
 	res.Confidence = out.Score
-	res.Reason = "cleanmylist: " + out.Reason
+	reason := out.Reason
+	if reason == "" {
+		reason = out.Verdict
+	}
+	res.Reason = "cleanmylist: " + reason
 	if out.ReasonCode != "" {
 		res.Reason += " (" + out.ReasonCode + ")"
 	}
@@ -76,6 +80,11 @@ func (c *CleanMyList) Check(ctx context.Context, email string) (Result, error) {
 	}
 	return res, nil
 }
+
+// ObservesBalance is false: CleanMyList publishes no balance endpoint, so an
+// exhausted account answers Account exactly like a healthy one and only a real
+// check ever reveals it.
+func (c *CleanMyList) ObservesBalance() bool { return false }
 
 // Account validates the key without spending allowance; no balance API exists.
 func (c *CleanMyList) Account(ctx context.Context) (*int, error) {
@@ -105,7 +114,7 @@ func (c *CleanMyList) request(ctx context.Context, method, path string, body []b
 	case http.StatusUnauthorized:
 		return ErrProviderKey
 	case http.StatusForbidden:
-		return fmt.Errorf("verify your CleanMyList account email before connecting: %w", ErrProviderKey)
+		return ErrProviderUnconfirmed
 	case http.StatusPaymentRequired:
 		return ErrProviderCredits
 	case http.StatusOK:

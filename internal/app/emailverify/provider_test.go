@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/errx"
@@ -76,5 +78,67 @@ func TestCleanMyListProviderWithoutBalance(t *testing.T) {
 	overview, err = s.Overview(context.Background(), org)
 	if err != nil || overview.Provider != "cleanmylist" || overview.ProviderError != "" {
 		t.Fatalf("recovered overview = %+v, %v", overview, err)
+	}
+}
+
+// An exhausted CleanMyList account answers the account check exactly like a
+// healthy one, so the 402 a real check found is the only evidence there is. It
+// has to outlive the ordinary lookup cache, or every pass puts the whole batch
+// back on doomed paid calls a minute later.
+func TestExhaustedAccountWithoutBalanceIsHeldPastTheLookupCache(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/jobs" {
+			_, _ = w.Write([]byte(`{"jobs":[]}`))
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+	}))
+	defer srv.Close()
+	id := uuid.New()
+	source := &providerSource{provider: &Provider{Name: "cleanmylist", Label: "CleanMyList", ConnectionID: &id, Client: verify.NewCleanMyList("key", srv.URL)}}
+	s := NewService(contactCountsRepo{}, Options{Builtin: builtinVerifier{}, Providers: source}).(*service)
+	org := uuid.New()
+
+	if res := s.VerifyAddress(context.Background(), org, "test@example.com"); res.Provider != verify.ProviderBuiltin {
+		t.Fatalf("result = %+v", res)
+	}
+	s.creditsMu.Lock()
+	for k, e := range s.credits {
+		e.at = e.at.Add(-2 * time.Minute)
+		s.credits[k] = e
+	}
+	s.creditsMu.Unlock()
+
+	overview, err := s.Overview(context.Background(), org)
+	if err != nil || overview.Provider != verify.ProviderBuiltin || overview.ProviderError == "" {
+		t.Fatalf("two minutes on, the empty account = %+v, %v", overview, err)
+	}
+	if !strings.Contains(overview.ProviderError, "CleanMyList") {
+		t.Fatalf("provider error does not name the service: %q", overview.ProviderError)
+	}
+}
+
+// Checks run concurrently and resolve out of order, so one that started before
+// a failure must not withdraw it: it never saw it.
+func TestOlderCheckDoesNotClearANewerFailure(t *testing.T) {
+	id := uuid.New()
+	source := &providerSource{}
+	s := NewService(contactCountsRepo{}, Options{Builtin: builtinVerifier{}, Providers: source}).(*service)
+	p := &Provider{Name: "cleanmylist", ConnectionID: &id, Client: verify.NewCleanMyList("key", "http://127.0.0.1:1")}
+
+	startedBefore := time.Now()
+	time.Sleep(time.Millisecond)
+	s.noteProviderError(context.Background(), p, verify.ErrProviderCredits)
+	if source.reported == nil {
+		t.Fatal("the failure was not reported")
+	}
+
+	s.noteProviderOK(context.Background(), p, startedBefore)
+	if !s.providerDown(p) || source.reported == nil {
+		t.Fatal("a check that began before the failure cleared it")
+	}
+	s.noteProviderOK(context.Background(), p, time.Now())
+	if s.providerDown(p) || source.reported != nil {
+		t.Fatal("a check that began after the failure did not clear it")
 	}
 }

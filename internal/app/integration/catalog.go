@@ -220,3 +220,14 @@ func Catalog() []models.IntegrationCatalogEntry {
 		},
 	}
 }
+
+// ProviderLabel is the catalog's display name for a provider, for copy a member
+// reads. Falls back to the identifier for anything not in the catalog.
+func ProviderLabel(p models.IntegrationProvider) string {
+	for _, e := range Catalog() {
+		if e.Provider == p {
+			return e.Name
+		}
+	}
+	return string(p)
+}
