@@ -271,7 +271,7 @@ Returns a single campaign's performance summary plus per-sequence-step stats. Th
 
 `engagement` groups the campaign's human opens and clicks by country (ISO code), mail client or browser, and device type (`desktop`, `mobile`, `tablet`), counting distinct contacts per bucket; a click counts as an open. Each list holds the busiest eight; an empty `key` is unknown. Country needs the GeoLite2 database on the consumer, otherwise every country row is unknown.
 
-`machine_opens` is the subset of `unique_opens` from automated fetchers (Apple MPP prefetch, UA-less clients, opens inside ten seconds of the send); human opens are `unique_opens` minus `machine_opens`. `machine_clicks` counts steps whose only clicks were automated (a security gateway walking the links); those are not part of `unique_clicks` or `total_clicks`, which only ever count a person's click.
+`machine_opens` is the subset of `unique_opens` from automated fetchers (Apple MPP prefetch, UA-less clients, opens inside the instance's automated-open window, which starts when the step is dispatched to a worker); human opens are `unique_opens` minus `machine_opens`. `machine_clicks` counts steps whose only clicks were automated (a security gateway walking the links); those are not part of `unique_clicks` or `total_clicks`, which only ever count a person's click.
 
 ## Get campaign daily stats
 

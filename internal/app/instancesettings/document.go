@@ -69,6 +69,61 @@ type Retention struct {
 	AuditLogDays int `json:"audit_log_days"`
 }
 
+// Tracking holds the engagement-classification windows. Zero means "compiled
+// default" on read, so a document written before the section existed still
+// resolves; the accepted range is clamped in Normalize.
+//
+// Nothing here drops an event. A classified-automated open or click is still
+// stored as delivery evidence and still shown on the timeline; it just does
+// not stamp the step, fire a branch or automation, or send a webhook.
+type Tracking struct {
+	// MachineWindowOpenSeconds is how soon after a step was dispatched an open
+	// is treated as automated. The clock starts at dispatch to the worker, so
+	// this window also covers provider queueing and transit to the recipient.
+	MachineWindowOpenSeconds int `json:"machine_window_open_seconds"`
+	// MachineWindowClickSeconds is the same window for click tickets, kept
+	// separately because a misjudged click costs an automation rather than a
+	// metric.
+	MachineWindowClickSeconds int `json:"machine_window_click_seconds"`
+}
+
+// DefaultTracking is the compiled classification window for each event kind.
+func DefaultTracking() Tracking {
+	return Tracking{
+		MachineWindowOpenSeconds:  config.TrackingMachineWindowOpenSecondsDefault,
+		MachineWindowClickSeconds: config.TrackingMachineWindowClickSecondsDefault,
+	}
+}
+
+// Normalize clamps both windows into the accepted range. Zero and negative
+// resolve to the compiled default rather than to "never automated", so a
+// document written before this section existed keeps the shipped behaviour.
+func (t *Tracking) Normalize() {
+	clamp := func(v, def int) int {
+		if v <= 0 {
+			return def
+		}
+		if v < config.TrackingMachineWindowSecondsMin {
+			return config.TrackingMachineWindowSecondsMin
+		}
+		if v > config.TrackingMachineWindowSecondsMax {
+			return config.TrackingMachineWindowSecondsMax
+		}
+		return v
+	}
+	t.MachineWindowOpenSeconds = clamp(t.MachineWindowOpenSeconds, config.TrackingMachineWindowOpenSecondsDefault)
+	t.MachineWindowClickSeconds = clamp(t.MachineWindowClickSeconds, config.TrackingMachineWindowClickSecondsDefault)
+}
+
+// OpenWindow and ClickWindow are the normalized windows as durations.
+func (t Tracking) OpenWindow() time.Duration {
+	return time.Duration(t.MachineWindowOpenSeconds) * time.Second
+}
+
+func (t Tracking) ClickWindow() time.Duration {
+	return time.Duration(t.MachineWindowClickSeconds) * time.Second
+}
+
 // Bounds on the domain-authentication grace window. One hour is the shortest
 // window that still absorbs a resolver blip; 30 days is the longest a domain
 // should keep sending cold mail unauthenticated while being warned about it.
@@ -98,6 +153,7 @@ type Document struct {
 	Access         Access         `json:"access"`
 	Sync           Sync           `json:"sync"`
 	Retention      Retention      `json:"retention"`
+	Tracking       Tracking       `json:"tracking"`
 	Deliverability Deliverability `json:"deliverability"`
 	Notifications  Notifications  `json:"notifications"`
 }
@@ -114,6 +170,7 @@ func Defaults() Document {
 		},
 		Sync:           DefaultSync(),
 		Retention:      DefaultRetention(),
+		Tracking:       DefaultTracking(),
 		Deliverability: DefaultDeliverability(),
 	}
 }
@@ -184,6 +241,7 @@ func (d *Document) Normalize() {
 	}
 	d.Sync.Normalize()
 	d.Retention.Normalize()
+	d.Tracking.Normalize()
 	d.Deliverability.Normalize()
 	d.Notifications.Normalize()
 }
@@ -254,6 +312,10 @@ type Patch struct {
 		FormEventDays       *int `json:"form_event_days"`
 		AuditLogDays        *int `json:"audit_log_days"`
 	} `json:"retention"`
+	Tracking *struct {
+		MachineWindowOpenSeconds  *int `json:"machine_window_open_seconds"`
+		MachineWindowClickSeconds *int `json:"machine_window_click_seconds"`
+	} `json:"tracking"`
 	Deliverability *struct {
 		EnforceDomainAuth *bool `json:"enforce_domain_auth"`
 		AuthGraceHours    *int  `json:"auth_grace_hours"`
@@ -307,6 +369,14 @@ func (p Patch) Apply(doc Document) Document {
 		}
 		if p.Retention.AuditLogDays != nil {
 			doc.Retention.AuditLogDays = *p.Retention.AuditLogDays
+		}
+	}
+	if p.Tracking != nil {
+		if p.Tracking.MachineWindowOpenSeconds != nil {
+			doc.Tracking.MachineWindowOpenSeconds = *p.Tracking.MachineWindowOpenSeconds
+		}
+		if p.Tracking.MachineWindowClickSeconds != nil {
+			doc.Tracking.MachineWindowClickSeconds = *p.Tracking.MachineWindowClickSeconds
 		}
 	}
 	if p.Deliverability != nil {
