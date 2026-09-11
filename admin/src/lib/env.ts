@@ -18,6 +18,11 @@ export const POSTHOG_KEY: string = runtimeEnv("POSTHOG_KEY", import.meta.env.VIT
 export const POSTHOG_HOST: string = runtimeEnv("POSTHOG_HOST", import.meta.env.VITE_POSTHOG_HOST, "https://us.i.posthog.com");
 // Error tracking is on wherever a key is set. "false" turns it off for an
 // install that reports to Sentry instead.
+// Where the PostHog app itself lives, as opposed to where events are sent.
+// They differ whenever api_host is a reverse proxy: without this the SDK builds
+// toolbar and session-replay links against the proxy, which does not serve the
+// app, so they lead nowhere.
+export const POSTHOG_UI_HOST: string = runtimeEnv("POSTHOG_UI_HOST", import.meta.env.VITE_POSTHOG_UI_HOST, "https://us.posthog.com");
 export const POSTHOG_ERROR_TRACKING: boolean = runtimeEnv("POSTHOG_ERROR_TRACKING", import.meta.env.VITE_POSTHOG_ERROR_TRACKING, "true") !== "false";
 export const SENTRY_DSN: string = runtimeEnv("SENTRY_DSN", import.meta.env.VITE_SENTRY_DSN);
 // The deployment label and the build every reported event is tagged with,

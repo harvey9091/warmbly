@@ -66,18 +66,13 @@ import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
 import { cn } from "@/lib/utils";
 import { plainToHtml } from "@/lib/email/body";
+import { bareEmail } from "@/lib/helper/emailAddress";
 
 const MAX_BODY_LEN = 4000;
 const MAX_SCHEDULE_MS = 29 * 24 * 60 * 60 * 1000;
 
 function looksLikeEmail(s: string): boolean {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
-}
-
-function bareEmail(s: string): string {
-    const m = s.match(/<([^>]+)>/);
-    if (m) return m[1].trim();
-    return s.trim();
 }
 
 function offsetHours(h: number): Date {

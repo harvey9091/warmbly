@@ -14,11 +14,11 @@ The rail opens with the standard mail folders, so direction is visually clear in
 | Inbox | Inbound mail, plus anything filed in a custom folder at the provider |
 | Drafts | Messages sitting in a mailbox's drafts folder |
 | Sent | Outbound mail, campaign and manual |
-| Archive | Archived at the provider (Gmail's All Mail, the Archive folder elsewhere) |
+| Archive | Archived (Gmail's All Mail, the Archive folder elsewhere) |
 | Spam | Junked at the provider |
-| Trash | Deleted at the provider |
+| Trash | Deleted |
 
-Each message's folder follows the provider: IMAP special-use folder attributes, Gmail labels, and Outlook well-known folders all map to the same six. Moves at the provider (junking a message, clearing it out of spam) follow on the next sync. The active folder is highlighted with a grey row and bold label, unread counts sit on the right, and each folder's three-dot menu offers **Mark all as read**.
+Each message starts in the folder the provider has it in: IMAP special-use folder attributes, Gmail labels, and Outlook well-known folders all map to the same six. Moves at the provider (junking a message, clearing it out of spam) follow on the next sync. You can also file a conversation yourself, which moves it here without moving it at the provider; see [filing a conversation](#filing-a-conversation). The active folder is highlighted with a grey row and bold label, unread counts sit on the right, and each folder's three-dot menu offers **Mark all as read**.
 
 Spam and Trash stay out of every other view: the **All** scope, the metric strip, and the unread badge only count the folders you actually work.
 
@@ -76,6 +76,22 @@ Categories label conversations. Tags label the mailboxes themselves (grouping ac
 ## Read state
 
 A conversation is unread when any message inside is unseen, marked by a bright left edge bar and bolder text. Opening it marks its messages seen and updates the counts. Read state syncs both ways with the mailbox provider.
+
+## Filing a conversation
+
+The thread header carries three filing actions, on the row above the message on a wide screen and behind the three-dot menu on a narrow one:
+
+| Action | Does |
+| --- | --- |
+| Mark as unread | Puts every message in the conversation back to unread and closes it |
+| Archive | Moves the conversation to Archive, so it leaves Inbox |
+| Delete | Moves the conversation to Trash, so it leaves every view except Trash |
+
+Archive and Delete both offer **Undo** on the confirmation toast. Open the Trash or Archive folder and the same header offers **Move to inbox**, so nothing filed by accident is stuck.
+
+<Callout type="info" title="Filing here does not move the message at the provider">
+Archive and Delete are Warmbly's own filing. The message keeps its place in Gmail, Outlook, or whatever mail client the mailbox belongs to, and deleting a conversation here never deletes mail there. The next sync will not undo your filing either: Warmbly records where the provider has each message separately from where you filed it, and follows the provider only when the provider itself moves the message. So junking a message in Gmail still reaches Warmbly, and an ordinary sync pass does not.
+</Callout>
 
 ## Replying
 

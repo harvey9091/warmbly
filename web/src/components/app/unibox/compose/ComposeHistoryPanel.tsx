@@ -17,6 +17,7 @@ import type { UniboxListRow } from "@/lib/api/client/app/unibox/searchIncoming";
 import { SearchInput } from "@/components/ui/field";
 import { useAppStore } from "@/stores";
 import { cn } from "@/lib/utils";
+import { bareEmail } from "@/lib/helper/emailAddress";
 
 type HistoryTab = "all" | "sent";
 
@@ -27,12 +28,6 @@ interface ComposeHistoryPanelProps {
     displayName?: string;
     // Mailbox affinity line, e.g. "usually from alex@acme.com".
     affinityLine?: string;
-}
-
-function bareEmail(s: string): string {
-    const m = s.match(/<([^>]+)>/);
-    if (m) return m[1].trim();
-    return s.trim();
 }
 
 function formatWhen(iso: string): string {

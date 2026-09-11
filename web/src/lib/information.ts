@@ -27,6 +27,11 @@ export const POSTHOG_HOST = runtimeEnv("POSTHOG_HOST", import.meta.env.VITE_POST
 // Error tracking is on wherever a key is set. "false" keeps the key for product
 // analytics and reports no exceptions, which is what an install that already
 // reports to Sentry wants.
+// Where the PostHog app itself lives, as opposed to where events are sent.
+// They differ whenever api_host is a reverse proxy: without this the SDK builds
+// toolbar and session-replay links against the proxy, which does not serve the
+// app, so they lead nowhere.
+export const POSTHOG_UI_HOST = runtimeEnv("POSTHOG_UI_HOST", import.meta.env.VITE_POSTHOG_UI_HOST, "https://us.posthog.com");
 export const POSTHOG_ERROR_TRACKING = runtimeEnv("POSTHOG_ERROR_TRACKING", import.meta.env.VITE_POSTHOG_ERROR_TRACKING, "true") !== "false";
 export const HUMAN_VERIFICATION_FAIL = "We couldn’t verify you’re human. Please try the security check again or reload the page.";
 export const PASSWORD_FAIL = "The password must be at least 8 characters long and contain both uppercase and lowercase letters, as well as a number."

@@ -217,6 +217,12 @@ No worker has checked in for more than five minutes while mailboxes are assigned
 
 Check the worker process is running, then check `ENCRYPTED_KEYS_BACKEND_URL` and `ENCRYPTED_KEYS_WORKER_TOKEN`: an empty value lets the worker start, subscribe and never register, with no log line to tell you. See [workers](/development/configuration/#workers).
 
+### tracking_domain_shares_brand
+
+`TRACKING_DOMAIN` is on the same registered domain as `APP_URL` or `API_PUBLIC_URL`. Every campaign's links and unsubscribe pages carry that host, so complaints against any one workspace can get it listed on a URL blocklist, and the listing reaches the domain that also serves your marketing site and your platform mail.
+
+Use a separate registered domain for tracking, and move workspaces onto their own verified tracking domains so their link reputation is theirs rather than shared.
+
 ### fleet_infra_unreachable
 
 Nodes are checking in from more than one machine, and `NATS_URL`, `REDIS` or `ENCRYPTED_KEYS_BACKEND_URL` still names a host that only resolves here, such as a compose service name or loopback. A joining node inherits those values verbatim, so it enrols, keeps heartbeating over HTTP, and reaches neither the bus nor the cache. The fleet looks healthy the whole time, which is why this is a check rather than a log line. See [split deployment](/development/split-deployment/).

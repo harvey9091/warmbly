@@ -167,6 +167,24 @@ TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12
 
 Full behavior, including what each registration mode does to the sign-up form, is on [accounts and access](/development/accounts-and-access/).
 
+### Proxying PostHog
+
+<Callout title="Set the UI host whenever you proxy">
+`POSTHOG_HOST` is where events are sent; `POSTHOG_UI_HOST` is where PostHog's own app lives. They are the same thing only when you are not proxying. Point the first at your proxy and leave the second at `https://us.posthog.com` (or `https://eu.posthog.com`), or the SDK builds toolbar and session-replay links against the proxy, which does not serve the app.
+</Callout>
+
+
+Content blockers drop requests to `posthog.com`, so analytics and error reporting quietly stop for a large share of visitors. The backend serves a reverse proxy at `/ingest` for this. Point each frontend at it:
+
+| Tree | Setting | Value |
+|---|---|---|
+| dashboard, admin | `POSTHOG_HOST` | `https://api.example.com/ingest` |
+| marketing site | `PUBLIC_POSTHOG_HOST` | `https://api.example.com/ingest` |
+
+Nothing else changes: the key stays the same, and the proxy forwards the payload untouched. It is on the backend rather than in each frontend because there are three of them, and a proxy copied three times drifts three ways.
+
+The proxy forwards only what PostHog needs to read the request. Cookies and `Authorization` stay on this side, so a session for your instance is never handed to a third party, and the caller's address goes in `X-Forwarded-For` so visitors are geolocated rather than your server.
+
 ## Captcha
 
 | Variable | What it does | Default | Restart needed |
@@ -293,6 +311,7 @@ On `filesystem`, a remote worker writes blobs to its own disk rather than a volu
 | Variable | What it does | Default | Restart needed |
 |---|---|---|---|
 | `PRIMARY_DB` | PostgreSQL connection string. Carries inline credentials, so it is never returned by any API | the compose postgres | yes |
+| `PGSSLROOTCERT` | Certificate bundle used to verify the database's TLS certificate, read by the Postgres driver. Amazon RDS chains to a root in no public trust store, so `sslmode=verify-full` against it needs AWS's bundle; the backend and consumer images ship it at `/etc/ssl/rds/global-bundle.pem`. Prefer `sslrootcert=` in the DSN so the setting travels with the connection it applies to | unset (system trust store) | yes |
 | `DATABASE_URL` | The realtime service's own name for the same database | the compose postgres | yes |
 | `DATABASE_POOL_SIZE` | Maximum pooled connections **for the realtime service only**. The Go services use the driver default and do not read it | `10` | yes |
 | `DATABASE_SSL` | Whether the realtime service connects to Postgres over TLS | `true`, and `false` under compose | yes |
@@ -416,6 +435,9 @@ Set both and every error goes to both. Each variable is read by one process, so 
 | Variable | Read by | What it does | Default |
 |---|---|---|---|
 | `POSTHOG_KEY` | backend, consumer, worker | Server-side error tracking, and the server-side product events below | unset |
+| `WARMBLY_POSTHOG_UI_HOST` / `PUBLIC_POSTHOG_UI_HOST` | Where PostHog's own app is, used for toolbar and session-replay links. Only differs from the host above when you proxy, and it must when you do | `https://us.posthog.com` | yes (build or container start) |
+| `POSTHOG_PROXY_INGEST` | Upstream the `/ingest` reverse proxy forwards capture traffic to. The frontends are pointed at `https://<api host>/ingest` so content blockers, which drop requests to posthog.com, do not silently remove your analytics and error reporting | `https://us.i.posthog.com` | yes |
+| `POSTHOG_PROXY_ASSETS` | Upstream for `/ingest/static/*`. PostHog serves its browser bundle from a different host than it ingests on, and sending one to the other 404s | `https://us-assets.i.posthog.com` | yes |
 | `POSTHOG_KEY` | forms service | The forms service's own errors. It reads its own environment, like tracking | unset |
 | `POSTHOG_KEY` | tracking service | Rust errors and panics, posted to the capture endpoint directly | unset |
 | `POSTHOG_KEY` | realtime service | Elixir exceptions, with the stack trace the rescue site caught | unset |

@@ -32,7 +32,7 @@
 // the route the user was on and the request that failed just before it.
 import type { CaptureResult, PostHog, Properties } from "posthog-js";
 import { maskIds } from "./maskIds";
-import { POSTHOG_ERROR_TRACKING, POSTHOG_HOST, POSTHOG_KEY, SENTRY_ENVIRONMENT, SENTRY_RELEASE } from "./information";
+import { POSTHOG_ERROR_TRACKING, POSTHOG_HOST, POSTHOG_KEY, POSTHOG_UI_HOST, SENTRY_ENVIRONMENT, SENTRY_RELEASE } from "./information";
 
 let client: PostHog | null = null;
 let loading: Promise<PostHog | null> | null = null;
@@ -52,6 +52,7 @@ export function loadPostHog(): Promise<PostHog | null> {
         .then(({ posthog }) => {
             posthog.init(POSTHOG_KEY, {
                 api_host: POSTHOG_HOST,
+                ui_host: POSTHOG_UI_HOST,
                 cookieless_mode: "always",
                 person_profiles: "never",
                 // The dashboard is a private tool behind a login. Autocapturing

@@ -42,6 +42,12 @@ The backend reaches Postgres and Redis on every request, so the round trips betw
 
 ## Two things that are not optional
 
+<Callout title="RDS needs AWS's certificate bundle">
+Amazon RDS presents a chain rooted in an RDS CA that is in no public trust store, so `sslmode=verify-full` fails with `x509: certificate signed by unknown authority` against the system bundle alone. The backend and consumer images ship AWS's truststore at `/etc/ssl/rds/global-bundle.pem`; point `sslrootcert` at it, as above.
+
+`sslmode=require` is the fallback if you cannot. It still encrypts, and `rds.force_ssl=1` still forces TLS server side, but nothing verifies the server's identity, so a caller that reaches the wrong host will not notice.
+</Callout>
+
 <Callout type="warn" title="Redis has to be TLS here">
 The cache holds each organization's decrypted data key for the life of its entry. A plaintext connection across the internet publishes key material, and a password does not change that. On one machine the loopback bind was the protection; once the control plane is somewhere else, TLS is.
 </Callout>
@@ -125,7 +131,7 @@ The renewal hook is the part that matters after day one. Neither service re-read
 `deploy/split-cloud/control-plane.env.example` is every setting, annotated. The ones that decide whether a fleet can exist at all:
 
 ```bash
-PRIMARY_DB=postgres://warmbly:...@db.eu-central-1.rds.amazonaws.com:5432/warmbly?sslmode=verify-full
+PRIMARY_DB=postgres://warmbly:...@db.us-east-1.rds.amazonaws.com:5432/warmbly?sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem
 REDIS=rediss://:<password>@bus.example.com:6380
 NATS_URL=tls://<token>@bus.example.com:4222
 ENCRYPTED_KEYS_BACKEND_URL=https://api.example.com

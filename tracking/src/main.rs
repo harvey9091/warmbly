@@ -77,6 +77,13 @@ async fn connect_producer(config: &Config) -> Producer {
 
 #[tokio::main]
 async fn main() {
+    // Before any TLS connection. rustls 0.23 cannot choose between aws-lc-rs
+    // and ring when both are in the tree, and panics at the first handshake:
+    // a tls:// bus or a rediss:// cache takes the whole service down at
+    // startup, which plaintext local development never reveals.
+    // Ignored rather than unwrapped: a second install is not a failure.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     // Initialize tracing
     tracing_subscriber::registry()
         .with(

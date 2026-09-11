@@ -7,12 +7,7 @@ import { CalendarPlusIcon } from "lucide-react";
 import toast from "react-hot-toast";
 import useIntegrationConnections from "@/lib/api/hooks/app/integrations/useIntegrationConnections";
 import { bookingURL, prefilledBookingURL } from "@/lib/api/models/app/integrations/Integration";
-
-function bareEmail(s: string): string {
-    const m = s.match(/<([^>]+)>/);
-    if (m) return m[1].trim();
-    return s.trim();
-}
+import { bareEmail } from "@/lib/helper/emailAddress";
 
 export default function InsertBookingLink({
     email,

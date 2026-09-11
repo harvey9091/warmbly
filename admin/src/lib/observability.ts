@@ -15,7 +15,7 @@
 // autocapture, no person profile. Exceptions only, and what they carry is the
 // operator whose request it was and the trail that led there, so an issue can
 // be answered rather than only counted.
-import { POSTHOG_ERROR_TRACKING, POSTHOG_HOST, POSTHOG_KEY, SENTRY_DSN, SENTRY_ENVIRONMENT, SENTRY_RELEASE } from "./env";
+import { POSTHOG_ERROR_TRACKING, POSTHOG_HOST, POSTHOG_KEY, POSTHOG_UI_HOST, SENTRY_DSN, SENTRY_ENVIRONMENT, SENTRY_RELEASE } from "./env";
 
 export type Identity = { userId?: string | null } | null;
 export type StepProperties = Record<string, string | number | boolean>;
@@ -56,6 +56,7 @@ export function initErrorReporting(): void {
             .then(({ posthog }) => {
                 posthog.init(POSTHOG_KEY, {
                     api_host: POSTHOG_HOST,
+                    ui_host: POSTHOG_UI_HOST,
                     cookieless_mode: "always",
                     person_profiles: "never",
                     autocapture: false,
