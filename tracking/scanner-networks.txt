@@ -49,3 +49,49 @@
 # asn:8074          clicks  microsoft
 # asn:12076         clicks  microsoft
 # asn:15169         clicks  google
+
+# Barracuda Email Gateway Defense. Published by Barracuda as the ranges its
+# filtering layer connects to a customer's mail server from, one narrow block
+# per region. Enabled for the same reason the EOP ranges are: these are the
+# mail filtering tier itself, not the cloud it happens to sit in, and no
+# recipient reads their mail from them.
+3.24.133.128/25     all     barracuda-egd
+15.222.16.128/25    all     barracuda-egd
+35.157.190.224/27   all     barracuda-egd
+18.185.115.192/26   all     barracuda-egd
+18.184.203.224/27   all     barracuda-egd
+13.200.136.128/25   all     barracuda-egd
+35.176.92.96/27     all     barracuda-egd
+18.133.136.128/26   all     barracuda-egd
+18.133.136.96/27    all     barracuda-egd
+209.222.82.0/24     all     barracuda-egd
+
+# Proofpoint, Mimecast and Cisco Secure Email, by ASN. Each of these is a pure
+# mail security network with no consumer eyeball traffic, which is what makes
+# them worth naming at all, and they are still NOT enabled by default. The
+# reason is browser isolation, and it is worth understanding before turning
+# one on:
+#
+#   Proofpoint Isolation and Mimecast Browser Isolation render a clicked page
+#   in the vendor's own cloud and stream it to the recipient. When a policy
+#   sends a link to isolation, the GET on the click ticket comes from the
+#   vendor's network and a PERSON is on the other end of it. Isolation is
+#   usually scoped to uncategorised or suspicious URLs, which is precisely what
+#   a new cold-outreach domain looks like, so for this product it is not a
+#   rare edge case.
+#
+# So a whole-ASN entry here cannot distinguish the delivery-time scan from the
+# isolated human click, and enabling one trades inflated click counts for lost
+# automations. Turn them on when your recipients' scanner noise costs you more
+# than that, and prefer leaving the machine-window rule to catch the
+# delivery-time half: a scan runs seconds after the send, an isolated click
+# runs whenever the person got to it.
+#
+# asn:22843         all     proofpoint
+# asn:26211         all     proofpoint
+# asn:52129         all     proofpoint
+# asn:30031         all     mimecast
+# asn:39588         all     mimecast
+# asn:42427         all     mimecast
+# asn:60492         all     mimecast
+# asn:16417         all     cisco-ironport

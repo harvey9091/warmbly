@@ -121,6 +121,15 @@ export interface InstanceSettings {
         form_event_days: number;
         audit_log_days: number;
     };
+    // How soon after a send an open or click is recorded as automated. The
+    // clock starts at dispatch to the worker, so the window also covers the
+    // provider's queue and transit to the recipient, not just reading time.
+    // Nothing is discarded: an automated event stays as delivery evidence but
+    // does not count as engagement or fire anything.
+    tracking: {
+        machine_window_open_seconds: number;
+        machine_window_click_seconds: number;
+    };
     // The sending-domain authentication gate. A mailbox whose domain has been
     // failing SPF or DMARC for longer than the grace window stops sending cold
     // mail and warmup mail until the records are fixed.
