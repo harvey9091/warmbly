@@ -26,7 +26,7 @@ func (d Deps) registerCampaignTools(r *Registry) {
 
 	r.Register(Tool{
 		Name:        "get_campaign_stats",
-		Description: "Get send/open/click/reply stats for one campaign.",
+		Description: "Get send/open/click/reply stats for one campaign, plus the same numbers and rates per sequence step.",
 		InputSchema: objectSchema(map[string]any{
 			"campaign_id": strProp("The campaign's UUID."),
 		}, "campaign_id"),
@@ -415,6 +415,25 @@ func (d Deps) getCampaignStats(ctx context.Context, inv Invocation, args json.Ra
 		return "", fromErrx(xerr)
 	}
 	s := a.Summary
+	// Per-step rates are what answer "which touch is working"; the counts
+	// alone cannot be compared across steps that reached different numbers.
+	steps := make([]map[string]any, 0, len(a.Sequences))
+	for _, st := range a.Sequences {
+		steps = append(steps, map[string]any{
+			"step_id":     st.SequenceID.String(),
+			"name":        st.Name,
+			"position":    st.Position,
+			"emails_sent": st.EmailsSent,
+			"opens":       st.Opens,
+			"clicks":      st.Clicks,
+			"replies":     st.Replies,
+			"bounces":     st.Bounces,
+			"open_rate":   st.OpenRate,
+			"click_rate":  st.ClickRate,
+			"reply_rate":  st.ReplyRate,
+			"bounce_rate": st.BounceRate,
+		})
+	}
 	return jsonResult(map[string]any{
 		"campaign_id":    a.CampaignID.String(),
 		"name":           a.Name,
@@ -428,6 +447,7 @@ func (d Deps) getCampaignStats(ctx context.Context, inv Invocation, args json.Ra
 		"open_rate":      s.OpenRate,
 		"click_rate":     s.ClickRate,
 		"reply_rate":     s.ReplyRate,
+		"steps":          steps,
 	})
 }
 

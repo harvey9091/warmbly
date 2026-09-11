@@ -93,6 +93,17 @@ func (r *analyticsRepository) GetWarmupStats(ctx context.Context, userID uuid.UU
 	return stats, nil
 }
 
+// machineClicksCount counts the progress rows whose ONLY clicks were automated,
+// over a `ccp` alias. Shared so the campaign summary and the per-step stats can
+// never disagree about what an automated click is.
+const machineClicksCount = `COUNT(CASE WHEN ccp.clicked_at IS NULL AND EXISTS (
+	SELECT 1 FROM email_link_clicks lc
+	WHERE lc.campaign_id = ccp.campaign_id AND lc.contact_id = ccp.contact_id AND lc.sequence_id = ccp.sequence_id AND lc.machine
+) AND NOT EXISTS (
+	SELECT 1 FROM email_link_clicks lc
+	WHERE lc.campaign_id = ccp.campaign_id AND lc.contact_id = ccp.contact_id AND lc.sequence_id = ccp.sequence_id AND NOT lc.machine
+) THEN 1 END) as machine_clicks`
+
 func (r *analyticsRepository) GetCampaignSummary(ctx context.Context, userID, campaignID uuid.UUID) (*models.CampaignSummary, *errx.Error) {
 	query := `
 		SELECT
@@ -102,13 +113,7 @@ func (r *analyticsRepository) GetCampaignSummary(ctx context.Context, userID, ca
 			COUNT(CASE WHEN ccp.opened_at IS NOT NULL THEN 1 END) as unique_opens,
 			COUNT(CASE WHEN ccp.opened_at IS NOT NULL AND ccp.opened_machine THEN 1 END) as machine_opens,
 			COUNT(CASE WHEN ccp.clicked_at IS NOT NULL THEN 1 END) as unique_clicks,
-			COUNT(CASE WHEN ccp.clicked_at IS NULL AND EXISTS (
-				SELECT 1 FROM email_link_clicks lc
-				WHERE lc.campaign_id = ccp.campaign_id AND lc.contact_id = ccp.contact_id AND lc.sequence_id = ccp.sequence_id AND lc.machine
-			) AND NOT EXISTS (
-				SELECT 1 FROM email_link_clicks lc
-				WHERE lc.campaign_id = ccp.campaign_id AND lc.contact_id = ccp.contact_id AND lc.sequence_id = ccp.sequence_id AND NOT lc.machine
-			) THEN 1 END) as machine_clicks,
+			` + machineClicksCount + `,
 			COUNT(CASE WHEN ccp.replied_at IS NOT NULL THEN 1 END) as replies,
 			COUNT(CASE WHEN ccp.bounced_at IS NOT NULL THEN 1 END) as bounces
 		FROM campaign_contact_progress ccp
@@ -257,7 +262,9 @@ func (r *analyticsRepository) GetSequenceStats(ctx context.Context, campaignID u
 			ROW_NUMBER() OVER (ORDER BY s.created_at) as position,
 			COUNT(CASE WHEN ccp.sent_at IS NOT NULL THEN 1 END) as emails_sent,
 			COUNT(CASE WHEN ccp.opened_at IS NOT NULL THEN 1 END) as opens,
+			COUNT(CASE WHEN ccp.opened_at IS NOT NULL AND ccp.opened_machine THEN 1 END) as machine_opens,
 			COUNT(CASE WHEN ccp.clicked_at IS NOT NULL THEN 1 END) as clicks,
+			` + machineClicksCount + `,
 			COUNT(CASE WHEN ccp.replied_at IS NOT NULL THEN 1 END) as replies,
 			COUNT(CASE WHEN ccp.bounced_at IS NOT NULL THEN 1 END) as bounces
 		FROM sequences s
@@ -279,11 +286,21 @@ func (r *analyticsRepository) GetSequenceStats(ctx context.Context, campaignID u
 	stats := make([]models.SequenceStats, 0)
 	for rows.Next() {
 		var s models.SequenceStats
-		if err := rows.Scan(&s.SequenceID, &s.Name, &s.Position, &s.EmailsSent, &s.Opens, &s.Clicks, &s.Replies, &s.Bounces); err != nil {
+		if err := rows.Scan(&s.SequenceID, &s.Name, &s.Position, &s.EmailsSent, &s.Opens, &s.MachineOpens, &s.Clicks, &s.MachineClicks, &s.Replies, &s.Bounces); err != nil {
 			db.CaptureError(err, "", nil, "scan")
 			return nil, errx.InternalError()
 		}
+		// Rates are of the step's own sends, which is the only way one step
+		// compares against another that reached fewer contacts.
+		s.OpenRate = models.Rate(s.Opens, s.EmailsSent)
+		s.ClickRate = models.Rate(s.Clicks, s.EmailsSent)
+		s.ReplyRate = models.Rate(s.Replies, s.EmailsSent)
+		s.BounceRate = models.Rate(s.Bounces, s.EmailsSent)
 		stats = append(stats, s)
+	}
+	if err := rows.Err(); err != nil {
+		db.CaptureError(err, query, params, "rows")
+		return nil, errx.InternalError()
 	}
 
 	return stats, nil

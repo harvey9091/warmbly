@@ -99,9 +99,22 @@ type SequenceStats struct {
 	Position   int       `json:"position"`
 	EmailsSent int       `json:"emails_sent"`
 	Opens      int       `json:"opens"`
-	Clicks     int       `json:"clicks"`
-	Replies    int       `json:"replies"`
-	Bounces    int       `json:"bounces"`
+	// MachineOpens is the subset of Opens from automated fetchers, by the
+	// same rule the summary uses. Human opens = Opens - MachineOpens.
+	MachineOpens int `json:"machine_opens"`
+	Clicks       int `json:"clicks"`
+	// MachineClicks counts this step's contacts whose only clicks were
+	// automated; they are not part of Clicks.
+	MachineClicks int `json:"machine_clicks"`
+	Replies       int `json:"replies"`
+	Bounces       int `json:"bounces"`
+
+	// Rates are percentages of this step's own EmailsSent, so steps that
+	// reached different numbers of contacts still compare.
+	OpenRate   float64 `json:"open_rate"`
+	ClickRate  float64 `json:"click_rate"`
+	ReplyRate  float64 `json:"reply_rate"`
+	BounceRate float64 `json:"bounce_rate"`
 }
 
 type CampaignDailyStats struct {
