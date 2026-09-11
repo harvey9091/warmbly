@@ -259,7 +259,7 @@ export default function CampaignOverview() {
                                             <AnimatedNumber value={s.emails_sent ?? 0} />
                                         </span>
                                         <StepMetric
-                                            label="opens"
+                                            label="Opens"
                                             count={s.opens ?? 0}
                                             rate={s.open_rate}
                                             sent={s.emails_sent ?? 0}
@@ -268,7 +268,7 @@ export default function CampaignOverview() {
                                             autoTip={AUTO_OPENS_TIP}
                                         />
                                         <StepMetric
-                                            label="clicks"
+                                            label="Clicks"
                                             count={s.clicks ?? 0}
                                             rate={s.click_rate}
                                             sent={s.emails_sent ?? 0}
@@ -278,14 +278,14 @@ export default function CampaignOverview() {
                                             desktopOnly
                                         />
                                         <StepMetric
-                                            label="replies"
+                                            label="Replies"
                                             count={s.replies ?? 0}
                                             rate={s.reply_rate}
                                             sent={s.emails_sent ?? 0}
                                             tone="text-amber-600"
                                         />
                                         <StepMetric
-                                            label="bounces"
+                                            label="Bounces"
                                             count={s.bounces ?? 0}
                                             rate={s.bounce_rate}
                                             sent={s.emails_sent ?? 0}
@@ -385,7 +385,7 @@ function StepMetric({
     const share = sent > 0 ? `${(rate ?? 0).toFixed(1)}%` : "—";
     const flagged = !!auto && !!autoTip;
     const title = [
-        `${count.toLocaleString()} ${label}`,
+        `${label}: ${count.toLocaleString()}`,
         sent > 0 ? `${share} of ${sent.toLocaleString()} sent` : "nothing sent yet",
         flagged ? `${auto} automated. ${autoTip}` : null,
     ]
