@@ -608,7 +608,9 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
                                 The clock starts when the send is handed to a worker, so the
                                 window also covers the provider&apos;s queue and the transit to
                                 the recipient. Known scanner networks are matched separately and
-                                are not bounded by time.
+                                are not bounded by time. A change applies within a minute and
+                                only to events recorded after it: opens and clicks already
+                                stored keep the label they were given when they arrived.
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="grid grid-cols-1 gap-3 pt-0 md:grid-cols-2">

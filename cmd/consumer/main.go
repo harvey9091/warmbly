@@ -537,7 +537,9 @@ func main() {
 	} else {
 		// The engagement prune reads its window from the instance settings on
 		// every pass, and the machine-window rule reads its windows per event,
-		// so editing either in the admin panel needs no restart.
+		// so editing either in the admin panel needs no restart. Both go
+		// through this process's own read cache, so an edit lands within its
+		// TTL rather than instantly.
 		trackingSettings := instancesettings.NewService(instancesettings.NewStore(primaryDB.Pool))
 		trackingConsumer.WireRetention(trackingSettings)
 		trackingConsumer.WireTrackingPolicy(trackingSettings)

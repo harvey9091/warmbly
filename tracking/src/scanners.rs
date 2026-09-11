@@ -282,6 +282,32 @@ mod tests {
         assert_eq!(s.classify("13.107.128.5", &h, true, Request::Open), None);
     }
 
+    // Every CIDR in the shipped catalogue must already be its own network
+    // address. `insert` calls `trunc()`, so `209.222.82.9/24` would silently
+    // become `209.222.82.0/24` and a typo in the host part of a block would
+    // widen or shift it with nothing to show for it.
+    #[test]
+    fn shipped_networks_are_written_in_canonical_form() {
+        for line in BUILTIN_CATALOGUE.lines() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            let Some(source) = line.split_whitespace().next() else {
+                continue;
+            };
+            if source.starts_with("asn:") {
+                continue;
+            }
+            let net: IpNet = source
+                .parse()
+                .unwrap_or_else(|_| panic!("{source} must parse"));
+            assert_eq!(
+                net,
+                net.trunc(),
+                "{source} has host bits set; write it as {}",
+                net.trunc()
+            );
+        }
+    }
+
     // Barracuda's published filtering blocks are narrow, per-region and
     // documented by the vendor as its own mail tier, so they ship enabled on
     // both endpoints like the EOP ranges.

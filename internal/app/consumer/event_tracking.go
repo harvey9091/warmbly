@@ -78,9 +78,11 @@ func (tc *TrackingConsumer) engagementRetentionDays(ctx context.Context) int {
 }
 
 // TrackingPolicySource is the operator-editable engagement-classification
-// section, satisfied by instancesettings.Service. Read per event, so an edit
-// in the admin panel applies to the next open or click rather than at the
-// next restart.
+// section, satisfied by instancesettings.Service. Read per event rather than
+// held from boot, so an edit in the admin panel needs no restart. The
+// consumer's own service caches for instancesettings.cacheTTL and the backend
+// that wrote the row is a different process, so an edit lands within that TTL,
+// not on the very next event.
 type TrackingPolicySource interface {
 	TrackingPolicy(ctx context.Context) instancesettings.Tracking
 }

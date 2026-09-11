@@ -46,7 +46,7 @@ type Service interface {
 	RetentionWindows(ctx context.Context) Retention
 	// TrackingPolicy is the engagement-classification section, already
 	// normalized. The tracking consumer reads it per event, so an edit takes
-	// effect on the next open or click rather than at the next restart.
+	// effect without a restart, within the cacheTTL the read goes through.
 	TrackingPolicy(ctx context.Context) Tracking
 	// DomainAuth is the sending-domain authentication gate: whether it is
 	// enforced at all, and how long a domain must stay failing first.
