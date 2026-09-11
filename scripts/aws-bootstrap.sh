@@ -116,8 +116,20 @@ create_kms() {
 create_bucket() {
   BUCKET="$PREFIX-blobs-$ACCOUNT_ID"
   if aws s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1; then
-    log "S3: $BUCKET already exists"
-    return 0
+    # Bucket names are global, so head-bucket says nothing about WHERE it is.
+    # Taking that as "already done" left the blobs in the region of a previous
+    # run while everything else moved, which nothing reported.
+    actual=$(aws s3api get-bucket-location --bucket "$BUCKET" \
+      --query 'LocationConstraint' --output text 2>/dev/null)
+    # S3 reports us-east-1 as the literal null, its original default.
+    [ "$actual" = "None" ] && actual="us-east-1"
+    if [ "$actual" = "$REGION" ]; then
+      log "S3: $BUCKET already exists in $REGION"
+      return 0
+    fi
+    die "$BUCKET exists in $actual, not $REGION. A bucket cannot move, and
+       deleting one is not this script's call. Empty and delete it, then re-run;
+       or pass a different --prefix so this region gets its own bucket."
   fi
   log "S3: creating $BUCKET"
   if [ "$DRY_RUN" = "true" ]; then
@@ -267,8 +279,13 @@ create_db() {
     --publicly-accessible \
     --no-multi-az \
     --region "$REGION" >/dev/null
-  log "RDS: creating. The master password is printed once, below."
-  DB_PASSWORD_PRINTED="$DB_PASSWORD"
+  # Never stdout: that is a terminal, a CI log or an agent transcript, and the
+  # value cannot be rotated back out of any of them.
+  pwfile="./${PREFIX}-db-password.txt"
+  ( umask 077; printf '%s\n' "$DB_PASSWORD" > "$pwfile" )
+  chmod 600 "$pwfile"
+  DB_PASSWORD_FILE="$pwfile"
+  log "RDS: creating. The master password was written to $pwfile (mode 0600)."
 }
 
 # ---- SES -------------------------------------------------------------------
@@ -308,10 +325,11 @@ summary() {
   log "  4. the DKIM records above, in DNS"
   log "  5. SES production access; a sandboxed account only delivers to verified"
   log "     addresses"
-  if [ -n "${DB_PASSWORD_PRINTED:-}" ]; then
+  if [ -n "${DB_PASSWORD_FILE:-}" ]; then
     log ""
-    log "  The database master password, shown once:"
-    log "    $DB_PASSWORD_PRINTED"
+    log "  The database master password is in $DB_PASSWORD_FILE."
+    log "  Move it into your secret store and delete the file; this script"
+    log "  cannot show it again, and it was never written to this output."
   fi
   log ""
 }
