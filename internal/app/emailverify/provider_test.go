@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,16 +19,35 @@ import (
 type providerSource struct {
 	ProviderSource
 	provider *Provider
+
+	mu       sync.Mutex
 	reported error
+	// onReport stands in for a slow health write, so a check resolving
+	// alongside one can be caught overtaking it.
+	onReport func()
 }
 
 func (s *providerSource) VerificationProviderFor(context.Context, uuid.UUID) (*Provider, error) {
 	return s.provider, nil
 }
 func (s *providerSource) ReportVerificationProviderError(_ context.Context, _ uuid.UUID, err error) {
+	s.mu.Lock()
 	s.reported = err
+	s.mu.Unlock()
+	if s.onReport != nil {
+		s.onReport()
+	}
 }
-func (s *providerSource) ClearVerificationProviderError(context.Context, uuid.UUID) { s.reported = nil }
+func (s *providerSource) ClearVerificationProviderError(context.Context, uuid.UUID) {
+	s.mu.Lock()
+	s.reported = nil
+	s.mu.Unlock()
+}
+func (s *providerSource) lastReport() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reported
+}
 
 type contactCountsRepo struct{ repository.ContactRepository }
 
@@ -64,16 +84,16 @@ func TestCleanMyListProviderWithoutBalance(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 	status = http.StatusPaymentRequired
-	if res := s.VerifyAddress(context.Background(), org, "test@example.com"); res.Provider != verify.ProviderBuiltin || source.reported == nil {
-		t.Fatalf("fallback = %+v, report = %v", res, source.reported)
+	if res := s.VerifyAddress(context.Background(), org, "test@example.com"); res.Provider != verify.ProviderBuiltin || source.lastReport() == nil {
+		t.Fatalf("fallback = %+v, report = %v", res, source.lastReport())
 	}
 	overview, err = s.Overview(context.Background(), org)
 	if err != nil || overview.Provider != verify.ProviderBuiltin || overview.ProviderError == "" {
 		t.Fatalf("empty-account overview = %+v, %v", overview, err)
 	}
 	status = http.StatusOK
-	if res := s.VerifyAddress(context.Background(), org, "test@example.com"); res.Provider != "cleanmylist" || source.reported != nil {
-		t.Fatalf("recovered account = %+v, report = %v", res, source.reported)
+	if res := s.VerifyAddress(context.Background(), org, "test@example.com"); res.Provider != "cleanmylist" || source.lastReport() != nil {
+		t.Fatalf("recovered account = %+v, report = %v", res, source.lastReport())
 	}
 	overview, err = s.Overview(context.Background(), org)
 	if err != nil || overview.Provider != "cleanmylist" || overview.ProviderError != "" {
@@ -129,16 +149,48 @@ func TestOlderCheckDoesNotClearANewerFailure(t *testing.T) {
 	startedBefore := time.Now()
 	time.Sleep(time.Millisecond)
 	s.noteProviderError(context.Background(), p, verify.ErrProviderCredits)
-	if source.reported == nil {
+	if source.lastReport() == nil {
 		t.Fatal("the failure was not reported")
 	}
 
 	s.noteProviderOK(context.Background(), p, startedBefore)
-	if !s.providerDown(p) || source.reported == nil {
+	if !s.providerDown(p) || source.lastReport() == nil {
 		t.Fatal("a check that began before the failure cleared it")
 	}
 	s.noteProviderOK(context.Background(), p, time.Now())
-	if s.providerDown(p) || source.reported != nil {
+	if s.providerDown(p) || source.lastReport() != nil {
 		t.Fatal("a check that began after the failure did not clear it")
+	}
+}
+
+// The health write is a round trip, so a check that resolves while one is in
+// flight must not withdraw it. Recording the failure before marking the
+// connection is what gives that check something to compare itself against.
+func TestASuccessResolvingMidReportDoesNotUndoTheFailure(t *testing.T) {
+	id := uuid.New()
+	reporting := make(chan struct{})
+	source := &providerSource{onReport: func() {
+		close(reporting)
+		time.Sleep(50 * time.Millisecond)
+	}}
+	s := NewService(contactCountsRepo{}, Options{Builtin: builtinVerifier{}, Providers: source}).(*service)
+	p := &Provider{Name: "cleanmylist", ConnectionID: &id, Client: verify.NewCleanMyList("key", "http://127.0.0.1:1")}
+
+	startedBefore := time.Now()
+	time.Sleep(time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.noteProviderError(context.Background(), p, verify.ErrProviderCredits)
+	}()
+	<-reporting
+	s.noteProviderOK(context.Background(), p, startedBefore)
+	<-done
+
+	if source.lastReport() == nil {
+		t.Fatal("a check that began before the failure withdrew it mid-report")
+	}
+	if !s.providerDown(p) {
+		t.Fatal("the failure was not held")
 	}
 }

@@ -103,6 +103,12 @@ type service struct {
 
 	creditsMu sync.Mutex
 	credits   map[string]creditsEntry
+
+	// healthLocks serialize the connection-health writes for one provider, so
+	// a report and a withdrawal raised by concurrent checks cannot reach the
+	// database in the opposite order to the checks that raised them.
+	healthMu    sync.Mutex
+	healthLocks map[string]*sync.Mutex
 }
 
 type creditsEntry struct {
@@ -140,6 +146,7 @@ func NewService(repo repository.ContactRepository, opts Options) Service {
 		wake:         make(chan struct{}, 1),
 		breakers:     map[uuid.UUID]*breaker{},
 		credits:      map[string]creditsEntry{},
+		healthLocks:  map[string]*sync.Mutex{},
 	}
 	if k := strings.TrimSpace(opts.PlatformMillionVerifierKey); k != "" {
 		s.platform = emailverify.NewMillionVerifier(k, "")
@@ -221,15 +228,33 @@ func (s *service) verifyBuiltin(ctx context.Context, orgID uuid.UUID, email stri
 	return res
 }
 
+// healthGate is the lock guarding one provider's connection health.
+func (s *service) healthGate(p *Provider) *sync.Mutex {
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	key := cacheKey(p)
+	m, ok := s.healthLocks[key]
+	if !ok {
+		m = &sync.Mutex{}
+		s.healthLocks[key] = m
+	}
+	return m
+}
+
 func (s *service) noteProviderError(ctx context.Context, p *Provider, err error) {
 	if p == nil || err == nil {
 		return
 	}
 	if errors.Is(err, emailverify.ErrProviderKey) || errors.Is(err, emailverify.ErrProviderCredits) {
+		g := s.healthGate(p)
+		g.Lock()
+		defer g.Unlock()
+		// Recorded before the connection is marked, so a check finishing
+		// alongside this one compares itself against a failure that exists.
+		s.cacheProviderState(p, nil, err)
 		if p.ConnectionID != nil && s.providers != nil {
 			s.providers.ReportVerificationProviderError(ctx, *p.ConnectionID, err)
 		}
-		s.cacheProviderState(p, nil, err)
 	}
 }
 
@@ -298,6 +323,9 @@ func (s *service) noteProviderOK(ctx context.Context, p *Provider, startedAt tim
 	if p == nil {
 		return
 	}
+	g := s.healthGate(p)
+	g.Lock()
+	defer g.Unlock()
 	s.creditsMu.Lock()
 	e, ok := s.credits[cacheKey(p)]
 	newer := ok && e.err != nil && e.at.After(startedAt)
