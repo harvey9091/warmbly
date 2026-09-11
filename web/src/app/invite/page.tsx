@@ -54,6 +54,10 @@ export default function InviteAcceptPage() {
     const signedInEmail = me.data?.email ?? "";
     const wrongAccount =
         loggedIn && !!signedInEmail && !!invitedEmail && signedInEmail.toLowerCase() !== invitedEmail.toLowerCase();
+    // Accept is a guaranteed 403 for the wrong session, so it must not be
+    // clickable before we know which session this is. `me` never resolves when
+    // it was never asked (no token), hence the loggedIn half.
+    const identityPending = loggedIn && (me.isPending || me.isFetching);
 
     async function onSwitchAccount() {
         await logout.mutateAsync();
@@ -168,11 +172,13 @@ export default function InviteAcceptPage() {
                                 <button
                                     type="button"
                                     onClick={onAccept}
-                                    disabled={accept.isPending}
+                                    disabled={accept.isPending || identityPending}
                                     className="w-full h-9 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-[13px] font-medium inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-60"
                                 >
-                                    {accept.isPending && <Loader2Icon className="w-3.5 h-3.5 animate-spin" />}
-                                    Accept invitation
+                                    {(accept.isPending || identityPending) && (
+                                        <Loader2Icon className="w-3.5 h-3.5 animate-spin" />
+                                    )}
+                                    {identityPending ? "Checking your account…" : "Accept invitation"}
                                 </button>
                             ) : (
                                 <div className="space-y-2">

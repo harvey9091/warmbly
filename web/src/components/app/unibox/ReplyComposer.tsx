@@ -139,7 +139,6 @@ function looksLikeEmail(s: string): boolean {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
 }
 
-
 // Derive composer defaults from the message the user explicitly chose
 // to reply to (or forward). Reply takes the message's "from" as the
 // new "to". Forward leaves "to" empty so the user picks the new

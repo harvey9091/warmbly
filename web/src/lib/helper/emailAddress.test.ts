@@ -23,6 +23,18 @@ describe("emailAddress", () => {
     });
 
     it("falls back to the address when the name is empty", () => {
+        // What GetAddressName renders for an envelope with no display name.
         expect(nameFromAddr(" (noreply-dmarc-support@google.com)")).toBe("noreply-dmarc-support@google.com");
+    });
+
+    it("takes the last bracket group, so a name with brackets survives", () => {
+        const s = "Acme (UK) Ltd (billing@acme.com)";
+        expect(bareEmail(s)).toBe("billing@acme.com");
+        expect(nameFromAddr(s)).toBe("Acme (UK) Ltd");
+    });
+
+    it("leaves a parenthetical that is not an address alone", () => {
+        expect(wrappedEmail("Nobody (no address here)")).toBeNull();
+        expect(bareEmail("Nobody (no address here)")).toBe("Nobody (no address here)");
     });
 });
