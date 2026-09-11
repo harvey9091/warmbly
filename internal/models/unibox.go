@@ -105,26 +105,31 @@ type EmailMessageStoreData struct {
 	// Folder is the canonical folder (see the Folder* constants) the message
 	// was in at sync time. Empty on events from workers predating the field;
 	// the consumer normalizes before storing.
-	Folder       string    `json:"folder,omitempty"`
-	ThreadID     string    `json:"thread_id"`
-	MessageID    string    `json:"message_id"`
-	GmailID      string    `json:"gmail_id"`
-	ParentID     string    `json:"parent_id"`
-	UID          uint32    `json:"uid"`
-	ModSeq       uint64    `json:"mod_seq"`
-	Flags        []string  `json:"flags"`
-	BCC          []string  `json:"bcc"`
-	CC           []string  `json:"cc"`
-	FromAddr     []string  `json:"from_addr"`
-	InReplyTo    []string  `json:"in_reply_to"`
-	ReplyTo      []string  `json:"reply_to"`
-	ToAddr       []string  `json:"to_addr"`
-	Subject      string    `json:"subject"`
-	Size         int64     `json:"size"`
-	InternalDate time.Time `json:"internal_date"`
-	SentDate     time.Time `json:"sent_date"`
-	Snippet      string    `json:"snippet"`
-	Seen         bool      `json:"seen"`
+	Folder string `json:"folder,omitempty"`
+	// ProviderFolder is where the PROVIDER last reported the message, which
+	// Folder stops tracking once the user files the message in Warmbly. The
+	// two are compared to tell a real provider move from a flag scan that
+	// keeps naming the folder the provider still has it in.
+	ProviderFolder string    `json:"provider_folder,omitempty"`
+	ThreadID       string    `json:"thread_id"`
+	MessageID      string    `json:"message_id"`
+	GmailID        string    `json:"gmail_id"`
+	ParentID       string    `json:"parent_id"`
+	UID            uint32    `json:"uid"`
+	ModSeq         uint64    `json:"mod_seq"`
+	Flags          []string  `json:"flags"`
+	BCC            []string  `json:"bcc"`
+	CC             []string  `json:"cc"`
+	FromAddr       []string  `json:"from_addr"`
+	InReplyTo      []string  `json:"in_reply_to"`
+	ReplyTo        []string  `json:"reply_to"`
+	ToAddr         []string  `json:"to_addr"`
+	Subject        string    `json:"subject"`
+	Size           int64     `json:"size"`
+	InternalDate   time.Time `json:"internal_date"`
+	SentDate       time.Time `json:"sent_date"`
+	Snippet        string    `json:"snippet"`
+	Seen           bool      `json:"seen"`
 	// BodyText is a bounded plain-text rendering of the message, carried on the
 	// new-email event so the consumer can make the message findable by what it
 	// says. The full body goes to object storage, never here.
@@ -207,6 +212,32 @@ var MailFolders = []string{FolderInbox, FolderSent, FolderDrafts, FolderArchive,
 func ValidFolder(f string) bool {
 	switch f {
 	case FolderInbox, FolderSent, FolderDrafts, FolderArchive, FolderSpam, FolderTrash:
+		return true
+	}
+	return false
+}
+
+// ResolveFolderSync decides what one sync event does to a message's placement.
+//
+// reported is compared against the folder the PROVIDER was last seen to have
+// the message in, never against the stored folder. A message the user filed in
+// Warmbly still turns up in the provider's inbox on every scan, and comparing
+// against the stored folder would read each of those as a move back and undo
+// them. An empty storedProvider is a row written before the column existed
+// (migration 000146), so it adopts. An invalid reported folder is a worker
+// predating the field and changes nothing.
+func ResolveFolderSync(storedFolder, storedProvider, reported string) (folder, provider string, changed bool) {
+	if !ValidFolder(reported) || reported == storedProvider {
+		return storedFolder, storedProvider, false
+	}
+	return reported, reported, true
+}
+
+// FilableFolder reports whether f is a folder a user may move mail INTO from
+// the unibox. sent/drafts/spam are provider verdicts, never a user's choice.
+func FilableFolder(f string) bool {
+	switch f {
+	case FolderInbox, FolderArchive, FolderTrash:
 		return true
 	}
 	return false
@@ -297,8 +328,9 @@ type MarkSeen struct {
 	Seen   bool   `json:"seen"`
 }
 
-// MoveFolder re-files messages into one canonical folder (Delete = trash,
-// Archive = archive). Store-side only: the provider copy is not moved.
+// MoveFolder re-files messages into one canonical folder (Archive = archive,
+// Delete = trash, Move to inbox = inbox). Store-side only: the provider copy
+// is not moved, so the message stays where it is in the user's mail client.
 type MoveFolder struct {
 	EmailIDs []uuid.UUID `json:"email_ids"`
 	Folder   string      `json:"folder"`

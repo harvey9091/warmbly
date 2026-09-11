@@ -35,15 +35,14 @@ func (s *JobsService) HandleUpdateEmail(ctx context.Context, e *models.JobEventE
 	if e.FolderPath != "" && email.FolderPath != e.FolderPath {
 		updateData.FolderPath = &e.FolderPath
 	}
-	// A folder move follows the provider. Events from workers predating the
-	// field carry "", which keeps the stored value. Delete/Archive in the
-	// thread header only re-file the row here, so a later flag change on the
-	// provider (still reporting inbox) must not pull the message back out.
-	localMove := (email.Folder == models.FolderTrash || email.Folder == models.FolderArchive) &&
-		e.Folder == models.FolderInbox
-	followProvider := models.ValidFolder(e.Folder) && !localMove
-	if followProvider && email.Folder != e.Folder {
-		updateData.Folder = &e.Folder
+	// The store follows the provider only when the provider itself moved the
+	// message; a scan that keeps naming the same folder leaves local filing be.
+	folder, provider, providerMoved := models.ResolveFolderSync(email.Folder, email.ProviderFolder, e.Folder)
+	if providerMoved {
+		updateData.ProviderFolder = &provider
+		if folder != email.Folder {
+			updateData.Folder = &folder
+		}
 	}
 
 	if err := s.UniboxRepository.UpdateEntry(ctx, e.UserID, e.EmailID, e.ID, &updateData); err != nil {
@@ -54,8 +53,9 @@ func (s *JobsService) HandleUpdateEmail(ctx context.Context, e *models.JobEventE
 	email.UID = e.UID
 	email.Mailbox = e.Mailbox
 	email.ModSeq = e.ModSeq
-	if followProvider {
-		email.Folder = e.Folder
+	if providerMoved {
+		email.Folder = folder
+		email.ProviderFolder = provider
 	}
 	s.publishEmailUpdated(ctx, e.UserID, email)
 	return nil
