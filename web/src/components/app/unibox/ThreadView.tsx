@@ -41,6 +41,8 @@ import { CategoryChip } from "@/components/app/contacts/CategoryPicker";
 import { SectionBar } from "@/components/layout/Page";
 import useThread from "@/lib/api/hooks/app/unibox/useThread";
 import useMarkSeen from "@/lib/api/hooks/app/unibox/useMarkSeen";
+import useMoveFolder from "@/lib/api/hooks/app/unibox/useMoveFolder";
+import { bareEmail, nameFromAddr, wrappedEmail } from "@/lib/helper/emailAddress";
 import useThreadLabels from "@/lib/api/hooks/app/unibox/useThreadLabels";
 import useThreadScheduled from "@/lib/api/hooks/app/unibox/useThreadScheduled";
 import cancelScheduled from "@/lib/api/client/app/unibox/cancelScheduled";
@@ -263,6 +265,27 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
     markSeenMutate({ ids: unseenIds, threadId });
   }, [threadId, q.data, markSeenMutate]);
 
+  // Header actions. Each one closes the thread: the effect above would
+  // otherwise re-mark an "unread" thread as seen on the next refetch, and a
+  // trashed/archived thread has left the list the reader is looking at.
+  const moveFolder = useMoveFolder();
+  const setSelectedThreadId = useAppStore((s) => s.setSelectedThreadId);
+  const threadIds = () => (q.data?.data ?? []).map((m) => m.id);
+  const markUnread = () => {
+    markSeenMutate({ ids: threadIds(), seen: false });
+    setSelectedThreadId(null);
+  };
+  const fileThread = (folder: "trash" | "archive") => {
+    toast
+      .promise(moveFolder.mutateAsync({ ids: threadIds(), folder }), {
+        loading: folder === "trash" ? "Deleting…" : "Archiving…",
+        success: folder === "trash" ? "Moved to Trash" : "Archived",
+        error: folder === "trash" ? "Couldn't delete" : "Couldn't archive",
+      })
+      .then(() => setSelectedThreadId(null))
+      .catch(() => undefined);
+  };
+
   const snooze = useMutation({
     mutationFn: (until: Date) =>
       snoozeThread({ thread_id: threadId, snoozed_until: until.toISOString() }),
@@ -340,15 +363,20 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
   // our own mailbox. Addresses arrive as "Name <addr>" or bare "addr"; reduce
   // to the bare address so the comparison + the CRM panel lookup both work.
   const mailboxEmail = mailbox?.email?.toLowerCase();
-  const bareAddr = (s: string) => {
-    const m = s.match(/<([^>]+)>/);
-    return (m ? m[1] : s).trim();
-  };
-  const contactEmail =
+  const contactFrom =
     messages
-      .map((m) => bareAddr(m.from))
-      .find((e) => e && e.toLowerCase() !== mailboxEmail) ??
-    bareAddr(messages[0]?.from ?? "");
+      .map((m) => m.from)
+      .find((f) => {
+        const e = bareEmail(f);
+        return e && e.toLowerCase() !== mailboxEmail;
+      }) ?? (messages[0]?.from ?? "");
+  const contactEmail = bareEmail(contactFrom);
+  // Display name from the From header, so an "Add as contact" from the
+  // panel does not create a nameless row. Empty when the header is bare.
+  const contactName =
+    wrappedEmail(contactFrom) && nameFromAddr(contactFrom) !== contactEmail
+      ? nameFromAddr(contactFrom)
+      : "";
 
   const submitCustomSnooze = () => {
     if (!customValue) return;
@@ -505,15 +533,18 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
             <IconAction
               label="Mark as unread"
               icon={<MailCheckIcon className="w-3.5 h-3.5" />}
+              onClick={markUnread}
             />
             <IconAction
               label="Archive thread"
               icon={<ArchiveIcon className="w-3.5 h-3.5" />}
+              onClick={() => fileThread("archive")}
             />
             <IconAction
               label="Delete thread"
               danger
               icon={<TrashIcon className="w-3.5 h-3.5" />}
+              onClick={() => fileThread("trash")}
             />
           </div>
           <PopoverMenu align="end" side="bottom">
@@ -529,15 +560,20 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
             <PopoverMenuContent>
               <PopoverMenuItem
                 icon={<MailCheckIcon className="w-3.5 h-3.5" />}
+                onSelect={markUnread}
               >
                 Mark as unread
               </PopoverMenuItem>
-              <PopoverMenuItem icon={<ArchiveIcon className="w-3.5 h-3.5" />}>
+              <PopoverMenuItem
+                icon={<ArchiveIcon className="w-3.5 h-3.5" />}
+                onSelect={() => fileThread("archive")}
+              >
                 Archive thread
               </PopoverMenuItem>
               <PopoverMenuItem
                 danger
                 icon={<TrashIcon className="w-3.5 h-3.5" />}
+                onSelect={() => fileThread("trash")}
               >
                 Delete thread
               </PopoverMenuItem>
@@ -640,6 +676,7 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
       {crmOpen && (
         <ContactContextPanel
           email={contactEmail}
+          name={contactName}
           mailboxId={mailbox?.id}
           onClose={() => setCrmOpen(false)}
         />

@@ -36,8 +36,13 @@ func (s *JobsService) HandleUpdateEmail(ctx context.Context, e *models.JobEventE
 		updateData.FolderPath = &e.FolderPath
 	}
 	// A folder move follows the provider. Events from workers predating the
-	// field carry "", which keeps the stored value.
-	if models.ValidFolder(e.Folder) && email.Folder != e.Folder {
+	// field carry "", which keeps the stored value. Delete/Archive in the
+	// thread header only re-file the row here, so a later flag change on the
+	// provider (still reporting inbox) must not pull the message back out.
+	localMove := (email.Folder == models.FolderTrash || email.Folder == models.FolderArchive) &&
+		e.Folder == models.FolderInbox
+	followProvider := models.ValidFolder(e.Folder) && !localMove
+	if followProvider && email.Folder != e.Folder {
 		updateData.Folder = &e.Folder
 	}
 
@@ -49,7 +54,7 @@ func (s *JobsService) HandleUpdateEmail(ctx context.Context, e *models.JobEventE
 	email.UID = e.UID
 	email.Mailbox = e.Mailbox
 	email.ModSeq = e.ModSeq
-	if models.ValidFolder(e.Folder) {
+	if followProvider {
 		email.Folder = e.Folder
 	}
 	s.publishEmailUpdated(ctx, e.UserID, email)

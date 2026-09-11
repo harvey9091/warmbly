@@ -44,6 +44,9 @@ type UniboxRepository interface {
 	// MarkSeenByFolder flips the read state of every message in one canonical
 	// folder for the whole workspace (the sidebar's "mark all as read").
 	MarkSeenByFolder(ctx context.Context, orgID uuid.UUID, folder string, seen bool) error
+	// MoveToFolderBulk re-files the given messages into one canonical folder,
+	// org-scoped like MarkSeenBulk.
+	MoveToFolderBulk(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID, folder string) error
 	Delete(ctx context.Context, userID, id uuid.UUID) error
 
 	// Snooze: per (user, thread). UpsertSnooze adopts the new
@@ -664,6 +667,18 @@ func (r *uniboxRepository) MarkSeenByFolder(ctx context.Context, orgID uuid.UUID
 	return err
 }
 
+func (r *uniboxRepository) MoveToFolderBulk(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID, folder string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := r.db.Exec(ctx,
+		`UPDATE unibox_emails SET folder = $1, updated_at = NOW()
+		 WHERE id = ANY($3) AND email_id IN (SELECT id FROM email_accounts WHERE organization_id = $2)`,
+		folder, orgID, ids,
+	)
+	return err
+}
+
 func (r *uniboxRepository) Delete(ctx context.Context, userID, id uuid.UUID) error {
 	_, err := r.db.Exec(ctx,
 		`DELETE FROM unibox_emails WHERE user_id = $1 AND id = $2`,
@@ -877,7 +892,7 @@ func (r *uniboxRepository) LatestThreadIDForContact(ctx context.Context, userID 
 		WHERE user_id = $1 AND thread_id <> ''
 		  AND EXISTS (
 			SELECT 1 FROM unnest(from_addr) a
-			WHERE lower(coalesce(substring(a from '<([^>]*)>'), btrim(a))) = lower($2)
+			WHERE lower(coalesce(substring(a from '<([^>]*)>'), substring(a from '\(([^()]*)\)\s*$'), btrim(a))) = lower($2)
 		  )
 		ORDER BY internal_date DESC
 		LIMIT 1

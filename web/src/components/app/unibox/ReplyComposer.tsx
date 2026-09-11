@@ -53,6 +53,7 @@ import {
 } from "@/components/ui/popover-menu";
 import { cn } from "@/lib/utils";
 import { plainToHtml } from "@/lib/email/body";
+import { bareEmail, nameFromAddr } from "@/lib/helper/emailAddress";
 
 export type ReplyMode = "reply" | "forward";
 
@@ -138,17 +139,6 @@ function looksLikeEmail(s: string): boolean {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
 }
 
-function nameFromAddr(s: string): string {
-    const m = s.match(/^"?([^"<]+)"?\s*<.+>$/);
-    if (m) return m[1].trim();
-    return s.replace(/<.+>/, "").trim() || s;
-}
-
-function bareEmail(s: string): string {
-    const m = s.match(/<([^>]+)>/);
-    if (m) return m[1].trim();
-    return s.trim();
-}
 
 // Derive composer defaults from the message the user explicitly chose
 // to reply to (or forward). Reply takes the message's "from" as the

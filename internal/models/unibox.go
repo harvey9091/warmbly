@@ -297,6 +297,13 @@ type MarkSeen struct {
 	Seen   bool   `json:"seen"`
 }
 
+// MoveFolder re-files messages into one canonical folder (Delete = trash,
+// Archive = archive). Store-side only: the provider copy is not moved.
+type MoveFolder struct {
+	EmailIDs []uuid.UUID `json:"email_ids"`
+	Folder   string      `json:"folder"`
+}
+
 // UniboxSnooze hides a thread from the user's inbox until SnoozedUntil
 // passes. UNIQUE per (user, thread); a second snooze on the same
 // thread updates SnoozedUntil in place.

@@ -46,3 +46,20 @@ func (s *uniboxService) MarkSeenBulk(ctx context.Context, orgID uuid.UUID, data 
 
 	return data, nil
 }
+
+// MoveFolderBulk backs Delete (trash) and Archive in the thread header.
+// ponytail: store-side only; the provider copy stays where it is. A
+// provider-side move needs a worker event per client (IMAP/Gmail/Graph).
+func (s *uniboxService) MoveFolderBulk(ctx context.Context, orgID uuid.UUID, data *models.MoveFolder) (*models.MoveFolder, *errx.Error) {
+	if len(data.EmailIDs) > 500 {
+		return nil, errx.ErrSeenMax
+	}
+	if !models.ValidFolder(data.Folder) {
+		return nil, errx.ErrUniboxFolder
+	}
+	if err := s.uniboxRepository.MoveToFolderBulk(ctx, orgID, data.EmailIDs, data.Folder); err != nil {
+		errs.CaptureException(err)
+		return nil, errx.InternalError()
+	}
+	return data, nil
+}

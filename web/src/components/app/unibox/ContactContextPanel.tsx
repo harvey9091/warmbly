@@ -44,6 +44,8 @@ import useContact from "@/lib/api/hooks/app/contacts/useContact";
 import useContactDeals from "@/lib/api/hooks/app/contacts/useContactDeals";
 import useContactNotes from "@/lib/api/hooks/app/contacts/useContactNotes";
 import useCreateContactNote from "@/lib/api/hooks/app/contacts/useCreateContactNote";
+import useAddContacts from "@/lib/api/hooks/app/contacts/useAddContacts";
+import { useQueryClient } from "@tanstack/react-query";
 import useCRMTasks from "@/lib/api/hooks/app/crm/tasks/useCRMTasks";
 import useCreateCRMTask from "@/lib/api/hooks/app/crm/tasks/useCreateCRMTask";
 import useCreateDeal from "@/lib/api/hooks/app/crm/deals/useCreateDeal";
@@ -77,10 +79,14 @@ const PRIORITY_OPTS: { id: CRMTask["priority"]; label: string }[] = [
 
 export default function ContactContextPanel({
     email,
+    name: fromName,
     mailboxId,
     onClose,
 }: {
     email?: string;
+    // Display name from the message's From header, used when adding the
+    // sender as a contact.
+    name?: string;
     mailboxId?: string;
     onClose?: () => void;
 }) {
@@ -140,7 +146,7 @@ export default function ContactContextPanel({
                         Resolving contact…
                     </div>
                 ) : !contact ? (
-                    <NotAContact email={email} />
+                    <NotAContact email={email} name={fromName} />
                 ) : (
                     <div className="divide-y divide-slate-200/70">
                         {/* Identity */}
@@ -788,7 +794,29 @@ function RowSkeleton() {
     );
 }
 
-function NotAContact({ email }: { email?: string }) {
+// A reply from someone outside the CRM. One click creates the contact from
+// the From header; the by-email lookup is invalidated so this panel flips to
+// the full contact view where the rest can be edited.
+function NotAContact({ email, name }: { email?: string; name?: string }) {
+    const add = useAddContacts();
+    const queryClient = useQueryClient();
+
+    async function onAdd() {
+        if (!email) return;
+        const parts = (name ?? "").trim().split(/\s+/).filter(Boolean);
+        const first_name = parts[0] ?? "";
+        const last_name = parts.slice(1).join(" ");
+        try {
+            await toast.promise(
+                add.mutateAsync([{ first_name, last_name, email, company: "", phone: "", campaigns: [], custom_fields: {}, source: "manual" }]),
+                { loading: "Adding contact…", success: "Contact added", error: "Couldn't add contact" },
+            );
+            await queryClient.invalidateQueries({ queryKey: ["contacts", "by-email", email] });
+        } catch {
+            /* surfaced */
+        }
+    }
+
     return (
         <div className="px-3 py-8 text-center">
             <div className="mx-auto size-9 rounded-md bg-white border border-slate-200 flex items-center justify-center mb-2.5">
@@ -796,13 +824,25 @@ function NotAContact({ email }: { email?: string }) {
             </div>
             <p className="text-[12px] font-medium text-slate-700 mb-0.5">Not a known contact</p>
             {email && <p className="text-[11px] text-slate-400 break-all mb-3">{email}</p>}
-            <Link
-                to="/app/contacts"
-                className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-slate-200 hover:border-slate-300 text-[11.5px] text-slate-700 hover:text-slate-900 transition-colors"
-            >
-                <PlusIcon className="w-3 h-3" />
-                Manage contacts
-            </Link>
+            <div className="flex items-center justify-center gap-1.5">
+                {email && (
+                    <button
+                        type="button"
+                        onClick={onAdd}
+                        disabled={add.isPending}
+                        className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-[11.5px] font-medium transition-colors disabled:opacity-60"
+                    >
+                        {add.isPending ? <Loader2Icon className="w-3 h-3 animate-spin" /> : <PlusIcon className="w-3 h-3" />}
+                        Add as contact
+                    </button>
+                )}
+                <Link
+                    to="/app/contacts"
+                    className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-slate-200 hover:border-slate-300 text-[11.5px] text-slate-700 hover:text-slate-900 transition-colors"
+                >
+                    Manage contacts
+                </Link>
+            </div>
         </div>
     );
 }

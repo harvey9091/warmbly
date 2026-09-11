@@ -387,6 +387,30 @@ func (h *Handler) UniboxMarkSeen(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// UniboxMoveFolder re-files messages (Delete = trash, Archive = archive).
+// PATCH /unibox/folder
+func (h *Handler) UniboxMoveFolder(c *gin.Context) {
+	orgID := middleware.GetOrganizationID(c)
+	if orgID == nil {
+		errx.Handle(c, errx.ErrUser)
+		return
+	}
+
+	var data models.MoveFolder
+	if err := c.ShouldBindJSON(&data); err != nil {
+		errx.Handle(c, errx.ErrInvalid)
+		return
+	}
+
+	resp, xerr := h.UniboxService.MoveFolderBulk(c.Request.Context(), *orgID, &data)
+	if xerr != nil {
+		errx.Handle(c, xerr)
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
 // GetUnseenCount gets the count of unseen emails
 // GET /unibox/count
 func (h *Handler) GetUnseenCount(c *gin.Context) {
