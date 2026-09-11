@@ -18,6 +18,7 @@ import { AlertCircleIcon, CornerUpLeftIcon, ForwardIcon, Loader2Icon } from "luc
 import EmailBody from "./EmailBody";
 import useUniboxEmail from "@/lib/api/hooks/app/unibox/useUniboxEmail";
 import type UniboxEmail from "@/lib/api/models/app/unibox/UniboxEmail";
+import { nameFromAddr, wrappedEmail } from "@/lib/helper/emailAddress";
 
 interface MessageBubbleProps {
     email: UniboxEmail;
@@ -27,17 +28,8 @@ interface MessageBubbleProps {
     onForward?: () => void;
 }
 
-function fromName(s: string): string {
-    const m = s.match(/^"?([^"<]+)"?\s*<.+>$/);
-    if (m) return m[1].trim();
-    return s.replace(/<.+>/, "").trim() || s;
-}
-
-function fromAddr(s: string): string | null {
-    const m = s.match(/<([^>]+)>/);
-    if (m) return m[1].trim();
-    return null;
-}
+const fromName = nameFromAddr;
+const fromAddr = wrappedEmail;
 
 function initials(s: string): string {
     const name = fromName(s);

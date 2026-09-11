@@ -185,6 +185,7 @@ A source's `column_mapping` is validated when the source is written, not on its 
 | GET | `/unibox/thread` | `READ_UNIBOX` |
 | GET | `/unibox/:id` | `READ_UNIBOX` |
 | PATCH | `/unibox/seen` | `WRITE_UNIBOX` |
+| PATCH | `/unibox/folder` | `WRITE_UNIBOX` |
 | POST | `/unibox/reply` | `WRITE_UNIBOX` |
 | POST | `/unibox/reply/draft` | `READ_UNIBOX` |
 | GET | `/unibox/compose/candidates` | `READ_UNIBOX` |
@@ -196,6 +197,8 @@ A source's `column_mapping` is validated when the source is written, not on its 
 | GET | `/unibox/agent-drafts` | `READ_UNIBOX` |
 | POST | `/unibox/agent-drafts/:id/approve` | `WRITE_UNIBOX` |
 | POST | `/unibox/agent-drafts/:id/discard` | `WRITE_UNIBOX` |
+
+`PATCH /unibox/folder` re-files up to 500 messages into `inbox`, `archive` or `trash` at once. The move is Warmbly's own: the copy at the mail provider stays where it is, and the next sync will not undo it, because the provider's placement is tracked separately and followed only when the provider itself moves the message. `sent`, `drafts` and `spam` are placements a provider reaches rather than somewhere a person files mail, so they are rejected with a `400`. See [filing a conversation](/guides/unibox/#filing-a-conversation).
 
 `POST /unibox/reply/draft` returns an AI-drafted reply (it never sends) grounded in the thread, the contact, and your [voice profile](/guides/unibox/#ai-reply-drafts). It charges AI credits; see [AI credits](/guides/ai-credits/).
 

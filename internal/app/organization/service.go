@@ -641,9 +641,10 @@ func (s *organizationService) GetInvitationToken(ctx context.Context, orgID, inv
 // acceptResolved performs the actual join given an already-loaded invitation.
 func (s *organizationService) acceptResolved(ctx context.Context, inv *models.OrganizationInvitation, userID uuid.UUID, email string) (*models.OrganizationMember, *errx.Error) {
 
-	// Verify email matches
-	if strings.ToLower(email) != strings.ToLower(inv.Email) {
-		return nil, errx.New(errx.Forbidden, "email does not match invitation")
+	// Verify email matches. Name both addresses: the usual cause is a browser
+	// already signed in as someone else, and a bare "does not match" hides it.
+	if !strings.EqualFold(email, inv.Email) {
+		return nil, errx.New(errx.Forbidden, "this invitation is for "+inv.Email+", but you are signed in as "+email+"; sign out and use the invited address")
 	}
 
 	// Check if invitation is expired

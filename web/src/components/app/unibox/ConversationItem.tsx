@@ -9,6 +9,7 @@ import type UniboxEmail from "@/lib/api/models/app/unibox/UniboxEmail";
 import { useAppStore } from "@/stores";
 import { useResourceViewers } from "@/hooks/PresenceProvider";
 import { cn } from "@/lib/utils";
+import { nameFromAddr } from "@/lib/helper/emailAddress";
 
 function relative(d: Date): string {
   const diff = Date.now() - d.getTime();
@@ -24,9 +25,7 @@ function relative(d: Date): string {
 
 function fromName(s: string): string {
   if (!s) return "Unknown sender";
-  const m = s.match(/^"?([^"<]+)"?\s*<.+>$/);
-  if (m) return m[1].trim();
-  return s.replace(/<.+>/, "").trim() || s;
+  return nameFromAddr(s);
 }
 
 function initials(s: string): string {

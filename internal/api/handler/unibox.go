@@ -387,6 +387,44 @@ func (h *Handler) UniboxMarkSeen(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// UniboxMoveFolder re-files messages (Archive = archive, Delete = trash,
+// Move to inbox = inbox). Org-scoped like /seen: the inbox is shared, so any
+// member with unibox access may file it. Naturally idempotent, so no
+// Idempotency-Key: the body names the destination, not a delta.
+// PATCH /unibox/folder
+func (h *Handler) UniboxMoveFolder(c *gin.Context) {
+	if !h.gateUnibox(c) {
+		return
+	}
+	orgID := middleware.GetOrganizationID(c)
+	if orgID == nil {
+		errx.Handle(c, errx.ErrUser)
+		return
+	}
+
+	var data models.MoveFolder
+	if err := c.ShouldBindJSON(&data); err != nil {
+		errx.Handle(c, errx.ErrInvalid)
+		return
+	}
+
+	resp, xerr := h.UniboxService.MoveFolderBulk(c.Request.Context(), *orgID, &data)
+	if xerr != nil {
+		errx.Handle(c, xerr)
+		return
+	}
+
+	// Audited so the spine broadcasts it: a teammate looking at the same list
+	// has to lose the thread too, and there is no sync event behind this one.
+	h.auditOrg(c, models.AuditActionUpdate, models.AuditEntityUnibox, nil, nil, map[string]string{
+		"action":   "move_folder",
+		"folder":   data.Folder,
+		"messages": strconv.Itoa(len(data.EmailIDs)),
+	})
+
+	c.JSON(http.StatusOK, resp)
+}
+
 // GetUnseenCount gets the count of unseen emails
 // GET /unibox/count
 func (h *Handler) GetUnseenCount(c *gin.Context) {
