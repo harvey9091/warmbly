@@ -38,6 +38,17 @@ RUN apk add --no-cache ca-certificates tzdata && \
 # with "mkdir /data/blobs/emails: permission denied".
 RUN mkdir -p /data/blobs && chown -R warmbly:warmbly /data
 
+# Amazon RDS presents a chain rooted in an RDS CA that is in no public trust
+# store, so sslmode=verify-full cannot work against it from the system bundle
+# alone. Shipping AWS's truststore makes verification possible for operators who
+# opt in with sslrootcert=/etc/ssl/rds/global-bundle.pem; nothing here changes
+# the default, because pointing every install at an RDS-only store would break
+# a Postgres fronted by a public CA.
+RUN mkdir -p /etc/ssl/rds && \
+    wget -qO /etc/ssl/rds/global-bundle.pem \
+      https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem && \
+    chmod 0644 /etc/ssl/rds/global-bundle.pem
+
 COPY --from=builder /out/consumer /app/consumer
 
 USER warmbly
