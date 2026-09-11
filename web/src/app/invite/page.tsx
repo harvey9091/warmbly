@@ -14,6 +14,8 @@ import useAcceptInvitation from "@/lib/api/hooks/app/organizations/useAcceptInvi
 import useOrganizations from "@/lib/api/hooks/app/organizations/useOrganizations";
 import useSwitchOrganization from "@/lib/api/hooks/app/organizations/useSwitchOrganization";
 import useAuthConfig from "@/lib/api/hooks/auth/useAuthConfig";
+import useUser from "@/lib/api/hooks/auth/useUser";
+import useLogout from "@/lib/api/hooks/auth/useLogout";
 import { useAppStore } from "@/stores";
 import { Logo } from "@/components/svg";
 import type { AppError } from "@/lib/api/client/normalizeError";
@@ -32,6 +34,11 @@ export default function InviteAcceptPage() {
     const setOrganizations = useAppStore((s) => s.setOrganizations);
     const setCurrentOrganization = useAppStore((s) => s.setCurrentOrganization);
     const { config: authConfig } = useAuthConfig();
+    // Who this browser is signed in as. The backend only lets the invited
+    // address accept, so a session for anyone else must switch first —
+    // otherwise Accept is a guaranteed 403.
+    const me = useUser(loggedIn);
+    const logout = useLogout();
 
     const nextPath = `/invite?token=${encodeURIComponent(token ?? "")}`;
     // The invited address has to travel too: the backend only accepts a signup
@@ -44,6 +51,14 @@ export default function InviteAcceptPage() {
         (invitedEmail ? `&email=${encodeURIComponent(invitedEmail)}` : "") +
         `&next=${encodeURIComponent(nextPath)}`;
     const signupClosed = authConfig.registration === "true";
+    const signedInEmail = me.data?.email ?? "";
+    const wrongAccount =
+        loggedIn && !!signedInEmail && !!invitedEmail && signedInEmail.toLowerCase() !== invitedEmail.toLowerCase();
+
+    async function onSwitchAccount() {
+        await logout.mutateAsync();
+        navigate(`/auth/login?next=${encodeURIComponent(nextPath)}`, { replace: true });
+    }
 
     async function onAccept() {
         if (!token) return;
@@ -132,7 +147,24 @@ export default function InviteAcceptPage() {
                                 )}
                             </div>
 
-                            {loggedIn ? (
+                            {wrongAccount ? (
+                                <div className="space-y-2">
+                                    <p className="text-[12px] text-slate-500 leading-relaxed">
+                                        You're signed in as <span className="font-medium text-slate-700">{signedInEmail}</span>, but this
+                                        invitation is for <span className="font-medium text-slate-700">{invitedEmail}</span>. Sign out, then sign in
+                                        or create an account with the invited address.
+                                    </p>
+                                    <button
+                                        type="button"
+                                        onClick={onSwitchAccount}
+                                        disabled={logout.isPending}
+                                        className="w-full h-9 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-[13px] font-medium inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-60"
+                                    >
+                                        {logout.isPending && <Loader2Icon className="w-3.5 h-3.5 animate-spin" />}
+                                        Switch account
+                                    </button>
+                                </div>
+                            ) : loggedIn ? (
                                 <button
                                     type="button"
                                     onClick={onAccept}

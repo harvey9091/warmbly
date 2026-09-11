@@ -5,10 +5,13 @@ import getUser from "../../client/auth/getUser";
 // long staleTime so navigating between pages never refetches — only
 // explicit invalidations (avatar upload, onboarding completion) move
 // it.
-export default function useUser() {
+// `enabled: false` lets a public page (the /invite landing) ask only when a
+// session exists, instead of firing a 401 that clears tokens.
+export default function useUser(enabled = true) {
     return useQuery({
         queryKey: ["auth", "me"],
         queryFn: () => getUser(),
+        enabled,
         staleTime: 5 * 60_000,
         gcTime: 30 * 60_000,
         refetchOnMount: false,
