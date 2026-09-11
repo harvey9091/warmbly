@@ -27,9 +27,10 @@ func TestIsInstantUsesTheDispatchClock(t *testing.T) {
 	if isInstant(&sent, sent.Add(window), window) {
 		t.Fatal("the boundary is outside the window")
 	}
-	// A stamp before the dispatch means a skewed clock somewhere, not a
-	// person who read the mail first. Treating a negative gap as "inside the
-	// window" would mark every such event automated, so it is neither.
+	// A stamp before the dispatch means the two clocks disagree, not that
+	// someone read the mail early. The old form compared a raw difference, so
+	// every skewed event fell inside the window and was marked automated;
+	// the rule abstains instead and lets the user agent and network decide.
 	if isInstant(&sent, sent.Add(-time.Hour), window) {
 		t.Fatal("an event stamped before dispatch is not instant")
 	}

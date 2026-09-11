@@ -43,8 +43,11 @@ func isMachineOpen(userAgent *string) bool {
 // the arrival scan it is aimed at. It is operator-editable for that reason:
 // how long that takes is a property of the deployment, not of the code.
 //
-// An unknown dispatch time never counts as instant, and neither does an event
-// stamped before it: a clock skewed backwards must not mark everything human.
+// An unknown dispatch time never counts as instant. Neither does an event
+// stamped BEFORE the dispatch, which means the two clocks disagree rather than
+// that someone read the mail early: the timing rule abstains there and the
+// event is left to the user agent and source-network rules, which is the only
+// honest answer when the one input this rule has is known to be wrong.
 func isInstant(sentAt *time.Time, at time.Time, window time.Duration) bool {
 	if sentAt == nil {
 		return false
