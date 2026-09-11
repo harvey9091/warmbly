@@ -33,7 +33,12 @@ GIN_MODE=release
 OPEN_API=true
 
 # Logs
-# SENTRY_DSN is intentionally omitted here so empty values are never emitted.
+# Error tracking. PostHog is the default backend; Sentry still works alongside
+# it or instead of it. All optional: unset means errors are logged locally.
+POSTHOG_KEY=""
+POSTHOG_HOST=""
+POSTHOG_ERROR_TRACKING="true"
+SENTRY_DSN=""
 
 # SECRETS
 AUTH_SECRET="example123"

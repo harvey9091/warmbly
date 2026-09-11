@@ -27,6 +27,9 @@ const (
 	ConstraintNoMailbox        ContactSendConstraint = "no_mailbox"
 	ConstraintDomainAuth       ContactSendConstraint = "domain_auth"
 	ConstraintCampaignEnded    ContactSendConstraint = "campaign_ended"
+	// ConstraintSenderBusy is the whole pool being fine and one mailbox not:
+	// the lead's sequence belongs to a mailbox that has nothing left today.
+	ConstraintSenderBusy ContactSendConstraint = "sender_busy"
 )
 
 // ContactSendPreview is a read-only "what happens next" for one contact in
@@ -85,8 +88,11 @@ func (s *schedulerService) PreviewContactSend(ctx context.Context, campaignID, c
 		return pv, nil
 	}
 
-	pair := &repository.ContactSequencePair{ContactID: contactID, SequenceID: *route.Target, IsNewLead: route.IsNewLead, NotBefore: route.DueAt}
-	at, sendable, _, perr := s.placeCampaignSend(ctx, campaign, accounts, meta, pair, true)
+	pair := &repository.ContactSequencePair{
+		ContactID: contactID, SequenceID: *route.Target, IsNewLead: route.IsNewLead,
+		NotBefore: route.DueAt, AssignedSender: route.AssignedSender,
+	}
+	at, sendable, _, perr := s.placeCampaignSend(ctx, campaign, accounts, meta, pair, nil, true)
 	switch {
 	case perr == nil && sendable != nil:
 		pv.State = models.NextActionDue
@@ -101,6 +107,11 @@ func (s *schedulerService) PreviewContactSend(ctx context.Context, campaignID, c
 		}
 		pv.NotBefore = &slot
 		pv.Constraint = s.deferralConstraint(ctx, campaign, route)
+		// The pool is not the gate here, one mailbox is: say which, rather than
+		// blaming "no mailbox can take it" while two others sit idle.
+		if errors.Is(perr, ErrSenderBusy) && pv.Constraint == ConstraintCapacity {
+			pv.Constraint = ConstraintSenderBusy
+		}
 		return pv, nil
 	case errors.Is(perr, ErrCampaignEnded):
 		pv.State = models.NextActionBlocked

@@ -98,6 +98,10 @@ var transientMailErrorCodes = []string{
 	string(errx.MailErrorCodeServerUnreachable),
 	string(errx.MailErrorCodeConnectionLost),
 	string(errx.MailErrorCodeNotFound),
+	// A NO/BAD the client has no dedicated error for. It is relayed as a
+	// temporary server error and never deactivates the mailbox, so a pass
+	// that completed afterwards disproves it like any other outage.
+	string(errx.MailErrorCodeImapUnknown),
 }
 
 func (s *JobsService) resolveTransientMailErrors(ctx context.Context, emailID uuid.UUID, syncedAt *time.Time) {

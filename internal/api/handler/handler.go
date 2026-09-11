@@ -72,6 +72,7 @@ import (
 	"github.com/warmbly/warmbly/internal/pkg/generation"
 
 	"github.com/warmbly/warmbly/internal/infrastructure/encryptedkeys"
+	"github.com/warmbly/warmbly/internal/infrastructure/kms"
 	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
 	"github.com/warmbly/warmbly/internal/infrastructure/storage"
 	"github.com/warmbly/warmbly/internal/models"
@@ -275,6 +276,12 @@ type Handler struct {
 	// HTTP-proxy implementation.
 	EncryptedKeys encryptedkeys.Store
 
+	// The instance's root of trust, used by /api/v1/internal/dek/decrypt to
+	// open a sealed key for a node that holds no KMS credential of its own.
+	// Nothing else in the handler layer touches it: application crypto goes
+	// through the cipher service.
+	KMS kms.Provider
+
 	// Worker messageId -> internal email map, served to workers over HTTPS at
 	// /api/v1/internal/email-message-map for the same no-direct-Postgres reason
 	// as EncryptedKeys. Backed by Postgres in the backend.
@@ -287,6 +294,11 @@ type Handler struct {
 	// Click-link store, served to the tracking service over HTTPS at
 	// /api/v1/internal/tracked-links/:id (same no-direct-Postgres rule).
 	TrackedLinks repository.TrackedLinkRepository
+
+	// Verified custom tracking and forms domains, read by the on-demand TLS
+	// gate at /tls/authorize so a reverse proxy can obtain a certificate for a
+	// hostname that was not known when the instance was installed.
+	CustomDomains repository.CustomDomainRepository
 
 	// Direct repositories used by handlers that don't yet have a
 	// service layer (avatars, etc.). Keep narrow and add a service

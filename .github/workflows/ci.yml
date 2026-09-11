@@ -50,6 +50,13 @@ jobs:
               # make lint runs the join-script checks, so a change to the
               # checker itself has to trigger the job that runs it.
               - 'scripts/check-join-script.sh'
+              # make lint also checks that every Dockerfile COPY names a path
+              # that exists. Nothing else does: build-push.yml runs only on
+              # push to main, so a COPY of a file the same PR deleted is green
+              # here and breaks main on merge. Both halves of that have to
+              # trigger the job: the Dockerfiles, and the trees they copy from.
+              - 'scripts/**'
+              - 'deploy/docker/**'
             migrations:
               - 'internal/infrastructure/db/migrations/**'
               - 'scripts/check-migrations.sh'

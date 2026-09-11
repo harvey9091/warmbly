@@ -8215,6 +8215,88 @@
         }
       }
     },
+    "/unibox/folder": {
+      "patch": {
+        "operationId": "unibox_move_folder",
+        "summary": "Move messages between folders",
+        "description": "Re-files a batch of messages into Inbox, Archive or Trash, org-wide. Up to 500 ids per call.\n\nThis is a move in Warmbly only. The copy at the mail provider stays where it is, and a later sync will not undo the move: Warmbly tracks the provider's own placement separately and follows it only when the provider itself moves the message. `sent`, `drafts` and `spam` are placements the provider reaches, so they are rejected here with a `400`.",
+        "tags": [
+          "unibox"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UniboxMoveFolderRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Echoes the request back.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UniboxMoveFolderRequest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, more than 500 ids, a folder outside inbox/archive/trash, or no organization selected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing scope/permission, or organization lacks unified-inbox access.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/unibox/reply": {
       "post": {
         "operationId": "unibox_reply",
@@ -11779,6 +11861,107 @@
           },
           "404": {
             "description": "Invalid UUID or key not found in this organization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api-keys/{id}/permanent": {
+      "delete": {
+        "operationId": "api-keys_delete",
+        "summary": "Delete an API key",
+        "description": "Removes a revoked or expired key from the workspace for good, along with its usage logs. A key that could still authenticate is refused with a 409: revoke it first, so what ended the credential stays on the record. A key past its expires_at can be deleted directly, since it already authenticates nothing.",
+        "tags": [
+          "api-keys"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deletion status envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyDeleteResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No organization selected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing API_KEYS scope or manage_api_keys org permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Invalid UUID or key not found in this organization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The key can still authenticate. Revoke it first.",
             "content": {
               "application/json": {
                 "schema": {
@@ -17399,6 +17582,114 @@
           },
           "429": {
             "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/templates/analyze": {
+      "post": {
+        "operationId": "deliverability-ops_analyze_template",
+        "summary": "Analyze template content with AI",
+        "description": "Runs the deployment's configured AI provider over a subject and body and returns the specific words and sentences that hurt deliverability, quoted from the copy, with whether each one is in the subject or the body and what to write instead. The rules-based score runs in the same request and comes back under `rules`. Advisory only and never blocks sending. Spends AI credits; honors `Idempotency-Key`. Requires WRITE_TEMPLATES scope (it writes no template, but a read-only key must not be able to spend the workspace credits), and the view_campaigns and use_ai permissions.",
+        "tags": [
+          "deliverability-ops"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Makes a retry safe: the same key is never charged twice.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScoreTemplateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The analysis, with the rules-based pass alongside it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateAnalysis"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Nothing written to analyze, or the template is over the size cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Out of AI credits. Nothing is charged and no provider call is made.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No AI provider configured (code `ai_not_configured`, permanent for that deployment), or the provider failed (code `service_unavailable`, and the reserved credits are refunded).",
             "content": {
               "application/json": {
                 "schema": {
@@ -23568,6 +23859,34 @@
           }
         }
       },
+      "UniboxMoveFolderRequest": {
+        "type": "object",
+        "description": "Also the echoed response body.",
+        "required": [
+          "email_ids",
+          "folder"
+        ],
+        "properties": {
+          "email_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 500,
+            "description": "Message UUIDs to move (max 500)."
+          },
+          "folder": {
+            "type": "string",
+            "enum": [
+              "inbox",
+              "archive",
+              "trash"
+            ],
+            "description": "Destination folder. Anything else is a `400`."
+          }
+        }
+      },
       "UniboxReplyRequest": {
         "type": "object",
         "required": [
@@ -25007,6 +25326,20 @@
           }
         }
       },
+      "APIKeyDeleteResult": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "deleted"
+            ]
+          }
+        }
+      },
       "APIPermission": {
         "type": "object",
         "required": [
@@ -26227,14 +26560,42 @@
           "opens": {
             "type": "integer"
           },
+          "machine_opens": {
+            "type": "integer",
+            "description": "Subset of opens from automated fetchers. Human opens are opens minus machine_opens."
+          },
           "clicks": {
             "type": "integer"
+          },
+          "machine_clicks": {
+            "type": "integer",
+            "description": "Contacts on this step whose only clicks were automated. Not part of clicks."
           },
           "replies": {
             "type": "integer"
           },
           "bounces": {
             "type": "integer"
+          },
+          "open_rate": {
+            "type": "number",
+            "format": "double",
+            "description": "Opens as a percentage of this step's own emails_sent. 0 while the step has sent nothing."
+          },
+          "click_rate": {
+            "type": "number",
+            "format": "double",
+            "description": "Clicks as a percentage of this step's own emails_sent. 0 while the step has sent nothing."
+          },
+          "reply_rate": {
+            "type": "number",
+            "format": "double",
+            "description": "Replies as a percentage of this step's own emails_sent. 0 while the step has sent nothing."
+          },
+          "bounce_rate": {
+            "type": "number",
+            "format": "double",
+            "description": "Bounces as a percentage of this step's own emails_sent. 0 while the step has sent nothing."
           }
         }
       },
@@ -28789,6 +29150,35 @@
           }
         }
       },
+      "TemplateScoreSpan": {
+        "type": "object",
+        "description": "One exact fragment of the copy that triggered an issue.",
+        "required": [
+          "field",
+          "text"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "enum": [
+              "subject",
+              "body"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "description": "The fragment as it is written in the copy."
+          },
+          "line": {
+            "type": "integer",
+            "description": "1-based line within that field."
+          },
+          "excerpt": {
+            "type": "string",
+            "description": "The whole line, for context around the fragment."
+          }
+        }
+      },
       "TemplateScoreIssue": {
         "type": "object",
         "required": [
@@ -28810,6 +29200,136 @@
           },
           "message": {
             "type": "string"
+          },
+          "field": {
+            "type": "string",
+            "description": "Set when the issue lives in exactly one half of the template. Absent when it straddles both or describes the send as a whole.",
+            "enum": [
+              "subject",
+              "body"
+            ]
+          },
+          "spans": {
+            "type": "array",
+            "description": "The exact fragments that caused the issue, in reading order. Capped at 8; the count that drives the deduction is taken before the cap.",
+            "items": {
+              "$ref": "#/components/schemas/TemplateScoreSpan"
+            }
+          },
+          "suggestion": {
+            "type": "string",
+            "description": "The fix, in one sentence."
+          }
+        }
+      },
+      "SpamFinding": {
+        "type": "object",
+        "description": "One located problem the AI analysis found. `text` is verified against the submitted copy before it is returned, so it is never a fragment the caller did not send.",
+        "required": [
+          "severity",
+          "issue"
+        ],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": [
+              "high",
+              "warn",
+              "info"
+            ]
+          },
+          "field": {
+            "type": "string",
+            "description": "Absent when the model labelled neither half and nothing in the finding could be anchored in the copy.",
+            "enum": [
+              "subject",
+              "body"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "description": "The fragment quoted from the copy. Absent when the finding is about the email as a whole."
+          },
+          "line": {
+            "type": "integer"
+          },
+          "excerpt": {
+            "type": "string"
+          },
+          "issue": {
+            "type": "string",
+            "description": "Why this fragment hurts deliverability or replies."
+          },
+          "suggestion": {
+            "type": "string",
+            "description": "What to write instead."
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "trigger_word",
+              "tone",
+              "formatting",
+              "links",
+              "structure",
+              "authenticity"
+            ]
+          }
+        }
+      },
+      "TemplateAnalysis": {
+        "type": "object",
+        "description": "AI spam analysis of a campaign template, with the rules-based pass alongside it.",
+        "required": [
+          "score",
+          "verdict",
+          "findings",
+          "rules",
+          "model"
+        ],
+        "properties": {
+          "score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Overall deliverability score (higher is safer), grounded on the rules pass."
+          },
+          "verdict": {
+            "type": "string",
+            "description": "One sentence on how the email will land."
+          },
+          "findings": {
+            "type": "array",
+            "description": "Located problems, most severe first.",
+            "items": {
+              "$ref": "#/components/schemas/SpamFinding"
+            }
+          },
+          "suggested_subject": {
+            "type": "string",
+            "description": "A rewritten subject, absent when the current one is fine."
+          },
+          "improvements": {
+            "type": "array",
+            "description": "Copy-level advice with no single fragment to quote.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rules": {
+            "$ref": "#/components/schemas/TemplateScoreResult"
+          },
+          "model": {
+            "type": "string"
+          },
+          "tokens_used": {
+            "type": "integer"
+          },
+          "credits_remaining": {
+            "type": "integer"
+          },
+          "credits_charged": {
+            "type": "integer"
           }
         }
       },

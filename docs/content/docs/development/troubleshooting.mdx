@@ -79,6 +79,7 @@ Newer builds return the invite-only refusal with its own machine code, `registra
 | Connecting a mailbox fails with `SERVER_UNREACHABLE` on a reachable host | The security setting does not match the server. A server expecting STARTTLS looks unreachable to a client attempting implicit TLS, and vice versa. Any port from 1 to 65535 is accepted, so the port alone no longer decides: set **Security** to SSL / TLS for a server that is encrypted from the first byte (usually SMTP `465`, IMAP `993`) and STARTTLS for one that upgrades in place (usually SMTP `587` or `2525`, IMAP `143`) |
 | A local relay such as Proton Bridge will not connect, and the **None** security option is not there | It appears only for a loopback literal (`localhost`, `127.0.0.0/8`, `::1`) on a self-hosted instance, because the mode is safe only when the credentials never leave the machine. A hostname that resolves to `127.0.0.1` is refused; type the address itself. On hosted Warmbly the worker is not your machine and cannot reach a Bridge at all. See [local mail relays](/guides/mailboxes/#local-mail-relays-proton-bridge) |
 | A mailbox reports `INSECURE_REMOTE_HOST` | It is stored with the unencrypted security mode but its host is not this machine, so the worker refused to dial it rather than put the password on a wire. Reconnect it with SSL / TLS or STARTTLS, or point it back at the local relay |
+| Connecting an Outlook mailbox stops at "Approval required" with `AADSTS90095` | The tenant needs an admin to consent once, or the app registration asks for a permission it should not. Grant consent under **Enterprise applications > your app > Permissions > Grant admin consent**, and check the registration lists only the delegated `User.Read`, `Mail.Send`, `Mail.ReadWrite` and `offline_access`: `IMAP.AccessAsUser.All` and `SMTP.Send` are admin-consent-only, are not used, and refuse every non-admin on their own. If a non-admin is still refused after a tenant-wide grant, the instance predates the fix that stopped sending `prompt=consent`, which made Entra ID re-check consent eligibility per sign-in instead of honouring the grant; upgrade it |
 | A mailbox stalls after about an hour | The worker is missing `BOX_GOOGLE_*` or `BOX_OUTLOOK_*`. The backend starts the OAuth flow but each worker refreshes the token. Set them and restart the worker |
 | Sending fails with an authentication error but the password is right | Warmbly negotiates the sign-in method from what the server advertises. If the mailbox reports `AUTH_UNSUPPORTED`, the server offers only mechanisms Warmbly does not implement, such as NTLM or GSSAPI, or it offers no encrypted connection at all and Warmbly will not send the password in the clear; an app password, or the provider's documented SMTP host, usually resolves both |
 | A send is refused and not retried | A `SEND_REJECTED` or `RECIPIENT_REJECTED` error means the receiving server answered with a permanent `5xx`, so retrying cannot deliver the message and would only spend the mailbox's daily budget. Both carry the server's own words, which is what distinguishes an address that no longer exists from one blocked by a policy. A temporary `4xx` is retried automatically and reported as a connection problem |
@@ -93,9 +94,8 @@ Newer builds return the invite-only refusal with its own machine code, `registra
 | `tracking` exits immediately with `Bind for 0.0.0.0:3000 failed: port is already allocated` | Something else on the host owns port `3000`, a very common default. Set `TRACKING_PORT=3001` in `.env`, re-run `make up`, and point your reverse proxy's tracking host at the new port |
 | The backend restart-loops with `duplicate migration file` | Two migrations on the branch share a version, which stops golang-migrate before a single one runs. Renumber the one that has not been released yet to the next free version and re-deploy. `make check-migrations` reports it, and CI runs the same check on every pull request. See [adding a migration](/development/local-development/#adding-a-migration) |
 | Seeding fails with `no migration found for version N` | The seed image is older than your schema. Re-run with `--build` |
-| Worker `install_state: error` | Test connection first (is the SSH key in `authorized_keys`?), then read `last_error` and Logs on the worker's detail page |
 | A whole workspace stopped sending and its banner says suspended | Its abuse posture reached `suspended`. Open the org in the admin panel, read the findings in the **Abuse posture** panel, then retract the ones that are wrong or set the posture directly. See [workspace abuse posture](/development/accounts-and-access/#workspace-abuse-posture) |
-| Worker heartbeat offline | Can the VPS reach the backend URL, NATS or Kafka, and Redis? Is the container running (Live status)? |
+| Worker heartbeat offline | Nothing connects to a node, so this is always diagnosed on the machine itself: `systemctl status warmbly-worker`, then check it can reach the backend URL, NATS or Kafka, and Redis. `warmblyctl fleet show <id>` gives the last time it was seen |
 
 ## Recovery
 
@@ -113,24 +113,38 @@ The volumes hold the per-organization data keys. Every sealed mailbox credential
 
 ## Collecting errors somewhere you can read them
 
-`make logs` shows you what a service printed. It does not tell you that a handler threw at 3am, in which build, for which organization. Every runtime in Warmbly can send that to Sentry instead, and none of them do until you set a DSN.
+`make logs` shows you what a service printed. It does not tell you that a handler threw at 3am, in which build, for which organization. Every runtime in Warmbly can send that to an error tracker instead, and none of them do until you say where.
 
-Point each service at a project by setting one variable on it:
+There are two backends. PostHog is the default:
 
 ```bash
 # backend, consumer, worker, forms, tracking, realtime
-SENTRY_DSN=https://<key>@<host>/<project>
+POSTHOG_KEY=phc_...
 # the dashboard, the admin panel, and public form pages (browser errors)
+WARMBLY_POSTHOG_KEY=phc_...
+# both, when your project is not on PostHog Cloud US
+POSTHOG_HOST=https://eu.i.posthog.com
+WARMBLY_POSTHOG_HOST=https://eu.i.posthog.com
+```
+
+Sentry is still supported, on its own or alongside PostHog:
+
+```bash
+SENTRY_DSN=https://<key>@<host>/<project>
 WARMBLY_SENTRY_DSN=https://<key>@<host>/<project>
 ```
 
-Under the installer's compose file both go in `.env`: every service inherits it through `env_file`, so one line and a `docker compose up -d` covers the whole instance.
+Set both backends and every error goes to both, which is the safe way to try one without giving up the other. Going the other way, `POSTHOG_ERROR_TRACKING=false` keeps a PostHog key for product analytics and reports no exceptions there.
 
-Every event is tagged with the service that raised it, the environment and the build, so one project can hold the whole instance and still be filterable. Server-side services take the environment from `APP_ENV`. The dashboard and admin panel take theirs from `WARMBLY_SENTRY_ENVIRONMENT`, since the container serving the bundle is not the process reporting the error. Hosted form pages are the exception among the browser apps: their environment is stamped into the page by the forms service, so it comes from that service's `APP_ENV`. The frontends are separate projects' worth of events in practice; give the browser ones their own project if you want the noise apart.
+Under the installer's compose file these go in `.env`: every service inherits them through `env_file`, so a couple of lines and a `docker compose up -d` covers the whole instance.
 
-The server behind the DSN is your choice. Sentry Cloud's free Developer plan covers 5k errors a month, and Warmbly assumes nothing about the host, so a self-hosted Sentry or a Sentry-compatible server such as GlitchTip works with the same variable.
+Every event is tagged with the service that raised it, the environment and the build, so one project can hold the whole instance and still be filterable. Exceptions also carry the workspace and user they happened to and, where there was one, the failing request's id and route, so a support message quoting a request id and an issue in error tracking are the same incident. What each property is and where it comes from is on [configuration](/development/configuration/#error-reporting). Server-side services take the environment from `APP_ENV`. The dashboard and admin panel take theirs from `WARMBLY_SENTRY_ENVIRONMENT`, since the container serving the bundle is not the process reporting the error, and the name is that one whichever backend receives the event. Hosted form pages are the exception among the browser apps: their environment is stamped into the page by the forms service, so it comes from that service's `APP_ENV`. The frontends are separate projects' worth of events in practice; give the browser ones their own project if you want the noise apart.
 
-Leaving every DSN unset is a supported configuration, not a degraded one: no host is contacted and errors go to the log as before. See [data control](/development/data-control/#error-reporting).
+The server behind either is your choice. PostHog Cloud's free tier covers 100k exceptions a month and `POSTHOG_HOST` points at a PostHog you run yourself; Sentry Cloud's free Developer plan covers 5k errors a month, and a self-hosted Sentry or a Sentry-compatible server such as GlitchTip works with the same DSN variable.
+
+Browser stack traces are minified unless the images were built with source-map upload configured, which the published ones are. See [source maps](/development/configuration/#source-maps) if you build your own.
+
+Configuring neither backend is a supported configuration, not a degraded one: no host is contacted and errors go to the log as before. See [data control](/development/data-control/#error-reporting).
 
 ## Still stuck
 

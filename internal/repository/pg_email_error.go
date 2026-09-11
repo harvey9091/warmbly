@@ -45,7 +45,12 @@ type CreateEmailAccountError struct {
 
 // EmailAccountErrorRepository defines operations for email account errors
 type EmailAccountErrorRepository interface {
-	Create(ctx context.Context, err *CreateEmailAccountError) (*EmailAccountError, *errx.Error)
+	// CreateOnce records an error unless the account already has an unresolved
+	// one with the same code, in which case it writes nothing and returns a
+	// nil record. It is the only write path: migration 000145 makes a second
+	// unresolved row for one code impossible, so an unconditional insert would
+	// only turn a repeat into a constraint violation.
+	CreateOnce(ctx context.Context, err *CreateEmailAccountError) (*EmailAccountError, *errx.Error)
 	GetByAccountID(ctx context.Context, accountID uuid.UUID, unresolvedOnly bool) ([]EmailAccountError, *errx.Error)
 	GetByUserID(ctx context.Context, userID uuid.UUID, limit int) ([]EmailAccountError, *errx.Error)
 	Resolve(ctx context.Context, errorID uuid.UUID, resolvedBy string) *errx.Error
@@ -72,12 +77,36 @@ func NewEmailAccountErrorRepository(database *db.DB) EmailAccountErrorRepository
 }
 
 // Create stores a new email account error
-func (r *emailAccountErrorRepository) Create(ctx context.Context, data *CreateEmailAccountError) (*EmailAccountError, *errx.Error) {
+// CreateOnce records the error unless the account already has an unresolved
+// one carrying the same code, and returns (nil, nil) when it declined.
+//
+// A mail server that refuses the same command every pass is not a new problem
+// every pass. The sync loop retries about once a minute and reports what it
+// got, so one IMAP_UNKNOWN that nobody can fix wrote 1440 identical rows a day
+// into the mailbox's error list (issue #405).
+//
+// Both guards are load-bearing. WHERE NOT EXISTS answers the ordinary repeat
+// without touching the index, and ON CONFLICT answers the race it cannot see:
+// two workers relaying the same failure in the same instant both find no row.
+// The unique index behind it is partial on the unresolved rows (migration
+// 000145), so resolved history is untouched and a problem that returns after
+// it was fixed is recorded again.
+func (r *emailAccountErrorRepository) CreateOnce(ctx context.Context, data *CreateEmailAccountError) (*EmailAccountError, *errx.Error) {
 	query := `
 		INSERT INTO email_account_errors (
 			email_account_id, user_id, error_code, severity, resolve_method,
 			title, message, user_message, action_required, task_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		)
+		-- The casts are load-bearing: a SELECT source, unlike VALUES, gives
+		-- the planner no target columns to infer the parameter types from.
+		SELECT $1::uuid, $2::uuid, $3::varchar, $4::email_error_severity,
+		       $5::email_error_resolve_method, $6::varchar, $7::text, $8::text,
+		       $9::text, $10::uuid
+		WHERE NOT EXISTS (
+			SELECT 1 FROM email_account_errors
+			WHERE email_account_id = $1 AND error_code = $3 AND resolved_at IS NULL
+		)
+		ON CONFLICT DO NOTHING
 		RETURNING id, email_account_id, user_id, error_code, severity, resolve_method,
 		          title, message, user_message, action_required, task_id,
 		          resolved_at, resolved_by, created_at
@@ -102,6 +131,10 @@ func (r *emailAccountErrorRepository) Create(ctx context.Context, data *CreateEm
 		&e.Title, &e.Message, &e.UserMessage, &e.ActionRequired, &e.TaskID,
 		&e.ResolvedAt, &e.ResolvedBy, &e.CreatedAt,
 	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// The row the caller wanted is already on screen, unresolved.
+		return nil, nil
+	}
 	if err != nil {
 		db.CaptureError(err, query, params, "queryrow")
 		return nil, errx.InternalError()
@@ -325,35 +358,4 @@ func MapSeverity(errType errx.MailErrorType) string {
 	default:
 		return "WARNING"
 	}
-}
-
-// GetUnresolvedByCode checks if there's already an unresolved error with the same code
-func (r *emailAccountErrorRepository) GetUnresolvedByCode(ctx context.Context, accountID uuid.UUID, errorCode string) (*EmailAccountError, *errx.Error) {
-	query := `
-		SELECT id, email_account_id, user_id, error_code, severity, resolve_method,
-		       title, message, user_message, action_required, task_id,
-		       resolved_at, resolved_by, created_at
-		FROM email_account_errors
-		WHERE email_account_id = $1
-		  AND error_code = $2
-		  AND resolved_at IS NULL
-		ORDER BY created_at DESC
-		LIMIT 1
-	`
-
-	var e EmailAccountError
-	err := r.DB.QueryRow(ctx, query, accountID, errorCode).Scan(
-		&e.ID, &e.EmailAccountID, &e.UserID, &e.ErrorCode, &e.Severity, &e.ResolveMethod,
-		&e.Title, &e.Message, &e.UserMessage, &e.ActionRequired, &e.TaskID,
-		&e.ResolvedAt, &e.ResolvedBy, &e.CreatedAt,
-	)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil // No existing error found
-		}
-		db.CaptureError(err, query, []any{accountID, errorCode}, "queryrow")
-		return nil, errx.InternalError()
-	}
-
-	return &e, nil
 }

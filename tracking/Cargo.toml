@@ -18,6 +18,12 @@ aws-sdk-secretsmanager = "1.15"
 # NATS (default event bus): pure-Rust, no native librdkafka to compile.
 async-nats = "0.38"
 
+# rustls 0.23 refuses to pick a provider when both aws-lc-rs and ring are in
+# the tree, and both are: it panics on the first TLS connection rather than at
+# startup. Named here so main can install one explicitly. ring, because it
+# needs no C toolchain on the musl builder.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
 # Kafka with Avro (optional; enabled with `--features kafka`). rdkafka is the
 # only native/librdkafka dependency, so the default build compiles far faster
 # and needs no libcurl/libsasl system headers.

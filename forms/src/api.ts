@@ -71,9 +71,16 @@ export interface PublicForm {
     cover_url?: string;
     background_url?: string;
     captcha_site_key?: string;
+    /** The "powered by" attribution. Absent when the deployment configured none. */
+    brand?: FormBrand;
     /** Present only when a valid personalized ?t= link opened the page. */
     prefill?: Record<string, string>;
     link_token?: string;
+}
+
+export interface FormBrand {
+    name: string;
+    url?: string;
 }
 
 export interface SubmitPayload {

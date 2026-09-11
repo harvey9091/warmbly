@@ -1019,10 +1019,10 @@ All fields optional.
 | --- | --- | --- | --- |
 | `name` | string | no | Step label. |
 | `subject` | string | no | Subject template. |
-| `body_plain` | string | no | Plain-text body template. |
-| `body_html` | string | no | HTML body template. |
+| `body_plain` | string | no | Plain-text body template. Leave it empty and the send path renders one from `body_html`, keeping list bullets, table rows and link destinations, and leaving out the stylesheet. |
+| `body_html` | string | no | HTML body template. Sent as written, including a whole document with its own `<head>`. Any `<style>` block is inlined onto the elements it matches at send time; see [the sequences guide](/guides/sequences/). |
 | `body_sync` | boolean | no | Keep plain and HTML bodies in sync. |
-| `body_code` | boolean | no | Treat the body as raw code (no auto-formatting). |
+| `body_code` | boolean | no | The body is authored as raw HTML. The dashboard editor opens it as markup instead of parsing it into the visual editor, which keeps only what its schema can represent. It does not change what is sent. |
 | `wait_after` | integer | no | Days to wait before this step, counted from the contact's previous step (`0` to `60`). Spacing belongs to the target step, so there is no standalone wait node for email steps. |
 | `conditions` | object | no | The connections out of this step (`{branches: [...]}`), evaluated in order; a branch with no `conditions` is a plain "go there next" link. Routing follows connections only: a step with `{}` or no branches has no outgoing path and ends the flow for the contact. |
 | `kind` | string | no | `email` (default), `action`, or `wait`. |

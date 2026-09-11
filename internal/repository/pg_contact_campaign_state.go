@@ -19,10 +19,12 @@ import (
 // the service.
 func (r *contactRepository) ListCampaignStates(ctx context.Context, orgID, contactID uuid.UUID) ([]models.ContactCampaignState, *errx.Error) {
 	campQuery := `
-		SELECT cam.id, cam.name, cam.status, c.subscribed, ` + undeliverableClause("cam.id") + `
+		SELECT cam.id, cam.name, cam.status, c.subscribed, ` + undeliverableClause("cam.id") + `,
+		       cl.email_account_id, COALESCE(sender.email, '')
 		FROM campaign_leads cl
 		JOIN campaigns cam ON cam.id = cl.campaign_id AND cam.organization_id = $2
 		JOIN contacts c ON c.id = cl.contact_id AND c.organization_id = $2
+		LEFT JOIN email_accounts sender ON sender.id = cl.email_account_id
 		WHERE cl.contact_id = $1
 		ORDER BY cam.created_at DESC
 	`
@@ -39,7 +41,8 @@ func (r *contactRepository) ListCampaignStates(ctx context.Context, orgID, conta
 	var camps []campRow
 	for rows.Next() {
 		var cr campRow
-		if err := rows.Scan(&cr.state.CampaignID, &cr.state.CampaignName, &cr.state.CampaignStatus, &cr.subscribed, &cr.undeliverable); err != nil {
+		if err := rows.Scan(&cr.state.CampaignID, &cr.state.CampaignName, &cr.state.CampaignStatus, &cr.subscribed, &cr.undeliverable,
+			&cr.state.SenderID, &cr.state.SenderEmail); err != nil {
 			rows.Close()
 			db.CaptureError(err, "", nil, "ListCampaignStates campaigns scan")
 			return nil, errx.InternalError()

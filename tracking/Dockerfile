@@ -18,13 +18,15 @@ RUN apk add --no-cache musl-dev && \
 WORKDIR /app
 COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
-# include_str! reads static/tracking.js at compile time, so it must be in the context.
+# include_str! reads static/tracking.js and scanner-networks.txt at compile
+# time, so both must be in the context.
 COPY static ./static
+COPY scanner-networks.txt ./scanner-networks.txt
 
 # The binary is copied out of the (cache-mounted) target dir before the mount is
 # released, so the runtime stage can COPY it.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
+RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cargo-target,target=/app/target \
     set -eux; \
     if [ -n "$CARGO_FEATURES" ]; then FEAT="--features $CARGO_FEATURES"; else FEAT=""; fi; \
     cargo build --release $FEAT; \

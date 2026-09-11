@@ -94,6 +94,7 @@ def extract(marker, out):
     open(os.path.join(d, out), "w").write("\n".join(body) + "\n")
 extract("/.env", ".env")
 extract("docker-compose.yml", "docker-compose.yml")
+extract("Caddyfile", "Caddyfile")
 PY
   [[ -f "$dir/docker-compose.yml" ]] || fail "--dry-run printed no compose file for: $label"
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
@@ -107,6 +108,92 @@ check_shape "bundled TLS" --tls caddy --host warmbly.example.com
 check_shape "core only" --components core
 check_shape "named volumes" --data-root volumes
 check_shape "external stores" --database-url postgres://u:p@db:5432/w --redis-url redis://cache:6379 --blobs s3
+
+# A workspace can point its own tracking or forms domain at an instance long
+# after it was installed, and the Caddyfile cannot name a host it has never
+# heard of. Without on_demand_tls behind an ask endpoint, every tracked link and
+# every opt-out link on such a domain fails TLS (issue #400). Asserted on the
+# rendered file, and where Caddy is available on what Caddy makes of it, because
+# a Caddyfile that parses can still carry no on-demand policy at all.
+check_caddy() {
+  local label=$1; shift
+  local want_catch_all=$1; shift
+  local dir="$work/caddy"
+  rm -rf "$dir"; mkdir -p "$dir"
+  sh "$SCRIPT" --dry-run --no-color --dir "$dir/inst" --version v0.0.0-test \
+    --tls caddy --host warmbly.example.com "$@" >"$dir/out" ||
+    fail "--dry-run failed for Caddy shape: $label"
+  python3 - "$dir" <<'PY'
+import sys, os
+d = sys.argv[1]
+lines = open(os.path.join(d, "out")).read().split("\n")
+idx = [i for i, l in enumerate(lines) if l.strip().startswith("── ") and "Caddyfile" in l]
+body = []
+if idx:
+    for l in lines[idx[0] + 1:]:
+        if l.strip().startswith("── ") and "(mode" in l:
+            break
+        body.append(l[2:] if l.startswith("  ") else l)
+    while body and (body[-1].strip() == "" or body[-1][:1] in "╭│╰"):
+        body.pop()
+open(os.path.join(d, "Caddyfile"), "w").write("\n".join(body) + "\n")
+PY
+  [[ -s "$dir/Caddyfile" ]] || fail "--tls caddy printed no Caddyfile for: $label"
+
+  grep -q 'ask http://backend:8080/tls/authorize' "$dir/Caddyfile" ||
+    fail "the Caddyfile has no on-demand ask endpoint for: $label"
+
+  if [[ "$want_catch_all" == yes ]]; then
+    grep -q '^https:// {' "$dir/Caddyfile" ||
+      fail "the Caddyfile has no custom-domain catch-all for: $label"
+    grep -q 'on_demand' "$dir/Caddyfile" ||
+      fail "the custom-domain catch-all does not enable on-demand TLS for: $label"
+  else
+    ! grep -q '^https:// {' "$dir/Caddyfile" ||
+      fail "the Caddyfile serves a catch-all with nothing behind it for: $label"
+  fi
+
+  # What the file says and what Caddy does with it are different questions. The
+  # adapted config is where a catch-all that quietly shadows the named hosts, or
+  # an on_demand block that produced no automation policy, becomes visible.
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    docker run --rm -v "$dir:/w" -w /w caddy:2-alpine \
+      caddy adapt --config /w/Caddyfile >"$dir/adapted.json" 2>/dev/null ||
+      fail "Caddy rejected the generated Caddyfile for: $label"
+    python3 - "$dir/adapted.json" "$want_catch_all" <<'PY' || fail "the adapted Caddy config is wrong for: $label"
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+want_catch_all = sys.argv[2] == "yes"
+# Two things are deliberately NOT asserted here, because the Caddyfile
+# adapter normalizes both and no input can make them fail: it always sorts
+# named-host routes ahead of a catch-all whatever order they were written in,
+# and it always folds an on_demand site into one policy with no subjects. Both
+# were written, mutation-tested, and found to be tautologies. A check that
+# cannot fail is worse than no check, so they are gone.
+routes = cfg["apps"]["http"]["servers"]["srv0"]["routes"]
+named = [r for r in routes if r.get("match")]
+catch = [r for r in routes if not r.get("match")]
+if not named:
+    sys.exit("no named host routes survived")
+if want_catch_all:
+    if len(catch) != 1:
+        sys.exit(f"expected exactly one catch-all route, got {len(catch)}")
+elif catch:
+    sys.exit("a catch-all route exists with no custom-domain services enabled")
+
+policies = cfg["apps"]["tls"]["automation"]["policies"]
+if want_catch_all and not [p for p in policies if p.get("on_demand")]:
+    sys.exit("no automation policy enables on-demand issuance")
+perm = cfg["apps"]["tls"]["automation"].get("on_demand", {}).get("permission", {})
+if perm.get("endpoint") != "http://backend:8080/tls/authorize":
+    sys.exit(f"on-demand issuance is not gated on the ask endpoint: {perm!r}")
+PY
+  fi
+  pass "custom domains can get a certificate: $label"
+}
+
+check_caddy "tracking and forms" yes
+check_caddy "core only" no --components core
 
 # Nothing drawn inside a redraw loop may be wider than the terminal. A wrapped
 # line is two physical rows, every cursor-up counts logical ones, and the menu

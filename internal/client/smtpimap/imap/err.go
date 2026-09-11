@@ -2,6 +2,8 @@ package imap
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/warmbly/warmbly/internal/errx"
@@ -21,7 +23,7 @@ func (c *Client) handleError(err error) *errx.MailError {
 		case imap.ResponseCodeAuthorizationFailed:
 			return errx.ErrMailAuthorizationFailed
 		default:
-			return errx.ErrMailUnknownImapError(string(imapErr.Code))
+			return errx.ErrMailUnknownImapError(imapErrDetail(imapErr))
 		}
 	}
 
@@ -36,4 +38,21 @@ func (c *Client) handleError(err error) *errx.MailError {
 	// no new mail, forever. Retry-level, so the loop reconnects at the next
 	// pass instead of deactivating the mailbox.
 	return errx.ErrMailServerUnreachable
+}
+
+// imapErrDetail is the part of the mailbox's error row that says what the
+// server actually refused. The response code is optional in IMAP, and a
+// codeless NO/BAD (IONOS, Gmail's "NO System Error") rendered as "Something
+// went wrong: " with nothing after the colon, which is unactionable for the
+// customer and undiagnosable from a bug report. Never returns "".
+func imapErrDetail(err *imap.Error) string {
+	if err.Code != "" {
+		return string(err.Code)
+	}
+	// Keep the status: a BAD means we sent something the server does not
+	// understand, a NO means it understood and declined.
+	if detail := strings.TrimSpace(fmt.Sprintf("%s %s", err.Type, err.Text)); detail != "" {
+		return detail
+	}
+	return "the mail server refused the command without saying why"
 }

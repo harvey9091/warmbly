@@ -14,13 +14,45 @@ import (
 // else's dashboard, carrying a live reset token signed with the self-host's own
 // AUTH_SECRET. APP_URL is the documented variable; FRONTEND_BASE_URL is the
 // older name and stays supported so existing deployments keep working.
+//
+// An install that set neither is answered from what it did configure, and a
+// self-host is never answered with the hosted dashboard: a link nobody can
+// open is a support ticket, while a working link to someone else's app is that
+// deployment's tokens walking out of it.
 func AppBaseURL() string {
 	for _, key := range []string{"APP_URL", "FRONTEND_BASE_URL"} {
 		if v := strings.TrimRight(strings.TrimSpace(os.Getenv(key)), "/"); v != "" {
 			return v
 		}
 	}
+	if v := inferredAppBaseURL(); v != "" {
+		return v
+	}
+	if SelfHosted() {
+		return ""
+	}
 	return "https://app.warmbly.com"
+}
+
+// inferredAppBaseURL reconstructs the dashboard origin from the rest of the
+// deployment's own configuration. CORS_ALLOW_ORIGINS is exact when it is set
+// (the dashboard is the first origin the browser calls the API from);
+// PUBLIC_HOST is the installer's one hostname everything else derives from.
+func inferredAppBaseURL() string {
+	for _, origin := range strings.Split(os.Getenv("CORS_ALLOW_ORIGINS"), ",") {
+		origin = strings.TrimRight(strings.TrimSpace(origin), "/")
+		if origin == "" || origin == "*" {
+			continue
+		}
+		if u, err := url.Parse(origin); err == nil && u.Scheme != "" && u.Host != "" {
+			return u.Scheme + "://" + u.Host
+		}
+	}
+	host := NormalizeTrackingHost(os.Getenv("PUBLIC_HOST"))
+	if host == "" {
+		return ""
+	}
+	return publicScheme(host) + "://" + host
 }
 
 // WebsocketURL is the realtime gateway clients connect to. It is deployment
@@ -67,14 +99,14 @@ func FormsBaseURL() string {
 	if host == "" {
 		return ""
 	}
-	return formsScheme(host) + "://" + host
+	return publicScheme(host) + "://" + host
 }
 
-// formsScheme is https except where TLS cannot be terminated: a form page on a
-// loopback or private-network host is a development or LAN install. The port is
+// publicScheme is https except where TLS cannot be terminated: a loopback or
+// private-network host is a development or LAN install. The port is
 // deliberately not a signal, because an install can terminate TLS on any port
 // and inferring http from one handed an https deployment http:// share links.
-func formsScheme(host string) string {
+func publicScheme(host string) string {
 	name := hostWithoutPort(NormalizeTrackingHost(host))
 	if name == "localhost" || strings.HasSuffix(name, ".localhost") {
 		return "http"
@@ -107,7 +139,7 @@ func FormURLOn(host, publicID string) string {
 	if host == "" {
 		return GetFormURL(publicID)
 	}
-	return formsScheme(host) + "://" + host + "/f/" + url.PathEscape(publicID)
+	return publicScheme(host) + "://" + host + "/f/" + url.PathEscape(publicID)
 }
 
 // GetFormURL is the hosted page for one form; empty when no base is known.

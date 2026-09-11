@@ -985,6 +985,10 @@ func templateSpec() resource {
 				Method: http.MethodPost, Path: "/templates/score", Body: bodyRequired,
 			},
 			{
+				Name: "analyze", Short: "AI spam analysis of a draft, with the wording to fix",
+				Method: http.MethodPost, Path: "/templates/analyze", Body: bodyRequired,
+			},
+			{
 				Name: "reorder", Short: "Change the order templates appear in",
 				Method: http.MethodPatch, Path: "/templates/reorder", Body: bodyRequired,
 				Success: "Templates reordered.",
@@ -1613,6 +1617,18 @@ you close the terminal.`,
 				Method: http.MethodDelete, Path: "/api-keys/{id}",
 				Args:    []argSpec{{Name: "id", Help: "The key's id"}},
 				Success: "API key revoked.",
+			},
+			{
+				Name: "purge", Aliases: []string{"destroy"}, Short: "Delete a revoked API key for good",
+				Method: http.MethodDelete, Path: "/api-keys/{id}/permanent",
+				Long: `Remove a revoked or expired key from the workspace, along with its
+request log.
+
+This is the step after ` + "`warmbly key revoke`" + `, not a shortcut past it: a key that
+could still authenticate is refused. Note that ` + "`delete`" + ` is an alias of ` + "`revoke`" + `,
+which ends a key but leaves it listed; ` + "`purge`" + ` is the one that removes the row.`,
+				Args:    []argSpec{{Name: "id", Help: "The key's id"}},
+				Success: "API key deleted.",
 			},
 			{
 				Name: "permissions", Aliases: []string{"scopes"}, Short: "Every grantable scope and its bit value",

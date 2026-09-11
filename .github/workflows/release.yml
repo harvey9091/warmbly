@@ -111,11 +111,15 @@ jobs:
             COMMIT=${{ github.sha }}
             SENTRY_ORG=${{ vars.SENTRY_ORG }}
             SENTRY_PROJECT=${{ matrix.service == 'admin' && vars.SENTRY_PROJECT_ADMIN || vars.SENTRY_PROJECT_WEB }}
-          # Source maps are uploaded only when all three are configured on this
-          # repository. A fork has none of them, the plugin is not in the build,
-          # and the image is byte-identical to one built with no Sentry account.
+            POSTHOG_CLI_PROJECT_ID=${{ vars.POSTHOG_CLI_PROJECT_ID }}
+            POSTHOG_CLI_HOST=${{ vars.POSTHOG_CLI_HOST }}
+          # Source maps are uploaded only when a backend is fully configured on
+          # this repository. A fork has neither set, no upload runs, and the
+          # image is byte-identical to one built with no error-tracking account
+          # at all.
           secrets: |
             sentry_auth_token=${{ secrets.SENTRY_AUTH_TOKEN }}
+            posthog_cli_api_key=${{ secrets.POSTHOG_CLI_API_KEY }}
           tags: |
             ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ github.ref_name }}
             ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:v${{ needs.validate-tag.outputs.minor }}

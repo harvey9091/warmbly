@@ -99,7 +99,7 @@ const faq = [
   ['How do A/B variants get chosen?',
    'Each contact is assigned a variant at the step by a stable weighted split, so a retry always lands on the same copy. We report which variant earned the reply.'],
   ['Where does a sequence actually send from?',
-   'A pool of your mailboxes, not one. The scheduler round-robins across the pool under each mailbox cap, the 600s spacing rule, and its current health band, so no single mailbox carries the campaign.'],
+   'A pool of your mailboxes, not one. The scheduler round-robins leads across the pool under each mailbox cap, the 600s spacing rule, and its current health band, so no single mailbox carries the campaign. A lead keeps the mailbox that sent its first email, so every follow-up comes from the same address.'],
   ['What stops a sequence for a contact?',
    'A reply, a met goal, a bounce, an unsubscribe, a STOP reply, or a manual suppression. Suppression is workspace-wide, so another sequence never picks the contact back up by accident.'],
 ];
@@ -593,7 +593,7 @@ const totalCap = senderPool.reduce((a, m) => a + m.cap, 0);
           One sequence, many mailboxes.
         </h2>
         <p class="mt-4 text-[15px] text-foreground/70 leading-relaxed">
-          A sequence sends through a pool of mailboxes, not one. The scheduler round-robins contacts across the pool with an eye on each mailbox daily cap and current health band, so no single mailbox ever carries the campaign.
+          A sequence sends through a pool of mailboxes, not one. The scheduler round-robins contacts across the pool with an eye on each mailbox daily cap and current health band, so no single mailbox ever carries the campaign. Rotation happens per lead, not per email: whichever mailbox sends a contact their first email sends the rest of the sequence too.
         </p>
       </div>
 
@@ -622,7 +622,7 @@ const totalCap = senderPool.reduce((a, m) => a + m.cap, 0);
           );
         })}
         <div class="px-5 sm:px-7 py-3 border-t border-[color:var(--border)] bg-[color:var(--surface-1)]/60 flex flex-wrap items-center justify-between gap-2 text-[11.5px] font-mono text-muted-foreground">
-          <span>Round-robin &middot; health-aware &middot; cap-aware</span>
+          <span>Round-robin per lead &middot; health-aware &middot; cap-aware</span>
           <span>Pool headroom: {totalCap - totalToday} sends today</span>
         </div>
       </div>

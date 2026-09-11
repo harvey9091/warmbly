@@ -29,7 +29,7 @@ import useValidateDiscountCode from "@/lib/api/hooks/app/subscription/useValidat
 import type DiscountPreview from "@/lib/api/models/app/subscription/DiscountPreview";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
-import { WEBSITE_URL } from "@/lib/information";
+import useBrand from "@/hooks/useBrand";
 import { PAID_PLANS, getPlan, isAtLeast, planOrder, type PlanID } from "@/lib/plans";
 import { describeDiscount, type BillingInterval } from "@/lib/pricing";
 import { TextInput } from "@/components/ui/field";
@@ -49,6 +49,7 @@ export default function UpgradeDialog({
     onClose: () => void;
 }) {
     const access = useFeatureAccess();
+    const brand = useBrand();
     const flow = useUpgradeFlow();
     const validateCode = useValidateDiscountCode();
     const reduced = useReducedMotion();
@@ -364,15 +365,17 @@ export default function UpgradeDialog({
                                         <ArrowRightIcon className="w-3 h-3" />
                                     </Link>
                                 )}
-                                <a
-                                    href={`${WEBSITE_URL}/pricing`}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="inline-flex items-center gap-1 font-medium text-slate-600 hover:text-slate-900 transition-colors"
-                                >
-                                    Compare every feature
-                                    <ArrowUpRightIcon className="w-3 h-3" />
-                                </a>
+                                {brand.website_url && (
+                                    <a
+                                        href={`${brand.website_url}/pricing`}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="inline-flex items-center gap-1 font-medium text-slate-600 hover:text-slate-900 transition-colors"
+                                    >
+                                        Compare every feature
+                                        <ArrowUpRightIcon className="w-3 h-3" />
+                                    </a>
+                                )}
                                 <button
                                     type="button"
                                     onClick={requestClose}

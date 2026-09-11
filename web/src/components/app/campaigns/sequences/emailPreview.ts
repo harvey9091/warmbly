@@ -21,10 +21,19 @@ export function htmlToPlain(html: string): string {
         })
         .replace(/<\s*br\s*\/?>/gi, "\n")
         .replace(/<\/\s*(p|div|h[1-6]|li|tr)\s*>/gi, "\n");
-    if (typeof document === "undefined") return withBreaks.replace(/<[^>]+>/g, "");
-    const tmp = document.createElement("div");
-    tmp.innerHTML = withBreaks;
-    return (tmp.textContent || "").replace(/\n{3,}/g, "\n\n").trim();
+    if (typeof DOMParser === "undefined") return withBreaks.replace(/<[^>]+>/g, "");
+    // DOMParser builds an inert document. Assigning innerHTML on a live
+    // element instead would fetch every src and fire every onerror in the
+    // body, which for a pasted HTML email is someone else's markup.
+    const doc = new DOMParser().parseFromString(withBreaks, "text/html");
+    // A <style> block's CSS is text to textContent, so without this the whole
+    // stylesheet of a designed email became the plain-text alternative. A
+    // hidden preheader is written to be read once, in the inbox list.
+    doc.querySelectorAll("style, script, title, noscript, template, [hidden]").forEach((el) => el.remove());
+    doc.querySelectorAll<HTMLElement>("[style]").forEach((el) => {
+        if (/display\s*:\s*none/i.test(el.getAttribute("style") ?? "")) el.remove();
+    });
+    return (doc.body.textContent || "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 // promptToHtml wraps a plain template string (a stored AI-block instruction) into

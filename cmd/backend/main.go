@@ -287,9 +287,13 @@ func main() {
 	// repository / object-storage needs. Declared up here so they
 	// survive the config block where they're initialized.
 	var s3ForHandler storage.Store
+	// The root of trust, surfaced so /api/v1/internal/dek/decrypt can open a
+	// sealed key for a node that carries no KMS credential of its own.
+	var kmsForHandler kms.Provider
 	var emailMessageMapForHandler repository.EmailMessageMapRepository
 	var emailSyncStateRepository repository.EmailSyncStateRepository
 	var trackedLinkRepository repository.TrackedLinkRepository
+	var customDomainRepository repository.CustomDomainRepository
 	// instanceSettings and the health registry are built after the handler
 	// dependencies, so the pool is hoisted out of the connection block.
 	var instanceSettings instancesettings.Service
@@ -323,7 +327,7 @@ func main() {
 			log.Fatal(err)
 		}
 
-		if err := observability.InitSentry(ctx, cfg, "backend"); err != nil {
+		if err := observability.Init(ctx, cfg, "backend"); err != nil {
 			log.Fatal(err)
 		}
 
@@ -378,6 +382,7 @@ func main() {
 			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
+		kmsForHandler = kms
 
 		geoPath, err := cfg.LoadGeoDBPath(ctx)
 		if err != nil {
@@ -602,6 +607,7 @@ func main() {
 		)
 		emailMessageMapForHandler = repository.NewEmailMessageMapRepository(primaryDB)
 		trackedLinkRepository = repository.NewTrackedLinkRepository(primaryDB.Pool)
+		customDomainRepository = repository.NewCustomDomainRepository(primaryDB.Pool)
 		instanceChecksDB = primaryDB.Pool
 		instanceSettings = instancesettings.NewService(instancesettings.NewStore(primaryDB.Pool))
 		bootstrapInstanceSettings(ctx, instanceSettings)
@@ -1980,9 +1986,11 @@ func main() {
 		// without a dedicated service layer (avatars, etc.).
 		Storage:                s3ForHandler,
 		EncryptedKeys:          encryptedKeys,
+		KMS:                    kmsForHandler,
 		EmailMessageMap:        emailMessageMapForHandler,
 		EmailSyncState:         emailSyncStateRepository,
 		TrackedLinks:           trackedLinkRepository,
+		CustomDomains:          customDomainRepository,
 		WebsiteTrackingService: websiteTrackingService,
 		UserRepo:               userRepoForHandler,
 		OrgRepo:                organizationRepoForHandler,

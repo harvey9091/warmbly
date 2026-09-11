@@ -48,6 +48,12 @@ export default interface ContactCampaignState {
     lead_status: LeadStatus;
     failure_reason?: string;
 
+    // The mailbox this lead's whole sequence sends from. Rotation picks it for
+    // the first email and every follow-up keeps it, so the contact always hears
+    // from one address. Absent until the first email goes out.
+    sender_id?: string | null;
+    sender_email?: string;
+
     steps: ContactCampaignStep[];
     completed_steps: number;
     total_steps: number;

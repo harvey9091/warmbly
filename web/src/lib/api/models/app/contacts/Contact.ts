@@ -44,6 +44,9 @@ export interface ContactCampaignProgress {
     // Label of the step the lead is on now (latest step sent). Empty when the
     // lead hasn't been contacted yet.
     current_step?: string;
+    // The mailbox this lead's whole sequence sends from, fixed when its first
+    // email went out. Empty until then.
+    sender?: string;
     // The worker's reason for the last failed send; set only when status is
     // "failed".
     failure_reason?: string;

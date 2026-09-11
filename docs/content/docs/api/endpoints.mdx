@@ -185,6 +185,7 @@ A source's `column_mapping` is validated when the source is written, not on its 
 | GET | `/unibox/thread` | `READ_UNIBOX` |
 | GET | `/unibox/:id` | `READ_UNIBOX` |
 | PATCH | `/unibox/seen` | `WRITE_UNIBOX` |
+| PATCH | `/unibox/folder` | `WRITE_UNIBOX` |
 | POST | `/unibox/reply` | `WRITE_UNIBOX` |
 | POST | `/unibox/reply/draft` | `READ_UNIBOX` |
 | GET | `/unibox/compose/candidates` | `READ_UNIBOX` |
@@ -196,6 +197,8 @@ A source's `column_mapping` is validated when the source is written, not on its 
 | GET | `/unibox/agent-drafts` | `READ_UNIBOX` |
 | POST | `/unibox/agent-drafts/:id/approve` | `WRITE_UNIBOX` |
 | POST | `/unibox/agent-drafts/:id/discard` | `WRITE_UNIBOX` |
+
+`PATCH /unibox/folder` re-files up to 500 messages into `inbox`, `archive` or `trash` at once. The move is Warmbly's own: the copy at the mail provider stays where it is, and the next sync will not undo it, because the provider's placement is tracked separately and followed only when the provider itself moves the message. `sent`, `drafts` and `spam` are placements a provider reaches rather than somewhere a person files mail, so they are rejected with a `400`. See [filing a conversation](/guides/unibox/#filing-a-conversation).
 
 `POST /unibox/reply/draft` returns an AI-drafted reply (it never sends) grounded in the thread, the contact, and your [voice profile](/guides/unibox/#ai-reply-drafts). It charges AI credits; see [AI credits](/guides/ai-credits/).
 
@@ -226,6 +229,8 @@ The `agent-drafts` endpoints back the [inbox agent](/guides/inbox-agent/): the a
 | Method | Path | API Permission |
 |--------|------|----------------|
 | GET | `/templates`, `/templates/:id` | `READ_TEMPLATES` |
+| POST | `/templates/score` | `READ_TEMPLATES` |
+| POST | `/templates/analyze` | `WRITE_TEMPLATES` (it spends AI credits) |
 | POST/PATCH/DELETE | `/templates[/:id]` | `WRITE_TEMPLATES` |
 | GET | `/crm/pipelines`, `/crm/pipelines/:id` | `READ_CRM` |
 | POST/PATCH/DELETE | `/crm/pipelines[/:id][/stages[/:stageId]]` | `WRITE_CRM` |
@@ -271,7 +276,10 @@ Changing Advisor settings (`PATCH /advisor/settings`) is JWT only, alongside the
 | GET | `/api-keys/:id` | `API_KEYS` |
 | PATCH | `/api-keys/:id` | `API_KEYS` |
 | DELETE | `/api-keys/:id` | `API_KEYS` |
+| DELETE | `/api-keys/:id/permanent` | `API_KEYS` |
 | DELETE | `/api-keys/self` | none |
+
+`DELETE /api-keys/:id/permanent` deletes a key that has already been revoked or has expired, taking its usage logs with it. A key that could still authenticate gets a `409`, because revoking is what records that a credential was ended and why. See [Ending a key](/api/authentication/).
 
 `DELETE /api-keys/self` revokes the key the request was made with, and is the one route here that needs no scope. A credential must always be able to end itself: requiring `API_KEYS` to sign out would leave a read-only key on a laptop someone is handing back live, which is what [`warmbly auth logout`](/api/cli/) promises to prevent. A JWT caller gets a `400`: there is no key in that request to end, only a session, which `POST /auth/logout` ends.
 
@@ -348,6 +356,8 @@ These never accept an API key. They depend on a human-bound session: billing flo
 `GET /auth/config` gained two fields: `invites_required` (boolean, true when an invitation token is needed to create an account) and `docs_url` (string, the deployment's link to the accounts and access documentation, for a client to surface next to a refusal).
 
 `GET /auth/config` also carries `websocket_url` and `app_url` (both strings, each omitted when the instance has none). They are the realtime gateway a developer client connects to and the dashboard origin a client sends someone to. Both are served here because on a self-hosted instance the host layout is whatever the operator chose, and there is no other way to discover it: the [CLI](/api/cli/) reads them for `warmbly events tail` and `warmbly browse`.
+
+Alongside them, `api_url` is this API's own public base (for a copyable example that names the right server), and `brand` is who the deployment says it is: `name`, and `website_url`, `website_label`, `terms_url`, `privacy_url` and `support_email`, each omitted when unset. On a self-hosted instance that configured no `EMAIL_BRAND_*` only `name` is present, and a client should render no link at all rather than substituting one of its own. See [configuration](/development/configuration/).
 
 `GET /auth/config` also carries `billing_enabled` (boolean). It is `false` when the deployment runs with `BILLING_PROVIDER=none`, which is the self-host default: every feature is unlocked server-side, so the dashboard shows the workspace as self-hosted instead of on a free trial and hides the billing and referral pages. `self_hosted` alone does not imply this, because a self-hosted install may still run Stripe.
 - `POST /auth/setup` (first-run claim: exchanges the one-time token printed at boot for the owner account. Refused once any account exists)

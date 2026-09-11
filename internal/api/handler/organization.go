@@ -225,9 +225,9 @@ func (h *Handler) InviteMember(c *gin.Context) {
 
 	// Send invitation email
 	if h.EmailNotificationService != nil {
-		subject := fmt.Sprintf("You've been invited to join %s on %s", orgName, templates.CompanyName)
+		subject := fmt.Sprintf("You've been invited to join %s on %s", orgName, templates.CompanyName())
 		acceptURL := config.GetInviteURL(inv.Token)
-		// GenerateInvitationHTML reports its own render errors to Sentry.
+		// GenerateInvitationHTML reports its own render errors.
 		if body, gerr := templates.GenerateInvitationHTML(inviterName, orgName, acceptURL); gerr == nil {
 			// Detached from the request context: the handler returns before the
 			// send completes, and a cancelled context aborted the send mid-dial.

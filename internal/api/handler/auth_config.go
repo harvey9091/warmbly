@@ -84,6 +84,29 @@ type DeploymentAuthConfig struct {
 	// a chat integration) cannot derive it: on a self-hosted instance the host
 	// layout is whatever the operator chose.
 	AppURL string `json:"app_url,omitempty"`
+
+	// APIURL is this API's own public base, taken from the request rather than
+	// guessed. The dashboard shows it in copyable API examples, which used to
+	// name api.warmbly.com on every install that was not ours.
+	APIURL string `json:"api_url,omitempty"`
+
+	// Brand is what this deployment calls itself and where it points people.
+	// Every field is empty on a self-host that configured no EMAIL_BRAND_*,
+	// and every surface reading it renders nothing rather than sending that
+	// operator's users to a website with no relationship to their instance.
+	Brand DeploymentBrand `json:"brand"`
+}
+
+// DeploymentBrand is the public half of config.Brand: what the sign-in screen,
+// a shared stats card and a public form page may show. The registered-company
+// details stay out of it; only the email footer is their place.
+type DeploymentBrand struct {
+	Name         string `json:"name"`
+	WebsiteURL   string `json:"website_url,omitempty"`
+	WebsiteLabel string `json:"website_label,omitempty"`
+	TermsURL     string `json:"terms_url,omitempty"`
+	PrivacyURL   string `json:"privacy_url,omitempty"`
+	SupportEmail string `json:"support_email,omitempty"`
 }
 
 // accountsDocsURL is the page every registration refusal points at.
@@ -118,5 +141,20 @@ func (h *Handler) AuthConfig(c *gin.Context) {
 		DocsURL:           accountsDocsURL,
 		WebsocketURL:      config.WebsocketURL(),
 		AppURL:            config.AppBaseURL(),
+		APIURL:            publicAPIBaseURL(c),
+		Brand:             deploymentBrand(),
 	})
+}
+
+// deploymentBrand is the public subset of this deployment's branding.
+func deploymentBrand() DeploymentBrand {
+	b := config.Brand()
+	return DeploymentBrand{
+		Name:         b.Name,
+		WebsiteURL:   b.WebsiteURL,
+		WebsiteLabel: b.WebsiteLabel(),
+		TermsURL:     b.TermsURL,
+		PrivacyURL:   b.PrivacyURL,
+		SupportEmail: b.SupportEmail,
+	}
 }

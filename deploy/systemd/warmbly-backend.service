@@ -9,8 +9,6 @@ Type=simple
 User=warmbly
 Group=warmbly
 EnvironmentFile=/etc/warmbly/warmbly.env
-# The backend serves the worker installer from this path (GET /worker-install.sh).
-Environment=WORKER_INSTALLER_PATH=/opt/warmbly/src/scripts/install-worker.sh
 WorkingDirectory=/opt/warmbly
 ExecStart=/opt/warmbly/bin/backend
 Restart=always

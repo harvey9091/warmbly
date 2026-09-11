@@ -59,3 +59,23 @@ func TestDisabledWithoutBase(t *testing.T) {
 		t.Fatal("expected empty url")
 	}
 }
+
+// A workspace with its own verified tracking domain mints the link there, so
+// the address the recipient reads is on the sender's domain. The token is the
+// same one the API origin verifies, because the host is not signed.
+func TestURLOnCustomOrigin(t *testing.T) {
+	s := New("secret", "https://api.example.com")
+	org, camp, contact := uuid.New(), uuid.New(), uuid.New()
+	now := time.Now()
+
+	u := s.URLOn("https://t.acme.com/", org, camp, contact, now)
+	if !strings.HasPrefix(u, "https://t.acme.com/unsubscribe/") {
+		t.Fatalf("unexpected url %q", u)
+	}
+	if _, err := s.Verify(strings.TrimPrefix(u, "https://t.acme.com/unsubscribe/"), now); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if got := s.URLOn("", org, camp, contact, now); !strings.HasPrefix(got, "https://api.example.com/unsubscribe/") {
+		t.Fatalf("empty origin should fall back to the API origin, got %q", got)
+	}
+}

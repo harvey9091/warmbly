@@ -30,4 +30,23 @@ export default interface AuthConfig {
     invites_required: boolean;
     /** Where to send someone a deployment policy refused, not their mistake. */
     docs_url: string;
+    /** The dashboard origin this deployment builds its emailed links from. */
+    app_url?: string;
+    /** This API's own public base, for copyable API examples. Absent on a
+     *  backend that predates it, in which case examples fall back to the API
+     *  origin the dashboard itself is configured with. */
+    api_url?: string;
+    /** Who this deployment says it is. Every field but the name is absent on a
+     *  self-host that configured no EMAIL_BRAND_*, and the UI then renders no
+     *  link at all rather than sending the operator's users to warmbly.com. */
+    brand?: DeploymentBrand;
+}
+
+export interface DeploymentBrand {
+    name: string;
+    website_url?: string;
+    website_label?: string;
+    terms_url?: string;
+    privacy_url?: string;
+    support_email?: string;
 }

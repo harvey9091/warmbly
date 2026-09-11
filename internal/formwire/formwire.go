@@ -18,11 +18,21 @@ type PublicForm struct {
 	BackgroundURL  string             `json:"background_url,omitempty"`
 	AllowedDomains []string           `json:"allowed_domains,omitempty"`
 	CaptchaSiteKey string             `json:"captcha_site_key,omitempty"`
+	// Brand is the "powered by" attribution at the foot of the page. Absent on
+	// a self-host that configured none, because a stranger filling in an
+	// operator's form has no business being sent to the platform's website.
+	Brand *Brand `json:"brand,omitempty"`
 	// Prefill and LinkToken appear only when a valid personalized ?t= ticket
 	// accompanied the fetch: values for the mapped fields, and the token
 	// echoed for submit/event attribution.
 	Prefill   map[string]string `json:"prefill,omitempty"`
 	LinkToken string            `json:"link_token,omitempty"`
+}
+
+// Brand is the deployment's public attribution on a form page.
+type Brand struct {
+	Name string `json:"name"`
+	URL  string `json:"url,omitempty"`
 }
 
 // SubmitRequest carries a visitor's answers plus the abuse signals only the

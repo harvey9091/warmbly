@@ -44,6 +44,10 @@ type Service interface {
 	// The retention sweeps read it on every pass, so an edit takes effect on
 	// the next one rather than at the next restart.
 	RetentionWindows(ctx context.Context) Retention
+	// TrackingPolicy is the engagement-classification section, already
+	// normalized. The tracking consumer reads it per event, so an edit takes
+	// effect without a restart, within the cacheTTL the read goes through.
+	TrackingPolicy(ctx context.Context) Tracking
 	// DomainAuth is the sending-domain authentication gate: whether it is
 	// enforced at all, and how long a domain must stay failing first.
 	DomainAuth(ctx context.Context) (enforce bool, grace time.Duration)
@@ -144,6 +148,12 @@ func (s *service) RetentionWindows(ctx context.Context) Retention {
 	r := s.Get(ctx).Retention
 	r.Normalize()
 	return r
+}
+
+func (s *service) TrackingPolicy(ctx context.Context) Tracking {
+	t := s.Get(ctx).Tracking
+	t.Normalize()
+	return t
 }
 
 func (s *service) DomainAuth(ctx context.Context) (bool, time.Duration) {

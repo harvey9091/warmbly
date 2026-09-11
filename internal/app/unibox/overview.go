@@ -29,7 +29,7 @@ func (s *uniboxService) Overview(ctx context.Context, orgID, userID uuid.UUID) (
 	// the same response so the scope rail shows it without a second
 	// round-trip. A failure here is non-fatal — the rest of the
 	// overview is more important than the badge — so we log via
-	// sentry and continue with a zero count.
+	// the error reporter and continue with a zero count.
 	if s.taskRepo != nil {
 		if n, err := s.taskRepo.CountScheduledForUser(ctx, userID); err == nil {
 			o.ScheduledPending = n

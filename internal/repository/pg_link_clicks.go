@@ -40,6 +40,7 @@ const (
 	LinkClickReasonPrefetch = "prefetch" // no user agent: never a person's browser
 	LinkClickReasonInstant  = "instant"  // arrived inside the machine window after dispatch
 	LinkClickReasonBurst    = "burst"    // a second link of the same email from the same source within seconds
+	LinkClickReasonScanner  = "scanner"  // walked from a known mail-filtering network
 )
 
 // LinkClickRepository is the per-link click log behind the contact timeline

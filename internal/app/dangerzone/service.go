@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/observability/errs"
 
 	"github.com/warmbly/warmbly/internal/errx"
@@ -57,7 +58,7 @@ type service struct {
 	notifier notify.EmailNotificationService
 
 	// frontendBaseURL is used when building cancellation links in emails.
-	// Falls back to "https://app.warmbly.com" if empty.
+	// Falls back to this deployment's own dashboard origin if empty.
 	frontendBaseURL string
 }
 
@@ -70,7 +71,7 @@ func NewService(
 	frontendBaseURL string,
 ) Service {
 	if frontendBaseURL == "" {
-		frontendBaseURL = "https://app.warmbly.com"
+		frontendBaseURL = config.AppBaseURL()
 	}
 	return &service{
 		repo:            repo,

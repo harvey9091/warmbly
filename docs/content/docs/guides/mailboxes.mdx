@@ -40,6 +40,8 @@ If a mailbox fails to connect with a server-unreachable error and the host and p
 
 When a mail server goes down or stops answering, the mailbox is not deactivated. Warmbly says so once in the drawer, retries on a widening interval, and picks up where it left off when the server comes back. Nothing that arrived meanwhile is skipped, and the error clears itself on the first pass that reaches the server again.
 
+The same holds for a server that answers but refuses what Warmbly asked. The drawer shows one row carrying the server's own wording, not one row per retry, and it clears on the first pass that completes.
+
 With two-factor authentication on, generate an app password in your provider's security settings and use that.
 
 Warmbly signs in with whichever method your server offers, preferring CRAM-MD5, then LOGIN, then PLAIN. Servers that accept only one of these, which includes Microsoft 365 relays and most appliance relays, work without any setting to change.
@@ -172,6 +174,10 @@ The same tab sets the **display name**, **reply-to** (empty uses the mailbox add
 
 The HTML signature is placed in a block of its own one line below the body, so it arrives without the stack of blank lines above it that Apple Mail and Outlook used to show. Put any extra spacing you want inside the signature itself. The plain-text signature follows the body after a single blank line.
 
+The signature editor has four views. **HTML** is the visual surface with bold, italic, underline, links and images. The `</>` button next to it swaps that for the raw markup, which is sent exactly as written, so a table-based signature from another tool can be pasted in whole. **Preview** renders it the way a mail client will, in its own frame. **Plain** holds the plain-text version, generated from the HTML while **Sync** is on.
+
+A signature carrying a `<style>` block, a whole HTML document, or an event handler is always edited as markup and the visual toggle is greyed out. The visual surface works by putting the markup into the page, and a signature is workspace data your teammates also see, so that markup is never given a live element to run in. Preview is how you look at it. Any `<style>` block in a signature is inlined onto the elements it matches when the email sends, the same as a campaign body.
+
 ### Custom tracking domain
 
 Open pixels and click links go out on a shared tracking host by default, which means their reputation is the sum of everyone else using it. Pointing a subdomain of the domain you send from at that host puts them on your own name instead.
@@ -193,6 +199,10 @@ Press **Check again** any time to re-resolve without changing the value. Warmbly
 
 Until it verifies, tracking falls back to the shared host, so an unverified domain never breaks sending: links keep working, they just are not on your name yet. Links already sent keep working after a change; new sends pick up the new domain.
 
+A verified domain also serves the [unsubscribe link](/guides/unsubscribe/#which-address-the-link-points-at) in that mailbox's campaign mail, so the opt-out a recipient reads sits on your name like every other link in the message. An unverified one changes nothing: the opt-out stays on the instance's API address, which always serves it.
+
+Verification proves DNS, not HTTPS, and the two are separate steps. That matters more now that the opt-out rides the same host: a certificate the recipient's browser rejects costs a spam complaint, not just a click. On Warmbly Cloud the certificate is handled for you. On a self-hosted instance installed with the bundled Caddy it is handled too: Caddy obtains one for your domain the first time a recipient loads a link on it. Behind an operator's own proxy it depends on that proxy, so a domain that verifies here but serves a certificate warning is something to raise with the operator.
+
 ## Warmup
 
 New mailboxes should warm up before carrying campaign volume. Defaults are `10`/day starting volume, `+1`/day ramp, and a `40`/day ceiling.
@@ -211,11 +221,13 @@ A mailbox can be set inactive (`PATCH /emails/{id}` with `status`) when you want
 
 Switching it off takes effect immediately: the machine syncing it is told to drop it, so it stops importing mail and stops being picked for campaign sends and warmup within seconds rather than at that machine's next restart. Warmup pool membership is dropped, and any warmup chain it had winds down on its next step. A campaign email already handed over is answered as a failure and the step is retried later on a mailbox that is still active, so nobody receives it twice and no lead is stranded.
 
+Leads mid-sequence on that mailbox move to another one in their campaign as they reach their next step, rather than going silent waiting for it. Each campaign's activity log records the change. See [senders and rotation](/guides/campaigns/) for how a lead's mailbox is chosen and when it changes.
+
 It keeps its worker assignment while off, so switching it back on puts it back on the same machine, sending from the same IP, and it resumes syncing from where it stopped instead of re-importing.
 
 **Disconnecting** removes the mailbox for good, from the Accounts selection bar. The machine syncing it is told to drop it before the record is removed, because afterwards there is nothing left to tell. If that instruction cannot be delivered, the disconnect fails with a `503` and nothing is removed, so retry it in a moment rather than assuming it worked.
 
-Everything belonging to that mailbox goes with it: its imported mail in the unibox, its warmup history and pool membership, its credentials, its sender links, and any send still scheduled for it. A campaign that was using it keeps running on its remaining senders. Export the workspace first if you want a copy. Disable the mailbox instead when you only want it to stop.
+Everything belonging to that mailbox goes with it: its imported mail in the unibox, its warmup history and pool membership, its credentials, its sender links, and any send still scheduled for it. A campaign that was using it keeps running on its remaining senders, and the leads it had been writing to move onto them at their next step. Export the workspace first if you want a copy. Disable the mailbox instead when you only want it to stop.
 
 ## Worker assignment
 
@@ -246,7 +258,7 @@ A mailbox now has a cold-rotation state, separate from its health:
 | State | Meaning |
 |-------|---------|
 | `active` | In cold rotation. The default, and where every mailbox starts |
-| `resting` | Out of cold rotation to recover. Warmup keeps running, so its reputation stays alive |
+| `resting` | Out of cold rotation to recover. Warmup keeps running, so its reputation stays alive. Leads mid-sequence on it move to another mailbox at their next step |
 | `reserve` | Held back by you. Never entered or left automatically |
 
 A mailbox rests when its warmup health reaches `throttled` or worse, and returns on its own once it is healthy again **and** has held steady for three days. One good hour does not put it back at full cold volume.

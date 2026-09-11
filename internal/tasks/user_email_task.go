@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/observability/errs"
+	"github.com/warmbly/warmbly/internal/pkg/mailhtml"
 	"github.com/warmbly/warmbly/internal/tasks/proto"
 )
 
@@ -152,6 +153,10 @@ func (s *tasksService) HandleUserEmailTask(task *proto.ProcessTask) *errx.Error 
 			bodyPlain = AddSignature(bodyPlain, account.SignaturePlain, false)
 		}
 	}
+
+	// Signature included, so a stylesheet in either half lands on the elements
+	// it matches. A no-op for a body with no <style>.
+	bodyHTML = mailhtml.InlineCSS(bodyHTML)
 
 	// STEP 7: Generate Message-ID
 	messageID := generateMessageID(account.Email)

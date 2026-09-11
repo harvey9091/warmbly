@@ -235,7 +235,7 @@ These are the ones that break things quietly when they drift, because each servi
 | realtime | `JWT_SECRET`, `SECRET_KEY_BASE`, `DATABASE_URL`, `REDIS_URL`, `PHX_HOST` |
 | web / admin | Only `WARMBLY_*` URLs, read at container start and written into `/config.js`. The same image runs anywhere |
 
-`APP_ENV` accepts `dev` or `prod`. No other value turns on production behavior. `prod` needs no cloud account: `SENTRY_DSN` stays optional in every environment, and `GEODB_PATH` must be *set* on the backend everywhere while the file it points at is optional (the consumer reads it too, optionally, for the location on opens and clicks).
+`APP_ENV` accepts `dev` or `prod`. No other value turns on production behavior. `prod` needs no cloud account: error tracking stays optional in every environment, and `GEODB_PATH` must be *set* on the backend everywhere while the file it points at is optional (the consumer reads it too, optionally, for the location on opens and clicks).
 
 The complete list of variables, with defaults and whether a change needs a restart, is the [configuration reference](/development/configuration/).
 
@@ -313,7 +313,12 @@ DEPLOYMENT_MODE=self_hosted
 # STRIPE_SECRET_KEY=
 # STRIPE_WEBHOOK_SECRET=
 # STRIPE_PUBLISHABLE_KEY=
-# SENTRY_DSN=
+# POSTHOG_KEY=                      # error tracking, and server-side product events
+# POSTHOG_HOST=                     # empty means PostHog Cloud US
+# POSTHOG_ERROR_TRACKING=true       # false keeps the key for analytics only
+# WARMBLY_POSTHOG_KEY=              # the browser half, used by web + admin + form pages
+# SENTRY_DSN=                       # the other backend, alongside PostHog or instead
+# WARMBLY_SENTRY_DSN=
 
 # ── Optional: swap infrastructure ─────────────────────────────────
 # BLOB_PROVIDER=s3
@@ -508,7 +513,7 @@ https://api.example.com/addresses/outlook/callback
 </Step>
 
 <Step>
-Under **API permissions**, add the Microsoft Graph delegated permissions the mailbox needs: `Mail.ReadWrite`, `Mail.Send`, `IMAP.AccessAsUser.All`, `SMTP.Send`, and `offline_access` so refresh tokens are issued.
+Under **API permissions**, add the Microsoft Graph **delegated** permissions the mailbox needs, and no others: `User.Read`, `Mail.Send`, `Mail.ReadWrite`, and `offline_access` so refresh tokens are issued. Graph is the transport for both send and sync, so the legacy `IMAP.AccessAsUser.All` and `SMTP.Send` permissions are not requested and should not be added: each one is admin-consent-only and adding it turns a sign-in every user could complete into one only a tenant admin can.
 </Step>
 
 <Step>
@@ -521,6 +526,10 @@ BOX_OUTLOOK_CLIENT_SECRET=your-client-secret-value
 </Step>
 
 </Steps>
+
+<Callout title="Non-admin users and tenant-wide consent">
+None of the four permissions above requires admin consent by default, so an ordinary user can connect their own mailbox. A tenant that has turned user consent off needs an admin to grant consent once, under **Enterprise applications > your app > Permissions > Grant admin consent**. Warmbly's authorize request asks for `prompt=select_account`, never `prompt=consent`, so that grant is honoured for everyone afterwards. See [approval required when connecting an Outlook mailbox](/development/troubleshooting/#the-stack-is-up-but-something-is-wrong) if a non-admin is still refused.
+</Callout>
 
 <Callout type="warn" title="Workers need these too">
 The backend starts the OAuth flow, but **each worker refreshes the token** when it expires. Compose passes the `BOX_*` values to the worker automatically, and remote workers receive them in their enrollment config. If a worker is missing them, the mailbox connects fine and then silently stops about an hour later when its first access token expires.
@@ -637,7 +646,7 @@ Three things to know:
 | Sign in with Apple | `APPLE_APP_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_KEY_SECRET` |
 | Mobile push (APNs) | `APNS_KEY_PATH` (or `APNS_KEY`), `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC` on backend and consumer. Partial config disables push with a warning, never a crash |
 | Notification tuning | `NOTIFICATION_PUSH_WINDOW` (default `5h`), `NOTIFICATION_EMAIL_DAILY_CAP` (default `25`, `0` means uncapped) |
-| Error tracking | `SENTRY_DSN`. Optional in every environment, including `prod` |
+| Error tracking | `POSTHOG_KEY` (plus `POSTHOG_HOST` for a PostHog you run) or `SENTRY_DSN`, and `WARMBLY_POSTHOG_KEY` / `WARMBLY_SENTRY_DSN` for the browser apps. Either, both or neither; optional in every environment, including `prod` |
 
 ## AI provider
 
@@ -723,7 +732,13 @@ The script enrols the node, writes the config the control plane hands back to `/
 The config handed to a node is generated from the backend's own environment. On a stock local install that means `ENCRYPTED_KEYS_BACKEND_URL=http://localhost:8080`, `NATS_URL=nats://nats:4222`, and `REDIS=redis://redis:6379`, none of which resolve on another machine. Before adding a remote node, set `API_PUBLIC_URL`, `NATS_URL`, and `REDIS` on the backend to addresses the machine can actually reach, and open those ports.
 </Callout>
 
-That config carries the decryption material the node needs: the internal API token, `KMS_LOCAL_MASTER_KEY`, and `CREDENTIALS_ENCRYPTION_KEY`. Serve the API over HTTPS before adding a node across a network you do not control. It deliberately does not include `PRIMARY_DB`: a worker reaches relational data through the internal API and nothing else.
+That config carries the decryption material the node needs: the internal API token, `KMS_LOCAL_MASTER_KEY`, and `CREDENTIALS_ENCRYPTION_KEY`. Serve the API over HTTPS before adding a node across a network you do not control.
+
+`PRIMARY_DB` reaches a consumer, which opens Postgres itself, and never a worker, which reaches relational data through the internal API and nothing else.
+
+Nothing else in the config needs a credential either. An instance running `KMS_PROVIDER=aws` or `BLOB_PROVIDER=s3` hands its nodes the brokered form of each, so a machine in the fleet opens sealed keys and signs blob operations through the internal API rather than carrying a cloud credential of its own. Blob bytes still go directly between the node and the object store. [Split deployment](/development/split-deployment/) covers the whole shape.
+
+`/etc/warmbly/node.local.env`, next to the generated file, is created once and never rewritten, and the container reads it second. Anything you add there survives a re-join and wins over the generated value.
 
 `BLOB_PROVIDER=filesystem` does not survive a fleet. A worker reads the message body the backend wrote, so the two need the same storage with permissions that let both reach it, and a node on another machine has neither. The join script creates and mounts `BLOB_FS_ROOT` so the node starts, and warns you, but sends will fail when the worker cannot read the body. Use `BLOB_PROVIDER=s3` with a bucket both sides can reach before running nodes off-host.
 

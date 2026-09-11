@@ -44,19 +44,7 @@ func (c *Client) foldersCapped(limit int) ([]models.Mailbox, *errx.MailError) {
 		// Asking a server without CONDSTORE for HIGHESTMODSEQ is a BAD.
 		HighestModSeq: caps.Has(imap.CapCondStore),
 	}
-	opts := &imap.ListOptions{}
-	// LIST-STATUS folds the STATUS of every folder into the one round trip;
-	// without it each kept folder is asked separately below.
-	listStatus := caps.Has(imap.CapListStatus)
-	if listStatus {
-		opts.ReturnStatus = status
-	}
-	// Gmail attaches \Sent, \Trash, \Junk, \All ... only when asked; on a
-	// plain LIST every folder is just \HasNoChildren and the canonical-folder
-	// mapping is left guessing from names ("Bin" filed as inbox).
-	if caps.Has(imap.CapSpecialUse) {
-		opts.ReturnSpecialUse = true
-	}
+	opts, listStatus := listOptionsFor(caps, status)
 
 	var all []models.Mailbox
 	statuses := map[string]*imap.StatusData{}
@@ -117,6 +105,34 @@ func (c *Client) foldersCapped(limit int) ([]models.Mailbox, *errx.MailError) {
 	}
 
 	return resp, nil
+}
+
+// listOptionsFor is the LIST options a server's capabilities allow, and
+// whether STATUS was folded into the same round trip.
+//
+// Every RETURN option is LIST-EXTENDED grammar (RFC 5258), which IMAP4rev2
+// implies and a plain RFC 3501 server does not. SPECIAL-USE does not bring it:
+// a server may advertise the folder attributes without the extended LIST that
+// requests them, and sending RETURN to one of those is a BAD that costs the
+// account its entire folder list, the same shape as the MODSEQ bug in #405.
+func listOptionsFor(caps imap.CapSet, status *imap.StatusOptions) (*imap.ListOptions, bool) {
+	opts := &imap.ListOptions{}
+	if !caps.Has(imap.CapListExtended) {
+		return opts, false
+	}
+	// LIST-STATUS folds the STATUS of every folder into the one round trip;
+	// without it each kept folder is asked separately.
+	listStatus := caps.Has(imap.CapListStatus)
+	if listStatus {
+		opts.ReturnStatus = status
+	}
+	// Gmail attaches \Sent, \Trash, \Junk, \All ... only when asked; on a
+	// plain LIST every folder is just \HasNoChildren and the canonical-folder
+	// mapping is left guessing from names ("Bin" filed as inbox).
+	if caps.Has(imap.CapSpecialUse) {
+		opts.ReturnSpecialUse = true
+	}
+	return opts, listStatus
 }
 
 // dedupeByName keeps one folder per name.

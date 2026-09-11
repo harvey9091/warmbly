@@ -15,6 +15,7 @@ import (
 	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/observability/errs"
+	"github.com/warmbly/warmbly/internal/pkg/mailhtml"
 	"github.com/warmbly/warmbly/internal/repository"
 	"github.com/warmbly/warmbly/internal/scheduler"
 	"github.com/warmbly/warmbly/internal/tasks/proto"
@@ -487,7 +488,10 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 	optOut := s.resolveOptOut(ctx, orgID, campaign)
 	var unsubscribeURL string
 	if s.unsubLinks != nil && s.unsubLinks.Enabled() {
-		unsubscribeURL = s.unsubLinks.URL(orgID, campaign.ID, contact.ID, time.Now())
+		// On the workspace's own verified tracking domain when it has one, so
+		// the opt-out address sits on the sender's domain like every other link
+		// in the email rather than naming the platform.
+		unsubscribeURL = s.unsubLinks.URLOn(resolveOptOutOrigin(account, campaign), orgID, campaign.ID, contact.ID, time.Now())
 	}
 	extra := map[string]string{UnsubscribeLinkVar: unsubscribeURL}
 
@@ -633,6 +637,13 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 	// so the link is never rewritten into a tracked ticket.
 	bodyHTML, bodyPlain = appendOptOut(bodyHTML, bodyPlain, optOut, unsubscribeURL)
 
+	// STEP 12.75: Copy any embedded stylesheet onto the elements it matches.
+	// Outlook.com, Yahoo and Gmail's mobile clients drop <style> blocks, so a
+	// design written with classes arrives unstyled without this. Last, so the
+	// signature and footer are inlined with the body; a no-op for a body with
+	// no <style>, which is every campaign written in the visual editor.
+	bodyHTML = mailhtml.InlineCSS(bodyHTML)
+
 	// STEP 13: Warm the organization DEK so the publisher's encrypt pass (the
 	// one whose ciphertext is actually sent) fails fast here if KMS is down.
 	if account.OrganizationID == nil {
@@ -674,7 +685,11 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 	// and the next tick emails the same person again (issue #169). The
 	// reservation also counts the send against the day's counters, so a lost
 	// stamp can never let the daily cap over-send either.
-	reserved, rerr := s.campaignProgressRepo.ReserveSend(ctx, campaign.ID, contact.ID, sequence.ID, taskID, nextPair.IsNewLead)
+	//
+	// It also binds the lead to this mailbox, in the same transaction, so every
+	// remaining step of this contact's sequence leaves from the address they
+	// are about to hear from (issue #401).
+	reserved, rerr := s.campaignProgressRepo.ReserveSend(ctx, campaign.ID, contact.ID, sequence.ID, taskID, account.ID, nextPair.IsNewLead)
 	if rerr != nil {
 		// The attempt could not be made durable, so it must not be made at all.
 		// Retry the whole task rather than sending something nothing remembers.
@@ -842,6 +857,29 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 				"contact_id":  contact.ID.String(),
 				"sequence_id": sequence.ID.String(),
 				"account_id":  account.ID.String(),
+			},
+		})
+	}
+
+	// This contact's sequence changed address. It only happens when the mailbox
+	// they had been hearing from stopped being one this campaign can send from
+	// (disconnected, taken off its sending accounts, resting, or held by warmup
+	// health), and it is the kind of thing an owner should find in the activity
+	// log rather than in a confused reply.
+	if prev := nextPair.AssignedSender; prev != nil && *prev != account.ID && s.campaignLogRepo != nil {
+		from := "its previous mailbox"
+		if old, oerr := s.emailRepo.GetByID(ctx, *prev); oerr == nil && old != nil {
+			from = old.Email
+		}
+		s.campaignLogRepo.CreateLog(ctx, &repository.CampaignLogEntry{
+			CampaignID: campaign.ID,
+			EventType:  "sender_reassigned",
+			Message: fmt.Sprintf("%s now hears from %s: %s can no longer send for this campaign",
+				contact.Email, account.Email, from),
+			Metadata: map[string]interface{}{
+				"contact_id":      contact.ID.String(),
+				"account_id":      account.ID.String(),
+				"prev_account_id": prev.String(),
 			},
 		})
 	}
@@ -1045,7 +1083,7 @@ func (s *tasksService) autoPauseCampaign(ctx context.Context, campaignID, taskID
 // there is no way to honour an unsubscribe, bounce or complaint for this
 // campaign — it is parked rather than sent unchecked. Since migration 000092
 // made campaigns.organization_id NOT NULL this should be unreachable, so it is
-// also reported to Sentry: reaching it means tenancy was lost somewhere else.
+// also reported: reaching it means tenancy was lost somewhere else.
 func (s *tasksService) haltOrglessCampaign(ctx context.Context, campaignID, taskID uuid.UUID) {
 	const reason = "Campaign paused: it has no workspace, so unsubscribes, bounces and complaints cannot be checked before sending. Contact support to reattach it."
 

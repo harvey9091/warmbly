@@ -75,10 +75,10 @@ if config_env() == :prod do
     pool_size: String.to_integer(System.get_env("DATABASE_POOL_SIZE") || "10"),
     show_sensitive_data_on_connection_error: true
 
-  # Sentry configuration. An env var that is present but empty must behave as
-  # unset: compose passes every optional variable through as "" so a single
-  # .env can drive the whole stack, and Sentry rejects "" as an invalid DSN
-  # hard enough to take the whole node down at boot.
+  # Error reporting. An env var that is present but empty must behave as unset:
+  # compose passes every optional variable through as "" so a single .env can
+  # drive the whole stack, and Sentry rejects "" as an invalid DSN hard enough
+  # to take the whole node down at boot.
   # A variable that is present but blank counts as unset here too, for the same
   # reason the DSN does: compose passes every optional variable through as "",
   # and System.get_env/2 only applies its default when the name is absent.
@@ -94,6 +94,17 @@ if config_env() == :prod do
         fallback
     end
   end
+
+  # PostHog error tracking, the default backend. The key also carries product
+  # analytics elsewhere in the platform, so POSTHOG_ERROR_TRACKING=false keeps
+  # the key configured and reports nothing from here.
+  config :realtime,
+    posthog_key:
+      if(env_or.("POSTHOG_ERROR_TRACKING", "true") != "false",
+        do: env_or.("POSTHOG_KEY", nil),
+        else: nil
+      ),
+    posthog_host: env_or.("POSTHOG_HOST", nil)
 
   case System.get_env("SENTRY_DSN") do
     dsn when is_binary(dsn) and dsn != "" ->

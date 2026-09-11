@@ -51,7 +51,7 @@ func (s *JobsService) HandleEmailAuthError(ctx context.Context, event models.Ema
 			TaskID:         taskID,
 		}
 
-		if _, xerr := s.EmailAccountErrorRepository.Create(ctx, errorRecord); xerr != nil {
+		if _, xerr := s.EmailAccountErrorRepository.CreateOnce(ctx, errorRecord); xerr != nil {
 			log.Error().Str("error", xerr.Message).Msg("Failed to store email auth error")
 		}
 	}
@@ -116,7 +116,7 @@ func (s *JobsService) HandleEmailDisabled(ctx context.Context, event models.Emai
 			TaskID:         taskID,
 		}
 
-		if _, xerr := s.EmailAccountErrorRepository.Create(ctx, errorRecord); xerr != nil {
+		if _, xerr := s.EmailAccountErrorRepository.CreateOnce(ctx, errorRecord); xerr != nil {
 			log.Error().Str("error", xerr.Message).Msg("Failed to store email disabled error")
 		}
 	}
@@ -181,7 +181,7 @@ func (s *JobsService) HandleEmailRateLimited(ctx context.Context, event models.E
 			TaskID:         taskID,
 		}
 
-		if _, xerr := s.EmailAccountErrorRepository.Create(ctx, errorRecord); xerr != nil {
+		if _, xerr := s.EmailAccountErrorRepository.CreateOnce(ctx, errorRecord); xerr != nil {
 			log.Error().Str("error", xerr.Message).Msg("Failed to store rate limit error")
 		}
 	}
@@ -235,7 +235,13 @@ func (s *JobsService) HandleEmailServerError(ctx context.Context, event models.E
 		}
 	}
 
-	// Store error in database (as warning, not critical)
+	// Store error in database (as warning, not critical).
+	//
+	// CreateOnce, not Create: the sync loop retries a refused server about
+	// once a minute and relays what it got each time, so the same unresolved
+	// failure would otherwise fill the mailbox's error list with a row a
+	// minute for as long as the server keeps refusing (issue #405).
+	recorded := true
 	if s.EmailAccountErrorRepository != nil {
 		errorRecord := &repository.CreateEmailAccountError{
 			EmailAccountID: emailAccountID,
@@ -250,16 +256,19 @@ func (s *JobsService) HandleEmailServerError(ctx context.Context, event models.E
 			TaskID:         taskID,
 		}
 
-		if _, xerr := s.EmailAccountErrorRepository.Create(ctx, errorRecord); xerr != nil {
+		row, xerr := s.EmailAccountErrorRepository.CreateOnce(ctx, errorRecord)
+		if xerr != nil {
 			log.Error().Str("error", xerr.Message).Msg("Failed to store server error")
 		}
+		recorded = xerr == nil && row != nil
 	}
 
 	// Server errors are temporary - don't change account status
 	// The error will be auto-resolved when connectivity is restored
 
-	// Only send notification if error persists (based on user visibility flag)
-	if s.StreamingPublisher != nil && event.UserVisible {
+	// Only notify for an error we just recorded: a repeat of one already in
+	// the drawer must not toast the reader again every pass.
+	if s.StreamingPublisher != nil && event.UserVisible && recorded {
 		s.StreamingPublisher.PublishEmailWarning(
 			ctx,
 			event.UserID,

@@ -22,9 +22,19 @@ A step has an internal **name** (never seen by recipients), a **subject** with a
 
 ### The body editor
 
-The toolbar carries undo and redo (`Ctrl+Z` and `Ctrl+Shift+Z`, or `Cmd` on a Mac), bold, italic, underline and strikethrough, a heading, bullet and numbered lists, links, images, the personalization menu, an AI block, a condition, spintax, and a form link. `Shift+Enter` puts a line break inside a paragraph rather than starting a new one.
+The toolbar carries undo and redo (`Ctrl+Z` and `Ctrl+Shift+Z`, or `Cmd` on a Mac), bold, italic, underline and strikethrough, a heading, bullet and numbered lists, links, images, the font menu, text and highlight colour, alignment, tables, the personalization menu, an AI block, a condition, spintax, and a form link. `Shift+Enter` puts a line break inside a paragraph rather than starting a new one.
 
-Pasting copy from Gmail, Outlook, Word or another email tool keeps its paragraphs, lists, links and emphasis. The blank-line scaffolding those tools ship (an empty `div` per gap, Word's spacer paragraphs) is dropped on the way in, because the editor already spaces paragraphs itself and keeping both renders every gap twice.
+**Alignment** is left, centre, right and justify, applied to whichever blocks the selection covers. Pressing the alignment a block already has clears it again, so a body can go back to inheriting rather than pinning one on every paragraph.
+
+**The font menu** sets the typeface and the size. Sizes come as presets from 12 to 36 px and as a box for any value between 8 and 96. Only the typefaces every mail client can resolve are offered, and each one is a full stack rather than a single name: a web font is never loaded by Gmail or by Outlook on Windows, so choosing one would only decide which fallback the reader gets, and it is better to choose the fallback yourself. Both are written onto the text as inline styles, which is the only place a mail client reads them from.
+
+<Callout type="info" title="Sizes are in pixels">
+Every client honours `px`. Anything under 13px is hard to read on a phone, which is where most cold email is opened.
+</Callout>
+
+Pasting copy from Gmail, Outlook, Word or another email tool keeps its paragraphs, lists, links and emphasis, along with its tables, inline styles, colours, fonts and alignment. The blank-line scaffolding those tools ship (an empty `div` per gap, Word's spacer paragraphs) is dropped on the way in, because the editor already spaces paragraphs itself and keeping both renders every gap twice.
+
+Tables are worth knowing about: they are the only layout Outlook on Windows renders reliably, because it lays messages out with Word rather than a browser engine. Anything built with `position`, `flex` or `grid` collapses there. The table menu inserts a two by two grid and, once the cursor is inside one, adds and removes rows and columns, merges cells and deletes the table. The dashed cell borders you see while editing are the editing surface only; the sent email carries whatever borders the markup asks for.
 
 #### Images
 
@@ -40,11 +50,40 @@ Deleting an image from the library also deletes the file, so it stops loading in
 Cold email from a real person rarely has images. An image-heavy body reads as a marketing blast to filters that cannot read the picture, and the content check flags it. One signature logo or one product shot is usually the most a first touch should carry.
 </Callout>
 
-#### HTML source
+#### Writing the HTML yourself
 
-The `</>` button on the right of the toolbar swaps the body for its HTML. What you type there is what the step sends, merge fields and conditions included, so you can paste a template built elsewhere and send it as is.
+The `</>` button on the right of the toolbar swaps the body for its HTML. What you type there is stored exactly as you wrote it, merge fields and conditions included, so a template built elsewhere keeps its markup. The only thing that changes on the way out is what the send path adds or resolves: merge fields fill in, a `<style>` block is inlined onto the elements it matches, and the signature, opt-out footer and tracking are appended.
 
-Switching back to the visual editor hands the markup to the editor's own structure, which keeps paragraphs, breaks, headings, lists, links, emphasis and images. Anything outside that (tables, for example) is named in a confirmation before it is dropped, and staying in HTML keeps it.
+HTML is a property of the step, not of the tab you happen to be on. A step written as markup opens as markup the next time anyone edits it, so a design cannot be quietly flattened by being reopened. Paste a whole HTML email into the visual editor and the step switches to HTML on its own and keeps the markup verbatim, because a document with its own `<head>` and `<style>` block is not something any visual editor can hold faithfully. The same happens if you copy the source of an email out of a file and paste it as text.
+
+Switching back to the visual editor hands the markup to the editor's own structure, which keeps paragraphs, breaks, headings, lists, links, emphasis, images, tables, `div` containers, colours, fonts and alignment. Anything outside that is named in a confirmation before it is dropped, and staying in HTML keeps it.
+
+#### CSS is inlined when the email sends
+
+Write your CSS in a `<style>` block as you normally would. When the email sends, every rule that matches something is copied onto the elements it matches, as a `style` attribute. Outlook.com, Yahoo and Gmail's mobile apps drop embedded stylesheets outright, so a design written with classes arrives unstyled without this.
+
+What that means in practice:
+
+- rules stay in the `<style>` block when they cannot be inlined: media queries, `@font-face`, `@keyframes`, and anything keyed on `:hover` or another reader state
+- a media query overriding a rule that has become an inline style needs `!important` on its declarations, or the inline style wins. This is true of every email tool that inlines CSS
+- your own `style` attribute still beats a stylesheet rule, and `!important` still beats that, exactly as in a browser
+- the rules that were inlined are removed from the `<style>` block, so the email does not carry its stylesheet twice
+- nothing happens to a body with no `<style>` block. Existing campaigns send byte for byte as before
+- `<style data-warmbly-inline="false">` is left exactly as written, if you want the cascade you wrote and know your readers
+
+#### What mail clients will do to it
+
+Under the body, and under the Preview tab, a panel names what your markup will run into: `<script>`, `<form>` and `<iframe>` being stripped, an external stylesheet that no client will ever fetch, CSS that Outlook on Windows ignores, images with no alt text, a web font that will fall back, and whether the message is long enough for Gmail to clip it. Gmail truncates anything over 102 KB behind a "View entire message" link, which also hides your unsubscribe footer and stops opens being recorded for readers who do not expand it.
+
+None of it blocks a send. It is there because writing email HTML means writing for renderers that disagree, and it is better to find out in the editor than from a reply.
+
+#### The plain-text half
+
+Every HTML email ships with a plain-text alternative beside it, and inbox providers read it.
+
+For a step written in HTML in the dashboard, Warmbly stores no plain-text half and renders one when the email sends: headings and paragraphs keep their line breaks, list items are bulleted, table rows become lines, each link keeps its destination in brackets after its text, and the stylesheet and any hidden preheader are left out. The mailbox's plain-text signature and the opt-out line follow it. The Preview tab shows the result, so you can read what a text-only client gets.
+
+This only applies when there is no plain-text body to send. Set `body_plain` through the API and that text is sent as written; leave it empty and the send path renders one from the HTML.
 
 ### Preview and test
 

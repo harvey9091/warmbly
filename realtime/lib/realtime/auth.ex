@@ -67,7 +67,7 @@ defmodule Realtime.Auth do
   rescue
     e ->
       Logger.error("JWT verification error: #{inspect(e)}")
-      ErrorReporter.capture_exception(e)
+      ErrorReporter.capture_exception(e, stacktrace: __STACKTRACE__)
       {:error, :verification_error}
   end
 

@@ -14,6 +14,12 @@ type ContactCampaignState struct {
 	CampaignStatus string    `json:"campaign_status"`
 	// LeadStatus follows ContactCampaignProgress.Status exactly.
 	LeadStatus string `json:"lead_status"`
+
+	// SenderID / SenderEmail are the mailbox this lead's whole sequence sends
+	// from, fixed when its first email went out. Empty until then: rotation
+	// picks it for the first step and every follow-up follows.
+	SenderID    *uuid.UUID `json:"sender_id,omitempty"`
+	SenderEmail string     `json:"sender_email,omitempty"`
 	// FailureReason is the worker's reason for the last failed send.
 	FailureReason string `json:"failure_reason,omitempty"`
 

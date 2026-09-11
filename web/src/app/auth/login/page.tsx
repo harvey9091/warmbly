@@ -21,7 +21,8 @@ import useRegister from "@/lib/api/hooks/auth/useRegister";
 import useRegisterConfirm from "@/lib/api/hooks/auth/useRegisterConfirm";
 import { saveTokens } from "@/lib/auth";
 import getUser from "@/lib/api/client/auth/getUser";
-import { WEBSITE_URL, TURNSTILE_KEY, API_URL } from "@/lib/information";
+import { TURNSTILE_KEY, API_URL } from "@/lib/information";
+import useBrand from "@/hooks/useBrand";
 import useAuthConfig from "@/lib/api/hooks/auth/useAuthConfig";
 import type Session from "@/lib/api/models/auth/Session";
 import beginSSO from "@/lib/api/client/auth/beginSSO";
@@ -1174,6 +1175,7 @@ function SignUpStep({
     });
     const pw = watch("password");
     const termsChecked = watch("acceptTerms");
+    const brand = useBrand();
 
     const { evaluate } = usePasswordStrength();
     const [strength, setStrength] = useState<{ score: 0 | 1 | 2 | 3 | 4; warning: string }>({ score: 0, warning: "" });
@@ -1234,13 +1236,21 @@ function SignUpStep({
                     </div>
                     <span className="text-[13px] text-slate-400 leading-relaxed">
                         I agree to the{" "}
-                        <a href={`${WEBSITE_URL}/terms`} target="_blank" rel="noopener noreferrer" className="text-sky-500 hover:text-sky-600 font-medium transition-colors">
-                            Terms of Service
-                        </a>
+                        {brand.terms_url ? (
+                            <a href={brand.terms_url} target="_blank" rel="noopener noreferrer" className="text-sky-500 hover:text-sky-600 font-medium transition-colors">
+                                Terms of Service
+                            </a>
+                        ) : (
+                            "Terms of Service"
+                        )}
                         {" "}and{" "}
-                        <a href={`${WEBSITE_URL}/privacy`} target="_blank" rel="noopener noreferrer" className="text-sky-500 hover:text-sky-600 font-medium transition-colors">
-                            Privacy Policy
-                        </a>
+                        {brand.privacy_url ? (
+                            <a href={brand.privacy_url} target="_blank" rel="noopener noreferrer" className="text-sky-500 hover:text-sky-600 font-medium transition-colors">
+                                Privacy Policy
+                            </a>
+                        ) : (
+                            "Privacy Policy"
+                        )}
                     </span>
                 </label>
                 <FieldError message={errors.acceptTerms?.message} />

@@ -73,8 +73,8 @@ func TestPoolRemainingSkipsMailboxesWaitingForTomorrow(t *testing.T) {
 	b.Enabled = true
 
 	pool := []AccountCandidate{
-		{RemainingToday: 30, Behavior: b, BehaviorOpenAt: &now},
-		{RemainingToday: 40, Behavior: b, BehaviorOpenAt: &tomorrow},
+		{RemainingToday: 30, Behavior: b, OpenAt: &now, OpenLoc: b.Loc},
+		{RemainingToday: 40, Behavior: b, OpenAt: &tomorrow, OpenLoc: b.Loc},
 	}
 	if got := poolRemainingOn(pool, now); got != 30 {
 		t.Fatalf("pool remaining = %d, want 30 (only the mailbox open today)", got)

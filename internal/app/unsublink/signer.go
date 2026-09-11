@@ -40,6 +40,11 @@ type Claims struct {
 	ExpiresAt  time.Time
 }
 
+// Path is the path every minted link carries, on whichever origin it is
+// served from. Click tracking recognises opt-out links by this segment, so it
+// is the same on the API origin and on a workspace's own tracking domain.
+const Path = "/unsubscribe/"
+
 // Signer mints links under a key derived from the instance auth secret. The
 // key is scoped with a purpose string so an unsubscribe token can never be
 // replayed as any other signed artefact that shares the secret.
@@ -73,12 +78,26 @@ func (s *Signer) Token(orgID, campaignID, contactID uuid.UUID, now time.Time) st
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
-// URL mints the full link for the given recipient, or "" when disabled.
+// URL mints the full link for the given recipient on the API origin, or ""
+// when disabled.
 func (s *Signer) URL(orgID, campaignID, contactID uuid.UUID, now time.Time) string {
+	return s.URLOn("", orgID, campaignID, contactID, now)
+}
+
+// URLOn mints the link on a specific origin: the workspace's own verified
+// tracking domain, so the address a recipient reads sits on the sender's
+// domain rather than the platform's. An empty origin (no custom domain, or a
+// deployment that serves opt-outs from the API only) falls back to the API
+// origin, which always serves the same routes.
+func (s *Signer) URLOn(origin string, orgID, campaignID, contactID uuid.UUID, now time.Time) string {
 	if !s.Enabled() {
 		return ""
 	}
-	return s.baseURL + "/unsubscribe/" + s.Token(orgID, campaignID, contactID, now)
+	base := strings.TrimRight(strings.TrimSpace(origin), "/")
+	if base == "" {
+		base = s.baseURL
+	}
+	return base + Path + s.Token(orgID, campaignID, contactID, now)
 }
 
 // Verify checks the token's signature and expiry and returns its claims.

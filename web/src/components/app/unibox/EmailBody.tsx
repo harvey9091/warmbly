@@ -19,7 +19,8 @@ interface EmailBodyProps {
 }
 
 // Typography for the message document. Deliberately minimal: the message
-// brings its own styling, and this only sets what it does not.
+// brings its own styling, and this only sets what it does not. It is injected
+// at the END of the document's head so the message's own rules win.
 const DOCUMENT_CSS = `
   html, body { margin: 0; padding: 0; }
   body {
@@ -31,8 +32,10 @@ const DOCUMENT_CSS = `
     word-break: break-word;
     overflow-wrap: anywhere;
   }
-  img { max-width: 100%; height: auto; border: 0; }
-  table { max-width: 100%; }
+  /* Containment, not styling: a 600px design must not scroll the drawer
+     sideways, so these hold even against the message's own stylesheet. */
+  img { max-width: 100% !important; height: auto; border: 0; }
+  table { max-width: 100% !important; }
   a { color: #0284c7; }
   blockquote {
     margin: 0.5em 0;
@@ -43,12 +46,29 @@ const DOCUMENT_CSS = `
   pre { white-space: pre-wrap; }
 `;
 
+// A body that is already a whole document (a campaign written in HTML mode, a
+// designed newsletter) must not be nested inside another one: the doctype and
+// the <head> would land in the body, and the frame would preview something the
+// recipient will never see. Its own <head> gets our shell instead.
+const DOCUMENT_ROOT = /^\s*(?:<!--[\s\S]*?-->\s*)*(?:<!doctype\s+html|<html[\s>])/i;
+const HEAD_OPEN = /<head\b[^>]*>/i;
+const HTML_OPEN = /<html\b[^>]*>/i;
+
+const SHELL =
+    `<meta charset="utf-8"><meta name="referrer" content="no-referrer">` +
+    // Every link in the message leaves the dashboard in a new tab.
+    `<base target="_blank"><style>${DOCUMENT_CSS}</style>`;
+
 function buildDocument(body: string): string {
-    return `<!doctype html><html><head><meta charset="utf-8">` +
-        `<meta name="referrer" content="no-referrer">` +
-        // Every link in the message leaves the dashboard in a new tab.
-        `<base target="_blank">` +
-        `<style>${DOCUMENT_CSS}</style></head><body>${body}</body></html>`;
+    if (DOCUMENT_ROOT.test(body)) {
+        // Our shell goes FIRST in the head, so the message's own stylesheet
+        // comes after it and wins on everything but the containment rules,
+        // which are marked !important above.
+        if (HEAD_OPEN.test(body)) return body.replace(HEAD_OPEN, `$&${SHELL}`);
+        if (HTML_OPEN.test(body)) return body.replace(HTML_OPEN, `$&<head>${SHELL}</head>`);
+        return `<!doctype html><html><head>${SHELL}</head>${body}</html>`;
+    }
+    return `<!doctype html><html><head>${SHELL}</head><body>${body}</body></html>`;
 }
 
 export default function EmailBody({ html, plain }: EmailBodyProps) {

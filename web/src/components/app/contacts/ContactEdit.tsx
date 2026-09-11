@@ -37,6 +37,17 @@ import NotesTab from "./contact-edit/NotesTab";
 import ResearchTab from "./contact-edit/ResearchTab";
 import DetailsTab, { type CustomField } from "./contact-edit/DetailsTab";
 import {
+    fieldsOf,
+    hasUnnamedValue,
+    idsOf,
+    rebase,
+    recordFromCF,
+    sameCampaigns,
+    sameFields,
+    sameIDs,
+    sameRows,
+} from "./contact-edit/rebase";
+import {
     CONTACT_SLIDE_TABS,
     type ContactSlideTab,
 } from "./contact-edit/tabs";
@@ -97,11 +108,9 @@ function ContactEditPanel({
     const [phone, setPhone] = React.useState(contact.phone);
     const [subscribed, setSubscribed] = React.useState(contact.subscribed);
     const [campaigns, setCampaigns] = React.useState<MiniCampaign[]>(contact.campaigns ?? []);
-    const [categoryIds, setCategoryIds] = React.useState<string[]>(
-        () => (contact.categories ?? []).map((c) => c.id),
-    );
+    const [categoryIds, setCategoryIds] = React.useState<string[]>(() => idsOf(contact.categories ?? []));
     const [customFields, setCustomFields] = React.useState<CustomField[]>(() =>
-        Object.entries(contact.custom_fields ?? {}).map(([n, v]) => ({ name: n, value: v })),
+        fieldsOf(contact.custom_fields),
     );
 
     function reset() {
@@ -112,40 +121,62 @@ function ContactEditPanel({
         setPhone(contact.phone);
         setSubscribed(contact.subscribed);
         setCampaigns(contact.campaigns ?? []);
-        setCategoryIds((contact.categories ?? []).map((c) => c.id));
-        setCustomFields(Object.entries(contact.custom_fields ?? {}).map(([n, v]) => ({ name: n, value: v })));
+        setCategoryIds(idsOf(contact.categories ?? []));
+        setCustomFields(fieldsOf(contact.custom_fields));
     }
 
-    const recordFromCF = React.useCallback((fields: CustomField[]) => {
-        const out: Record<string, string> = {};
-        for (const f of fields) {
-            if (!f.name.trim()) continue;
-            out[f.name.trim()] = f.value;
-        }
-        return out;
-    }, []);
+    // The panel outlives the record it edits: lifting a suppression on the
+    // Overview tab re-subscribes the contact, and a teammate's edit arrives
+    // through the audit spine. Rebase every field the user has not touched
+    // onto the new server value, so a change the user made elsewhere in this
+    // panel does not read back as an unsaved edit and pop "Discard unsaved
+    // changes?" on the way out (issue #415).
+    const serverRef = React.useRef(contact);
+    React.useEffect(() => {
+        const prev = serverRef.current;
+        if (prev === contact) return;
+        serverRef.current = contact;
+        setFirstName((v) => rebase(v, prev.first_name, contact.first_name));
+        setLastName((v) => rebase(v, prev.last_name, contact.last_name));
+        setEmail((v) => rebase(v, prev.email, contact.email));
+        setCompany((v) => rebase(v, prev.company, contact.company));
+        setPhone((v) => rebase(v, prev.phone, contact.phone));
+        setSubscribed((v) => rebase(v, prev.subscribed, contact.subscribed));
+        setCampaigns((v) => rebase(v, prev.campaigns ?? [], contact.campaigns ?? [], sameCampaigns));
+        setCategoryIds((v) =>
+            rebase(v, idsOf(prev.categories ?? []), idsOf(contact.categories ?? []), sameIDs),
+        );
+        // sameRows, not sameFields: a row the user has typed a value into but
+        // not yet named saves as nothing, so the save-shaped comparison would
+        // call the draft untouched and throw that row away.
+        setCustomFields((v) =>
+            rebase(v, fieldsOf(prev.custom_fields), fieldsOf(contact.custom_fields), sameRows),
+        );
+    }, [contact]);
 
-    const dirty = React.useMemo(() => {
+    // What the save would send. The panel also treats a half-typed custom
+    // field as unsaved work (see `dirty`), which this deliberately does not:
+    // there is nothing to send for a row with no name.
+    const changed = React.useMemo(() => {
         if (firstName !== contact.first_name) return true;
         if (lastName !== contact.last_name) return true;
         if (email !== contact.email) return true;
         if (company !== contact.company) return true;
         if (phone !== contact.phone) return true;
         if (subscribed !== contact.subscribed) return true;
-        if (JSON.stringify(recordFromCF(customFields)) !== JSON.stringify(contact.custom_fields ?? {})) return true;
-        const curC = new Set(contact.campaigns.map((c) => c.id));
-        const nextC = new Set(campaigns.map((c) => c.id));
-        if (curC.size !== nextC.size) return true;
-        for (const id of curC) if (!nextC.has(id)) return true;
-        const curCat = new Set((contact.categories ?? []).map((c) => c.id));
-        const nextCat = new Set(categoryIds);
-        if (curCat.size !== nextCat.size) return true;
-        for (const id of curCat) if (!nextCat.has(id)) return true;
+        if (!sameFields(customFields, fieldsOf(contact.custom_fields))) return true;
+        if (!sameCampaigns(campaigns, contact.campaigns ?? [])) return true;
+        if (!sameIDs(categoryIds, idsOf(contact.categories ?? []))) return true;
         return false;
-    }, [contact, firstName, lastName, email, company, phone, subscribed, customFields, campaigns, categoryIds, recordFromCF]);
+    }, [contact, firstName, lastName, email, company, phone, subscribed, customFields, campaigns, categoryIds]);
+
+    // What the user would lose on the way out, which is more than what would
+    // be sent: a custom-field row they have typed a value into but not named
+    // yet is not savable and not, on its own, a reason to enable Save.
+    const dirty = changed || hasUnnamedValue(customFields);
 
     async function save() {
-        if (!dirty) return;
+        if (!changed) return;
         const data: Record<string, unknown> = {};
         if (firstName !== contact.first_name) data.first_name = firstName;
         if (lastName !== contact.last_name) data.last_name = lastName;
@@ -153,19 +184,13 @@ function ContactEditPanel({
         if (company !== contact.company) data.company = company;
         if (phone !== contact.phone) data.phone = phone;
         if (subscribed !== contact.subscribed) data.subscribed = subscribed;
-        const cf = recordFromCF(customFields);
-        if (JSON.stringify(cf) !== JSON.stringify(contact.custom_fields ?? {})) data.custom_fields = cf;
-        const cur = new Set(contact.campaigns.map((c) => c.id));
-        const next = new Set(campaigns.map((c) => c.id));
-        let campaignsChanged = cur.size !== next.size;
-        if (!campaignsChanged) for (const id of cur) if (!next.has(id)) { campaignsChanged = true; break; }
-        if (campaignsChanged) data.campaigns = campaigns.map((c) => c.id);
-
-        const curCat = new Set((contact.categories ?? []).map((c) => c.id));
-        const nextCat = new Set(categoryIds);
-        let categoriesChanged = curCat.size !== nextCat.size;
-        if (!categoriesChanged) for (const id of curCat) if (!nextCat.has(id)) { categoriesChanged = true; break; }
-        if (categoriesChanged) data.categories = categoryIds;
+        // Same comparisons `dirty` and the rebase use, so what counts as
+        // changed is decided in exactly one place.
+        if (!sameFields(customFields, fieldsOf(contact.custom_fields))) {
+            data.custom_fields = recordFromCF(customFields);
+        }
+        if (!sameCampaigns(campaigns, contact.campaigns ?? [])) data.campaigns = idsOf(campaigns);
+        if (!sameIDs(categoryIds, idsOf(contact.categories ?? []))) data.categories = categoryIds;
 
         try {
             await toast.promise(update.mutateAsync(data), {
@@ -276,7 +301,7 @@ function ContactEditPanel({
                         <button
                             type="button"
                             onClick={save}
-                            disabled={!dirty || update.isPending}
+                            disabled={!changed || update.isPending}
                             className="ml-auto h-7 px-3 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
                         >
                             {update.isPending ? (

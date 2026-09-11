@@ -15,13 +15,20 @@ import useUpdateSequence from "@/lib/api/hooks/app/campaigns/sequences/useUpdate
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
 
-// Body fields the composer owns. body_sync/body_code are legacy editor-only
-// flags (they don't affect sending), so the composer keeps HTML + plain in
-// lockstep and leaves them alone.
-type Draft = Pick<Sequence, "name" | "subject" | "body_plain" | "body_html">;
+// Body fields the composer owns. body_code records that this step is authored
+// as raw HTML, so reopening it shows the markup instead of handing it to the
+// editor schema, which keeps only what it can represent. body_sync stays a
+// legacy editor-only flag: the composer keeps HTML + plain in lockstep itself.
+type Draft = Pick<Sequence, "name" | "subject" | "body_plain" | "body_html" | "body_code">;
 
 function toDraft(s: Sequence): Draft {
-    return { name: s.name, subject: s.subject, body_plain: s.body_plain, body_html: s.body_html };
+    return {
+        name: s.name,
+        subject: s.subject,
+        body_plain: s.body_plain,
+        body_html: s.body_html,
+        body_code: s.body_code,
+    };
 }
 
 export default function SequenceView({
@@ -63,6 +70,7 @@ export default function SequenceView({
                 ...(draft.subject !== baseline.subject && { subject: draft.subject }),
                 ...(draft.body_plain !== baseline.body_plain && { body_plain: draft.body_plain }),
                 ...(draft.body_html !== baseline.body_html && { body_html: draft.body_html }),
+                ...(draft.body_code !== baseline.body_code && { body_code: draft.body_code }),
             };
             await toast.promise(updateSequence.mutateAsync(data), {
                 loading: "Saving step…",
@@ -124,6 +132,8 @@ export default function SequenceView({
                     onSubjectChange={(v) => patch({ subject: v })}
                     bodyHtml={draft.body_html}
                     onBodyChange={(html, plain) => patch({ body_html: html, body_plain: plain })}
+                    bodyCode={draft.body_code}
+                    onBodyCodeChange={(code) => patch({ body_code: code })}
                     campaignId={campaignId}
                     stepId={sequence.id}
                     canSendTest

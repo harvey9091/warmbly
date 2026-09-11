@@ -1,6 +1,7 @@
 package templates
 
 import (
+	"github.com/warmbly/warmbly/internal/config"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,6 +43,8 @@ func TestBaseTemplate_Structure(t *testing.T) {
 }
 
 func TestBaseTemplate_BusinessDetails(t *testing.T) {
+	t.Setenv("DEPLOYMENT_MODE", "cloud")
+
 	html, err := GenerateLoginCodeHTML("000000")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -49,22 +52,62 @@ func TestBaseTemplate_BusinessDetails(t *testing.T) {
 
 	checks := []string{
 		// Branding
-		CompanyName,
+		CompanyName(),
 		"warmbly.com",
 		"Privacy",
 		"Terms",
-		TermsURL,
-		PrivacyURL,
+		config.Brand().TermsURL,
+		config.Brand().PrivacyURL,
 		// Companies Act 2006 required details
-		LegalEntity,
-		CompanyNumber,
-		PlaceOfReg,
-		RegisteredAddr,
+		config.Brand().LegalEntity,
+		config.Brand().CompanyNumber,
+		config.Brand().PlaceOfReg,
+		config.Brand().Address,
 	}
 
 	for _, s := range checks {
 		if !strings.Contains(html, s) {
 			t.Errorf("footer: expected HTML to contain %q", s)
+		}
+	}
+}
+
+// A self-host sends its own users mail. Naming our company in the footer, or
+// linking our website and terms from it, is wrong on every count: it is not
+// their legal entity, and it hands their recipients to us.
+func TestBaseTemplate_SelfHostFooterNamesNobodyElse(t *testing.T) {
+	t.Setenv("DEPLOYMENT_MODE", "self_hosted")
+	t.Setenv("APP_URL", "https://app.acme.example")
+
+	// The welcome mail is the one that both carries the footer and links the
+	// dashboard, so it covers the leak and the replacement in one render.
+	html, err := GenerateWelcomeHTML("Jane")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, unwanted := range []string{"warmbly.com", "Mindroot", "16543299", "Shelton Street"} {
+		if strings.Contains(html, unwanted) {
+			t.Errorf("self-host footer leaks %q", unwanted)
+		}
+	}
+	if !strings.Contains(html, "app.acme.example") {
+		t.Error("self-host email should link the deployment's own dashboard")
+	}
+}
+
+// The same install with EMAIL_BRAND_* set renders its own details.
+func TestBaseTemplate_SelfHostBranding(t *testing.T) {
+	t.Setenv("DEPLOYMENT_MODE", "self_hosted")
+	t.Setenv("EMAIL_BRAND_LEGAL_ENTITY", "Acme GmbH")
+	t.Setenv("EMAIL_BRAND_WEBSITE_URL", "https://acme.example")
+
+	html, err := GenerateLoginCodeHTML("000000")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, want := range []string{"Acme GmbH", "acme.example"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected footer to contain %q", want)
 		}
 	}
 }
@@ -276,19 +319,19 @@ func TestPreview(t *testing.T) {
 		}},
 		{"trial-expired.html", func() (string, error) { return GenerateTrialExpiredHTML() }},
 		{"invitation.html", func() (string, error) {
-			return GenerateInvitationHTML("Jane Doe", "Acme Inc", AppURL+"/invite?token=abc123")
+			return GenerateInvitationHTML("Jane Doe", "Acme Inc", AppURL()+"/invite?token=abc123")
 		}},
 		{"notification.html", func() (string, error) {
-			return GenerateNotificationHTML("New sign-in to your account", "Signed in from Chrome on macOS (London, GB).", AppURL+"/app/settings/security", "")
+			return GenerateNotificationHTML("New sign-in to your account", "Signed in from Chrome on macOS (London, GB).", AppURL()+"/app/settings/security", "")
 		}},
 		{"deletion-org-scheduled.html", func() (string, error) {
-			return GenerateOrgDeletionScheduledHTML("Acme Inc", previewTime, 30, AppURL+"/organization/settings/danger-zone")
+			return GenerateOrgDeletionScheduledHTML("Acme Inc", previewTime, 30, AppURL()+"/organization/settings/danger-zone")
 		}},
 		{"deletion-user-scheduled.html", func() (string, error) {
-			return GenerateUserDeletionScheduledHTML("Jane", previewTime, 30, AppURL+"/account/danger-zone")
+			return GenerateUserDeletionScheduledHTML("Jane", previewTime, 30, AppURL()+"/account/danger-zone")
 		}},
 		{"deletion-reminder.html", func() (string, error) {
-			return GenerateDeletionReminderHTML("Acme Inc", previewTime, AppURL+"/organization/settings/danger-zone")
+			return GenerateDeletionReminderHTML("Acme Inc", previewTime, AppURL()+"/organization/settings/danger-zone")
 		}},
 		{"deletion-completed.html", func() (string, error) {
 			return GenerateDeletionCompletedHTML(previewTime, previewTime)
@@ -322,7 +365,7 @@ func TestGenerateTrialExpiredHTML(t *testing.T) {
 		"#f5f6f8",         // branded cream wrapper
 		"Your free trial has ended",
 		"Choose a plan</a>",
-		AppURL + "/settings/billing", // billing CTA href
+		AppURL() + "/settings/billing", // billing CTA href
 		"<title>Your Warmbly trial has ended</title>",
 	}
 	for _, s := range checks {
@@ -335,7 +378,7 @@ func TestGenerateTrialExpiredHTML(t *testing.T) {
 // ─── Invitation ─────────────────────────────────────────────────
 
 func TestGenerateInvitationHTML(t *testing.T) {
-	url := AppURL + "/invite?token=abc123"
+	url := AppURL() + "/invite?token=abc123"
 	html, err := GenerateInvitationHTML("Jane Doe", "Acme Inc", url)
 	if err != nil {
 		t.Fatalf("GenerateInvitationHTML returned error: %v", err)
@@ -356,7 +399,7 @@ func TestGenerateInvitationHTML(t *testing.T) {
 }
 
 func TestGenerateInvitationHTML_EscapesNames(t *testing.T) {
-	html, err := GenerateInvitationHTML("<script>evil()</script>", "Acme & Co", AppURL+"/invite?token=x")
+	html, err := GenerateInvitationHTML("<script>evil()</script>", "Acme & Co", AppURL()+"/invite?token=x")
 	if err != nil {
 		t.Fatalf("GenerateInvitationHTML returned error: %v", err)
 	}
@@ -371,7 +414,7 @@ func TestGenerateInvitationHTML_EscapesNames(t *testing.T) {
 // ─── Notification ───────────────────────────────────────────────
 
 func TestGenerateNotificationHTML_WithCTA(t *testing.T) {
-	html, err := GenerateNotificationHTML("New sign-in", "Signed in from Chrome.", AppURL+"/app/settings/security", "")
+	html, err := GenerateNotificationHTML("New sign-in", "Signed in from Chrome.", AppURL()+"/app/settings/security", "")
 	if err != nil {
 		t.Fatalf("GenerateNotificationHTML returned error: %v", err)
 	}
@@ -380,7 +423,7 @@ func TestGenerateNotificationHTML_WithCTA(t *testing.T) {
 		"New sign-in",
 		"Signed in from Chrome.",
 		"Open in Warmbly</a>", // default CTA label
-		AppURL + "/app/settings/security",
+		AppURL() + "/app/settings/security",
 		"<title>New sign-in</title>",
 	}
 	for _, s := range checks {
@@ -403,7 +446,7 @@ func TestGenerateNotificationHTML_NoCTA(t *testing.T) {
 // ─── Deletion (danger zone) ─────────────────────────────────────
 
 func TestGenerateDeletionEmails(t *testing.T) {
-	cancel := AppURL + "/account/danger-zone"
+	cancel := AppURL() + "/account/danger-zone"
 	cases := []struct {
 		name    string
 		gen     func() (string, error)
@@ -460,31 +503,92 @@ func TestGenerateDeletionEmails(t *testing.T) {
 // ─── Constants ──────────────────────────────────────────────────
 
 func TestBusinessConstants(t *testing.T) {
-	if CompanyName == "" {
+	t.Setenv("DEPLOYMENT_MODE", "cloud")
+
+	if CompanyName() == "" {
 		t.Error("CompanyName should not be empty")
 	}
-	if LegalEntity == "" {
+	if config.Brand().LegalEntity == "" {
 		t.Error("LegalEntity should not be empty")
 	}
-	if CompanyNumber == "" {
+	if config.Brand().CompanyNumber == "" {
 		t.Error("CompanyNumber should not be empty")
 	}
-	if PlaceOfReg == "" {
+	if config.Brand().PlaceOfReg == "" {
 		t.Error("PlaceOfReg should not be empty")
 	}
-	if RegisteredAddr == "" {
+	if config.Brand().Address == "" {
 		t.Error("RegisteredAddr should not be empty")
 	}
-	if WebsiteURL == "" {
+	if config.Brand().WebsiteURL == "" {
 		t.Error("WebsiteURL should not be empty")
 	}
-	if !strings.HasPrefix(WebsiteURL, "https://") {
+	if !strings.HasPrefix(config.Brand().WebsiteURL, "https://") {
 		t.Error("WebsiteURL should start with https://")
 	}
-	if !strings.HasPrefix(TermsURL, "https://") {
+	if !strings.HasPrefix(config.Brand().TermsURL, "https://") {
 		t.Error("TermsURL should start with https://")
 	}
-	if !strings.HasPrefix(PrivacyURL, "https://") {
+	if !strings.HasPrefix(config.Brand().PrivacyURL, "https://") {
 		t.Error("PrivacyURL should start with https://")
+	}
+}
+
+// The product name is the software's, so it survives on a self-host; the legal
+// details and the links do not.
+func TestBusinessConstantsOnSelfHost(t *testing.T) {
+	t.Setenv("DEPLOYMENT_MODE", "self_hosted")
+
+	if CompanyName() == "" {
+		t.Error("CompanyName should not be empty")
+	}
+	for name, got := range map[string]string{
+		"LegalEntity":    config.Brand().LegalEntity,
+		"CompanyNumber":  config.Brand().CompanyNumber,
+		"PlaceOfReg":     config.Brand().PlaceOfReg,
+		"RegisteredAddr": config.Brand().Address,
+		"WebsiteURL":     config.Brand().WebsiteURL,
+		"TermsURL":       config.Brand().TermsURL,
+		"PrivacyURL":     config.Brand().PrivacyURL,
+		"SupportEmail":   config.Brand().SupportEmail,
+	} {
+		if got != "" {
+			t.Errorf("%s defaults to %q on a self-host; it must be unset", name, got)
+		}
+	}
+}
+
+// A rebranded install must not leak the product's own name into copy a
+// recipient reads. Every template that names the product reads it from
+// EMAIL_BRAND_NAME, so a half-rebrand (an Acme header over Warmbly prose) is
+// the failure this covers.
+func TestTemplatesUseTheConfiguredName(t *testing.T) {
+	t.Setenv("DEPLOYMENT_MODE", "self_hosted")
+	t.Setenv("EMAIL_BRAND_NAME", "Acme")
+	t.Setenv("APP_URL", "https://app.acme.example")
+
+	cases := map[string]func() (string, error){
+		"welcome":           func() (string, error) { return GenerateWelcomeHTML("Jane") },
+		"digest":            func() (string, error) { return GenerateDigestHTML(3, []DigestItem{{Title: "One"}}) },
+		"trial expired":     func() (string, error) { return GenerateTrialExpiredHTML() },
+		"invitation":        func() (string, error) { return GenerateInvitationHTML("Jane", "Acme Inc", "https://x/invite") },
+		"notification":      func() (string, error) { return GenerateNotificationHTML("Hi", "Body", "https://x", "") },
+		"registration code": func() (string, error) { return GenerateRegistrationCodeHTML("123456") },
+		"user deletion":     func() (string, error) { return GenerateUserDeletionScheduledHTML("Jane", previewTime, 30, "https://x") },
+	}
+
+	for name, gen := range cases {
+		t.Run(name, func(t *testing.T) {
+			html, err := gen()
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			if strings.Contains(html, "Warmbly") {
+				t.Error("rebranded install still renders the product's own name")
+			}
+			if !strings.Contains(html, "Acme") {
+				t.Error("expected the configured name in the copy")
+			}
+		})
 	}
 }

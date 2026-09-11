@@ -6,7 +6,6 @@ import (
 	"os"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -256,9 +255,5 @@ func absoluteLink(link string) string {
 	if link == "" || link[0] != '/' {
 		return link
 	}
-	base := strings.TrimRight(os.Getenv("APP_URL"), "/")
-	if base == "" {
-		base = "https://app.warmbly.com"
-	}
-	return base + link
+	return config.AppBaseURL() + link
 }

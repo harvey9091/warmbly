@@ -11,7 +11,9 @@
     "lint:fix": "eslint . --fix",
     "preview": "vite preview",
     "test": "vitest",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "build:pages": "vite build && WARMBLY_CONFIG_OUT=dist/config.js sh ./docker-entrypoint.sh",
+    "sourcemaps:posthog": "pnpm dlx --package @posthog/cli posthog-cli sourcemap inject --directory dist && pnpm dlx --package @posthog/cli posthog-cli sourcemap upload --directory dist --delete-after"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",
@@ -38,6 +40,7 @@
     "input-otp": "^1.4.2",
     "lucide-react": "^0.563.0",
     "motion": "^12.40.0",
+    "posthog-js": "^1.427.2",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-router-dom": "^7.18.1",

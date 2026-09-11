@@ -28,6 +28,7 @@ export const STANDARD_TARGETS: { id: string; label: string }[] = [
 export const VERIFICATION_VOCABULARY_LABELS: Record<string, string> = {
     zerobounce: "ZeroBounce",
     millionverifier: "MillionVerifier",
+    cleanmylist: "CleanMyList",
     neverbounce: "NeverBounce",
     bouncer: "Bouncer",
     kickbox: "Kickbox",

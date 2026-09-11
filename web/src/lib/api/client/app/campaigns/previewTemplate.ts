@@ -12,6 +12,14 @@ export interface TemplatePreviewAttachment {
     mime_type: string;
 }
 
+// One thing mail clients will do to this body that its author did not ask for.
+// Advisory: findings never block a send.
+export interface TemplateHtmlFinding {
+    code: string;
+    severity: "error" | "warning" | "info";
+    message: string;
+}
+
 export interface TemplatePreview {
     subject: string;
     body_html: string;
@@ -22,6 +30,10 @@ export interface TemplatePreview {
     from?: TemplatePreviewFrom;
     // Present when campaign_id was given and this step's send carries files.
     attachments?: TemplatePreviewAttachment[];
+    // What Gmail, Outlook and Yahoo will do to this markup: what they strip,
+    // what CSS they ignore, and whether the message is long enough to be
+    // clipped. Sized on the body as it ships, after CSS inlining.
+    html_findings?: TemplateHtmlFinding[];
 }
 
 export interface TemplatePreviewInput {

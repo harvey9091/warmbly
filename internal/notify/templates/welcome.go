@@ -16,7 +16,7 @@ const welcomeContent = `
 Welcome
 </p>
 <h2 style="margin:0 0 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-weight:600;font-size:20px;color:#0f172a;letter-spacing:-0.01em;">
-{{if .FirstName}}Hi {{.FirstName}}, welcome to Warmbly{{else}}Welcome to Warmbly{{end}}
+{{if .FirstName}}Hi {{.FirstName}}, welcome to {{.Brand}}{{else}}Welcome to {{.Brand}}{{end}}
 </h2>
 <p style="margin:0 0 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#475569;line-height:20px;">
 Your account is ready. From here you can connect mailboxes, warm them up, and start outbound campaigns, all in one place.
@@ -58,16 +58,18 @@ var welcomeTmpl = template.Must(template.New("welcome_content").Parse(welcomeCon
 // base shell so styling stays consistent with the rest of the
 // transactional mail.
 func GenerateWelcomeHTML(firstName string) (string, error) {
+	brand := CompanyName()
 	data := struct {
 		FirstName string
 		AppURL    string
-	}{FirstName: firstName, AppURL: AppURL}
+		Brand     string
+	}{FirstName: firstName, AppURL: AppURL(), Brand: brand}
 	var buf bytes.Buffer
 	if err := welcomeTmpl.Execute(&buf, data); err != nil {
 		errs.CaptureException(err)
 		return "", err
 	}
-	return renderEmail("Welcome to "+CompanyName, buf.String())
+	return renderEmail("Welcome to "+brand, buf.String())
 }
 
 // WelcomeTemplate / WelcomeHTMLTMPL retained as deprecated exports so

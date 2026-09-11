@@ -473,8 +473,12 @@ func (c *Client) FetchEnvelopes(ctx context.Context, uids []imap.UID) ([]*Fetche
 		BodyStructure: &imap.FetchItemBodyStructure{
 			Extended: true,
 		},
-		Flags:        true,
-		ModSeq:       true,
+		Flags: true,
+		// MODSEQ is a CONDSTORE fetch item (RFC 7162). Asking a server that
+		// never advertised it for one is a malformed fetch-att, and a strict
+		// parser answers BAD and syncs nothing: issue #405, where IONOS said
+		// `BAD expected fetch-att instead of "MODSEQ BODY.P"` on every pass.
+		ModSeq:       c.condStore.Load(),
 		InternalDate: true,
 		RFC822Size:   true,
 		BodySection: []*imap.FetchItemBodySection{{

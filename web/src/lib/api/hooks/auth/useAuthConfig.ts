@@ -30,6 +30,10 @@ export const AUTH_CONFIG_FALLBACK: AuthConfig = {
     billing_enabled: true,
     setup_required: false,
     docs_url: "https://docs.warmbly.com/development/accounts-and-access/",
+    // An unreachable backend cannot tell us whose instance this is, and the
+    // fallback fails self-host-safe everywhere else, so it claims no branding
+    // either: no website, no terms, no privacy link.
+    brand: { name: "Warmbly" },
 };
 
 export default function useAuthConfig() {

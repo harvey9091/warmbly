@@ -21,6 +21,12 @@ The wording of the sentence and of the link text is yours to change.
 
 **Unsubscribe link** is the right choice when your list skews toward consumers, when your legal team asks for a link, or when your volume is high enough that provider bulk-sender rules apply. The link is unique to the recipient and campaign, signed so it cannot be guessed or altered, and valid for a year after the send. Clicking it opens a plain confirmation page with one button. Nothing happens until the button is pressed, because link scanners and preview fetchers follow every link in an email. The page then offers a way back for anyone who unsubscribed by mistake.
 
+### Which address the link points at
+
+A mailbox or campaign with a verified [custom tracking domain](/guides/mailboxes/#custom-tracking-domain) serves its unsubscribe link there, so a recipient reads `https://t.yourdomain.com/unsubscribe/...` rather than an address on the platform. The campaign's own domain wins over the mailbox's, and only a verified one is used. The page itself is the same page, named after you: it carries no logo, no product name and no scripts, because the email came from your mailbox and not from a platform.
+
+Without a custom domain the link stays on the instance's own API address. Either way it is the sender's infrastructure, not a third party's, and the recipient's opt-out reaches the same suppression list.
+
 You can also place the link inside your own copy instead of the footer: insert the **Unsubscribe link** variable from the variable menu, or type `{{.UnsubscribeLink}}`.
 
 Dropped into your copy on its own, the variable becomes a real link in the HTML message, labelled with the same **Link text** the footer uses ("Unsubscribe" by default). The recipient reads a word, not the signed address. To choose the wording yourself, select the text first and then pick **Unsubscribe link** from the variable menu, or press the link button and use the **Unsubscribe** shortcut next to the address field: the selected text becomes the link and Warmbly fills in the address at send time.
@@ -77,4 +83,8 @@ The suppression list is available over the API as `GET /suppressions`, `POST /su
 
 ## Self-hosting
 
-Unsubscribe links are served by the API process on the origin in `API_PUBLIC_URL`, so that variable must be set to the address recipients can reach. Without it Warmbly cannot mint links: the header is left off, and the link mode falls back to the reply-to-opt-out sentence. Links are signed under `AUTH_SECRET`; rotating it invalidates links in emails already sent.
+Unsubscribe links are served by the API process on the origin in `API_PUBLIC_URL`, so that variable must be set to an address recipients can reach. Leaving it unset does not disable the link: the backend falls back to its own listen address, `API_HOST`, whose default wildcard bind resolves to `http://localhost:8080`. Every opt-out in every campaign email then points at an address only the backend's own machine can open. Links are signed under `AUTH_SECRET`; rotating it invalidates links in emails already sent.
+
+Nothing in a campaign email points at warmbly.com. The opt-out address, the tracking pixel and every wrapped link are built from your own `API_PUBLIC_URL` and `TRACKING_DOMAIN`, and a workspace on your instance that verifies its own tracking domain gets the opt-out on that domain instead. A workspace's verified domain is a CNAME to your `TRACKING_DOMAIN`, so the tracking service serves the unsubscribe routes as well as the pixel and click tickets: an install running [core only](/development/install/) has no tracking service, keeps `TRACKING_DOMAIN` unset, and serves every opt-out from the API address.
+
+One-click (`List-Unsubscribe-Post`) is attached only when the link is `https`. An instance reachable over plain HTTP still sends the plain `List-Unsubscribe` header, because a provider POSTing an opt-out to an `http` address either refuses it or sends the token in the clear.

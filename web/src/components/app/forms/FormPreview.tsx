@@ -13,6 +13,7 @@ import type { FormDesign, FormField } from "@/lib/api/models/app/forms/Form";
 
 import "./form-theme.css";
 import { designVars, ensureFont, focusSteps, resolveDesign, splitPages } from "./designCore";
+import useBrand from "@/hooks/useBrand";
 
 // FieldBody renders one block with the shared .wf classes. Inputs are real
 // but inert (readOnly/disabled, tabIndex -1) so form-theme.css styles them
@@ -322,6 +323,9 @@ export default function FormPreview({
 }) {
     const r = React.useMemo(() => resolveDesign(design), [design]);
     React.useEffect(() => ensureFont(r), [r]);
+    // Same rule as the served page: no attribution when this deployment
+    // configured none, so the preview is what a visitor will actually see.
+    const brand = useBrand();
 
     const [page, setPage] = React.useState(0);
     const screens = React.useMemo(
@@ -490,11 +494,13 @@ export default function FormPreview({
                             {r.layout !== "split" && !r.logoOnPage && bodyLogo}
                             {previewPaging ? pagedPreview : buildList}
                         </div>
-                        <div className="brand">
-                            <a href="https://warmbly.com" target="_blank" rel="noopener noreferrer" onClick={(e) => e.preventDefault()}>
-                                Powered by Warmbly
-                            </a>
-                        </div>
+                        {brand.website_url && (
+                            <div className="brand">
+                                <a href={brand.website_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.preventDefault()}>
+                                    Powered by {brand.name}
+                                </a>
+                            </div>
+                        )}
                     </main>
                 </div>
             </div>

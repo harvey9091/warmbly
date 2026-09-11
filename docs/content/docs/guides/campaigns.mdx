@@ -40,7 +40,7 @@ Pick mailboxes in **Sending accounts** three ways, and the first two combine:
 Sending accounts always resolve inside the campaign's own workspace. If you belong to more than one workspace, a tag you reuse across them still only picks up mailboxes belonging to the workspace that owns the campaign, so one workspace's sending reputation, daily caps, and warmup are never spent on another's traffic.
 
 <Callout type="info" title="Follow-ups stay on the same mailbox">
-Each mailbox stays within its own daily limit, and follow-ups always send from the mailbox that sent the first email to that contact, so threads stay consistent.
+Rotation chooses a mailbox for a lead's **first** email, and that mailbox sends the rest of that lead's sequence. Three emails from three addresses is not a conversation, and a reply belongs in the mailbox the contact was written to from.
 </Callout>
 
 | Rotation | Behavior |
@@ -49,7 +49,20 @@ Each mailbox stays within its own daily limit, and follow-ups always send from t
 | Round-robin | Cycles in order: `A`, `B`, `C`, back to `A` |
 | Weighted | Sends more from healthier, higher-limit mailboxes |
 
-**ESP matching** optionally aligns sender and recipient providers (Gmail to Gmail). **Prefer same** falls back to any mailbox when no same-provider one is free; **Strict same** makes the contact wait instead. An unknown recipient provider never blocks a send.
+Whichever mode you pick, it decides which mailbox **starts** a lead. Every mailbox still stays inside its own daily cap and minimum gap, so a campaign's volume is the sum of its mailboxes' budgets as always.
+
+The Leads tab shows each lead's mailbox in its **Sender** column, and a contact's Activity tab shows it beside their progress. A lead has none until its first email goes out.
+
+**ESP matching** optionally aligns sender and recipient providers (Gmail to Gmail). **Prefer same** falls back to any mailbox when no same-provider one is free; **Strict same** makes the contact wait instead. An unknown recipient provider never blocks a send. Like rotation, it applies to a lead's first email: a follow-up goes out from the mailbox the contact already knows.
+
+### When a lead's mailbox is busy, or gone
+
+Two things can happen to a lead's mailbox, and Warmbly treats them differently:
+
+- **Busy**: it has used its daily budget, or it is outside its own sending hours. The lead waits for it, and the rest of the campaign keeps sending from the mailboxes that are free. Nothing is lost: the lead sends when the mailbox is next available, and the activity log notes the wait once a day.
+- **Gone**: it was disconnected, removed from the campaign's sending accounts, sent to rest, held by warmup health, or its domain is failing authentication. Waiting would leave the contact silent for days, so the lead moves to another mailbox in the pool and the campaign's activity log records the change.
+
+Removing a mailbox from **Sending accounts** therefore hands its in-flight leads to the remaining mailboxes as each of them reaches its next step. Adding a mailbox never moves an existing lead; it picks up new ones.
 
 ## Sending limits
 
@@ -103,7 +116,7 @@ A lead is **Processing** only while steps remain, so a finished campaign reads a
 
 ### Who opened, clicked and replied
 
-Next to each lead's status, the Leads list shows three engagement columns: **Opened**, **Clicked** and **Replied**, each with the number of emails in the sequence the person engaged with. A dash means the lead was emailed and has not engaged; the cell is blank for a lead not emailed yet. An open counts when a person opened the email, or clicked a link in it. Mail clients that fetch every image automatically (Apple Mail Privacy Protection, for example) show as **auto** instead, the same opens the campaign overview reports as automatic, so they never pass for engagement. Clicks are held to the same standard: a link followed within ten seconds of the send, or several links of one email followed within a few seconds of each other, is a security gateway scanning the message, not the recipient. Those clicks are kept on the contact's activity marked **auto**, counted apart on the campaign overview, and never make a lead **Clicked**, never fire a clicked branch or automation, and never send a webhook. See [Link tracking and UTM parameters](#link-tracking-and-utm-parameters).
+Next to each lead's status, the Leads list shows three engagement columns: **Opened**, **Clicked** and **Replied**, each with the number of emails in the sequence the person engaged with. A dash means the lead was emailed and has not engaged; the cell is blank for a lead not emailed yet. An open counts when a person opened the email, or clicked a link in it. Mail clients that fetch every image automatically (Apple Mail Privacy Protection, for example) show as **auto** instead, the same opens the campaign overview reports as automatic, so they never pass for engagement. Clicks are held to the same standard: a link followed from a known mail security network, within the instance's automated-click window after the send (thirty seconds by default), or several links of one email followed within a few seconds of each other, is a security gateway scanning the message, not the recipient. Those clicks are kept on the contact's activity marked **auto**, counted apart on the campaign overview, and never make a lead **Clicked**, never fire a clicked branch or automation, and never send a webhook. See [Link tracking and UTM parameters](#link-tracking-and-utm-parameters).
 
 Opens depend on the recipient's mail client loading images. Outlook, many corporate setups and some privacy-minded clients block them, so a person can read an email and still show no open; the info icon on the column says as much. A click is stronger evidence, so a click by the person always counts as an open too. Open the contact's Activity tab to see each open and click with the mail client and location it came from.
 
@@ -212,11 +225,15 @@ If scheduling stalls on a transient infrastructure hiccup, Warmbly re-seeds with
 
 Warmbly scores each step's copy out of 100 for the signals spam filters weight: trigger wording, stacked punctuation, ALL-CAPS subjects, link and image counts, image-only bodies, empty or oversized bodies, and attachments.
 
+Anything the checker can point at, it points at: the badge names the subject or the body (or both, when the wording straddles the two), the offending words are quoted back exactly as you typed them, and the line they sit in is shown for context. You never have to hunt through your own copy for a word the checker already found.
+
+A few issues are about the message as a whole rather than any wording in it. An empty subject, an empty or oversized body and an image-heavy layout name the half they concern but have nothing to quote; an attachment on a cold email concerns neither half, so it shows as a plain line with no badge. Every issue, located or not, carries its fix in a sentence.
+
 You see it in three places:
 
 - **In the editor**, re-scored as you write a step.
-- **In the launch dialog**, alongside the other pre-send checks, with the lowest-scoring step named. Only email steps are scored; wait and action steps carry no copy.
-- **In the campaign activity feed**, if the copy that actually goes out scores below your floor.
+- **In the launch dialog**, alongside the other pre-send checks, with the lowest-scoring step named and its worst issue quoted as `Subject:` or `Body:`. Only email steps are scored; wait and action steps carry no copy.
+- **In the campaign activity feed**, if the copy that actually goes out scores below your floor, again naming the half of the message at fault.
 
 That last one catches what the first two cannot. The editor scores the template; the send path scores the message after merge fields, spintax, A/B selection and AI blocks have resolved, which is where a clean template becomes "Hi ," or picks the one spammy spintax branch. It logs once per step per day, not once per recipient.
 
@@ -225,6 +242,29 @@ That last one catches what the first two cannot. The editor scores the template;
 <Callout type="info" title="Advisory, not a gate">
 A low score never blocks or delays a send. It is a signal to rewrite, not a verdict: a legitimate email can score badly, and a well-scoring one sent to a bad list will still fail.
 </Callout>
+
+### Analyze with AI
+
+The rules above catch what rules can catch. **Analyze with AI**, under the score in the step editor, reads the copy itself and reports what a filter and a human reader will object to:
+
+- the specific word, phrase or sentence, quoted from your draft, and whether it is in the subject or the body
+- why that fragment hurts deliverability or replies
+- what to write instead
+- a rewritten subject line, which you can apply in one click
+- copy-level advice that has no single fragment to point at
+- an overall deliverability score out of 100
+
+It runs on the AI provider configured for the deployment (see [AI credits](/guides/ai-credits/) for the cost, and [Configuration](/development/configuration/) for self-host setup). It needs the **Use AI** permission. A deployment with no provider configured says so in place of the button rather than offering something that cannot run.
+
+Every quote is checked against your draft before it is shown. A fragment the model could not have copied from your copy is dropped rather than displayed, so the panel never points at a sentence you did not write.
+
+### Re-check
+
+**Re-check** re-scores the copy on the spot instead of waiting for the editor's debounce, and once you have run an AI analysis it re-runs that too. Edit what the findings told you to edit, press it, and the panel shows the new score against the previous one: `+14 since your last check`.
+
+The AI score is deliberately not sampled, so re-checking copy you did not touch returns the same number. A change in the score is a change in the copy.
+
+When the draft has moved on from the analysis on screen, the panel says so and highlights the button, rather than presenting stale findings as current.
 
 ## Easing out of warmup
 

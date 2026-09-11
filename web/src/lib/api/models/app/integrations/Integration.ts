@@ -15,7 +15,8 @@ export type IntegrationProvider =
     | "calendly"
     | "cal_com"
     | "google_sheets"
-    | "millionverifier";
+    | "millionverifier"
+    | "cleanmylist";
 
 export type IntegrationAuthMethod = "oauth" | "api_key" | "webhook";
 
@@ -365,6 +366,7 @@ export const PROVIDER_LABELS: Record<IntegrationProvider, string> = {
     cal_com: "Cal.com",
     google_sheets: "Google Sheets",
     millionverifier: "MillionVerifier",
+    cleanmylist: "CleanMyList",
 };
 
 // A connection is bookable when it's a connected scheduling provider with a

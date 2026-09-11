@@ -17,6 +17,8 @@ use crate::events::TrackingEvent;
 use crate::hits::{ForwardedHit, HitForwarder, HitPayload, Outcome};
 use crate::links::{LinkResolver, Resolution};
 use crate::producer::Producer;
+use crate::scanners::{Request, ScannerNetworks};
+use crate::unsubscribe::{body_content_type, invalid_token, valid_token, UnsubscribeProxy};
 
 // 1x1 transparent GIF (43 bytes)
 const TRANSPARENT_GIF: &[u8] = &[
@@ -43,11 +45,23 @@ pub struct AppState {
     pub hits: Arc<HitForwarder>,
     /// Tighter per-source budget for page views than for pixels
     pub hit_rate_limiter: Arc<RateLimiter>,
+    /// Opt-out pages get a budget of their own rather than sharing the pixel
+    /// and click one. A single NAT or mail gateway can spend that shared
+    /// counter on tracking alone, and the recipient behind it who then opens
+    /// the unsubscribe link would be refused: the one request that must never
+    /// be turned away. Same size, separate bucket; a source loading opt-out
+    /// pages this fast is probing, not opting out.
+    pub unsubscribe_rate_limiter: Arc<RateLimiter>,
+    /// Known automated-scanner sources. A match labels the event and nothing
+    /// else: the pixel is still served and the click still redirected.
+    pub scanners: Arc<ScannerNetworks>,
     /// Proxies whose forwarded-IP header is believed, and which header
     pub trusted_proxies: Arc<Vec<ipnet::IpNet>>,
     pub client_ip_header: Arc<String>,
     /// Key for the source-address token (see `hash_ip`)
     pub ip_hash_key: Arc<String>,
+    /// Recipient opt-out, proxied to the backend that owns the pages
+    pub unsubscribe: Arc<UnsubscribeProxy>,
 }
 
 impl AppState {
@@ -75,9 +89,17 @@ impl AppState {
                 config.internal_api_token.clone(),
             )),
             hit_rate_limiter: Arc::new(RateLimiter::new(config.pagehit_rate_limit_per_min)),
+            unsubscribe_rate_limiter: Arc::new(RateLimiter::new(config.rate_limit_per_min)),
+            scanners: Arc::new(ScannerNetworks::new(
+                config.scanner_builtins,
+                &config.scanner_networks,
+                &config.scanner_click_networks,
+                Some(config.scanner_asn_header.clone()),
+            )),
             trusted_proxies: Arc::new(config.trusted_proxies.clone()),
             client_ip_header: Arc::new(config.client_ip_header.clone()),
             ip_hash_key: Arc::new(config.ip_hash_key.clone()),
+            unsubscribe: Arc::new(UnsubscribeProxy::new(config.backend_internal_url.clone())),
         }
     }
 
@@ -127,6 +149,7 @@ pub async fn track_open(
         return pixel_response();
     }
 
+    let trusted = peer_is_trusted(peer, &state.trusted_proxies);
     // The address is hashed for deduplication + rate limiting; only its
     // network travels with the event, for the location lookup downstream.
     let ip = client_ip(
@@ -161,6 +184,14 @@ pub async fn track_open(
         return pixel_response();
     }
 
+    // A mail-filtering network fetching the pixel is delivery evidence, not a
+    // read. The event is published and labelled rather than dropped, so the
+    // consumer can record it as a machine open.
+    let scanner = state
+        .scanners
+        .classify(&ip, &headers, trusted, Request::Open)
+        .map(|label| label.to_string());
+
     // Publish event asynchronously (fire and forget)
     let producer = state.producer.clone();
     tokio::spawn(async move {
@@ -174,6 +205,7 @@ pub async fn track_open(
                 user_agent,
                 ip_hash,
                 client_ip: Some(anonymize_ip(&ip)).filter(|n| !n.is_empty()),
+                scanner,
             })
             .await;
     });
@@ -198,6 +230,7 @@ pub async fn track_click(
         return (StatusCode::NOT_FOUND, "Unknown link").into_response();
     }
 
+    let trusted = peer_is_trusted(peer, &state.trusted_proxies);
     // Anti-flood: cap total request rate per source. Only the address's
     // network rides along, for the location lookup downstream.
     let ip = client_ip(
@@ -236,15 +269,21 @@ pub async fn track_click(
         return Redirect::temporary(&link.destination).into_response();
     }
 
-    // When the workspace registered the destination's host for website
-    // tracking, the ticket rides along so the snippet can tie the browser to
-    // the recipient. The ticket is opaque and per-recipient: it names no
-    // destination and no secret, only "the click the backend already knows".
-    let target = if link.identify {
-        with_identify_param(&link.destination, &link_id)
-    } else {
-        link.destination.clone()
-    };
+    // Safe Links and its peers redirect the browser to the destination rather
+    // than fetching it, so a person's click always reaches us from the
+    // person's own address. A ticket walked from a mail-filtering network is
+    // a scan: it is still redirected, and labelled so it never counts.
+    let scanner = state
+        .scanners
+        .classify(&ip, &headers, trusted, Request::Click)
+        .map(|label| label.to_string());
+
+    let target = redirect_target(
+        &link.destination,
+        &link_id,
+        link.identify,
+        scanner.as_deref(),
+    );
 
     // Dedupe repeat clicks of the same ticket from the same source
     if state.is_duplicate("CLICK", &link_id, &ip_hash).await {
@@ -266,11 +305,116 @@ pub async fn track_click(
                 user_agent,
                 ip_hash,
                 client_ip: Some(anonymize_ip(&ip)).filter(|n| !n.is_empty()),
+                scanner,
             })
             .await;
     });
 
     Redirect::temporary(&target).into_response()
+}
+
+/// Recipient opt-out, served here because a workspace's verified tracking
+/// domain is the host its campaign mail carries. The backend owns the pages
+/// and the suppression; these three only shape-check the token, spend the
+/// source's budget and hand the request on.
+///
+/// GET /unsubscribe/{token}
+pub async fn unsubscribe_page(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Path(token): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !valid_token(&token) {
+        return invalid_token();
+    }
+    if let Some(limited) = spend_unsubscribe_budget(&state, peer, &headers).await {
+        return limited;
+    }
+    state.unsubscribe.get(&token).await
+}
+
+/// POST /unsubscribe/{token} — the confirm button, or a provider's RFC 8058
+/// one-click. Never rate limited: a provider POSTing an opt-out is the one
+/// request that must not be refused, and a refusal here is a spam complaint.
+pub async fn unsubscribe_submit(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !valid_token(&token) {
+        return invalid_token();
+    }
+    let content_type = body_content_type(&headers);
+    state.unsubscribe.post(&token, body, content_type).await
+}
+
+/// POST /unsubscribe/{token}/resubscribe — the "unsubscribed by mistake" button.
+pub async fn unsubscribe_undo(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Path(token): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !valid_token(&token) {
+        return invalid_token();
+    }
+    if let Some(limited) = spend_unsubscribe_budget(&state, peer, &headers).await {
+        return limited;
+    }
+    let content_type = body_content_type(&headers);
+    state
+        .unsubscribe
+        .resubscribe(&token, body, content_type)
+        .await
+}
+
+/// Charges one request against the source's opt-out budget, returning the
+/// refusal when it is spent. A recipient opts out once, so this budget is
+/// never reached by real traffic; it exists to cap token spraying, and it is
+/// deliberately not the counter that pixels and clicks spend.
+async fn spend_unsubscribe_budget(
+    state: &AppState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+) -> Option<Response> {
+    let ip = client_ip(
+        peer,
+        headers,
+        &state.trusted_proxies,
+        &state.client_ip_header,
+    );
+    let source = hash_ip(&state.ip_hash_key, &ip);
+    if state.unsubscribe_rate_limiter.allow(&source).await {
+        return None;
+    }
+    Some((StatusCode::TOO_MANY_REQUESTS, "Slow down").into_response())
+}
+
+/// Where a click is sent. When the workspace registered the destination's host
+/// for website tracking, the identification ticket rides along so the snippet
+/// can tie the browser to the recipient; it is opaque and per-recipient,
+/// naming no destination and no secret, only "the click the backend already
+/// knows".
+///
+/// A recognised scanner is sent to the bare destination, the same as one
+/// caught by its user agent: the ticket reaches the page's snippet, which
+/// posts it to the hit endpoint, and the backend files that page view against
+/// the recipient. A gateway walking the link would show up as the person
+/// browsing the site.
+fn redirect_target(
+    destination: &str,
+    ticket: &str,
+    identify: bool,
+    scanner: Option<&str>,
+) -> String {
+    if identify && scanner.is_none() {
+        with_identify_param(destination, ticket)
+    } else {
+        destination.to_string()
+    }
 }
 
 /// Query parameter the click redirect appends and the snippet strips.
@@ -455,7 +599,7 @@ fn client_ip(
     header: &str,
 ) -> String {
     let peer_ip = peer.ip();
-    if !trusted.iter().any(|net| net.contains(&peer_ip)) {
+    if !peer_is_trusted(peer, trusted) {
         return peer_ip.to_string();
     }
     let raw = headers
@@ -474,6 +618,14 @@ fn client_ip(
         Some(ip) => ip.to_string(),
         None => peer_ip.to_string(),
     }
+}
+
+/// Whether the socket peer is one of the proxies the operator named. Every
+/// header that can change how a request is treated, the client address and the
+/// source ASN, is read only when this is true.
+fn peer_is_trusted(peer: SocketAddr, trusted: &[ipnet::IpNet]) -> bool {
+    let peer_ip = peer.ip();
+    trusted.iter().any(|net| net.contains(&peer_ip))
 }
 
 /// The network an address belongs to, for the location lookup downstream:
@@ -510,6 +662,37 @@ fn hash_ip(key: &str, ip: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The ticket identifies the recipient to the destination's own analytics.
+    // Handing it to a security gateway files the gateway's fetch as that
+    // person's visit, which is the same reason the user-agent path above
+    // redirects scanners to the bare destination.
+    #[test]
+    fn a_scanner_is_never_handed_the_identification_ticket() {
+        assert_eq!(
+            redirect_target("https://x.com/p", "abc", true, None),
+            "https://x.com/p?wbly_t=abc"
+        );
+        assert_eq!(
+            redirect_target(
+                "https://x.com/p",
+                "abc",
+                true,
+                Some("microsoft-365-protection")
+            ),
+            "https://x.com/p"
+        );
+        // A destination the workspace never registered carries no ticket
+        // either way, and the redirect itself always happens.
+        assert_eq!(
+            redirect_target("https://x.com/p", "abc", false, None),
+            "https://x.com/p"
+        );
+        assert_eq!(
+            redirect_target("https://x.com/p", "abc", false, Some("scanner")),
+            "https://x.com/p"
+        );
+    }
 
     #[test]
     fn identify_param_keeps_query_and_fragment() {

@@ -104,11 +104,13 @@ export function FormPage() {
                         {design.layout !== "split" && !design.logoOnPage && bodyLogo}
                         <FormRenderer form={form} design={design} tracker={tracker} />
                     </div>
-                    <div className="brand">
-                        <a href="https://warmbly.com" target="_blank" rel="noopener noreferrer">
-                            Powered by Warmbly
-                        </a>
-                    </div>
+                    {form.brand?.url && (
+                        <div className="brand">
+                            <a href={form.brand.url} target="_blank" rel="noopener noreferrer">
+                                Powered by {form.brand.name}
+                            </a>
+                        </div>
+                    )}
                 </main>
             </div>
         </div>

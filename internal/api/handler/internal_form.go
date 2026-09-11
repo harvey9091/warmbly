@@ -44,6 +44,7 @@ func (h *Handler) InternalGetPublicForm(c *gin.Context) {
 		BackgroundURL:  f.BackgroundURL,
 		AllowedDomains: f.AllowedDomains,
 		CaptchaSiteKey: formCaptchaSiteKey(f),
+		Brand:          formBrand(),
 	}
 	if token := c.Query("t"); token != "" {
 		if link, prefill := h.FormService.ResolveLink(c.Request.Context(), f, token); link != nil {
@@ -52,6 +53,18 @@ func (h *Handler) InternalGetPublicForm(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// formBrand is the "powered by" line a public form page carries, or nil when
+// this deployment set none. A self-host that configured no EMAIL_BRAND_* shows
+// no attribution at all: the page is the operator's, seen by the operator's
+// leads, and the platform has no claim on that footer.
+func formBrand() *formwire.Brand {
+	b := config.Brand()
+	if b.WebsiteURL == "" {
+		return nil
+	}
+	return &formwire.Brand{Name: b.Name, URL: b.WebsiteURL}
 }
 
 // InternalRecordFormEvent stores one funnel event; the forms service already

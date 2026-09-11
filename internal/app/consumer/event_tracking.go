@@ -53,6 +53,7 @@ type TrackingConsumer struct {
 	// retention is the operator-editable window the engagement prune obeys.
 	// Injected post-construction; nil keeps the compiled default.
 	retention RetentionSource
+	tracking  TrackingPolicySource
 	topic     string
 	group     string
 }
@@ -74,6 +75,30 @@ func (tc *TrackingConsumer) engagementRetentionDays(ctx context.Context) int {
 		return config.EngagementEventRetentionDaysDefault
 	}
 	return tc.retention.RetentionWindows(ctx).EngagementEventDays
+}
+
+// TrackingPolicySource is the operator-editable engagement-classification
+// section, satisfied by instancesettings.Service. Read per event rather than
+// held from boot, so an edit in the admin panel needs no restart. The
+// consumer's own service caches for instancesettings.cacheTTL and the backend
+// that wrote the row is a different process, so an edit lands within that TTL,
+// not on the very next event.
+type TrackingPolicySource interface {
+	TrackingPolicy(ctx context.Context) instancesettings.Tracking
+}
+
+// WireTrackingPolicy attaches the instance settings the machine-window rule
+// reads its windows from.
+func (tc *TrackingConsumer) WireTrackingPolicy(src TrackingPolicySource) { tc.tracking = src }
+
+// machineWindows are the windows the next classification uses. An unwired
+// source falls back to the compiled defaults, which is what the consumer runs
+// on before the settings document has ever been written.
+func (tc *TrackingConsumer) machineWindows(ctx context.Context) instancesettings.Tracking {
+	if tc.tracking == nil {
+		return instancesettings.DefaultTracking()
+	}
+	return tc.tracking.TrackingPolicy(ctx)
 }
 
 // NewTrackingConsumer wires the tracking consumer to the shared event bus.
@@ -218,10 +243,11 @@ func (tc *TrackingConsumer) receive(_ context.Context, msg eventbus.Message) err
 // HandleTrackingEvent processes a tracking event.
 //
 // Opens and clicks are classified before they count. The edge already drops
-// crawlers and security scanners it can name; here the ones it cannot are
-// caught by what they do: a fetch with no browser, a fetch inside the
-// machine window after dispatch (nobody reads that fast), and clicks on
-// several links of one email within seconds (a gateway walking the message).
+// crawlers and security scanners it can name by user agent, and labels the
+// ones it recognises by source network; here the ones it cannot are caught by
+// what they do: a fetch with no browser, a fetch inside the machine window
+// after dispatch (nobody reads that fast), and clicks on several links of one
+// email within seconds (a gateway walking the message).
 // A machine open is still recorded, labelled, because it proves delivery. A
 // machine click is logged per link with its reason but never stamps the step
 // as clicked, fires no automation, and sends no webhook: "clicked" keeps
@@ -272,11 +298,12 @@ func (tc *TrackingConsumer) HandleTrackingEvent(ctx context.Context, event *even
 	// labelled, and must never fire open-triggered automations.
 	var machine bool
 	var reason string
+	windows := tc.machineWindows(ctx)
 	switch event.EventType {
 	case events.EventTypeEmailOpened:
-		machine, reason = classifyOpen(event.UserAgent, sentAt, at)
+		machine, reason = classifyOpen(event.UserAgent, event.Scanner, sentAt, at, windows.OpenWindow())
 	case events.EventTypeEmailClicked:
-		machine, reason = classifyClick(event.UserAgent, sentAt, at)
+		machine, reason = classifyClick(event.UserAgent, event.Scanner, sentAt, at, windows.ClickWindow())
 	default:
 		// Unknown event type, skip
 		return nil

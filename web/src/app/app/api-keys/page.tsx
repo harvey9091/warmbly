@@ -48,9 +48,11 @@ import useAPIKeys from "@/lib/api/hooks/app/api-keys/useAPIKeys";
 import useAPIKeyUsageSummary from "@/lib/api/hooks/app/api-keys/useAPIKeyUsageSummary";
 import useAPIKeyAnalytics from "@/lib/api/hooks/app/api-keys/useAPIKeyAnalytics";
 import type APIKey from "@/lib/api/models/app/apikeys/APIKey";
+import { keyCanAuthenticate, keyStatus } from "@/lib/api/models/app/apikeys/APIKey";
 import CreateKeyModal from "./_components/CreateKeyModal";
 import KeyDetailDrawer from "./_components/KeyDetailDrawer";
 import { StackedBars } from "./_components/Sparkline";
+import useBrand from "@/hooks/useBrand";
 
 export default function APIKeysPage() {
     const canManage = usePermission("MANAGE_API_KEYS");
@@ -203,7 +205,10 @@ export default function APIKeysPage() {
 }
 
 function KeyRow({ apiKey, onClick }: { apiKey: APIKey; onClick: () => void }) {
-    const status = apiKey.status;
+    // A key past its expires_at still reads "active" in the column, so the row
+    // asks the model rather than the field.
+    const status = keyStatus(apiKey);
+    const live = keyCanAuthenticate(apiKey);
     return (
         <button
             type="button"
@@ -211,9 +216,7 @@ function KeyRow({ apiKey, onClick }: { apiKey: APIKey; onClick: () => void }) {
             className="w-full h-12 px-5 flex items-center gap-3 text-left hover:bg-slate-50/80 transition-colors group"
         >
             <KeyIcon
-                className={`w-3.5 h-3.5 shrink-0 ${
-                    status === "active" ? "text-slate-500" : "text-slate-300"
-                }`}
+                className={`w-3.5 h-3.5 shrink-0 ${live ? "text-slate-500" : "text-slate-300"}`}
             />
             <div className="flex flex-col min-w-0 max-w-[40%]">
                 <span className="text-[12.5px] text-slate-900 font-medium truncate">{apiKey.name}</span>
@@ -256,7 +259,10 @@ function StatusPill({ status }: { status: APIKey["status"] }) {
 }
 
 function CodeSnippet({ prefix }: { prefix: string }) {
-    const snippet = `curl https://api.warmbly.com/v1/campaigns \\
+    // This instance's own API base, not the hosted one: a self-hoster copying
+    // the example was being handed a curl aimed at somebody else's server.
+    const { apiURL } = useBrand();
+    const snippet = `curl ${apiURL}/v1/campaigns \\
   -H "Authorization: Bearer ${prefix}…" \\
   -H "Content-Type: application/json"`;
     const [copied, setCopied] = React.useState(false);

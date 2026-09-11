@@ -20,6 +20,9 @@ The Integrations page is a searchable directory with your existing connections a
 | Discord | Notifications | webhook URL | Ping a server channel on reply, bounce, or warmup health |
 | Calendly, Cal.com | Meetings | minted inbound URL | Track booked, rescheduled, and canceled calls |
 | MillionVerifier | Verification | API key | Check every contact's address through your pay-as-you-go credits instead of the built-in probe |
+| CleanMyList | Verification | API key | Verify contacts using your CleanMyList plan allowance and credits |
+
+Only one Verification connection is active at a time; see [one verifier at a time](/guides/integrations/#one-verifier-at-a-time).
 
 Three connect styles appear on the catalog cards: `one-click` OAuth, `api_key` for providers without an OAuth app, and `webhook` for a minted inbound URL or a pasted channel URL.
 
@@ -36,6 +39,20 @@ The key is tested against your MillionVerifier account when you connect, so a mi
 </Callout>
 
 **Credentials** (OAuth tokens, pasted keys, webhook URLs) are sealed with envelope encryption before touching the database. Only non-secret display details like an account name or Salesforce instance host are stored in the clear, so the dashboard can label the connection.
+
+### Connect CleanMyList
+
+1. Verify your account email in [CleanMyList](https://www.cleanmylist.io/), then create a workspace key under **App → API keys**.
+2. In Warmbly, open **Integrations → CleanMyList → Connect** and paste the key. Warmbly validates it with a free, read-only account request and stores it encrypted.
+3. New contacts and re-verification requests use CleanMyList. Each address uses one unit of plan allowance first, then credits. Its deliverable, risky, undeliverable, and unknown verdicts map to Warmbly's corresponding statuses.
+
+CleanMyList does not expose a balance through its API, so Warmbly omits the credit counter. View your allowance and credits in CleanMyList. If verification fails, including an exhausted account, Warmbly uses the built-in check. Fix the account or reconnect a revoked key to restore verification.
+
+An account with nothing left is only visible when a check is refused, so Warmbly stops checking against it for 15 minutes rather than retrying every address. Topping up takes effect on the next pass after that. See the [CleanMyList API documentation](https://www.cleanmylist.io/developers) and [address verification](/guides/deliverability/#address-verification).
+
+### One verifier at a time
+
+A workspace uses one verification service. Connecting a second one is refused while the first is connected, because which one ran would otherwise be decided by connection order alone and every check would quietly move to a different bill. Disconnect the current service first, then connect the new one.
 
 ## CRM field mappings
 

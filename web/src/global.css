@@ -559,6 +559,33 @@ svg.loading circle {
   outline-offset: 1px;
 }
 
+/* Layout tables. The editing surface needs a visible grid to work in, but the
+   sent markup keeps whatever borders the template wrote: these rules never
+   leave the dashboard, and a mail client would ignore them anyway. A cell with
+   its own inline border or background wins, so a real design still previews as
+   itself while it is being edited. */
+.tiptap-body table { border-collapse: collapse; margin: 0.4em 0; max-width: 100%; }
+/* Only a table that sizes itself nowhere else. A presentational width= loses to
+   any stylesheet rule, so forcing one here edited a 600px design at full
+   container width and table-layout:fixed threw away its column widths. An
+   inline style beats this rule on its own. */
+.tiptap-body table:not([width]) { width: 100%; }
+.tiptap-body td, .tiptap-body th { border: 1px dashed #e2e8f0; padding: 0.4em 0.55em; vertical-align: top; position: relative; }
+.tiptap-body th { background: #f8fafc; font-weight: 600; text-align: left; }
+.tiptap-body td > p:last-child, .tiptap-body th > p:last-child { margin-bottom: 0; }
+.tiptap-body .selectedCell::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: rgba(2, 132, 199, 0.08); /* sky-600 */
+}
+
+/* The signature is other people's markup mounted in the dashboard's own DOM,
+   because a contentEditable is how the visual editor works. Paint containment
+   makes this box the containing block for anything positioned inside it and
+   clips to it, so a signature carrying position:fixed covers itself rather
+   than a teammate's screen. Markup that could execute never reaches here at
+   all; EmailEditor forces the source view for that. */
+.email-signature-surface { contain: layout paint; }
+
 /* Merge-tag chips shown inside the composer editor. Only the node-view button
    carries .tpl-var; the resolved `<span data-var>` the preview renders is left
    unstyled on purpose so it reads as the plain value it will send as. */

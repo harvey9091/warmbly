@@ -1,6 +1,11 @@
 package tasks
 
-import "github.com/warmbly/warmbly/internal/models"
+import (
+	"strings"
+
+	"github.com/warmbly/warmbly/internal/config"
+	"github.com/warmbly/warmbly/internal/models"
+)
 
 // trackingOverrideIgnored is a tracking domain that was configured but not
 // used, with the sentence the campaign log records for it.
@@ -48,4 +53,33 @@ func resolveTrackingHost(defaultHost string, account *models.Email, campaign *mo
 	}
 
 	return host, ignored
+}
+
+// resolveOptOutOrigin is the absolute origin a recipient's unsubscribe link is
+// minted on: the workspace's OWN verified tracking domain (campaign override
+// first), or "" to leave it on the API origin.
+//
+// Deliberately narrower than resolveTrackingHost, which falls back to the
+// install's shared tracking host. An opt-out has to reach something serving:
+// a verified domain is a CNAME this install resolved to its own tracking
+// service, so it provably does, while the shared host is only configuration
+// and is absent from a core-only install. A dead click link costs a click; a
+// dead opt-out costs a spam complaint.
+func resolveOptOutOrigin(account *models.Email, campaign *models.Campaign) string {
+	host := ""
+	if account != nil && account.TrackingDomainVerified && account.TrackingDomain != "" {
+		host = account.TrackingDomain
+	}
+	if campaign != nil && campaign.TrackingDomainVerified && campaign.TrackingDomain != "" {
+		host = campaign.TrackingDomain
+	}
+	// http is what TrackingURL picks for a loopback or ported host, and an
+	// opt-out address a recipient reads (and a provider fetches for one-click)
+	// has to be https. Such a host is a dev or LAN install, where the API
+	// origin is the honest place for the link.
+	origin := strings.TrimSuffix(config.TrackingURL(host, ""), "/")
+	if !strings.HasPrefix(origin, "https://") {
+		return ""
+	}
+	return origin
 }

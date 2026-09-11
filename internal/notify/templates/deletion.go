@@ -62,7 +62,7 @@ Scheduled deletion
 Account scheduled for deletion
 </h2>
 <p style="margin:0 0 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#475569;line-height:20px;">
-Hi {{.Name}}, your Warmbly account has been scheduled for permanent deletion.
+Hi {{.Name}}, your {{.Brand}} account has been scheduled for permanent deletion.
 </p>
 ` + deletionDetailBlock + `
 <p style="margin:0 0 8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;color:#94a3b8;letter-spacing:0.08em;text-transform:uppercase;font-weight:500;">
@@ -182,12 +182,14 @@ func GenerateOrgDeletionScheduledHTML(orgName string, executeAfter time.Time, gr
 // GenerateUserDeletionScheduledHTML renders the account "scheduled for
 // deletion" notice. firstName falls back to the email upstream.
 func GenerateUserDeletionScheduledHTML(firstName string, executeAfter time.Time, graceDays int, cancelURL string) (string, error) {
-	return renderDeletion(userDeletionScheduledTmpl, "Your Warmbly account is scheduled for deletion", struct {
+	brand := CompanyName()
+	return renderDeletion(userDeletionScheduledTmpl, "Your "+brand+" account is scheduled for deletion", struct {
 		Name      string
 		DeleteOn  string
 		GraceDays int
 		CancelURL string
-	}{firstName, formatDeletionTime(executeAfter), graceDays, cancelURL})
+		Brand     string
+	}{firstName, formatDeletionTime(executeAfter), graceDays, cancelURL, brand})
 }
 
 // GenerateOrgDeletionCancelledHTML renders the org deletion-cancelled

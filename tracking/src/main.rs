@@ -9,7 +9,10 @@ mod kafka;
 mod links;
 mod nats;
 mod observability;
+mod posthog;
 mod producer;
+mod scanners;
+mod unsubscribe;
 
 use axum::{
     extract::DefaultBodyLimit,
@@ -26,7 +29,10 @@ use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::config::Config;
-use crate::handlers::{health, track_click, track_open, track_page_hit, tracking_js, AppState};
+use crate::handlers::{
+    health, track_click, track_open, track_page_hit, tracking_js, unsubscribe_page,
+    unsubscribe_submit, unsubscribe_undo, AppState,
+};
 use crate::observability::report_error;
 use crate::producer::Producer;
 
@@ -71,6 +77,13 @@ async fn connect_producer(config: &Config) -> Producer {
 
 #[tokio::main]
 async fn main() {
+    // Before any TLS connection. rustls 0.23 cannot choose between aws-lc-rs
+    // and ring when both are in the tree, and panics at the first handshake:
+    // a tls:// bus or a rediss:// cache takes the whole service down at
+    // startup, which plaintext local development never reveals.
+    // Ignored rather than unwrapped: a second install is not a failure.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     // Initialize tracing
     tracing_subscriber::registry()
         .with(
@@ -90,7 +103,13 @@ async fn main() {
         }
     };
     // Held until main returns so queued events are flushed on shutdown.
-    let _sentry = observability::init(&config.env, Some(&config.sentry_dsn), &config.release);
+    let _reporting = observability::init(observability::Settings {
+        env: &config.env,
+        release: &config.release,
+        sentry_dsn: &config.sentry_dsn,
+        posthog_key: &config.posthog_key,
+        posthog_host: &config.posthog_host,
+    });
     info!("Starting tracking service on {}", config.addr());
 
     // Event-bus producer (NATS by default; Kafka when EVENTBUS_PROVIDER=kafka
@@ -110,6 +129,19 @@ async fn main() {
         .route(
             "/p",
             post(track_page_hit).layer(DefaultBodyLimit::max(hits::MAX_BODY_BYTES)),
+        )
+        // Recipient opt-out. A workspace's verified tracking domain is the
+        // host its campaign mail carries, so the unsubscribe address in that
+        // mail resolves here; the backend owns the pages behind it.
+        .route(
+            "/unsubscribe/:token",
+            get(unsubscribe_page)
+                .post(unsubscribe_submit)
+                .layer(DefaultBodyLimit::max(unsubscribe::MAX_BODY_BYTES)),
+        )
+        .route(
+            "/unsubscribe/:token/resubscribe",
+            post(unsubscribe_undo).layer(DefaultBodyLimit::max(unsubscribe::MAX_BODY_BYTES)),
         )
         .layer(
             CorsLayer::new()

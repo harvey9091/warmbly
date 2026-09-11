@@ -29,6 +29,7 @@ type Provider interface {
 var (
 	_ Provider = (*KMS)(nil)
 	_ Provider = (*LocalProvider)(nil)
+	_ Provider = (*BrokeredProvider)(nil)
 )
 
 // Name satisfies Provider for the AWS implementation.

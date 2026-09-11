@@ -1233,7 +1233,20 @@ function ContactsTableBody({
                             </>
                         )}
                         {embedded ? (
-                            <Th className="w-28 hidden md:table-cell">Current step</Th>
+                            <>
+                                <Th className="w-28 hidden md:table-cell">Current step</Th>
+                                <Th className="w-36 hidden xl:table-cell">
+                                    <span className="inline-flex items-center gap-1">
+                                        Sender
+                                        <span
+                                            className="inline-flex cursor-help text-slate-300 hover:text-slate-500"
+                                            title="The mailbox this lead's whole sequence sends from. It is picked when the first email goes out and every follow-up keeps it, so the contact always hears from one address."
+                                        >
+                                            <InfoIcon className="w-3 h-3" aria-label="How the sender is chosen" />
+                                        </span>
+                                    </span>
+                                </Th>
+                            </>
                         ) : (
                             <Th className="w-24 text-right hidden md:table-cell">Campaigns</Th>
                         )}
@@ -1369,6 +1382,7 @@ function ContactsTableBody({
                                     </>
                                 )}
                                 {embedded ? (
+                                    <>
                                     <td className="px-3 hidden md:table-cell">
                                         {lead?.current_step ? (
                                             <span
@@ -1385,6 +1399,19 @@ function ContactsTableBody({
                                             <span className="text-[11px] text-slate-300">Not started</span>
                                         )}
                                     </td>
+                                    <td className="px-3 hidden xl:table-cell">
+                                        {lead?.sender ? (
+                                            <span
+                                                title={`Every step of this lead's sequence sends from ${lead.sender}`}
+                                                className="block truncate text-[11.5px] text-slate-600"
+                                            >
+                                                {lead.sender}
+                                            </span>
+                                        ) : (
+                                            <span className="text-[11px] text-slate-300">Not assigned</span>
+                                        )}
+                                    </td>
+                                    </>
                                 ) : (
                                     <td className="px-3 text-right font-mono text-[12px] text-slate-600 tabular-nums hidden md:table-cell">
                                         {c.campaigns?.length ?? 0}

@@ -86,10 +86,14 @@ func buildSendHeaders(req *SendRequest) map[string]string {
 		h[config.WarmupVerifyHeader] = req.WarmupToken
 	}
 	if req.UnsubscribeURL != "" {
-		// RFC 8058: the HTTPS URI in List-Unsubscribe plus the one-click marker
-		// tells Gmail/Yahoo/Microsoft to POST List-Unsubscribe=One-Click here.
 		h["List-Unsubscribe"] = "<" + req.UnsubscribeURL + ">"
-		h["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+		// RFC 8058 one-click requires the URI to be https: a provider that
+		// POSTs an http address either refuses or leaks the token in clear, so
+		// an http link (a LAN or dev install) ships as a plain RFC 2369 header
+		// the recipient clicks instead of a one-click button that will not work.
+		if strings.HasPrefix(strings.ToLower(req.UnsubscribeURL), "https://") {
+			h["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+		}
 	}
 	if len(h) == 0 {
 		return nil

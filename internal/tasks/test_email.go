@@ -51,7 +51,7 @@ func (s *tasksService) SendTestEmail(ctx context.Context, orgID uuid.UUID, accou
 	optOut := s.resolveOptOut(ctx, orgID, campaign)
 	var unsubscribeURL string
 	if s.unsubLinks != nil && s.unsubLinks.Enabled() {
-		unsubscribeURL = s.unsubLinks.URL(orgID, campaign.ID, uuid.Nil, time.Now())
+		unsubscribeURL = s.unsubLinks.URLOn(resolveOptOutOrigin(account, campaign), orgID, campaign.ID, uuid.Nil, time.Now())
 	}
 
 	rendered := previewTemplatesWith(sequence.Subject, sequence.BodyHTML, sequence.BodyPlain, renderFor, unsubscribeURL)

@@ -60,6 +60,16 @@ var (
 	// contact; the returned accountID is a nominal pool mailbox for the wakeup
 	// task only (the next invocation re-evaluates selection from scratch).
 	ErrCampaignDeferred = errors.New("campaign send deferred - no eligible mailbox for this contact right now")
+
+	// ErrSenderBusy is the narrower deferral: this lead's sequence belongs to
+	// one mailbox, and that mailbox has nothing left today. Every step of a
+	// conversation comes from the address the contact first heard from, so the
+	// lead waits for it rather than being written to by a stranger.
+	//
+	// It wraps ErrCampaignDeferred, so every caller that reschedules on a
+	// deferral behaves exactly as before; only the contact drawer, which words
+	// the reason, tests for it.
+	ErrSenderBusy = fmt.Errorf("%w: the mailbox this lead's sequence belongs to has no capacity left today", ErrCampaignDeferred)
 )
 
 // DeferSlot is the wakeup time a caller must use after CalculateNextCampaignTime

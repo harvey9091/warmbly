@@ -1,9 +1,12 @@
 package imap
 
 import (
+	"bufio"
 	"context"
+	"io"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +22,12 @@ import (
 // against it, so "works on a plain RFC 3501 server" is a thing CI checks
 // rather than a thing we believe.
 func testServer(t *testing.T, caps imap.CapSet, folders ...string) *Client {
+	t.Helper()
+	return clientTo(t, startMemServer(t, caps, folders...))
+}
+
+// startMemServer runs the in-process server and returns its address.
+func startMemServer(t *testing.T, caps imap.CapSet, folders ...string) string {
 	t.Helper()
 	mem := imapmemserver.New()
 	user := imapmemserver.NewUser("warmbly@test", "hunter2")
@@ -49,7 +58,13 @@ func testServer(t *testing.T, caps imap.CapSet, folders ...string) *Client {
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
 
-	host, port, _ := net.SplitHostPort(ln.Addr().String())
+	return ln.Addr().String()
+}
+
+// clientTo points a Client at an already-running server.
+func clientTo(t *testing.T, addr string) *Client {
+	t.Helper()
+	host, port, _ := net.SplitHostPort(addr)
 	c := &Client{
 		Email:    "warmbly@test",
 		AuthType: models.AuthPlain,
@@ -64,6 +79,86 @@ func testServer(t *testing.T, caps imap.CapSet, folders ...string) *Client {
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	return c
+}
+
+// wireLog is every command the client sent.
+//
+// The in-process server is lenient: go-imap's own parser takes fetch items
+// the advertised capabilities do not cover, which is exactly how #405 shipped
+// past a package whose tests all run against a plain RFC 3501 server. A real
+// one answers BAD, so what has to be asserted is the command on the wire, not
+// whether this server happened to accept it.
+type wireLog struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (w *wireLog) add(line string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.lines = append(w.lines, line)
+}
+
+// commands returns every recorded line whose command word matches, uppercased.
+func (w *wireLog) commands(name string) []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var out []string
+	for _, l := range w.lines {
+		// "<tag> <COMMAND> ..." and UID-prefixed forms.
+		fields := strings.Fields(strings.ToUpper(l))
+		if len(fields) >= 2 && (fields[1] == name || (fields[1] == "UID" && len(fields) >= 3 && fields[2] == name)) {
+			out = append(out, strings.ToUpper(l))
+		}
+	}
+	return out
+}
+
+// recordingServer is startMemServer behind a proxy that records the client's
+// half of the conversation.
+func recordingServer(t *testing.T, caps imap.CapSet, folders ...string) (*Client, *wireLog) {
+	t.Helper()
+	upstream := startMemServer(t, caps, folders...)
+	log := &wireLog{}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		for {
+			down, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			up, err := net.Dial("tcp", upstream)
+			if err != nil {
+				_ = down.Close()
+				return
+			}
+			go func() { _, _ = io.Copy(down, up); _ = down.Close() }()
+			go func() {
+				defer func() { _ = up.Close() }()
+				r := bufio.NewReader(down)
+				for {
+					line, err := r.ReadString('\n')
+					if line != "" {
+						log.add(strings.TrimRight(line, "\r\n"))
+						if _, werr := up.Write([]byte(line)); werr != nil {
+							return
+						}
+					}
+					if err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+
+	return clientTo(t, ln.Addr().String()), log
 }
 
 func atoi(s string) int {

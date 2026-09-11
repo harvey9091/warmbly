@@ -14,11 +14,11 @@ RUN apk add --no-cache git ca-certificates && \
 
 WORKDIR /app
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
+RUN --mount=type=cache,id=gomod,target=/go/pkg/mod go mod download
 
 COPY . .
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,id=gomod,target=/go/pkg/mod \
+    --mount=type=cache,id=gobuild,target=/root/.cache/go-build \
     set -eux; \
     if echo "$GO_TAGS" | grep -qw kafka; then CGO=1; TAGS="musl kafka"; else CGO=0; TAGS=""; fi; \
     CGO_ENABLED=$CGO GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags "$TAGS" -ldflags="-s -w -X github.com/warmbly/warmbly/internal/version.Version=$VERSION -X github.com/warmbly/warmbly/internal/version.Commit=$COMMIT -X github.com/warmbly/warmbly/internal/version.BuiltAt=$BUILT_AT" -o /out/consumer ./cmd/consumer
@@ -37,6 +37,17 @@ RUN apk add --no-cache ca-certificates tzdata && \
 # root-owned, the non-root process cannot write to it, and the first send fails
 # with "mkdir /data/blobs/emails: permission denied".
 RUN mkdir -p /data/blobs && chown -R warmbly:warmbly /data
+
+# Amazon RDS presents a chain rooted in an RDS CA that is in no public trust
+# store, so sslmode=verify-full cannot work against it from the system bundle
+# alone. Shipping AWS's truststore makes verification possible for operators who
+# opt in with sslrootcert=/etc/ssl/rds/global-bundle.pem; nothing here changes
+# the default, because pointing every install at an RDS-only store would break
+# a Postgres fronted by a public CA.
+RUN mkdir -p /etc/ssl/rds && \
+    wget -qO /etc/ssl/rds/global-bundle.pem \
+      https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem && \
+    chmod 0644 /etc/ssl/rds/global-bundle.pem
 
 COPY --from=builder /out/consumer /app/consumer
 

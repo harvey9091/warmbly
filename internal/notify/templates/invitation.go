@@ -19,7 +19,7 @@ Invitation
 You've been invited to {{.OrgName}}
 </h2>
 <p style="margin:0 0 20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#475569;line-height:20px;">
-{{.InviterName}} has invited you to join <strong style="color:#0f172a;">{{.OrgName}}</strong> on Warmbly. Accept the invitation to start collaborating on mailboxes, warmup, and campaigns.
+{{.InviterName}} has invited you to join <strong style="color:#0f172a;">{{.OrgName}}</strong> on {{.Brand}}. Accept the invitation to start collaborating on mailboxes, warmup, and campaigns.
 </p>
 
 <table cellpadding="0" cellspacing="0" border="0" align="center" role="presentation" style="margin:0 0 24px;">
@@ -42,15 +42,17 @@ var invitationTmpl = template.Must(template.New("invitation_content").Parse(invi
 // GenerateInvitationHTML renders a team-invitation email. acceptURL is
 // the full invite-accept link (already carrying the token).
 func GenerateInvitationHTML(inviterName, orgName, acceptURL string) (string, error) {
+	brand := CompanyName()
 	data := struct {
 		InviterName string
 		OrgName     string
 		AcceptURL   string
-	}{InviterName: inviterName, OrgName: orgName, AcceptURL: acceptURL}
+		Brand       string
+	}{InviterName: inviterName, OrgName: orgName, AcceptURL: acceptURL, Brand: brand}
 	var buf bytes.Buffer
 	if err := invitationTmpl.Execute(&buf, data); err != nil {
 		errs.CaptureException(err)
 		return "", err
 	}
-	return renderEmail("You've been invited to Warmbly", buf.String())
+	return renderEmail("You've been invited to "+brand, buf.String())
 }

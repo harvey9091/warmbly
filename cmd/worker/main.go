@@ -47,8 +47,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Sentry
-	if err := observability.InitSentry(ctx, cfg, "worker"); err != nil {
+	// Error reporting
+	if err := observability.Init(ctx, cfg, "worker"); err != nil {
 		log.Fatal(err)
 	}
 
@@ -267,9 +267,9 @@ func buildVersion() string {
 	return os.Getenv("WARMBLY_VERSION")
 }
 
-// uuidNamespaceURL is the RFC 4122 URL namespace, matching the value used by
-// scripts/install-worker.sh when deriving the per-IP worker ID. Keep these in
-// sync: the installer and the worker must agree on the derivation.
+// uuidNamespaceURL is the RFC 4122 URL namespace used to derive the per-IP
+// worker ID. Changing it re-identifies every WORKER_BIND_IP node and orphans
+// the mailboxes assigned to their old ids.
 var uuidNamespaceURL = uuid.MustParse("6ba7b811-9dad-11d1-80b4-00c04fd430c8")
 
 // workerIDFromIP returns the deterministic UUIDv5 for the given IPv4 string.

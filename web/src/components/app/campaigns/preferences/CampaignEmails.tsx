@@ -115,8 +115,9 @@ export function RotationRampSection({
                     }
                 />
                 <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
-                    Each mailbox stays within its own daily limit, and follow-ups always come from the mailbox that
-                    sent the first email — so every thread stays consistent.
+                    Rotation picks the mailbox for a lead's first email, and every follow-up to that lead comes from
+                    the same address, so the conversation stays consistent. Each mailbox stays within its own daily
+                    limit, and a lead only changes address if its mailbox stops being able to send for this campaign.
                 </p>
             </div>
 

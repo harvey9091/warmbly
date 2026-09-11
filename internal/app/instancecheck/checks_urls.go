@@ -25,7 +25,9 @@ func urlChecks() []check {
 		{id: "api_public_url_unset_oidc", run: checkAPIPublicURLUnsetOIDC},
 		{id: "oidc_discovery_failed", run: checkOIDCDiscoveryFailed},
 		{id: "websocket_unreachable", run: checkWebsocketUnreachable},
+		{id: "tracking_domain_unset", run: checkTrackingDomainUnset},
 		{id: "tracking_domain_unreachable", run: checkTrackingDomainUnreachable},
+		{id: "tracking_domain_shares_brand", run: checkTrackingDomainSharesBrand},
 		{id: "app_origin_wildcard", run: checkAppOriginWildcard},
 	}
 }
@@ -34,25 +36,38 @@ func checkAppURLUnset(ctx context.Context, d Deps, in Input) *Finding {
 	if appURLConfigured() {
 		return nil
 	}
+	guess := config.AppBaseURL()
+	if guess == "" {
+		return result(CategoryURLs, SeverityError, "APP_URL is not set",
+			"APP_URL is not set and nothing else names this instance's dashboard, so password reset, invitation and setup links "+
+				"are being mailed as paths with no host in front of them and nobody can open one. Set APP_URL to your dashboard origin.",
+			docsAddresses)
+	}
 	return result(CategoryURLs, SeverityError, "APP_URL is not set",
-		"APP_URL is not set, so password reset, invitation and setup links are being built against https://app.warmbly.com. "+
-			"Those links go to the hosted service, not to your instance, and a reset token in one of them leaves your deployment. "+
-			"Set APP_URL to your dashboard origin.",
+		fmt.Sprintf("APP_URL is not set, so password reset, invitation and setup links are being built against %s, guessed from "+
+			"CORS_ALLOW_ORIGINS or PUBLIC_HOST. If that is not where your dashboard is served, every one of those links is dead. "+
+			"Set APP_URL to your dashboard origin.", guess),
 		docsAddresses)
 }
 
+// Checks the URL links are actually built from, not only the one that was
+// configured. An install that set no APP_URL still mails reset and invitation
+// tokens, against a base inferred from CORS_ALLOW_ORIGINS or PUBLIC_HOST, and
+// that base is as capable of being plain http as a configured one.
 func checkAppURLInsecure(ctx context.Context, d Deps, in Input) *Finding {
 	raw := appURL()
-	if !appURLConfigured() {
-		return nil
-	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "http" || isLoopbackHost(u.Hostname()) {
 		return nil
 	}
+	source := "APP_URL is"
+	if !appURLConfigured() {
+		source = "APP_URL is not set, so emailed links are being built against"
+	}
 	return result(CategoryURLs, SeverityWarning, "The dashboard is not behind HTTPS",
-		fmt.Sprintf("APP_URL is %s. Browsers refuse WebAuthn outside a secure context, so passkeys are disabled, "+
-			"and session cookies are sent in the clear. Put the dashboard behind HTTPS.", raw),
+		fmt.Sprintf("%s %s. Browsers refuse WebAuthn outside a secure context, so passkeys are disabled, and session "+
+			"cookies and the reset and invitation tokens in emailed links all travel in the clear. Put the dashboard "+
+			"behind HTTPS.", source, raw),
 		docsAddresses)
 }
 
@@ -149,6 +164,51 @@ func checkWebsocketUnreachable(ctx context.Context, d Deps, in Input) *Finding {
 		fmt.Sprintf("The realtime service is not reachable at %s, so the dashboard will not update live "+
 			"and presence will be empty.", raw),
 		docsRealtime)
+}
+
+// An install that never configured a tracking host is a working install, and
+// this is the only place it is ever said out loud: nothing else fails, mail
+// still sends, and the operator finds out months later that no campaign ever
+// recorded an open. An installer run that skipped the wizard lands here.
+func checkTrackingDomainUnset(ctx context.Context, d Deps, in Input) *Finding {
+	if env("TRACKING_DOMAIN") != "" {
+		return nil
+	}
+	return result(CategoryURLs, SeverityWarning, "No tracking domain is set",
+		"TRACKING_DOMAIN is not set, so campaign mail goes out with no open pixel and unwrapped links, no workspace "+
+			"can verify a tracking domain of its own, and every recipient's unsubscribe link is served from your API "+
+			"address instead of the sender's domain. Sending itself is unaffected. Set TRACKING_DOMAIN to a host "+
+			"routed to the tracking service, or leave it unset deliberately if you run no tracking service.",
+		docsDelivery)
+}
+
+// checkTrackingDomainSharesBrand catches a tracking host on the same
+// registered domain as the product itself. Every campaign's links and opt-out
+// pages carry that host, so one customer's complaints can get the domain listed
+// on a URL blocklist, and the listing lands on the domain that also serves the
+// marketing site and the platform's own mail.
+func checkTrackingDomainSharesBrand(_ context.Context, _ Deps, _ Input) *Finding {
+	tracking := hostOnly(env("TRACKING_DOMAIN"))
+	if tracking == "" || isLoopbackHost(tracking) {
+		return nil
+	}
+	for _, key := range []string{"APP_URL", "API_PUBLIC_URL"} {
+		other := hostOf(env(key))
+		if other == "" {
+			continue
+		}
+		if registrableDomain(tracking) != registrableDomain(other) {
+			continue
+		}
+		return result(CategoryURLs, SeverityWarning, "The tracking domain is on your own brand's domain",
+			fmt.Sprintf("TRACKING_DOMAIN is %s, which shares the registered domain %s with %s. Every campaign's "+
+				"links and unsubscribe pages carry that host, so complaints against any one workspace can get it "+
+				"listed on a URL blocklist, and the listing reaches the domain serving your site and your platform "+
+				"mail as well. Use a separate registered domain for tracking, and move workspaces onto their own "+
+				"verified tracking domains.", tracking, registrableDomain(tracking), key),
+			docsDelivery)
+	}
+	return nil
 }
 
 func checkTrackingDomainUnreachable(ctx context.Context, d Deps, in Input) *Finding {

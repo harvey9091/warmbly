@@ -335,6 +335,20 @@ function CampaignCard({ state }: { state: ContactCampaignState }) {
                             )
                         }
                     />
+                    <PanelFact
+                        label="Sender"
+                        value={
+                            state.sender_email ? (
+                                <span title={`Every step of this sequence sends from ${state.sender_email}`}>
+                                    {state.sender_email}
+                                </span>
+                            ) : (
+                                <span title="Picked when the first email goes out; every follow-up then keeps it.">
+                                    Chosen at the first email
+                                </span>
+                            )
+                        }
+                    />
                     <div className="sm:col-span-2">
                         <NextActionFact
                             next={state.next}
@@ -1144,6 +1158,8 @@ function machineLabel(reason?: string | null): string {
             return "Automated: several links followed within seconds, the way a security scanner walks an email";
         case "prefetch":
             return "Automated: fetched by a mail proxy or a client with no browser";
+        case "scanner":
+            return "Automated: came from a mail security network, not the recipient's own device";
         default:
             return "Automated: a mail privacy proxy or scanner, not a person";
     }

@@ -28,7 +28,7 @@ Digest
 While you were away
 </h2>
 <p style="margin:0 0 20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#475569;line-height:20px;">
-{{.Count}} updates in your Warmbly workspace, bundled into one email.
+{{.Count}} updates in your {{.Brand}} workspace, bundled into one email.
 </p>
 {{range .Items}}
 <div style="margin:0 0 14px;padding:12px 14px;border:1px solid #e2e8f0;border-radius:8px;">
@@ -45,7 +45,7 @@ While you were away
 <table cellpadding="0" cellspacing="0" border="0" align="center" role="presentation" style="margin:8px 0 24px;">
 <tr>
 <td align="center" style="border-radius:6px;background:#0f172a;">
-<a href="{{.AppURL}}" target="_blank" style="display:inline-block;padding:10px 22px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;font-weight:600;color:#ffffff;text-decoration:none;letter-spacing:0.01em;">Open Warmbly</a>
+<a href="{{.AppURL}}" target="_blank" style="display:inline-block;padding:10px 22px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;font-weight:600;color:#ffffff;text-decoration:none;letter-spacing:0.01em;">Open {{.Brand}}</a>
 </td>
 </tr>
 </table>
@@ -60,15 +60,17 @@ var digestTmpl = template.Must(template.New("digest_content").Parse(digestConten
 
 // GenerateDigestHTML renders the bundled-notifications email.
 func GenerateDigestHTML(count int, items []DigestItem) (string, error) {
+	brand := CompanyName()
 	data := struct {
 		Count  int
 		Items  []DigestItem
 		AppURL string
-	}{Count: count, Items: items, AppURL: AppURL}
+		Brand  string
+	}{Count: count, Items: items, AppURL: AppURL(), Brand: brand}
 	var buf bytes.Buffer
 	if err := digestTmpl.Execute(&buf, data); err != nil {
 		errs.CaptureException(err)
 		return "", err
 	}
-	return renderEmail(fmt.Sprintf("%d updates in your Warmbly workspace", count), buf.String())
+	return renderEmail(fmt.Sprintf("%d updates in your %s workspace", count, brand), buf.String())
 }

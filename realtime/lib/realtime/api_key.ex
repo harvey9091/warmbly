@@ -143,7 +143,7 @@ defmodule Realtime.ApiKey do
   rescue
     e ->
       Logger.error("Database query failed: #{inspect(e)}")
-      ErrorReporter.capture_exception(e)
+      ErrorReporter.capture_exception(e, stacktrace: __STACKTRACE__)
       {:error, :database_error}
   end
 

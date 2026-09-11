@@ -1368,7 +1368,7 @@ function TrackingDomainCard({ mailbox }: { mailbox: Inbox }) {
                 )}
             </div>
 
-            <FieldShell label="Custom tracking domain" hint="Track opens & clicks through your own subdomain instead of the shared host. Improves deliverability.">
+            <FieldShell label="Custom tracking domain" hint="Track opens & clicks through your own subdomain instead of the shared host, and serve the unsubscribe link there too. Improves deliverability.">
                 <TextInput value={domain} placeholder="track.yourdomain.com" onChange={setDomain} className="w-full h-9" />
             </FieldShell>
 

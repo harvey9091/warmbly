@@ -162,6 +162,13 @@ func constraintCopy(c scheduler.ContactSendConstraint, st *models.ContactCampaig
 		return "Today's new-lead limit is reached"
 	case scheduler.ConstraintCapacity:
 		return "No mailbox can take it right now (daily cap, spacing, or health)"
+	case scheduler.ConstraintSenderBusy:
+		// One mailbox is the gate, not the pool: this contact's whole sequence
+		// sends from the address they first heard from.
+		if st.SenderEmail != "" {
+			return "Waiting for " + st.SenderEmail + ", which sends the rest of this sequence"
+		}
+		return "Waiting for the mailbox that sends this contact's sequence"
 	case scheduler.ConstraintCampaignInactive:
 		switch st.CampaignStatus {
 		case "draft":

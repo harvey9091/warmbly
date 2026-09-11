@@ -100,6 +100,9 @@ type ContactCampaignProgress struct {
 	// FailureReason is the worker's reason for the last failed send, set only
 	// when Status is "failed".
 	FailureReason string `json:"failure_reason,omitempty"`
+	// Sender is the mailbox address this lead's whole sequence sends from,
+	// fixed when its first email went out. Empty until then.
+	Sender string `json:"sender,omitempty"`
 }
 
 // Lead status constants for ContactCampaignProgress.Status.
@@ -300,7 +303,7 @@ type ContactVerificationResponse struct {
 // VerificationOverview is what Settings shows about address verification.
 type VerificationOverview struct {
 	// Provider is who checks this workspace's addresses: "builtin" or
-	// "millionverifier".
+	// "millionverifier" or "cleanmylist".
 	Provider string `json:"provider"`
 	// ConnectionID is the integration connection behind a paid provider.
 	ConnectionID *string `json:"connection_id,omitempty"`

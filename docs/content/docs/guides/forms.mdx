@@ -95,6 +95,8 @@ Type the subdomain into **Custom domain** on any form's Share tab, add the `CNAM
 
 Verification reports the same outcomes as a tracking domain: verified, no record yet, points at something else, or nothing to point at when the install has no forms host. Until it verifies, links keep working on the shared host, so an unverified domain never breaks a form. Warmbly re-checks hourly, so a record that finishes propagating starts being used on its own, and one that later stops pointing here stops being used instead of quietly serving links from a host that no longer answers.
 
+Verification proves DNS, not HTTPS. Warmbly Cloud and a self-hosted instance installed with the bundled Caddy both obtain the certificate for your domain on their own, the first time a page on it is loaded. Behind an operator's own proxy it is that proxy's job, so a domain that verifies here but serves a certificate warning is something to raise with the operator.
+
 Links already sent keep resolving on whichever host they were built with. Only new links pick up a change.
 
 ### Forms in a campaign

@@ -26,10 +26,12 @@ import (
 // Provider is a paid verification backend bound to one organization.
 type Provider struct {
 	Name string
+	// Label is the provider's display name, for copy a member reads.
+	Label string
 	// ConnectionID is the integration connection carrying the key; nil for
 	// the instance-wide key an operator configured.
 	ConnectionID *uuid.UUID
-	Client       *emailverify.MillionVerifier
+	Client       emailverify.ProviderClient
 }
 
 // ProviderSource resolves the paid provider an organization connected.
@@ -101,12 +103,22 @@ type service struct {
 
 	creditsMu sync.Mutex
 	credits   map[string]creditsEntry
+
+	// healthLocks serialize the connection-health writes for one provider, so
+	// a report and a withdrawal raised by concurrent checks cannot reach the
+	// database in the opposite order to the checks that raised them.
+	healthMu    sync.Mutex
+	healthLocks map[string]*sync.Mutex
 }
 
 type creditsEntry struct {
-	n   int
+	n   *int
 	err error
-	at  time.Time
+	// at is when this state was observed; until is when it stops being
+	// believed. They differ because an exhausted account that the provider
+	// cannot report a balance for is held longer than a routine lookup.
+	at    time.Time
+	until time.Time
 }
 
 // Options configures the service.
@@ -134,6 +146,7 @@ func NewService(repo repository.ContactRepository, opts Options) Service {
 		wake:         make(chan struct{}, 1),
 		breakers:     map[uuid.UUID]*breaker{},
 		credits:      map[string]creditsEntry{},
+		healthLocks:  map[string]*sync.Mutex{},
 	}
 	if k := strings.TrimSpace(opts.PlatformMillionVerifierKey); k != "" {
 		s.platform = emailverify.NewMillionVerifier(k, "")
@@ -181,15 +194,17 @@ func (s *service) providerFor(ctx context.Context, orgID uuid.UUID) *Provider {
 		}
 	}
 	if s.platform != nil {
-		return &Provider{Name: emailverify.ProviderMillionVerifier, Client: s.platform}
+		return &Provider{Name: emailverify.ProviderMillionVerifier, Label: "MillionVerifier", Client: s.platform}
 	}
 	return nil
 }
 
 func (s *service) VerifyAddress(ctx context.Context, orgID uuid.UUID, email string) emailverify.Result {
 	if p := s.providerFor(ctx, orgID); p != nil {
+		startedAt := time.Now()
 		res, err := p.Client.Check(ctx, email)
 		if err == nil {
+			s.noteProviderOK(ctx, p, startedAt)
 			return res
 		}
 		s.noteProviderError(ctx, p, err)
@@ -213,18 +228,59 @@ func (s *service) verifyBuiltin(ctx context.Context, orgID uuid.UUID, email stri
 	return res
 }
 
+// healthGate is the lock guarding one provider's connection health.
+func (s *service) healthGate(p *Provider) *sync.Mutex {
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	key := cacheKey(p)
+	m, ok := s.healthLocks[key]
+	if !ok {
+		m = &sync.Mutex{}
+		s.healthLocks[key] = m
+	}
+	return m
+}
+
 func (s *service) noteProviderError(ctx context.Context, p *Provider, err error) {
 	if p == nil || err == nil {
 		return
 	}
-	if errors.Is(err, emailverify.ErrMillionVerifierKey) || errors.Is(err, emailverify.ErrMillionVerifierCredits) {
+	if errors.Is(err, emailverify.ErrProviderKey) || errors.Is(err, emailverify.ErrProviderCredits) {
+		g := s.healthGate(p)
+		g.Lock()
+		defer g.Unlock()
+		// Recorded before the connection is marked, so a check finishing
+		// alongside this one compares itself against a failure that exists.
+		s.cacheProviderState(p, nil, err)
 		if p.ConnectionID != nil && s.providers != nil {
 			s.providers.ReportVerificationProviderError(ctx, *p.ConnectionID, err)
 		}
-		s.creditsMu.Lock()
-		s.credits[cacheKey(p)] = creditsEntry{err: err, at: time.Now()}
-		s.creditsMu.Unlock()
 	}
+}
+
+// cacheProviderState records what is known about a provider's account. An
+// exhausted account whose balance the provider never reports is held for a
+// cooldown rather than a minute: nothing but a real check can retire it, so a
+// shorter hold just re-runs the batch that discovered it.
+func (s *service) cacheProviderState(p *Provider, n *int, err error) {
+	ttl := time.Minute
+	if errors.Is(err, emailverify.ErrProviderCredits) && !p.Client.ObservesBalance() {
+		ttl = time.Duration(config.VerificationExhaustedCooldownMinutes) * time.Minute
+	}
+	now := time.Now()
+	s.creditsMu.Lock()
+	s.credits[cacheKey(p)] = creditsEntry{n: n, err: err, at: now, until: now.Add(ttl)}
+	s.creditsMu.Unlock()
+}
+
+// providerDown reports an error recorded against the provider that has not
+// lapsed, so a key that dies mid-pass stops the rest of the batch instead of
+// burning a doomed call on every remaining address.
+func (s *service) providerDown(p *Provider) bool {
+	s.creditsMu.Lock()
+	defer s.creditsMu.Unlock()
+	e, ok := s.credits[cacheKey(p)]
+	return ok && e.err != nil && time.Now().Before(e.until)
 }
 
 func cacheKey(p *Provider) string {
@@ -234,38 +290,54 @@ func cacheKey(p *Provider) string {
 	return "platform"
 }
 
-// providerUsable checks (cached for a minute) that the provider's key works
-// and has credits, so a pass never burns a whole batch on a dead key.
-func (s *service) providerUsable(ctx context.Context, p *Provider) (int, error) {
+// providerUsable caches account health and any available balance for a minute.
+func (s *service) providerUsable(ctx context.Context, p *Provider) (*int, error) {
 	key := cacheKey(p)
 	s.creditsMu.Lock()
 	e, ok := s.credits[key]
 	s.creditsMu.Unlock()
-	if ok && time.Since(e.at) < time.Minute {
+	if ok && time.Now().Before(e.until) {
 		return e.n, e.err
 	}
-	n, err := p.Client.Credits(ctx)
-	if err == nil && n <= 0 {
-		err = emailverify.ErrMillionVerifierCredits
+	startedAt := time.Now()
+	n, err := p.Client.Account(ctx)
+	if err == nil && n != nil && *n <= 0 {
+		err = emailverify.ErrProviderCredits
 	}
-	s.creditsMu.Lock()
-	s.credits[key] = creditsEntry{n: n, err: err, at: time.Now()}
-	s.creditsMu.Unlock()
+	s.cacheProviderState(p, n, err)
 	if err != nil {
 		s.noteProviderError(ctx, p, err)
-	} else {
-		s.noteProviderOK(ctx, p)
+	} else if n != nil {
+		// Only a reported balance withdraws a recorded failure. A provider that
+		// answers without one has said the key works, never that there is
+		// allowance left, so an observed 402 has to survive it.
+		s.noteProviderOK(ctx, p, startedAt)
 	}
 	return n, err
 }
 
-// noteProviderOK withdraws a recorded provider error once the key answers with
-// a balance again. The write is guarded in the repository, so a pass that finds
-// the connection already healthy costs nothing.
-func (s *service) noteProviderOK(ctx context.Context, p *Provider) {
-	if p == nil || p.ConnectionID == nil || s.providers == nil {
+// noteProviderOK withdraws a recorded provider error once something that began
+// after it succeeds. Checks run concurrently and resolve out of order, so one
+// that started before the failure must not clear it: it never saw it.
+func (s *service) noteProviderOK(ctx context.Context, p *Provider, startedAt time.Time) {
+	if p == nil {
 		return
 	}
+	g := s.healthGate(p)
+	g.Lock()
+	defer g.Unlock()
+	s.creditsMu.Lock()
+	e, ok := s.credits[cacheKey(p)]
+	newer := ok && e.err != nil && e.at.After(startedAt)
+	if ok && e.err != nil && !newer {
+		delete(s.credits, cacheKey(p))
+	}
+	s.creditsMu.Unlock()
+	if newer || p.ConnectionID == nil || s.providers == nil {
+		return
+	}
+	// The write is guarded in the repository, so a pass that finds the
+	// connection already healthy costs nothing.
 	s.providers.ClearVerificationProviderError(ctx, *p.ConnectionID)
 }
 
@@ -313,12 +385,17 @@ func (s *service) verifyOrgBatch(ctx context.Context, orgID uuid.UUID, cands []r
 		} else {
 			workers = config.VerificationProviderConcurrency
 			verify = func(ctx context.Context, email string) emailverify.Result {
+				if s.providerDown(p) {
+					return s.verifyBuiltin(ctx, orgID, email)
+				}
+				startedAt := time.Now()
 				res, err := p.Client.Check(ctx, email)
 				if err != nil {
 					s.noteProviderError(ctx, p, err)
 					// Fall back for this address so the pass still makes progress.
 					return s.verifyBuiltin(ctx, orgID, email)
 				}
+				s.noteProviderOK(ctx, p, startedAt)
 				return res
 			}
 		}
@@ -435,22 +512,27 @@ func (s *service) Overview(ctx context.Context, orgID uuid.UUID) (*models.Verifi
 		}
 		n, err := s.providerUsable(ctx, p)
 		if err != nil {
-			out.ProviderError = providerErrorText(err)
+			out.ProviderError = providerErrorText(p.Label, err)
 		} else {
 			out.Provider = p.Name
-			out.Credits = &n
+			out.Credits = n
 		}
 	}
 	return out, nil
 }
 
-func providerErrorText(err error) string {
+func providerErrorText(label string, err error) string {
+	if label == "" {
+		label = "The verification service"
+	}
 	switch {
-	case errors.Is(err, emailverify.ErrMillionVerifierKey):
-		return "MillionVerifier rejected the API key. Reconnect it with a current key."
-	case errors.Is(err, emailverify.ErrMillionVerifierCredits):
-		return "The MillionVerifier account has no credits left. Top it up to keep using it; the built-in check is used meanwhile."
+	case errors.Is(err, emailverify.ErrProviderUnconfirmed):
+		return label + " has not had its account email confirmed yet. Confirm it, then reconnect."
+	case errors.Is(err, emailverify.ErrProviderKey):
+		return label + " rejected the API key. Reconnect it with a current key."
+	case errors.Is(err, emailverify.ErrProviderCredits):
+		return "The " + label + " account has no allowance or credits left. Top it up to keep using it; the built-in check is used meanwhile."
 	default:
-		return "MillionVerifier could not be reached; the built-in check is used meanwhile."
+		return label + " could not be reached; the built-in check is used meanwhile."
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/observability/errs"
@@ -33,7 +34,6 @@ const (
 	DefaultCurrency   = "usd" // reward ledger currency
 	MonthlyRewardCap  = 50    // max rewarded conversions per referrer per 30 days
 	clawbackWindow    = 30 * 24 * time.Hour
-	defaultShareBase  = "https://app.warmbly.com"
 	codeAlphabet      = "ABCDEFGHJKMNPQRSTVWXYZ23456789" // no ambiguous chars
 	codeLength        = 8
 )
@@ -114,7 +114,7 @@ func NewService(
 	shareBase string,
 ) Service {
 	if strings.TrimSpace(shareBase) == "" {
-		shareBase = defaultShareBase
+		shareBase = config.AppBaseURL()
 	}
 	return &service{
 		repo:         repo,

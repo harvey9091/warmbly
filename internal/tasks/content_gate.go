@@ -46,14 +46,8 @@ func (s *tasksService) warnOnWeakContent(ctx context.Context, orgID, campaignID,
 
 	seq := sequenceID.String()
 	detail := ""
-	for _, issue := range res.Issues {
-		if issue.Severity == "high" {
-			detail = " " + issue.Message
-			break
-		}
-	}
-	if detail == "" && len(res.Issues) > 0 {
-		detail = " " + res.Issues[0].Message
+	if lead := warmlint.LeadIssue(res); lead != "" {
+		detail = " " + lead
 	}
 
 	codes := make([]string, 0, len(res.Issues))

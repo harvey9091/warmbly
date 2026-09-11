@@ -19,7 +19,7 @@ Subscription
 Your free trial has ended
 </h2>
 <p style="margin:0 0 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#475569;line-height:20px;">
-Thanks for trying Warmbly. Your trial has now ended, so we've paused your campaigns and turned off warmup to avoid any unexpected sending.
+Thanks for trying {{.Brand}}. Your trial has now ended, so we've paused your campaigns and turned off warmup to avoid any unexpected sending.
 </p>
 
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;width:100%;">
@@ -58,11 +58,15 @@ var trialExpiredTmpl = template.Must(template.New("trial_expired_content").Parse
 // GenerateTrialExpiredHTML renders the trial-ended notice through the
 // shared base shell. The billing CTA points at the app's billing page.
 func GenerateTrialExpiredHTML() (string, error) {
-	data := struct{ BillingURL string }{BillingURL: AppURL + "/settings/billing"}
+	brand := CompanyName()
+	data := struct {
+		BillingURL string
+		Brand      string
+	}{BillingURL: AppURL() + "/settings/billing", Brand: brand}
 	var buf bytes.Buffer
 	if err := trialExpiredTmpl.Execute(&buf, data); err != nil {
 		errs.CaptureException(err)
 		return "", err
 	}
-	return renderEmail("Your Warmbly trial has ended", buf.String())
+	return renderEmail("Your "+brand+" trial has ended", buf.String())
 }

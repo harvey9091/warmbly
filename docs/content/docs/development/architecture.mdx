@@ -71,34 +71,35 @@ Application-layer secrets are sealed with AES-256-GCM under the DEK and base64-e
 
 - email account credentials (IMAP/SMTP passwords, OAuth tokens)
 - email body content stored in S3 (EMSG format)
-- **worker SSH private keys** (since admins drive workers over SSH)
-- **AWS credential rows and worker-profile secrets** (Kafka SASL passwords, Schema Registry secrets, Redis URLs) used to configure remote workers
 
-Worker-related secrets are encrypted under a platform DEK (key ID = `uuid.Nil`): the same envelope as organization secrets, the same trust boundary, a different identity. See `internal/app/cipher/` and `internal/app/worker_orchestrator/orchestrator.go`.
+Instance-level secrets that are not owned by any organization are encrypted under a platform DEK (key ID = `uuid.Nil`): the same envelope as organization secrets, the same trust boundary, a different identity. See `internal/app/cipher/`.
+
+Mailbox credentials are the one exception to the per-organization DEK. They are sealed with `CREDENTIALS_ENCRYPTION_KEY` (`KeyDomainInstance`) because a worker reads them without an organization context.
 
 ## Worker model
 
-Workers are added and managed from the admin dashboard. The flow:
+Every Warmbly process that runs on a machine you own is a node: a `worker` sends and syncs mail, a `consumer` processes events. Both share one registry (`fleet_nodes`) and one lifecycle. `workers` is the placement extension over that registry and holds only `account_count`, `health_state` and `load_score`; `workers.id` is the node id.
 
-1. Admin fills out host/port/user. Backend generates an ed25519 keypair, encrypts the private key, stores the row in `pending` state.
-2. Admin pastes the generated public key into the VPS's `~/.ssh/authorized_keys`.
-3. Admin clicks Test. Backend opens an SSH session and runs `true`. First success pins the host SHA256 fingerprint (trust-on-first-use).
-4. Admin clicks Install. Backend uploads `scripts/install-worker.sh` and a per-worker env file, runs the installer, which installs Docker if missing, generates a deterministic UUID from the VPS's public IPv4 (UUIDv5, URL namespace), writes a systemd unit, and starts the worker container with `--hostname <uuid>`.
-5. The worker reads its identity from `os.Hostname()`, subscribes to the event bus topic named for that UUID, and heartbeats to the backend's internal API every 90 seconds.
+The fleet is pull-based. A node joins by running one command with the instance join token, then heartbeats forever, and nothing is ever pushed to it:
 
-From then on, every lifecycle operation (restart, update image, uninstall, rotate keys, system updates, reboot, tail logs, fetch live status) happens via SSH from the dashboard.
+1. The operator issues a join token with `warmblyctl fleet join-token`.
+2. On the machine, `curl -fsSL https://api.example.com/join.sh | sh -s -- --url ... --token ... --role worker` enrols the node. The script is embedded in the backend and served at `GET /join.sh`, so a self-hosted fleet never depends on a vendor host and always gets a script matching its own backend.
+3. The backend returns a node id, the config rendered from its own environment, and the version to run. The script writes `/etc/warmbly/node.env`, installs a systemd service and an update timer, and starts the node container.
+4. The node subscribes to the event bus topic named for its id and heartbeats, pacing its own beat at a third of `models.NodeLivenessWindow` from the value the server returns.
+
+The heartbeat reply carries exactly one instruction: `desired_version`. The node writes it to a file and a systemd timer pulls and restarts, so the process being replaced is never the process doing the replacing. An empty `desired_version` means "no opinion", never "downgrade to nothing".
+
+The machine needs no inbound port, no SSH key and no cloud account. There is no restart, logs, reboot or uninstall action in the dashboard, because nothing reaches into a machine. The operator surface is `warmblyctl fleet` (join-token, list, show, remove, pin, version, channel) and the admin panel's Fleet section.
 
 ### Why per-VPS instead of a Kubernetes DaemonSet
 
 A k8s `DaemonSet` was the previous shape. It was removed because k8s nodes typically NAT all pods through a small set of egress IPs, and pods churn while IPs do not. What a mailbox provider remembers is the address an account signs in from, so the unit of identity has to be the IP, not the pod: a mailbox whose client address changes every deploy collects sign-in risk challenges for no reason. The worker also has no Postgres dependency, so cluster-level service discovery and RBAC buy us nothing.
 
-### Identity from IP
+### Node identity
 
-Worker UUID is `UUIDv5(URL_namespace, public_ipv4)`. Properties:
+A node's id is assigned at enrolment and persisted on the machine, so re-running the join command re-joins under the same identity and the node keeps its history and its mailboxes.
 
-- same IP → same worker (reputation persists across reinstalls)
-- new IP → new worker (fresh identity, no inherited history)
-- deterministic, no state needed at the control plane to recover it
+A machine with several public addresses can instead run one node per address: with `WORKER_BIND_IP` set and no `WORKER_ID`, the worker derives `UUIDv5(URL_namespace, public_ipv4)`. Same IP, same worker, with no state at the control plane needed to recover it, which is what lets each address be its own stable sending identity.
 
 ## Worker placement
 
@@ -113,7 +114,7 @@ So the levers invert: IP *stability* per mailbox beats IP diversity, and a migra
 
 ### Choosing a worker
 
-Placement scores every live worker and takes the best (`internal/app/worker/placement.go`). Hard constraints are only about whether the work can be done at all: the worker has to be heartbeating, in `healthy` or `watch`, and have capacity headroom for the mailbox's weight. Everything else is a preference:
+Placement scores every live worker and takes the best (`internal/app/worker/placement.go`). Hard constraints are only about whether the work can be done at all: the worker has to be heartbeating and in `healthy` or `watch`. Everything else is a preference:
 
 | Term | Why |
 |---|---|
@@ -122,9 +123,12 @@ Placement scores every live worker and takes the best (`internal/app/worker/plac
 | Region match | Sign-ins from where the provider expects them raise fewer challenges |
 | Tenant blast radius | Spread one customer across workers so a single failure does not stop their sending |
 | Provider crowding | Many accounts of one provider signing in from one address is what earns a per-IP throttle |
+| Node youth | A worker that enrolled minutes ago has proved nothing, so it is probed gently rather than handed every placement for being empty |
 | Foreign tenants | Only for organizations entitled to isolated egress |
 
-Capacity is one number for every worker, in cold-mailbox equivalents, because each mailbox already declares its own cost: an `smtp_imap` mailbox weighs `1.0`, a Gmail or Outlook API mailbox `0.05`, and a warmup-only assignment `0.4`.
+Capacity is one number for every worker, in cold-mailbox equivalents, because each mailbox already declares its own cost: an `smtp_imap` mailbox weighs `1.0`, a Gmail or Outlook API mailbox `0.05`, and a warmup-only assignment `0.4`. The mailbox being placed counts against the target too, so the same nearly-full worker can be under target for a Gmail mailbox and over it for an `smtp_imap` one.
+
+**Capacity is a target, not a ceiling.** Nothing refuses a placement for being over it. Going over costs more than any bonus a candidate can earn, so stickiness alone can never keep a mailbox on an over-target worker; it does not outweigh the penalty terms, so a worker with room but crowded with foreign tenants can still lose. Once no worker has room, the least-overloaded one wins with region, blast radius and provider crowding all applied. This is deliberate: the target is a flat `16` for every worker regardless of the machine, so refusing on it refuses on a guess, and refusing exactly when the fleet is full is when good placement matters most.
 
 ### Moving a mailbox
 
@@ -140,34 +144,28 @@ Rotation (`internal/app/worker/rotation.go`) is deliberately reluctant, and a fl
 
 Plans that reserve egress bind an organization to a worker (`dedicated_worker_assignments`). It is a strong placement preference, not a pin: the worker carries no marking, so if it dies the organization's mailboxes place normally instead of stranding, and the rotation loop pulls them onto a replacement once one exists. Mailboxes belonging to other tenants drift off a reserved worker on the same loop.
 
-## Credentials and profiles
+## Node configuration
 
-Workers never carry hardcoded credentials. Two reusable entities in the admin dashboard:
+Nodes never carry hardcoded credentials, and there is nothing to keep in sync by hand. The join endpoint renders `/etc/warmbly/node.env` from the backend's own environment (`nodeEnvKeys` in `internal/api/handler/fleet_nodes.go`), so a node is configured with exactly the infrastructure the control plane uses: event bus, Redis, KMS, blob storage, the internal API token, and the mailbox OAuth clients.
 
-- **AWS credentials**: a named keypair; the secret access key is stored as ciphertext from the cipher service.
-- **Worker profile**: a named bundle of event bus settings (NATS URL or Kafka bootstrap + SASL + Schema Registry), Redis URL, backend internal API URL and token, worker image, and release channel, with an optional foreign key to one AWS credentials row.
+`PRIMARY_DB` is deliberately excluded. A worker reaches relational data through the internal API and nothing else, and shipping a DSN here would quietly undo that boundary.
 
-Workers reference one profile. When the admin edits the profile, the backend marks any assigned worker whose `config_applied_at` is older than `profile.updated_at` as having stale config. The dashboard shows a warning; one click rewrites `/etc/warmbly/worker.env` over SSH and restarts the worker.
-
-Schema: the `workers`, `worker_profiles`, and `aws_credentials` tables in `internal/infrastructure/db/migrations/000001_baseline.up.sql`.
+Schema: `fleet_nodes` is the registry every role shares, and `workers` is the placement extension over it (`internal/infrastructure/db/migrations/000141_fleet_nodes.up.sql`); `000142_drop_push_provisioning.up.sql` removed the push path it replaced.
 
 ## Auto-update from GitHub releases
 
-Each profile picks a release channel:
+The fleet targets one release channel, held in `admin_settings` under `fleet.release`:
 
-- `pinned`: admin sets the image tag manually
 - `stable`: latest non-prerelease GitHub Release
 - `dev`: latest release (including prereleases)
 
-Trigger model is push-driven, not poll-driven:
+`internal/app/releases` resolves the head of that channel and writes the tag. It updates nothing itself. The heartbeat reply carries `desired_version`; the node writes it to a file and a systemd timer (`warmbly-node-update`, installed by the join script) pulls and restarts, so the process being replaced is never the process doing the replacing.
 
-- One-shot check on backend boot, populates the dashboard.
-- GitHub webhook (`POST /webhooks/github/releases`, HMAC-validated) on every release event.
-- Admin "Check now" button as a manual fallback.
+An empty `desired_version` means "no opinion" and must never be read as "downgrade to nothing": a node that cannot be told what to run keeps running what it has. A per-node `pinned_version` overrides the fleet target, for canarying or holding a machine back.
 
-When auto_update is on and a new tag is resolved, the backend records the new image on the profile, then rolls each assigned worker by SSHing in, re-running the installer with `--update --image <new>`, which regenerates the systemd unit, pulls the image, and restarts. Workers' running version is recorded in `workers.image_version` so the dashboard can show a `v1.2.3 → v1.2.4` diff.
+The backend is deliberately excluded from this. It is what tells everyone else their version, and a self-update that goes wrong leaves nothing to recover with.
 
-All configuration is env-driven (`RELEASES_GITHUB_REPO`, `RELEASES_WORKER_IMAGE_REPO`, `RELEASES_WEBHOOK_SECRET`, `RELEASES_ENABLED`) so self-hosters can point at their own fork and registry.
+Trigger model is push-driven, not poll-driven: a one-shot check on backend boot, a GitHub webhook (`POST /webhooks/github/releases`, HMAC-validated) on every release event, and an admin "Check now" button as a manual fallback. All configuration is env-driven (`RELEASES_GITHUB_REPO`, `RELEASES_WORKER_IMAGE_REPO`, `RELEASES_WEBHOOK_SECRET`, `RELEASES_ENABLED`) so self-hosters can point at their own fork and registry.
 
 See `internal/app/releases/service.go`.
 
@@ -209,11 +207,11 @@ These files are the fastest way to rebuild context:
 - `docs/content/docs/development/deployment-guide.mdx`
 - `cmd/worker/main.go`
 - `internal/app/worker/assignment.go`
-- `internal/app/worker_orchestrator/orchestrator.go`
+- `internal/app/worker/placement.go`
+- `internal/app/fleetnode/service.go`
 - `internal/app/releases/service.go`
 - `internal/app/cipher/cipher.go`
 - `internal/tasks/email_task.go`
 - `internal/repository/pg_worker.go`
-- `internal/repository/pg_worker_ssh.go`
-- `internal/repository/pg_credentials.go`
+- `internal/repository/pg_worker_placement.go`
 - `internal/repository/pg_warmup.go`

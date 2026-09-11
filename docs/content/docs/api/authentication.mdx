@@ -39,6 +39,8 @@ Codes expire after ten minutes, both halves are per-IP rate limited, and the `de
 
 `DELETE /v1/api-keys/:id` revokes any key in the workspace and needs the `API_KEYS` scope. `DELETE /v1/api-keys/self` revokes the key the call was made with and needs no scope at all, so a narrowly scoped credential can always end itself. This is what `warmbly auth logout` uses.
 
+Revoking leaves the key listed, with the time and reason it ended, and its request history intact. `DELETE /v1/api-keys/:id/permanent` removes the row for good, along with its usage logs, and is how the **Delete key** button under a revoked key in Settings > API keys works. It refuses a key that could still authenticate with a `409`: revoke it first, so what ended the credential is on the record. A key past its `expires_at` can be deleted directly, since it already authenticates nothing.
+
 ## Using your API key
 
 Include your API key in the `Authorization` header of every request:

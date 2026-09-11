@@ -547,7 +547,7 @@ var table = []Entry{
 	// Encryption.
 	{
 		Key: "KMS_PROVIDER", Group: GroupEncryption, RuntimeChangeable: ChangeBootOnly,
-		Effect:     "local wraps organization keys with the master key below; aws wraps them with AWS KMS.",
+		Effect:     "local wraps organization keys with the master key below; aws wraps them with AWS KMS; brokered holds no key material and asks this instance to unwrap, which is what a node off this machine should run.",
 		DocsAnchor: docsEncryption,
 		Resolve:    func(*Runtime) string { return config.KMSProvider() },
 	},
@@ -585,7 +585,7 @@ var table = []Entry{
 	// Storage.
 	{
 		Key: "BLOB_PROVIDER", Group: GroupStorage, RuntimeChangeable: ChangeBootOnly,
-		Effect:     "filesystem stores email bodies, attachments and avatars on disk; s3 stores them in any S3-compatible bucket.",
+		Effect:     "filesystem stores email bodies, attachments and avatars on disk; s3 stores them in any S3-compatible bucket; brokered holds no bucket credential and asks this instance to sign each operation, which is what a node off this machine should run.",
 		DocsAnchor: docsStorage,
 		Resolve:    func(*Runtime) string { return config.BlobProvider() },
 	},
@@ -775,11 +775,53 @@ var table = []Entry{
 		DocsAnchor: docsAddresses,
 		Resolve:    envOr("TRACKING_RATE_LIMIT_PER_MIN", "300"),
 	},
+	{
+		Key: "TRACKING_SCANNER_BUILTINS", Group: GroupTracking, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Loads the known-scanner network catalogue shipped with Warmbly. Off leaves only the networks you name.",
+		DocsAnchor: docsAddresses,
+		Resolve:    boolOr("TRACKING_SCANNER_BUILTINS", true),
+	},
+	{
+		Key: "TRACKING_SCANNER_NETWORKS", Group: GroupTracking, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Extra scanner sources whose opens and clicks are both recorded as automated.",
+		DocsAnchor: docsAddresses,
+		Resolve:    envValue("TRACKING_SCANNER_NETWORKS"),
+	},
+	{
+		Key: "TRACKING_SCANNER_CLICK_NETWORKS", Group: GroupTracking, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Extra scanner sources judged on clicks only, for networks that also proxy a mail client's image fetches.",
+		DocsAnchor: docsAddresses,
+		Resolve:    envValue("TRACKING_SCANNER_CLICK_NETWORKS"),
+	},
+	{
+		Key: "TRACKING_SCANNER_ASN_HEADER", Group: GroupTracking, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Header a trusted proxy sets with the source ASN. Empty means asn: entries cannot match.",
+		DocsAnchor: docsAddresses,
+		Resolve:    envValue("TRACKING_SCANNER_ASN_HEADER"),
+	},
 
 	// Observability.
 	{
+		Key: "POSTHOG_KEY", Group: GroupObservability, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "PostHog project key. Carries error tracking and product analytics; unset means neither is sent and no host is contacted.",
+		DocsAnchor: docsDeployment,
+		Resolve:    envValue("POSTHOG_KEY"),
+	},
+	{
+		Key: "POSTHOG_HOST", Group: GroupObservability, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Where those events go. Empty means PostHog Cloud US; set it to your own PostHog.",
+		DocsAnchor: docsDeployment,
+		Resolve:    envValue("POSTHOG_HOST"),
+	},
+	{
+		Key: "POSTHOG_ERROR_TRACKING", Group: GroupObservability, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "false keeps the key for product analytics and reports no exceptions to PostHog.",
+		DocsAnchor: docsDeployment,
+		Resolve:    boolOr("POSTHOG_ERROR_TRACKING", true),
+	},
+	{
 		Key: "SENTRY_DSN", Group: GroupObservability, RuntimeChangeable: ChangeBootOnly,
-		Effect:     "Error reporting. Optional in every environment; unset simply logs instead.",
+		Effect:     "Error reporting to Sentry, alongside or instead of PostHog. Optional in every environment; unset simply logs instead.",
 		DocsAnchor: docsDeployment,
 		Resolve:    envValue("SENTRY_DSN"),
 	},

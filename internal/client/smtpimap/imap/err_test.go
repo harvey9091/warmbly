@@ -3,8 +3,10 @@ package imap
 import (
 	"io"
 	"net"
+	"strings"
 	"testing"
 
+	goimap "github.com/emersion/go-imap/v2"
 	"github.com/warmbly/warmbly/internal/errx"
 )
 
@@ -24,5 +26,67 @@ func TestHandleErrorTransportIsNotNil(t *testing.T) {
 	}
 	if c.handleError(nil) != nil {
 		t.Error("handleError(nil) must stay nil")
+	}
+}
+
+// A NO/BAD carries a response code only when the server chooses to send one.
+// A codeless one used to render as "Something went wrong: " with nothing after
+// the colon (issue #405, IONOS), which tells the customer nothing and leaves a
+// bug report with no way to identify the refused command.
+func TestHandleErrorCodelessImapErrorKeepsServerText(t *testing.T) {
+	c := &Client{}
+
+	for _, tc := range []struct {
+		name string
+		err  *goimap.Error
+		want string
+	}{
+		{
+			name: "codeless NO keeps the server's text",
+			err:  &goimap.Error{Type: goimap.StatusResponseTypeNo, Text: "System Error"},
+			want: "NO System Error",
+		},
+		{
+			name: "codeless BAD is distinguishable from a NO",
+			err:  &goimap.Error{Type: goimap.StatusResponseTypeBad, Text: "Command unrecognized"},
+			want: "BAD Command unrecognized",
+		},
+		{
+			name: "a response code still wins over the text",
+			err:  &goimap.Error{Type: goimap.StatusResponseTypeNo, Code: goimap.ResponseCodeServerBug, Text: "oops"},
+			want: "SERVERBUG",
+		},
+		{
+			name: "no code and no text still says something",
+			err:  &goimap.Error{Type: goimap.StatusResponseTypeNo},
+			want: "NO",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := c.handleError(tc.err)
+			if got == nil {
+				t.Fatalf("handleError(%v) = nil, want a mail error", tc.err)
+			}
+			if got.Code != errx.MailErrorCodeImapUnknown {
+				t.Fatalf("Code = %q, want %q", got.Code, errx.MailErrorCodeImapUnknown)
+			}
+			if !strings.Contains(got.Message, tc.want) {
+				t.Errorf("Message = %q, want it to contain %q", got.Message, tc.want)
+			}
+		})
+	}
+}
+
+// The whole point of the fallback: the detail is never empty, so the row can
+// never read as a bare "Something went wrong: " again.
+func TestHandleErrorImapDetailIsNeverEmpty(t *testing.T) {
+	for _, err := range []*goimap.Error{
+		{},
+		{Type: goimap.StatusResponseTypeNo},
+		{Type: goimap.StatusResponseTypeBad, Text: "   "},
+	} {
+		if detail := imapErrDetail(err); strings.TrimSpace(detail) == "" {
+			t.Errorf("imapErrDetail(%+v) = %q, want a non-empty detail", err, detail)
+		}
 	}
 }

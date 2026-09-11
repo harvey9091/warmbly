@@ -3,86 +3,92 @@ package templates
 import (
 	"bytes"
 	"html/template"
-	"os"
 	"strings"
 
+	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 // ─── Centralized Business Details ────────────────────────────────
-// Branding and legal info for every email template. These are variables, not
-// constants, because a self-hosted install must not send mail attributed to
-// Mindroot Ltd with links to someone else's dashboard: AppURL derives from
-// APP_URL and the rest are overridable with EMAIL_BRAND_*.
-var (
-	CompanyName    = brandEnv("EMAIL_BRAND_NAME", "Warmbly")
-	LegalEntity    = brandEnv("EMAIL_BRAND_LEGAL_ENTITY", "Mindroot Ltd")
-	CompanyNumber  = brandEnv("EMAIL_BRAND_COMPANY_NUMBER", "16543299")
-	PlaceOfReg     = brandEnv("EMAIL_BRAND_PLACE_OF_REG", "England and Wales")
-	RegisteredAddr = brandEnv("EMAIL_BRAND_ADDRESS", "71-75 Shelton Street, London, England, WC2H 9JQ")
-	WebsiteURL     = brandEnv("EMAIL_BRAND_WEBSITE_URL", "https://warmbly.com")
-	AppURL         = appURL()
-	SupportEmail   = brandEnv("EMAIL_BRAND_SUPPORT_EMAIL", "team@warmbly.com")
-	TermsURL       = brandEnv("EMAIL_BRAND_TERMS_URL", "https://warmbly.com/terms")
-	PrivacyURL     = brandEnv("EMAIL_BRAND_PRIVACY_URL", "https://warmbly.com/privacy")
-)
+// Branding and legal info for every email template, resolved from
+// config.Brand() so the footer, the sign-in screen and a public form page all
+// say the same thing about who this deployment is.
+//
+// These are functions, not constants, because a self-hosted install must not
+// send mail attributed to Mindroot Ltd with links to someone else's dashboard.
+// On a self-host the hosted defaults are not a fallback at all: they are
+// another company's registered details and another company's website. Unset
+// means unset there, and the footer drops the row rather than filling it with
+// ours.
 
-func brandEnv(key, def string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return def
-}
+// CompanyName is the product name in subjects and the header. Unlike the legal
+// details it is true of a self-host too: it is the software's name.
+func CompanyName() string { return config.Brand().Name }
 
-// appURL is the dashboard base every emailed link is built from. Reading it
-// here rather than hardcoding it is what makes password reset and team invites
-// work on a self-hosted install.
-func appURL() string {
-	for _, key := range []string{"APP_URL", "FRONTEND_BASE_URL"} {
-		if v := strings.TrimRight(strings.TrimSpace(os.Getenv(key)), "/"); v != "" {
-			return v
-		}
-	}
-	return "https://app.warmbly.com"
-}
+// AppURL is the dashboard base every emailed link is built from.
+func AppURL() string { return config.AppBaseURL() }
 
-// WebsiteLabel is the display text for the footer website link, derived from
-// WebsiteURL so a rebranded install does not render "warmbly.com" pointing
-// somewhere else.
-func WebsiteLabel() string {
-	label := strings.TrimPrefix(strings.TrimPrefix(WebsiteURL, "https://"), "http://")
-	return strings.TrimSuffix(label, "/")
+// footerLink is one entry in the footer's link row. It is a list rather than
+// three fixed slots so an install that configured none of them renders no row
+// instead of three links to nowhere.
+type footerLink struct {
+	Label string
+	URL   string
 }
 
 type baseData struct {
 	Subject        string
 	Content        template.HTML
 	CompanyName    string
-	LegalEntity    string
-	CompanyNumber  string
-	PlaceOfReg     string
+	FooterLinks    []footerLink
+	LegalLine      string
 	RegisteredAddr string
-	WebsiteURL     string
-	WebsiteLabel   string
-	TermsURL       string
-	PrivacyURL     string
+}
+
+// footerLinks is the configured subset of privacy, terms and website.
+func footerLinks(b config.BrandConfig) []footerLink {
+	var links []footerLink
+	for _, l := range []footerLink{
+		{Label: "Privacy", URL: b.PrivacyURL},
+		{Label: "Terms", URL: b.TermsURL},
+		{Label: b.WebsiteLabel(), URL: b.WebsiteURL},
+	} {
+		if l.URL != "" && l.Label != "" {
+			links = append(links, l)
+		}
+	}
+	return links
+}
+
+// legalLine is the Companies Act 2006 identification line, which only the
+// hosted service is the subject of. A self-host renders no line rather than
+// naming a company that has nothing to do with the mail it just sent.
+func legalLine(b config.BrandConfig) string {
+	parts := []string{}
+	for _, p := range []string{b.LegalEntity, b.CompanyNumber, b.PlaceOfReg} {
+		if p = strings.TrimSpace(p); p != "" {
+			parts = append(parts, p)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "\u00a9 " + strings.Join(parts, " \u00b7 ")
 }
 
 var baseTmpl = template.Must(template.New("base").Parse(baseHTML))
 
 func renderEmail(subject, content string) (string, error) {
+	// One read of the environment per render, so the header, the links and
+	// the legal line can never disagree with each other.
+	brand := config.Brand()
 	data := baseData{
 		Subject:        subject,
 		Content:        template.HTML(content),
-		CompanyName:    CompanyName,
-		LegalEntity:    LegalEntity,
-		CompanyNumber:  CompanyNumber,
-		PlaceOfReg:     PlaceOfReg,
-		RegisteredAddr: RegisteredAddr,
-		WebsiteURL:     WebsiteURL,
-		WebsiteLabel:   WebsiteLabel(),
-		TermsURL:       TermsURL,
-		PrivacyURL:     PrivacyURL,
+		CompanyName:    brand.Name,
+		FooterLinks:    footerLinks(brand),
+		LegalLine:      legalLine(brand),
+		RegisteredAddr: brand.Address,
 	}
 	var buf bytes.Buffer
 	if err := baseTmpl.Execute(&buf, data); err != nil {
@@ -145,25 +151,22 @@ const baseHTML = `<!DOCTYPE html>
 <tr>
 <td align="center" style="padding:32px 24px 48px;">
 <table cellpadding="0" cellspacing="0" border="0" role="presentation" style="max-width:520px;width:100%;">
-<tr>
+{{if .FooterLinks}}<tr>
 <td align="center" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;line-height:18px;padding-bottom:8px;">
-<a href="{{.PrivacyURL}}" style="color:#64748b;text-decoration:none;">Privacy</a>
-<span style="color:#cbd5e1;">&nbsp;·&nbsp;</span>
-<a href="{{.TermsURL}}" style="color:#64748b;text-decoration:none;">Terms</a>
-<span style="color:#cbd5e1;">&nbsp;·&nbsp;</span>
-<a href="{{.WebsiteURL}}" style="color:#64748b;text-decoration:none;">{{.WebsiteLabel}}</a>
-</td>
-</tr>
-<tr>
+{{range $i, $link := .FooterLinks}}{{if $i}}<span style="color:#cbd5e1;">&nbsp;·&nbsp;</span>
+{{end}}<a href="{{$link.URL}}" style="color:#64748b;text-decoration:none;">{{$link.Label}}</a>
+{{end}}</td>
+</tr>{{end}}
+{{if .LegalLine}}<tr>
 <td align="center" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:10px;line-height:16px;color:#94a3b8;">
-&copy; {{.LegalEntity}} &middot; {{.CompanyNumber}} &middot; {{.PlaceOfReg}}
+{{.LegalLine}}
 </td>
-</tr>
-<tr>
+</tr>{{end}}
+{{if .RegisteredAddr}}<tr>
 <td align="center" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:10px;line-height:16px;color:#94a3b8;padding-top:4px;">
 {{.RegisteredAddr}}
 </td>
-</tr>
+</tr>{{end}}
 </table>
 </td>
 </tr>

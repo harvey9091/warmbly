@@ -196,13 +196,13 @@ func (s *emailService) GetTrackingDomain(ctx context.Context, orgID, emailAccoun
 	switch {
 	case account.TrackingDomain == "":
 		status.Status = trackdns.CodeUnset
-		status.Message = "No custom tracking domain is set, so opens and clicks go through the shared tracking host."
+		status.Message = "No custom tracking domain is set, so opens and clicks go through the shared tracking host and the unsubscribe link stays on this install's API address."
 	case target == "":
 		status.Status = trackdns.CodeNoTarget
 		status.Message = "This Warmbly install has no tracking host configured, so there is nothing to point a CNAME at yet. Ask your administrator to set TRACKING_DOMAIN."
 	case account.TrackingDomainVerified:
 		status.Status = trackdns.CodeVerified
-		status.Message = fmt.Sprintf("%s points at %s.", account.TrackingDomain, target)
+		status.Message = fmt.Sprintf("%s points at %s. Opens, clicks and the unsubscribe link in this mailbox's campaign mail are served there.", account.TrackingDomain, target)
 	default:
 		status.Status = trackingStatusPending
 		status.Message = fmt.Sprintf("%s has not verified yet. Check it again to see what DNS returns for it right now.", account.TrackingDomain)

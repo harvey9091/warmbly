@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS idx_organizations_forms_domain_verified;
+DROP INDEX IF EXISTS idx_campaigns_tracking_domain_verified;
+DROP INDEX IF EXISTS idx_email_accounts_tracking_domain_verified;

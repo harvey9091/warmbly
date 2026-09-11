@@ -29,7 +29,8 @@ pub const TRACKING_EVENT_SCHEMA: &str = r#"
         {"name": "timestamp", "type": "string", "avro.java.string": "String"},
         {"name": "user_agent", "type": ["null", "string"], "default": null},
         {"name": "ip_hash", "type": ["null", "string"], "default": null},
-        {"name": "client_ip", "type": ["null", "string"], "default": null}
+        {"name": "client_ip", "type": ["null", "string"], "default": null},
+        {"name": "scanner", "type": ["null", "string"], "default": null}
     ]
 }
 "#;
@@ -86,6 +87,13 @@ impl ToAvroValue for TrackingEvent {
                 "client_ip",
                 match &self.client_ip {
                     Some(net) => Value::Union(1, Box::new(Value::String(net.clone()))),
+                    None => Value::Union(0, Box::new(Value::Null)),
+                },
+            ),
+            (
+                "scanner",
+                match &self.scanner {
+                    Some(label) => Value::Union(1, Box::new(Value::String(label.clone()))),
                     None => Value::Union(0, Box::new(Value::Null)),
                 },
             ),

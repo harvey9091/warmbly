@@ -13,6 +13,7 @@ import getCurrentOrganization from "@/lib/api/client/app/organizations/getCurren
 import listLimitRequests from "@/lib/api/client/app/organizations/listLimitRequests";
 import submitLimitRequest from "@/lib/api/client/app/organizations/submitLimitRequest";
 import cancelLimitRequest from "@/lib/api/client/app/organizations/cancelLimitRequest";
+import useBrand from "@/hooks/useBrand";
 import type {
     LimitField,
     LimitRequestStatus,
@@ -36,6 +37,7 @@ const STATUS_TONE: Record<LimitRequestStatus, string> = {
 
 export default function LimitsSettingsPage() {
     const qc = useQueryClient();
+    const brand = useBrand();
 
     const orgQuery = useQuery({
         queryKey: ["app", "organizations", "current"],
@@ -157,16 +159,17 @@ export default function LimitsSettingsPage() {
                             {submit.isPending ? "Submitting…" : "Submit request"}
                         </button>
                         <p className="text-[11px] text-slate-500">
-                            Subject to review per our{" "}
-                            <a
-                                href="https://warmbly.com/terms"
-                                target="_blank"
-                                rel="noreferrer"
-                                className="underline"
-                            >
-                                terms of service
-                            </a>
-                            .
+                            {brand.terms_url ? (
+                                <>
+                                    Subject to review per our{" "}
+                                    <a href={brand.terms_url} target="_blank" rel="noreferrer" className="underline">
+                                        terms of service
+                                    </a>
+                                    .
+                                </>
+                            ) : (
+                                "Subject to review."
+                            )}
                         </p>
                     </div>
                 </form>

@@ -6,8 +6,8 @@ import type ContactSelection from "@/lib/api/models/app/contacts/ContactSelectio
 import type { ContactVerificationCounts } from "@/lib/api/models/app/contacts/SearchContactsResult";
 
 export interface VerificationOverview {
-    // "builtin" (the in-house check) or "millionverifier".
-    provider: "builtin" | "millionverifier" | string;
+    // "builtin" (the in-house check) or the connected verification provider.
+    provider: "builtin" | "millionverifier" | "cleanmylist" | string;
     connection_id?: string;
     credits?: number;
     // Set when a provider is connected but unusable (bad key, no credits).

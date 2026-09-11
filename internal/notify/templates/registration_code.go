@@ -12,7 +12,7 @@ const registrationCodeContent = `
 Verify
 </p>
 <h2 style="margin:0 0 8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-weight:600;font-size:18px;color:#0f172a;letter-spacing:-0.01em;">
-Welcome to Warmbly
+Welcome to {{.Brand}}
 </h2>
 <p style="margin:0 0 24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#475569;line-height:20px;">
 Enter this code to finish creating your account.
@@ -34,7 +34,10 @@ Expires in 15 minutes
 var registrationCodeTmpl = template.Must(template.New("registration_code_content").Parse(registrationCodeContent))
 
 func GenerateRegistrationCodeHTML(code string) (string, error) {
-	data := struct{ Code string }{Code: code}
+	data := struct {
+		Code  string
+		Brand string
+	}{Code: code, Brand: CompanyName()}
 	var buf bytes.Buffer
 	if err := registrationCodeTmpl.Execute(&buf, data); err != nil {
 		errs.CaptureException(err)

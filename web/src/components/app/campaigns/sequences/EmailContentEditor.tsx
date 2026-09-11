@@ -34,6 +34,7 @@ import {
     SelectButton,
 } from "@/components/ui/popover-menu";
 import ContentScore from "../ContentScore";
+import HtmlFindings from "./HtmlFindings";
 import useTemplates from "@/lib/api/hooks/app/templates/useTemplates";
 import useCreateTemplate from "@/lib/api/hooks/app/templates/useCreateTemplate";
 import { useConfirm } from "@/hooks/context/confirm";
@@ -42,12 +43,15 @@ import buildError from "@/lib/helper/buildError";
 import { VARIABLES, htmlToPlain, linkifyUnsubscribe, promptToHtml, renderPreview, templateIssue } from "./emailPreview";
 import { LINK_VARIABLES, UNSUBSCRIBE_TOKEN } from "@/lib/templateVars";
 import useCampaign from "@/lib/api/hooks/app/campaigns/useCampaign";
+import { isDocumentBody } from "@/lib/email/pastedEmail";
 
 export default function EmailContentEditor({
     subject,
     onSubjectChange,
     bodyHtml,
     onBodyChange,
+    bodyCode = false,
+    onBodyCodeChange,
     subjectPlaceholder = "Quick question, {{.FirstName}}",
     bodyPlaceholder = "Hi {{.FirstName}}, …",
     campaignId,
@@ -59,6 +63,11 @@ export default function EmailContentEditor({
     onSubjectChange: (value: string) => void;
     bodyHtml: string;
     onBodyChange: (html: string, plain: string) => void;
+    // HTML mode for this arm, persisted on the step as body_code. Without the
+    // setter the mode is local to the session and inferred from the body: an
+    // A/B variant has no column to record it in.
+    bodyCode?: boolean;
+    onBodyCodeChange?: (code: boolean) => void;
     subjectPlaceholder?: string;
     bodyPlaceholder?: string;
     // When set, the preview renders for a chosen lead and mailbox and shows the
@@ -74,6 +83,24 @@ export default function EmailContentEditor({
     dirty?: boolean;
 }) {
     const [tab, setTab] = React.useState<"edit" | "preview">("edit");
+
+    // An A/B arm has nowhere to persist the mode, so it infers one from the
+    // body it opens with: markup no schema can hold faithfully must not be
+    // parsed just because the arm was reopened. This component is keyed on the
+    // step or the variant, so the seed is re-read whenever either changes.
+    const [localCode, setLocalCode] = React.useState(() => isDocumentBody(bodyHtml));
+    const code = onBodyCodeChange ? bodyCode : localCode;
+    const setCode = onBodyCodeChange ?? setLocalCode;
+
+    // A body can also become a document after mount: applying a template
+    // replaces it wholesale. Whichever mode the step is in, it has to switch
+    // before the editor parses that markup through its schema, or the next
+    // visual edit saves the gutted version. The visual editor cannot produce
+    // document markup itself, so this only ever fires on a body from outside.
+    React.useEffect(() => {
+        if (!code && isDocumentBody(bodyHtml)) setCode(true);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [bodyHtml, code]);
 
     // Preview context: null contact = the built-in sample; the mailbox defaults
     // to the campaign's first enabled sender once the pool has loaded.
@@ -99,14 +126,23 @@ export default function EmailContentEditor({
     const previewMut = useTemplatePreview();
     const runPreview = previewMut.mutateAsync;
     React.useEffect(() => {
-        if (tab !== "preview") return;
+        // HTML mode keeps the preview running on the Edit tab: the client
+        // notes below the editor come from it, and an author writing markup
+        // is exactly who needs them while they write.
+        if (tab !== "preview" && !code) return;
+        // Switching to Preview is a deliberate act and should feel immediate.
+        // Writing markup is not: the request carries the whole body, which for
+        // a designed email is tens of kilobytes, so it waits for a real pause.
+        const settle = tab === "preview" ? 250 : 800;
         // Responses can land out of order; only the newest request may paint.
         let active = true;
         const t = setTimeout(() => {
             runPreview({
                 subject,
                 body_html: bodyHtml,
-                body_plain: htmlToPlain(bodyHtml),
+                // Matches what the step stores, so the preview shows the text
+                // part the recipient gets rather than a second derivation.
+                body_plain: code ? "" : htmlToPlain(bodyHtml),
                 ...(campaignId && previewContact ? { contact_id: previewContact.id } : {}),
                 ...(campaignId ? { campaign_id: campaignId } : {}),
                 ...(campaignId && previewMailbox ? { account_id: previewMailbox.id } : {}),
@@ -118,13 +154,13 @@ export default function EmailContentEditor({
                 .catch(() => {
                     if (active) setServerPreview(null);
                 });
-        }, 250);
+        }, settle);
         return () => {
             active = false;
             clearTimeout(t);
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tab, subject, bodyHtml, previewContact?.id, campaignId, previewMailbox?.id, stepId]);
+    }, [tab, code, subject, bodyHtml, previewContact?.id, campaignId, previewMailbox?.id, stepId]);
 
     const tplIssue = templateIssue(subject) || templateIssue(bodyHtml) || templateIssue(htmlToPlain(bodyHtml));
 
@@ -247,13 +283,25 @@ export default function EmailContentEditor({
                     </div>
                 </div>
                 {tab === "edit" ? (
-                    <RichTextEditor
-                        html={bodyHtml}
-                        onChange={(html) => onBodyChange(html, htmlToPlain(html))}
-                        variables={VARIABLES}
-                        links={LINK_VARIABLES}
-                        placeholder={bodyPlaceholder}
-                    />
+                    <>
+                        <RichTextEditor
+                            html={bodyHtml}
+                            // In HTML mode the plain-text half is left to the
+                            // send path, which renders it from the finished
+                            // message (signature and footer included) with
+                            // list bullets, table rows and link destinations.
+                            // Deriving a weaker one here would only mask it.
+                            onChange={(html) => onBodyChange(html, code ? "" : htmlToPlain(html))}
+                            code={code}
+                            onCodeChange={setCode}
+                            variables={VARIABLES}
+                            links={LINK_VARIABLES}
+                            placeholder={bodyPlaceholder}
+                        />
+                        {/* What clients will do to this markup. Live while
+                            writing HTML, where it is most needed. */}
+                        <HtmlFindings findings={serverPreview?.html_findings ?? []} />
+                    </>
                 ) : (
                     <div className="rounded-md border border-slate-200 bg-white">
                         {campaignId && (
@@ -324,6 +372,7 @@ export default function EmailContentEditor({
                         </p>
                     </div>
                 )}
+                {tab === "preview" && <HtmlFindings findings={serverPreview?.html_findings ?? []} />}
                 {(serverPreview?.errors?.length ?? 0) > 0 ? (
                     <p className="mt-1.5 flex items-start gap-1.5 text-[11px] text-rose-600">
                         <AlertCircleIcon className="mt-px w-3.5 h-3.5 shrink-0" />
@@ -356,7 +405,12 @@ export default function EmailContentEditor({
                 )}
             </div>
 
-            <ContentScore subject={subject} bodyHtml={bodyHtml} bodyPlain={htmlToPlain(bodyHtml)} />
+            <ContentScore
+                subject={subject}
+                bodyHtml={bodyHtml}
+                bodyPlain={htmlToPlain(bodyHtml)}
+                onApplySubject={onSubjectChange}
+            />
         </div>
     );
 }

@@ -5,7 +5,7 @@ Two distinct planes, deployed differently.
 | Plane | Services | How |
 |-------|----------|-----|
 | Control | backend, consumer, tracking, realtime, web | Container hosting in one region (Railway in production). Stable region-pinning so KMS/S3 calls stay local. |
-| Execution | worker | One process per VPS, anywhere with a public IPv4. Managed from the admin dashboard over SSH. |
+| Execution | worker | One process per machine, anywhere with outbound network. Joins with one command and pulls its work; nothing connects back to it. |
 
 ## Directory layout
 
@@ -60,6 +60,11 @@ Full reference: [local development](https://docs.warmbly.com/development/local-d
 
 ## Deploying without Docker
 
+`deploy/split-cloud/` holds the manifests for running the two planes on
+different providers: the control plane on a container host, the bus and cache
+and fleet on machines you own, and the database, root key and object store in a
+cloud region. Its README lists what is in it.
+
 `deploy/systemd/` holds one unit per service and `deploy/nginx/warmbly.conf` a site that serves the static frontends and proxies the API, websocket and tracking hosts. The step-by-step guide that uses them is [Deploying without Docker](https://docs.warmbly.com/development/bare-metal/).
 
 ## Deploying the control plane
@@ -77,62 +82,62 @@ Backend, consumer, and the Elixir realtime service all pick their event transpor
 
 Set the flag the same on all three services. A publisher on Pub/Sub with a subscriber on Redis silently drops every realtime event.
 
-## Worker deployment
+## Adding a machine
 
-Workers run on per-VPS machines so cold-mail traffic spreads across many IPs. Worker identity is a deterministic UUIDv5 derived from the VPS's public IPv4 — same IP, same worker.
+Every Warmbly process that runs on a machine you own is a node: a `worker` sends and syncs mail, a `consumer` processes events. Both share one registry (`fleet_nodes`), and both join the same way.
 
-Add a worker from the admin dashboard:
-
-1. Provision a VPS, note its public IP + root user
-2. Admin → Workers → Add Worker
-3. Copy the generated enrollment command
-4. Run it on the VPS as root
-
-The installer is served by the backend at `/worker-install.sh`. It exchanges the one-time token for worker config, writes `/etc/warmbly/worker.env`, configures systemd, enables a daily randomized self-update timer, and starts the worker container. The worker then heartbeats back to the backend and marks itself installed.
-
-The older SSH-managed path is still supported: paste the generated SSH public key into the VPS's `~/.ssh/authorized_keys`, then click Test and Install. From then on, lifecycle operations (restart, update, system updates, reboot, rotate keys, logs, uninstall) can happen from the dashboard.
-
-Manual install on the VPS is also supported:
+Nothing is ever pushed to a node. It joins with one command and heartbeats forever, and everything the control plane wants from it comes back in the heartbeat reply.
 
 ```bash
-curl -fsSL https://api.example.com/worker-install.sh | sudo bash -s -- \
-  --enroll wmenroll_... \
-  --api-base https://api.example.com
+# On the instance
+warmblyctl fleet join-token
 
-# or fully manual, passing a prepared env file:
-sudo bash scripts/install-worker.sh \
-  --image ghcr.io/<owner>/warmbly/worker:prod \
-  --env-file worker.env
+# On the new machine (needs Docker, systemd and root)
+curl -fsSL https://api.example.com/join.sh | sh -s -- \
+  --url https://api.example.com \
+  --token <join-token> \
+  --role worker \
+  --region eu-central
 ```
 
-`scripts/install-worker.sh --help` lists every flag (`--ips` for multi-IP machines, `--update`, `--uninstall`, `--purge`, `--status`, `--no-auto-update`, plus the legacy Kafka/AWS prompts).
+The join script is embedded in the backend and served at `GET /join.sh`, so a self-hosted fleet gets a script matching its own backend. It enrols the node, writes the config the control plane hands back to `/etc/warmbly/node.env`, installs a systemd service and an update timer, and starts the node container. `--dry-run` prints what it would write without touching the machine.
+
+`--region` is optional and only feeds worker placement. Re-running the same command on the same machine re-joins it under the same identity, so it keeps its history and its mailboxes.
+
+The machine needs no inbound port, no SSH key and no cloud account. There is no restart, logs or reboot action anywhere, because nothing reaches into a machine.
 
 ### Why per-VPS instead of Kubernetes DaemonSet
 
-Cold-mail reputation lives at the IP level. K8s nodes typically NAT pods through a small set of egress IPs, so a per-node DaemonSet does not deliver IP diversity. Workers don't depend on Postgres, so cluster-level service discovery isn't needed. Spreading across VPS providers and regions is the only thing that actually moves the deliverability needle.
+Workers don't depend on Postgres, so cluster-level service discovery isn't needed, and k8s pods churn while IPs do not. What a mailbox provider remembers is the address an account signs in from, so a mailbox whose client address changes every deploy collects sign-in risk challenges for nothing.
 
 ### Worker env reference
 
-Workers in production should be assigned to a worker profile in the dashboard. The profile bundles all of these:
+A node is not configured by hand. The join endpoint renders `/etc/warmbly/node.env` from the backend's own environment (`nodeEnvKeys` in `internal/api/handler/fleet_nodes.go`), so a node runs against exactly the infrastructure the control plane uses:
 
-| Env var | Source | Notes |
-|---------|--------|-------|
-| `APP_ENV` | profile | |
-| `EVENTBUS_PROVIDER` / `NATS_URL` | profile | `nats` on the default stack |
-| `CODEC_PROVIDER` | profile | `json` on the default stack |
-| `REDIS` | profile | full URL with embedded password; encrypted at rest |
-| `ENCRYPTED_KEYS_BACKEND_URL` | profile | the backend's public/internal URL |
-| `ENCRYPTED_KEYS_WORKER_TOKEN` | profile | must equal the backend's `INTERNAL_API_TOKEN` |
-| `BOX_GOOGLE_*` / `BOX_OUTLOOK_*` | profile | mailbox OAuth clients; needed for token refresh |
-| `KAFKA_*` / `SCHEMA_REGISTRY_*` | profile | Kafka path only; secrets encrypted at rest |
-| `AWS_REGION` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | profile (via AWS credentials row) | only when using AWS KMS/S3; secret encrypted at rest |
-| `WORKER_TIER` | (worker row) | `shared` or `dedicated` |
+| Env var | Notes |
+|---------|-------|
+| `APP_ENV` | |
+| `EVENTBUS_PROVIDER` / `NATS_URL` | `nats` on the default stack |
+| `CODEC_PROVIDER` | `json` on the default stack |
+| `REDIS` | full URL with embedded password |
+| `KMS_PROVIDER` / `KMS_LOCAL_MASTER_KEY` / `KMS_KEY_ID` | envelope decryption |
+| `CREDENTIALS_ENCRYPTION_KEY` | mailbox credentials, read without an org context |
+| `BLOB_PROVIDER` / `BLOB_FS_ROOT` / `AWS_REGION` / `S3_BUCKET` | message bodies |
+| `BOX_GOOGLE_*` / `BOX_OUTLOOK_*` | mailbox OAuth clients; needed for token refresh |
+| `KAFKA_*` / `SCHEMA_REGISTRY_*` | Kafka path only |
 
-The worker does **not** open a Postgres connection. Do not add one.
+Set on the node itself, not inherited: `WARMBLY_NODE_ID`, `WARMBLY_NODE_ROLE`, `WARMBLY_NODE_REGION`, and `WORKER_ID` (equal to the node id, so the placement row and the node row are the same machine).
+
+`PRIMARY_DB` is deliberately absent. The worker does **not** open a Postgres connection; it reaches relational data through the backend's internal API and nothing else. Do not add one.
+
+Two settings do not survive a fleet on their defaults. `BLOB_PROVIDER=filesystem` gives a remote worker no way to read the body the backend wrote, and a stock local install hands out `NATS_URL`/`REDIS`/`ENCRYPTED_KEYS_BACKEND_URL` values that only resolve on the instance host. Set reachable addresses and `BLOB_PROVIDER=s3` before adding a node off-host.
 
 ## Auto-update
 
-Each worker profile picks a release channel (`pinned` / `stable` / `dev`) and an `auto_update` toggle. When a GitHub release fires the webhook, the backend resolves the channel and (if `auto_update=true`) rolls every assigned worker. See [the self-hosting guide](https://docs.warmbly.com/development/deployment-guide/).
+`internal/app/releases` resolves the head of the configured channel and writes the tag to `admin_settings`; it updates nothing itself. The heartbeat reply carries `desired_version`, the node writes it to a file, and a systemd timer pulls and restarts, so the process being replaced is never the process doing the replacing. A per-node `pinned_version` holds a machine back for canarying.
+
+The backend is deliberately excluded: it is what tells everyone else their version. See [the self-hosting guide](https://docs.warmbly.com/development/deployment-guide/).
+
 
 ## Health checks
 

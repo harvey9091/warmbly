@@ -42,6 +42,9 @@ type WorkerCapacityRow struct {
 // dimensionless except Effective (mailbox-equivalents) and Load (sum of
 // mailbox weights). Utilization is Load/Effective and is the value the
 // scheduler sorts on when picking the next worker.
+//
+// Effective is a target, not a ceiling. Nothing refuses a placement for being
+// over it; see Score in placement.go for what being over it costs.
 type Capacity struct {
 	Base        float64
 	HealthMul   float64
@@ -49,6 +52,14 @@ type Capacity struct {
 	Effective   float64
 	Load        float64
 	Utilization float64
+
+	// Target is Effective without the age ramp, and is what placement measures
+	// utilization against. Age damping exists to probe a new worker gently,
+	// but it collapses Effective to the floor for the first hours of a node's
+	// life, and dividing by that made a one-hour-old worker look 200% loaded
+	// after a single mailbox. Placement pays for youth as a score term
+	// instead; see weightNewWorker.
+	Target float64
 }
 
 // ComputeCapacity is the placement math: Base * Health * Age, floored at
@@ -68,6 +79,10 @@ func ComputeCapacity(row WorkerCapacityRow) Capacity {
 	}
 	if c.Effective > 0 {
 		c.Utilization = c.Load / c.Effective
+	}
+	c.Target = math.Floor(c.Base * c.HealthMul)
+	if c.Target <= 0 {
+		c.Target = 1
 	}
 	return c
 }

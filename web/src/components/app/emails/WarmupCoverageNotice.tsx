@@ -71,7 +71,7 @@ export default function WarmupCoverageNotice({
                         </button>
                     ) : (
                         <a
-                            href="https://warmbly.com"
+                            href="https://docs.warmbly.com/guides/warmbly-cloud/"
                             target="_blank"
                             rel="noopener noreferrer"
                             className="font-medium underline underline-offset-2 hover:text-amber-950"

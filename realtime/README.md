@@ -46,6 +46,8 @@ GCP_PROJECT_ID=your_gcp_project
 # Optional
 PORT=4000
 PUBSUB_ENABLED=true
+POSTHOG_KEY=phc_your_project_key
+POSTHOG_HOST=https://us.i.posthog.com
 SENTRY_DSN=your_sentry_dsn
 GOOGLE_APPLICATION_CREDENTIALS_JSON='{"type":"service_account",...}'
 ```

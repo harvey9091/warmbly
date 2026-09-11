@@ -53,7 +53,7 @@ func liveJobsService(handle *db.DB) *JobsService {
 // nextPair asks routing what it would send next, exactly as the scheduler does.
 func (f *sendResultFixture) nextPair(t *testing.T, s *JobsService) *repository.ContactSequencePair {
 	t.Helper()
-	pair, _, err := s.CampaignProgressRepo.FindNextRoutedPair(context.Background(), f.campaign, "created_at", "asc", "", false, false)
+	pair, _, _, err := s.CampaignProgressRepo.FindNextRoutedPair(context.Background(), f.campaign, "created_at", "asc", "", false, false, nil)
 	if err != nil {
 		t.Fatalf("next pair: %v", err)
 	}
@@ -147,11 +147,11 @@ func TestLiveReserveSendClaimsAStepExactlyOnce(t *testing.T) {
 	s := liveJobsService(handle)
 	f := newSendResultFixture(t, handle)
 
-	first, err := s.CampaignProgressRepo.ReserveSend(ctx, f.campaign, f.contact, f.step, uuid.New(), true)
+	first, err := s.CampaignProgressRepo.ReserveSend(ctx, f.campaign, f.contact, f.step, uuid.New(), uuid.Nil, true)
 	if err != nil || !first {
 		t.Fatalf("first reservation: claimed=%v err=%v", first, err)
 	}
-	second, err := s.CampaignProgressRepo.ReserveSend(ctx, f.campaign, f.contact, f.step, uuid.New(), true)
+	second, err := s.CampaignProgressRepo.ReserveSend(ctx, f.campaign, f.contact, f.step, uuid.New(), uuid.Nil, true)
 	if err != nil {
 		t.Fatalf("second reservation: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestLiveReserveSendClaimsAStepExactlyOnce(t *testing.T) {
 	if err := s.CampaignProgressRepo.RecordEmailSent(ctx, f.campaign, f.contact, f.step); err != nil {
 		t.Fatalf("record sent: %v", err)
 	}
-	third, err := s.CampaignProgressRepo.ReserveSend(ctx, f.campaign, f.contact, f.step, uuid.New(), true)
+	third, err := s.CampaignProgressRepo.ReserveSend(ctx, f.campaign, f.contact, f.step, uuid.New(), uuid.Nil, true)
 	if err != nil {
 		t.Fatalf("third reservation: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestLiveReleaseSendReturnsTheStep(t *testing.T) {
 	s := liveJobsService(handle)
 	f := newSendResultFixture(t, handle)
 
-	if _, err := s.CampaignProgressRepo.ReserveSend(ctx, f.campaign, f.contact, f.step, uuid.New(), true); err != nil {
+	if _, err := s.CampaignProgressRepo.ReserveSend(ctx, f.campaign, f.contact, f.step, uuid.New(), uuid.Nil, true); err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
 	if err := s.CampaignProgressRepo.ReleaseSend(ctx, f.campaign, f.contact, f.step, true); err != nil {

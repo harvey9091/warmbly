@@ -40,10 +40,29 @@ describe("normalizePastedHTML", () => {
         expect(out).toContain("<img");
     });
 
-    it("unwraps styling-only elements but keeps our merge-field chips", () => {
-        expect(normalizePastedHTML('<p><font color="red">Hi</font></p>')).toBe("<p>Hi</p>");
+    it("keeps our merge-field chips through the span unwrap", () => {
         const chip = '<p><span data-var="">{{.FirstName}}</span></p>';
         expect(normalizePastedHTML(chip)).toBe(chip);
+    });
+
+    // A colour someone chose is design and the schema holds it now (issue
+    // #393). The source editor's own font stack is not, and importing it
+    // renders a cold email in Arial in every inbox.
+    it("keeps a chosen colour off a pasted span and drops the source's fonts", () => {
+        expect(normalizePastedHTML('<p><font color="red">Hi</font></p>')).toBe(
+            '<p><span style="color: red">Hi</span></p>',
+        );
+        expect(normalizePastedHTML('<p><span style="background-color:#ff0">Hi</span></p>')).toBe(
+            '<p><span style="background-color: #ff0">Hi</span></p>',
+        );
+        expect(
+            normalizePastedHTML('<p><span style="font-family:Arial;font-size:13px">Hi</span></p>'),
+        ).toBe("<p>Hi</p>");
+    });
+
+    it("drops a near-black colour, which is a default rather than a choice", () => {
+        expect(normalizePastedHTML('<p><span style="color:#000000">Hi</span></p>')).toBe("<p>Hi</p>");
+        expect(normalizePastedHTML('<p><span style="color: rgb(34, 34, 34)">Hi</span></p>')).toBe("<p>Hi</p>");
     });
 
     it("leaves a copy from another TipTap editor untouched", () => {

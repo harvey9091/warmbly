@@ -4,17 +4,20 @@ import (
 	"html"
 	"strings"
 
+	"github.com/warmbly/warmbly/internal/app/unsublink"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/mailhtml"
 )
 
 // UnsubscribeLinkVar is the template variable a step can place by hand
 // ({{.UnsubscribeLink}}); it resolves to the recipient's own signed link.
 const UnsubscribeLinkVar = "UnsubscribeLink"
 
-// unsubscribePathMarker is the path segment every minted link carries. Click
-// tracking leaves such links alone so an opt-out is never counted as a click
-// or bounced through a redirect.
-const unsubscribePathMarker = "/unsubscribe/"
+// unsubscribePathMarker is the path segment every minted link carries, on the
+// API origin and on a workspace's own tracking domain alike. Click tracking
+// leaves such links alone so an opt-out is never counted as a click or bounced
+// through a redirect.
+const unsubscribePathMarker = unsublink.Path
 
 // optOutFooter renders the in-body opt-out for one recipient, as HTML and as
 // plain text, or empty strings when the effective mode is off. Link mode with
@@ -50,11 +53,7 @@ func appendOptOut(bodyHTML, bodyPlain string, settings models.UnsubscribeSetting
 		return bodyHTML, bodyPlain
 	}
 	if bodyHTML != "" {
-		if strings.Contains(bodyHTML, "</body>") {
-			bodyHTML = strings.Replace(bodyHTML, "</body>", htmlPart+"</body>", 1)
-		} else {
-			bodyHTML += htmlPart
-		}
+		bodyHTML = mailhtml.InsertBeforeBodyEnd(bodyHTML, htmlPart)
 	}
 	if bodyPlain != "" {
 		bodyPlain += "\n\n" + plainPart

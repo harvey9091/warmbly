@@ -72,7 +72,7 @@ func TestSyncStateClearsTransientMailErrors(t *testing.T) {
 	if errRepo.calls != 1 {
 		t.Fatalf("resolved errors %d times, want once per relayed state", errRepo.calls)
 	}
-	want := map[string]bool{"SERVER_UNREACHABLE": true, "CONNECTION_LOST": true, "RESOURCE_NOT_FOUND": true}
+	want := map[string]bool{"SERVER_UNREACHABLE": true, "CONNECTION_LOST": true, "RESOURCE_NOT_FOUND": true, "IMAP_UNKNOWN": true}
 	for _, code := range errRepo.resolvedCodes {
 		if !want[code] {
 			t.Errorf("resolved %q, which a completed sync does not disprove", code)

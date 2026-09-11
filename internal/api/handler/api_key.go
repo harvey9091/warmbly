@@ -171,6 +171,32 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "revoked"})
 }
 
+// DeleteAPIKey permanently removes a revoked or expired API key
+// DELETE /api-keys/:id/permanent
+func (h *Handler) DeleteAPIKey(c *gin.Context) {
+	orgID := middleware.GetOrganizationID(c)
+	if orgID == nil {
+		errx.JSON(c, errx.New(errx.BadRequest, "no organization selected"))
+		return
+	}
+
+	keyIDStr := c.Param("id")
+	keyID, err := uuid.Parse(keyIDStr)
+	if err != nil {
+		errx.JSON(c, errx.ErrNotFound)
+		return
+	}
+
+	if xerr := h.APIKeyService.Delete(c.Request.Context(), *orgID, keyID); xerr != nil {
+		errx.JSON(c, xerr)
+		return
+	}
+
+	h.auditOrg(c, models.AuditActionDelete, models.AuditEntityAPIKey, &keyID, nil, nil)
+
+	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+}
+
 // RevokeOwnAPIKey revokes the key the request was made with.
 //
 // Deliberately outside the API_KEYS scope gate: a credential must always be
