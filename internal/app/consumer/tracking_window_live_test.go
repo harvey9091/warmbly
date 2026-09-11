@@ -23,6 +23,28 @@ import (
 // or that an existing instance's document lacks entirely, is only visible
 // against a real row.
 
+// settingsSandbox snapshots the singleton settings row and restores it
+// verbatim afterwards. The document is instance-wide, not fixture-owned, so a
+// cleanup that wrote Defaults() back would silently reset the settings of
+// whatever database the test was pointed at.
+// It returns the snapshot, because a test must assert against the values the
+// database actually held rather than against the shipped defaults: this suite
+// is meant to run against a real instance's database, where an operator may
+// have set anything.
+func settingsSandbox(t *testing.T, ctx context.Context, store instancesettings.Store) instancesettings.Document {
+	t.Helper()
+	before, err := store.Get(ctx)
+	if err != nil {
+		t.Fatalf("snapshot settings: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Put(ctx, before, nil); err != nil {
+			t.Errorf("restore settings: %v", err)
+		}
+	})
+	return before
+}
+
 // An instance that upgrades has a settings row written before this section
 // existed. Its document has no "tracking" key at all, and the windows have to
 // come back as the shipped defaults rather than as zero, which would read as
@@ -31,6 +53,7 @@ func TestLiveTrackingWindowsDefaultOnADocumentWithoutTheSection(t *testing.T) {
 	handle := liveDB(t)
 	ctx := context.Background()
 	store := instancesettings.NewStore(handle.Pool)
+	_ = settingsSandbox(t, ctx, store)
 
 	// A document exactly as an older version would have written it.
 	old := instancesettings.Defaults()
@@ -57,7 +80,6 @@ func TestLiveTrackingWindowsDefaultOnADocumentWithoutTheSection(t *testing.T) {
 	if err := store.Put(ctx, doc, nil); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Put(ctx, instancesettings.Defaults(), nil) })
 
 	got, err := store.Get(ctx)
 	if err != nil {
@@ -80,7 +102,7 @@ func TestLiveTrackingWindowReachesTheClassifier(t *testing.T) {
 	handle := liveDB(t)
 	ctx := context.Background()
 	store := instancesettings.NewStore(handle.Pool)
-	t.Cleanup(func() { _ = store.Put(ctx, instancesettings.Defaults(), nil) })
+	before := settingsSandbox(t, ctx, store)
 
 	widened := 300
 	patch := instancesettings.Patch{Tracking: &struct {
@@ -101,10 +123,12 @@ func TestLiveTrackingWindowReachesTheClassifier(t *testing.T) {
 	if got, want := windows.OpenWindow(), time.Duration(widened)*time.Second; got != want {
 		t.Fatalf("open window = %v, want %v", got, want)
 	}
-	// The click window was not part of the patch and must keep its default
-	// rather than being cleared by a partial write.
-	if got, want := windows.ClickWindow(), time.Duration(config.TrackingMachineWindowClickSecondsDefault)*time.Second; got != want {
-		t.Fatalf("click window = %v, want the untouched default %v", got, want)
+	// The click window was not part of the patch and must come back exactly as
+	// it was, rather than being cleared by a partial write. Compared against
+	// the snapshot, not against the shipped default, so the assertion holds on
+	// a database where an operator has already set one.
+	if got, want := windows.ClickWindow(), before.Tracking.ClickWindow(); got != want {
+		t.Fatalf("click window = %v, want it untouched at %v", got, want)
 	}
 
 	sent := time.Now()
@@ -127,7 +151,7 @@ func TestLiveTrackingWindowClampsThroughStorage(t *testing.T) {
 	handle := liveDB(t)
 	ctx := context.Background()
 	store := instancesettings.NewStore(handle.Pool)
-	t.Cleanup(func() { _ = store.Put(ctx, instancesettings.Defaults(), nil) })
+	_ = settingsSandbox(t, ctx, store)
 
 	doc := instancesettings.Defaults()
 	doc.Tracking.MachineWindowOpenSeconds = config.TrackingMachineWindowSecondsMax + 10_000
