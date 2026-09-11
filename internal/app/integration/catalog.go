@@ -205,5 +205,29 @@ func Catalog() []models.IntegrationCatalogEntry {
 				"Replaces the built-in check while credits last, falls back when they run out",
 			},
 		},
+		{
+			Provider:   models.IntegrationCleanMyList,
+			Name:       "CleanMyList",
+			Tagline:    "Verify contact addresses with your CleanMyList account.",
+			Category:   models.IntegrationCategoryVerification,
+			AuthMethod: string(models.IntegrationAuthAPIKey),
+			DocsURL:    "https://www.cleanmylist.io/developers",
+			Highlights: []string{
+				"Checks new contacts and re-verifies existing addresses",
+				"Uses your CleanMyList plan allowance first, then credits",
+				"Falls back to the built-in check when the service is unavailable",
+			},
+		},
 	}
+}
+
+// ProviderLabel is the catalog's display name for a provider, for copy a member
+// reads. Falls back to the identifier for anything not in the catalog.
+func ProviderLabel(p models.IntegrationProvider) string {
+	for _, e := range Catalog() {
+		if e.Provider == p {
+			return e.Name
+		}
+	}
+	return string(p)
 }

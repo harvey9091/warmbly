@@ -261,6 +261,11 @@ const (
 	VerificationProbeConcurrency = 4
 	// VerificationProviderConcurrency bounds parallel paid-provider lookups.
 	VerificationProviderConcurrency = 8
+	// VerificationExhaustedCooldownMinutes is how long an out-of-allowance
+	// account is left alone when its provider publishes no balance endpoint.
+	// Nothing but a billable check can tell such an account has been topped up,
+	// so retrying sooner only re-runs the batch that found it empty.
+	VerificationExhaustedCooldownMinutes = 15
 	// VerificationBreakerWindow and VerificationBreakerInvalidPct are the
 	// in-house probe's self-check: when this share of the last window of
 	// probe verdicts is "invalid", the probe itself is suspect (issue #200,

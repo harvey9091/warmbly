@@ -59,6 +59,10 @@ const PIPEDRIVE: RawBrandLogo = {
 };
 
 export const RAW_BRAND_LOGOS: Record<string, RawBrandLogo> = {
+    cleanmylist: {
+        viewBox: "0 0 64 64",
+        inner: '<rect x="12" y="13" width="40" height="8" rx="4" fill="#111A15"/><rect x="12" y="28" width="31" height="8" rx="4" fill="#111A15"/><rect x="12" y="43" width="28" height="8" rx="4" fill="#111A15"/><circle cx="47" cy="47" r="13" fill="#78D21D"/>',
+    },
     slack: SLACK,
     close: CLOSE,
     pipedrive: PIPEDRIVE,

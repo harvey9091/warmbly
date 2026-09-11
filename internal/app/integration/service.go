@@ -9,6 +9,7 @@ import (
 	"fmt"
 	emailverifyapp "github.com/warmbly/warmbly/internal/app/emailverify"
 	"github.com/warmbly/warmbly/internal/pkg/emailverify"
+	"slices"
 	"strings"
 	"time"
 
@@ -272,14 +273,23 @@ func (s *service) Connect(ctx context.Context, orgID, userID uuid.UUID, provider
 
 	displayFields := buildDisplayFields(provider, config)
 
-	// A verification key is checked before it is stored: a mistyped key would
-	// otherwise quietly leave every contact on the built-in check.
-	if provider == models.IntegrationMillionVerifier {
-		credits, err := checkMillionVerifierKey(ctx, config)
+	verifier := slices.Contains(models.VerificationProviders, provider)
+	if verifier {
+		// One verifier at a time. Which connection wins would otherwise be
+		// decided by creation order alone, so connecting a second service
+		// would silently move every check onto a different bill.
+		if err := s.refuseSecondVerifier(ctx, orgID); err != nil {
+			return nil, err
+		}
+		// A verification key is checked before it is stored: a mistyped key
+		// would otherwise quietly leave every contact on the built-in check.
+		credits, err := checkVerificationKey(ctx, provider, config)
 		if err != nil {
 			return nil, err
 		}
-		displayFields["credits"] = credits
+		if credits != nil {
+			displayFields["credits"] = *credits
+		}
 	}
 
 	var inboundSecret string
@@ -294,6 +304,16 @@ func (s *service) Connect(ctx context.Context, orgID, userID uuid.UUID, provider
 	configEnc, err := s.sealConfig(ctx, orgID, config)
 	if err != nil {
 		return nil, err
+	}
+
+	// Asked again next to the write: validating the key above is a round trip
+	// to the provider, which is long enough for a second connect to pass the
+	// first check. Two that still cross leave an inert connection on the
+	// Integrations page, never a lost one.
+	if verifier {
+		if err := s.refuseSecondVerifier(ctx, orgID); err != nil {
+			return nil, err
+		}
 	}
 
 	status := models.IntegrationStatusPending
@@ -1351,69 +1371,111 @@ func buildDisplayFields(provider models.IntegrationProvider, config map[string]a
 		pick("server")
 	case models.IntegrationZapier, models.IntegrationMake, models.IntegrationN8N:
 		// Outbound-via-Warmbly-API providers: minimal display fields.
-	case models.IntegrationMillionVerifier:
+	case models.IntegrationMillionVerifier, models.IntegrationCleanMyList:
 		// Credits are filled in at connect time from the provider.
 	}
 	return df
 }
 
-// checkMillionVerifierKey validates a pasted key against the provider and
-// returns the account's credit balance.
-func checkMillionVerifierKey(ctx context.Context, config map[string]any) (int, error) {
-	key, _ := config["api_key"].(string)
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return 0, errors.New("paste your MillionVerifier API key")
+func verificationClient(provider models.IntegrationProvider, key string) (emailverify.ProviderClient, error) {
+	switch provider {
+	case models.IntegrationMillionVerifier:
+		return emailverify.NewMillionVerifier(key, ""), nil
+	case models.IntegrationCleanMyList:
+		return emailverify.NewCleanMyList(key, ""), nil
+	default:
+		return nil, fmt.Errorf("%s does not verify addresses", provider)
 	}
-	credits, err := emailverify.NewMillionVerifier(key, "").Credits(ctx)
-	switch {
-	case errors.Is(err, emailverify.ErrMillionVerifierKey):
-		return 0, errors.New("MillionVerifier rejected this API key")
-	case errors.Is(err, emailverify.ErrMillionVerifierCredits):
-		// A valid key with an empty balance still connects; the built-in
-		// check covers until it is topped up.
-		return 0, nil
-	case err != nil:
-		return 0, fmt.Errorf("could not reach MillionVerifier: %w", err)
-	}
-	return credits, nil
 }
 
-// VerificationProviderFor returns the org's connected MillionVerifier client,
-// or nil when none is connected. A disconnected or reauth-required connection
-// does not count.
-func (s *service) VerificationProviderFor(ctx context.Context, orgID uuid.UUID) (*emailverifyapp.Provider, error) {
+// checkVerificationKey validates a pasted key without spending credits.
+func checkVerificationKey(ctx context.Context, provider models.IntegrationProvider, config map[string]any) (*int, error) {
+	name := ProviderLabel(provider)
+	key, _ := config["api_key"].(string)
+	if strings.TrimSpace(key) == "" {
+		return nil, fmt.Errorf("paste your %s API key", name)
+	}
+	client, err := verificationClient(provider, key)
+	if err != nil {
+		return nil, err
+	}
+	balance, err := client.Account(ctx)
+	switch {
+	case errors.Is(err, emailverify.ErrProviderCredits):
+		// A valid empty account can connect; the built-in check covers it.
+		zero := 0
+		return &zero, nil
+	case errors.Is(err, emailverify.ErrProviderUnconfirmed):
+		return nil, fmt.Errorf("confirm your %s account email address, then connect", name)
+	case errors.Is(err, emailverify.ErrProviderKey):
+		return nil, fmt.Errorf("%s rejected this API key", name)
+	case err != nil:
+		return nil, fmt.Errorf("could not reach %s: %w", name, err)
+	}
+	return balance, nil
+}
+
+// refuseSecondVerifier reports the verifier already connected to the workspace,
+// so connecting another one is refused rather than silently taking over.
+func (s *service) refuseSecondVerifier(ctx context.Context, orgID uuid.UUID) error {
+	active, err := s.activeVerificationConnection(ctx, orgID)
+	if err != nil || active == nil {
+		return err
+	}
+	return fmt.Errorf("%s already verifies this workspace's addresses. Disconnect it first", ProviderLabel(active.Provider))
+}
+
+// activeVerificationConnection returns the connection that verifies this
+// workspace's addresses, or nil when none does. Connect keeps there being at
+// most one, so the first match is the answer. A disconnected or
+// reauth-required connection does not count.
+func (s *service) activeVerificationConnection(ctx context.Context, orgID uuid.UUID) (*models.IntegrationConnection, error) {
 	conns, err := s.repo.ListConnections(ctx, orgID)
 	if err != nil {
 		return nil, err
 	}
 	for _, c := range conns {
-		if c.Provider != models.IntegrationMillionVerifier {
+		if !slices.Contains(models.VerificationProviders, c.Provider) {
 			continue
 		}
 		if c.Status != models.IntegrationStatusConnected && c.Status != models.IntegrationStatusDegraded {
 			continue
 		}
-		sec, err := s.repo.GetConnectionSecrets(ctx, c.ID)
-		if err != nil {
-			return nil, err
-		}
-		cfg, err := s.openConfig(ctx, sec)
-		if err != nil {
-			return nil, err
-		}
-		key, _ := cfg["api_key"].(string)
-		if strings.TrimSpace(key) == "" {
-			continue
-		}
-		id := c.ID
-		return &emailverifyapp.Provider{
-			Name:         emailverify.ProviderMillionVerifier,
-			ConnectionID: &id,
-			Client:       emailverify.NewMillionVerifier(key, ""),
-		}, nil
+		return &c, nil
 	}
 	return nil, nil
+}
+
+// VerificationProviderFor returns the org's connected verification client, or
+// nil when none is connected.
+func (s *service) VerificationProviderFor(ctx context.Context, orgID uuid.UUID) (*emailverifyapp.Provider, error) {
+	c, err := s.activeVerificationConnection(ctx, orgID)
+	if err != nil || c == nil {
+		return nil, err
+	}
+	sec, err := s.repo.GetConnectionSecrets(ctx, c.ID)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := s.openConfig(ctx, sec)
+	if err != nil {
+		return nil, err
+	}
+	key, _ := cfg["api_key"].(string)
+	if strings.TrimSpace(key) == "" {
+		return nil, nil
+	}
+	client, err := verificationClient(c.Provider, key)
+	if err != nil {
+		return nil, err
+	}
+	id := c.ID
+	return &emailverifyapp.Provider{
+		Name:         string(c.Provider),
+		Label:        ProviderLabel(c.Provider),
+		ConnectionID: &id,
+		Client:       client,
+	}, nil
 }
 
 // ReportVerificationProviderError records why the provider stopped being
@@ -1425,11 +1487,14 @@ func (s *service) ReportVerificationProviderError(ctx context.Context, connectio
 	status, health := models.IntegrationStatusDegraded, models.IntegrationHealthDegraded
 	detail := err.Error()
 	switch {
-	case errors.Is(err, emailverify.ErrMillionVerifierKey):
+	case errors.Is(err, emailverify.ErrProviderUnconfirmed):
 		status, health = models.IntegrationStatusReauthRequired, models.IntegrationHealthDown
-		detail = "MillionVerifier rejected the API key; reconnect with a current key"
-	case errors.Is(err, emailverify.ErrMillionVerifierCredits):
-		detail = "MillionVerifier account is out of credits; the built-in check is used until it is topped up"
+		detail = "The account email address is not confirmed yet; confirm it, then reconnect"
+	case errors.Is(err, emailverify.ErrProviderKey):
+		status, health = models.IntegrationStatusReauthRequired, models.IntegrationHealthDown
+		detail = "The API key was rejected; reconnect with a current key"
+	case errors.Is(err, emailverify.ErrProviderCredits):
+		detail = "No allowance or credits left; the built-in check is used until the account is topped up"
 	}
 	_ = s.repo.SetConnectionStatus(ctx, connectionID, status, health, detail)
 }
