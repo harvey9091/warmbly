@@ -167,6 +167,19 @@ TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12
 
 Full behavior, including what each registration mode does to the sign-up form, is on [accounts and access](/development/accounts-and-access/).
 
+### Proxying PostHog
+
+Content blockers drop requests to `posthog.com`, so analytics and error reporting quietly stop for a large share of visitors. The backend serves a reverse proxy at `/ingest` for this. Point each frontend at it:
+
+| Tree | Setting | Value |
+|---|---|---|
+| dashboard, admin | `POSTHOG_HOST` | `https://api.example.com/ingest` |
+| marketing site | `PUBLIC_POSTHOG_HOST` | `https://api.example.com/ingest` |
+
+Nothing else changes: the key stays the same, and the proxy forwards the payload untouched. It is on the backend rather than in each frontend because there are three of them, and a proxy copied three times drifts three ways.
+
+The proxy forwards only what PostHog needs to read the request. Cookies and `Authorization` stay on this side, so a session for your instance is never handed to a third party, and the caller's address goes in `X-Forwarded-For` so visitors are geolocated rather than your server.
+
 ## Captcha
 
 | Variable | What it does | Default | Restart needed |
@@ -417,6 +430,8 @@ Set both and every error goes to both. Each variable is read by one process, so 
 | Variable | Read by | What it does | Default |
 |---|---|---|---|
 | `POSTHOG_KEY` | backend, consumer, worker | Server-side error tracking, and the server-side product events below | unset |
+| `POSTHOG_PROXY_INGEST` | Upstream the `/ingest` reverse proxy forwards capture traffic to. The frontends are pointed at `https://<api host>/ingest` so content blockers, which drop requests to posthog.com, do not silently remove your analytics and error reporting | `https://us.i.posthog.com` | yes |
+| `POSTHOG_PROXY_ASSETS` | Upstream for `/ingest/static/*`. PostHog serves its browser bundle from a different host than it ingests on, and sending one to the other 404s | `https://us-assets.i.posthog.com` | yes |
 | `POSTHOG_KEY` | forms service | The forms service's own errors. It reads its own environment, like tracking | unset |
 | `POSTHOG_KEY` | tracking service | Rust errors and panics, posted to the capture endpoint directly | unset |
 | `POSTHOG_KEY` | realtime service | Elixir exceptions, with the stack trace the rescue site caught | unset |

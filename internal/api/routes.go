@@ -123,6 +123,11 @@ func Run(
 	// hostname interesting points here in public DNS.
 	r.GET("/tls/authorize", h.AuthorizeTLSDomain)
 
+	// PostHog reverse proxy. Content blockers drop requests to posthog.com, so
+	// the frontends are pointed here and this forwards them. Public by
+	// necessity: it serves the browser before anyone has signed in.
+	r.Any("/ingest/*path", h.PostHogProxy)
+
 	// Internal backend-to-backend endpoints. Workers call these instead of
 	// touching Postgres directly, per the no-direct-data-services rule in
 	// CLAUDE.md. Auth: shared bearer token (INTERNAL_API_TOKEN).
