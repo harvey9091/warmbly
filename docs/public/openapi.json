@@ -8215,6 +8215,88 @@
         }
       }
     },
+    "/unibox/folder": {
+      "patch": {
+        "operationId": "unibox_move_folder",
+        "summary": "Move messages between folders",
+        "description": "Re-files a batch of messages into Inbox, Archive or Trash, org-wide. Up to 500 ids per call.\n\nThis is a move in Warmbly only. The copy at the mail provider stays where it is, and a later sync will not undo the move: Warmbly tracks the provider's own placement separately and follows it only when the provider itself moves the message. `sent`, `drafts` and `spam` are placements the provider reaches, so they are rejected here with a `400`.",
+        "tags": [
+          "unibox"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UniboxMoveFolderRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Echoes the request back.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UniboxMoveFolderRequest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, more than 500 ids, a folder outside inbox/archive/trash, or no organization selected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing scope/permission, or organization lacks unified-inbox access.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/unibox/reply": {
       "post": {
         "operationId": "unibox_reply",
@@ -23774,6 +23856,34 @@
           "seen": {
             "type": "boolean",
             "description": "`true` marks as read, `false` marks as unread."
+          }
+        }
+      },
+      "UniboxMoveFolderRequest": {
+        "type": "object",
+        "description": "Also the echoed response body.",
+        "required": [
+          "email_ids",
+          "folder"
+        ],
+        "properties": {
+          "email_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 500,
+            "description": "Message UUIDs to move (max 500)."
+          },
+          "folder": {
+            "type": "string",
+            "enum": [
+              "inbox",
+              "archive",
+              "trash"
+            ],
+            "description": "Destination folder. Anything else is a `400`."
           }
         }
       },

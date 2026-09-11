@@ -45,6 +45,7 @@ type UniboxService interface {
 	) (int64, *errx.Error)
 	MarkSeen(ctx context.Context, userID, emailID uuid.UUID, seen bool) *errx.Error
 	MarkSeenBulk(ctx context.Context, orgID uuid.UUID, data *models.MarkSeen) (*models.MarkSeen, *errx.Error)
+	MoveFolderBulk(ctx context.Context, orgID uuid.UUID, data *models.MoveFolder) (*models.MoveFolder, *errx.Error)
 
 	// Snooze hides a thread until `until`. Unsnooze drops the row.
 	Snooze(ctx context.Context, userID uuid.UUID, threadID string, until time.Time) (*models.UniboxSnooze, *errx.Error)

@@ -185,6 +185,9 @@ var (
 	// Folder scoping (unibox sidebar).
 	ErrUniboxFolder     = New(BadRequest, "Folder must be one of inbox, sent, drafts, archive, spam, trash.")
 	ErrSeenFolderAndIDs = New(BadRequest, "Provide either email_ids or folder, not both.")
+	// Filing a message is narrower than scoping a list: the other three are
+	// verdicts the provider reaches, not somewhere a user puts mail.
+	ErrUniboxFilableFolder = New(BadRequest, "Folder must be one of inbox, archive, trash.")
 
 	// Servers
 	ErrIPAddr    = New(BadRequest, "Invalid IP Address.")

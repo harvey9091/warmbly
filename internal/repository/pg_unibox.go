@@ -22,6 +22,9 @@ type UpdateUniboxEntry struct {
 	// FolderPath is the source folder's name, the folder's identity.
 	FolderPath *string `json:"folder_path"`
 	Folder     *string `json:"folder"`
+	// ProviderFolder is the provider's own placement. It moves on every real
+	// provider move; Folder only follows when the message was not filed here.
+	ProviderFolder *string `json:"provider_folder"`
 }
 
 type UniboxRepository interface {
@@ -44,6 +47,9 @@ type UniboxRepository interface {
 	// MarkSeenByFolder flips the read state of every message in one canonical
 	// folder for the whole workspace (the sidebar's "mark all as read").
 	MarkSeenByFolder(ctx context.Context, orgID uuid.UUID, folder string, seen bool) error
+	// MoveToFolderBulk re-files the given messages into one canonical folder,
+	// org-scoped like MarkSeenBulk.
+	MoveToFolderBulk(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID, folder string) error
 	Delete(ctx context.Context, userID, id uuid.UUID) error
 
 	// Snooze: per (user, thread). UpsertSnooze adopts the new
@@ -111,7 +117,7 @@ var mailFieldsFull = []string{
 	"gmail_id", "parent_id", "uid", "mod_seq",
 	"flags", "bcc", "cc", "from_addr", "in_reply_to", "reply_to",
 	"to_addr", "subject", "size", "internal_date", "sent_date",
-	"snippet", "seen", "updated_at", "created_at", "folder",
+	"snippet", "seen", "updated_at", "created_at", "folder", "provider_folder",
 }
 
 var mailFieldsPreview = []string{
@@ -126,13 +132,15 @@ func (r *uniboxRepository) CreateEntry(ctx context.Context, userID uuid.UUID, e 
 			gmail_id, parent_id, uid, mod_seq,
 			flags, bcc, cc, from_addr, in_reply_to, reply_to,
 			to_addr, subject, size, internal_date, sent_date,
-			snippet, seen, created_at, updated_at, body_text, folder
+			snippet, seen, created_at, updated_at, body_text, folder,
+			provider_folder
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9, $10, $11,
 			$12, $13, $14, $15, $16, $17,
 			$18, $19, $20, $21, $22,
-			$23, $24, $25, $26, $27, $28
+			$23, $24, $25, $26, $27, $28,
+			$28
 		)
 		ON CONFLICT (id) DO NOTHING
 	`
@@ -146,6 +154,8 @@ func (r *uniboxRepository) CreateEntry(ctx context.Context, userID uuid.UUID, e 
 		textArray(e.InReplyTo), textArray(e.ReplyTo), textArray(e.ToAddr),
 		e.Subject, e.Size, e.InternalDate, e.SentDate,
 		e.Snippet, e.Seen, e.CreatedAt, e.UpdatedAt, e.BodyText,
+		// $28 is both columns: a message starts out where the provider put it,
+		// and only diverges once someone files it in Warmbly.
 		models.NormalizeFolder(e.Folder, e.Flags),
 	)
 	return err
@@ -193,6 +203,11 @@ func (r *uniboxRepository) UpdateEntry(ctx context.Context, userID, emailID, id 
 	if e.Folder != nil {
 		setClauses = append(setClauses, fmt.Sprintf("folder = $%d", argPos))
 		args = append(args, *e.Folder)
+		argPos++
+	}
+	if e.ProviderFolder != nil {
+		setClauses = append(setClauses, fmt.Sprintf("provider_folder = $%d", argPos))
+		args = append(args, *e.ProviderFolder)
 		argPos++
 	}
 
@@ -251,7 +266,7 @@ func (r *uniboxRepository) GetByID(ctx context.Context, userID, id uuid.UUID) (*
 		&e.GmailID, &e.ParentID, &e.UID, &e.ModSeq,
 		&e.Flags, &e.BCC, &e.CC, &e.FromAddr, &e.InReplyTo, &e.ReplyTo,
 		&e.ToAddr, &e.Subject, &e.Size, &e.InternalDate, &e.SentDate,
-		&e.Snippet, &e.Seen, &e.UpdatedAt, &e.CreatedAt, &e.Folder,
+		&e.Snippet, &e.Seen, &e.UpdatedAt, &e.CreatedAt, &e.Folder, &e.ProviderFolder,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -290,7 +305,7 @@ func (r *uniboxRepository) GetByIDForOrg(ctx context.Context, orgID, id uuid.UUI
 		&e.GmailID, &e.ParentID, &e.UID, &e.ModSeq,
 		&e.Flags, &e.BCC, &e.CC, &e.FromAddr, &e.InReplyTo, &e.ReplyTo,
 		&e.ToAddr, &e.Subject, &e.Size, &e.InternalDate, &e.SentDate,
-		&e.Snippet, &e.Seen, &e.UpdatedAt, &e.CreatedAt, &e.Folder,
+		&e.Snippet, &e.Seen, &e.UpdatedAt, &e.CreatedAt, &e.Folder, &e.ProviderFolder,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -664,6 +679,18 @@ func (r *uniboxRepository) MarkSeenByFolder(ctx context.Context, orgID uuid.UUID
 	return err
 }
 
+func (r *uniboxRepository) MoveToFolderBulk(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID, folder string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := r.db.Exec(ctx,
+		`UPDATE unibox_emails SET folder = $1, updated_at = NOW()
+		 WHERE id = ANY($3) AND email_id IN (SELECT id FROM email_accounts WHERE organization_id = $2)`,
+		folder, orgID, ids,
+	)
+	return err
+}
+
 func (r *uniboxRepository) Delete(ctx context.Context, userID, id uuid.UUID) error {
 	_, err := r.db.Exec(ctx,
 		`DELETE FROM unibox_emails WHERE user_id = $1 AND id = $2`,
@@ -877,7 +904,7 @@ func (r *uniboxRepository) LatestThreadIDForContact(ctx context.Context, userID 
 		WHERE user_id = $1 AND thread_id <> ''
 		  AND EXISTS (
 			SELECT 1 FROM unnest(from_addr) a
-			WHERE lower(coalesce(substring(a from '<([^>]*)>'), btrim(a))) = lower($2)
+			WHERE lower(coalesce(substring(a from '<([^>]*)>'), substring(a from '\(([^()]*)\)\s*$'), btrim(a))) = lower($2)
 		  )
 		ORDER BY internal_date DESC
 		LIMIT 1
