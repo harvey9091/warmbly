@@ -153,13 +153,31 @@ const (
 	// it must stay well clear of a slow provider handshake.
 	CampaignSendReclaimAfterMinutes = 30
 
-	// TrackingMachineWindowSeconds is how soon after a step was dispatched an
-	// open or click is treated as automated rather than a person. The clock
-	// starts when the send is handed to the worker, before the provider has
-	// even accepted the message, so a person cannot plausibly have read and
-	// acted on it inside this window; security gateways that detonate every
-	// link at delivery time routinely do.
-	TrackingMachineWindowSeconds = 10
+	// TrackingMachineWindowOpenSecondsDefault and
+	// TrackingMachineWindowClickSecondsDefault are how soon after a step was
+	// dispatched an open or a click is treated as automated rather than a
+	// person. Operator-editable under Instance settings.
+	//
+	// The clock starts when the send is handed to the worker, NOT when the
+	// recipient's server received it, so the window has to absorb the worker's
+	// SMTP handshake, the sending provider's outbound queue and the transit to
+	// the recipient's MX before the gateway that scans on arrival even starts.
+	// That is why these are not the "no human could read this fast" numbers
+	// they look like: against this anchor, ten seconds routinely expired before
+	// the scan it was meant to catch.
+	//
+	// Opens get the longer window. The two failure modes are not symmetric: a
+	// misjudged open costs a metric and an open-triggered branch, while a
+	// misjudged click costs an interested lead the automation behind it, and
+	// clicks have the scanner-network catalogue covering them as well.
+	TrackingMachineWindowOpenSecondsDefault  = 60
+	TrackingMachineWindowClickSecondsDefault = 30
+
+	// Bounds on both windows. One second is the floor rather than zero because
+	// it is effectively "off" while still keeping the rule's shape, and 15
+	// minutes is past any plausible delivery lag.
+	TrackingMachineWindowSecondsMin = 1
+	TrackingMachineWindowSecondsMax = 900
 
 	// TrackingClickBurstSeconds is the window inside which clicks on two
 	// different links of the same email from the same source are treated as

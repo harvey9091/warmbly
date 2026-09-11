@@ -119,12 +119,37 @@ const RETENTION_PRESETS = [
     },
 ] as const;
 
+// Engagement-classification windows, mirroring internal/config/constants.go.
+// The clock starts when the send is handed to a worker, which is why these are
+// larger than "how fast could a person read this": the window also has to
+// cover provider queueing and transit before the recipient's gateway sees it.
+const MACHINE_WINDOW_MIN_SECONDS = 1;
+const MACHINE_WINDOW_MAX_SECONDS = 900;
+
+const TRACKING_FIELDS = [
+    {
+        key: "machineWindowOpen",
+        setting: "machine_window_open_seconds",
+        label: "Automated open window (seconds)",
+        help: "An open arriving this soon after a send was dispatched is recorded as automated. Raise it when delivery-time scanners are being counted as opens, lower it when recipients who read immediately are being missed.",
+    },
+    {
+        key: "machineWindowClick",
+        setting: "machine_window_click_seconds",
+        label: "Automated click window (seconds)",
+        help: "The same window for clicks, kept separate because the two mistakes cost different things: a misjudged open loses a metric, a misjudged click loses the automation behind an interested lead.",
+    },
+] as const;
+
+type TrackingFieldKey = (typeof TRACKING_FIELDS)[number]["key"];
+
 interface FormState {
     linksEnabled: boolean;
     ttlHours: string;
     allowInvitedSignup: boolean;
     sync: Record<SyncFieldKey, string>;
     retention: Record<RetentionFieldKey, string>;
+    tracking: Record<TrackingFieldKey, string>;
     enforceDomainAuth: boolean;
     authGraceHours: string;
 }
@@ -144,6 +169,10 @@ function toForm(s: InstanceSettings): FormState {
             engagementDays: String(s.retention.engagement_event_days),
             formDays: String(s.retention.form_event_days),
             auditDays: String(s.retention.audit_log_days),
+        },
+        tracking: {
+            machineWindowOpen: String(s.tracking.machine_window_open_seconds),
+            machineWindowClick: String(s.tracking.machine_window_click_seconds),
         },
         enforceDomainAuth: s.deliverability.enforce_domain_auth,
         authGraceHours: String(s.deliverability.auth_grace_hours),
@@ -199,6 +228,10 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
         RETENTION_FIELDS.some(
             (f) => form.retention[f.key] !== String(server.retention[f.setting]),
         );
+    const trackingDirty =
+        !!server &&
+        !!form &&
+        TRACKING_FIELDS.some((f) => form.tracking[f.key] !== String(server.tracking[f.setting]));
     const dirty =
         !!server &&
         !!form &&
@@ -208,6 +241,7 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
             form.enforceDomainAuth !== server.deliverability.enforce_domain_auth ||
             form.authGraceHours !== String(server.deliverability.auth_grace_hours) ||
             retentionDirty ||
+            trackingDirty ||
             syncDirty);
 
     useEffect(() => {
@@ -220,6 +254,16 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
         form !== null &&
         RETENTION_FIELDS.every((f) =>
             syncFieldValid(form.retention[f.key], RETENTION_MIN_DAYS, RETENTION_MAX_DAYS),
+        );
+
+    const trackingValid =
+        form !== null &&
+        TRACKING_FIELDS.every((f) =>
+            syncFieldValid(
+                form.tracking[f.key],
+                MACHINE_WINDOW_MIN_SECONDS,
+                MACHINE_WINDOW_MAX_SECONDS,
+            ),
         );
 
     const authGrace = form ? Number(form.authGraceHours) : NaN;
@@ -256,6 +300,12 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
             );
             return;
         }
+        if (!trackingValid) {
+            toast.error(
+                `Every automated-engagement window must be a whole number of seconds between ${MACHINE_WINDOW_MIN_SECONDS} and ${MACHINE_WINDOW_MAX_SECONDS}`,
+            );
+            return;
+        }
         if (!authGraceValid) {
             toast.error(
                 `The authentication grace period must be a whole number of hours between ${AUTH_GRACE_MIN_HOURS} and ${AUTH_GRACE_MAX_HOURS}`,
@@ -275,6 +325,10 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
                 engagement_event_days: Number(form.retention.engagementDays),
                 form_event_days: Number(form.retention.formDays),
                 audit_log_days: Number(form.retention.auditDays),
+            },
+            tracking: {
+                machine_window_open_seconds: Number(form.tracking.machineWindowOpen),
+                machine_window_click_seconds: Number(form.tracking.machineWindowClick),
             },
             deliverability: {
                 enforce_domain_auth: form.enforceDomainAuth,
@@ -538,6 +592,67 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
                                     );
                                 })}
                             </div>
+                        </CardContent>
+                    </Card>
+
+                    <Card className="lg:col-span-2">
+                        <CardHeader>
+                            <CardTitle>Automated engagement</CardTitle>
+                            <CardDescription>
+                                Security gateways fetch the tracking pixel and walk every link
+                                when a message arrives, using an ordinary browser&apos;s user
+                                agent. An open or click landing inside these windows is recorded
+                                as automated: still kept as delivery evidence and still shown on
+                                the timeline, but it does not count as engagement, fire a branch
+                                or automation, or send a webhook. Nothing is discarded either way.
+                                The clock starts when the send is handed to a worker, so the
+                                window also covers the provider&apos;s queue and the transit to
+                                the recipient. Known scanner networks are matched separately and
+                                are not bounded by time.
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent className="grid grid-cols-1 gap-3 pt-0 md:grid-cols-2">
+                            {TRACKING_FIELDS.map((f) => {
+                                const valid = syncFieldValid(
+                                    form.tracking[f.key],
+                                    MACHINE_WINDOW_MIN_SECONDS,
+                                    MACHINE_WINDOW_MAX_SECONDS,
+                                );
+                                return (
+                                    <div key={f.key}>
+                                        <Label htmlFor={`tracking-${f.key}`}>{f.label}</Label>
+                                        <Input
+                                            id={`tracking-${f.key}`}
+                                            type="text"
+                                            inputMode="numeric"
+                                            autoComplete="off"
+                                            value={form.tracking[f.key]}
+                                            onChange={(e) =>
+                                                setForm({
+                                                    ...form,
+                                                    tracking: {
+                                                        ...form.tracking,
+                                                        [f.key]: e.target.value,
+                                                    },
+                                                })
+                                            }
+                                            aria-invalid={!valid}
+                                            className="mt-1"
+                                        />
+                                        <p className="mt-1 text-xs text-muted-foreground">
+                                            {f.help} Between {MACHINE_WINDOW_MIN_SECONDS} and{" "}
+                                            {MACHINE_WINDOW_MAX_SECONDS.toLocaleString()} seconds.
+                                        </p>
+                                        {!valid && (
+                                            <p className="mt-1 text-xs text-red-600">
+                                                Enter a whole number between{" "}
+                                                {MACHINE_WINDOW_MIN_SECONDS} and{" "}
+                                                {MACHINE_WINDOW_MAX_SECONDS.toLocaleString()}.
+                                            </p>
+                                        )}
+                                    </div>
+                                );
+                            })}
                         </CardContent>
                     </Card>
 

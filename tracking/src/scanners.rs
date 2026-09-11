@@ -282,6 +282,44 @@ mod tests {
         assert_eq!(s.classify("13.107.128.5", &h, true, Request::Open), None);
     }
 
+    // Barracuda's published filtering blocks are narrow, per-region and
+    // documented by the vendor as its own mail tier, so they ship enabled on
+    // both endpoints like the EOP ranges.
+    #[test]
+    fn barracuda_filtering_blocks_are_a_scanner_for_both() {
+        let s = builtins();
+        for kind in [Request::Open, Request::Click] {
+            assert_eq!(
+                s.classify("209.222.82.10", &hdr(&[]), false, kind)
+                    .as_deref(),
+                Some("barracuda-egd"),
+                "{kind:?} from Barracuda EGD should be labelled"
+            );
+        }
+    }
+
+    // Proofpoint, Mimecast and Cisco are catalogued by ASN and ship commented
+    // out. Proofpoint Isolation and Mimecast Browser Isolation render a
+    // clicked page in the vendor's own cloud, so a whole-ASN entry cannot tell
+    // the delivery-time scan from a person clicking through isolation, and
+    // enabling one is an operator's trade rather than a default.
+    #[test]
+    fn vendor_asns_are_not_on_by_default() {
+        let s = builtins();
+        for asn in [
+            "22843", "30031", "39588", "42427", "52129", "26211", "60492", "16417",
+        ] {
+            let h = hdr(&[("cf-asn", asn)]);
+            for kind in [Request::Open, Request::Click] {
+                assert_eq!(
+                    s.classify("203.0.113.9", &h, true, kind),
+                    None,
+                    "AS{asn} must ship commented out for {kind:?}"
+                );
+            }
+        }
+    }
+
     // Outlook on the web is served from the Exchange Online ranges, which are
     // deliberately absent from the catalogue.
     #[test]

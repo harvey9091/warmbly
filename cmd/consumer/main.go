@@ -536,8 +536,11 @@ func main() {
 		log.Println("tracking consumer unavailable; opens/clicks not consumed:", terr)
 	} else {
 		// The engagement prune reads its window from the instance settings on
-		// every pass, so shortening it in the admin panel needs no restart.
-		trackingConsumer.WireRetention(instancesettings.NewService(instancesettings.NewStore(primaryDB.Pool)))
+		// every pass, and the machine-window rule reads its windows per event,
+		// so editing either in the admin panel needs no restart.
+		trackingSettings := instancesettings.NewService(instancesettings.NewStore(primaryDB.Pool))
+		trackingConsumer.WireRetention(trackingSettings)
+		trackingConsumer.WireTrackingPolicy(trackingSettings)
 		defer trackingConsumer.Close()
 		go func() {
 			if err := trackingConsumer.Start(ctx); err != nil {

@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/mileusna/useragent"
-	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -34,15 +33,24 @@ func isMachineOpen(userAgent *string) bool {
 }
 
 // isInstant reports whether an engagement arrived so soon after the step was
-// dispatched that no person could have read the email yet. Security
-// gateways (Safe Links, Proofpoint, Mimecast) open the pixel and walk every
-// link at delivery time with an ordinary browser UA, which is exactly what
-// the UA rules cannot see. An unknown dispatch time never counts as instant.
-func isInstant(sentAt *time.Time, at time.Time) bool {
+// dispatched that no person could have read the email yet. Security gateways
+// (Safe Links, Proofpoint, Mimecast) open the pixel and walk every link at
+// delivery time with an ordinary browser UA, which is exactly what the UA
+// rules cannot see.
+//
+// The anchor is dispatch to the worker, so `window` has to cover the SMTP
+// handshake, the sending provider's queue and transit to the recipient before
+// the arrival scan it is aimed at. It is operator-editable for that reason:
+// how long that takes is a property of the deployment, not of the code.
+//
+// An unknown dispatch time never counts as instant, and neither does an event
+// stamped before it: a clock skewed backwards must not mark everything human.
+func isInstant(sentAt *time.Time, at time.Time, window time.Duration) bool {
 	if sentAt == nil {
 		return false
 	}
-	return at.Sub(*sentAt) < time.Duration(config.TrackingMachineWindowSeconds)*time.Second
+	since := at.Sub(*sentAt)
+	return since >= 0 && since < window
 }
 
 // isScannerSource reports whether the tracking edge recognised the request's
@@ -56,14 +64,14 @@ func isScannerSource(scanner *string) bool {
 // classifyClick applies the per-event click rules (the burst rule needs the
 // click log and lives in the consumer). It returns whether the click is
 // automated and the reason recorded with it; an empty reason is a person.
-func classifyClick(userAgent, scanner *string, sentAt *time.Time, at time.Time) (bool, string) {
+func classifyClick(userAgent, scanner *string, sentAt *time.Time, at time.Time, window time.Duration) (bool, string) {
 	if isScannerSource(scanner) {
 		return true, repository.LinkClickReasonScanner
 	}
 	if userAgent == nil || strings.TrimSpace(*userAgent) == "" {
 		return true, repository.LinkClickReasonPrefetch
 	}
-	if isInstant(sentAt, at) {
+	if isInstant(sentAt, at, window) {
 		return true, repository.LinkClickReasonInstant
 	}
 	return false, ""
@@ -86,14 +94,14 @@ func eventTime(stamp string) time.Time {
 // caught it: scanner for a fetch from a known mail-filtering network,
 // prefetch for a mail proxy or a fetch with no browser, instant for a fetch
 // inside the machine window after dispatch. An empty reason is a person.
-func classifyOpen(userAgent, scanner *string, sentAt *time.Time, at time.Time) (bool, string) {
+func classifyOpen(userAgent, scanner *string, sentAt *time.Time, at time.Time, window time.Duration) (bool, string) {
 	if isScannerSource(scanner) {
 		return true, repository.EmailOpenReasonScanner
 	}
 	if isMachineOpen(userAgent) {
 		return true, repository.EmailOpenReasonPrefetch
 	}
-	if isInstant(sentAt, at) {
+	if isInstant(sentAt, at, window) {
 		return true, repository.EmailOpenReasonInstant
 	}
 	return false, ""
