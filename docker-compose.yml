@@ -437,7 +437,6 @@ services:
       WARMBLY_POSTHOG_HOST: ${WARMBLY_POSTHOG_HOST:-}
       WARMBLY_POSTHOG_ERROR_TRACKING: ${WARMBLY_POSTHOG_ERROR_TRACKING:-}
       WARMBLY_SENTRY_DSN: ${WARMBLY_SENTRY_DSN:-}
->>>>>>> upstream/main
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -607,18 +606,9 @@ services:
       # captcha is off server-side. Set WARMBLY_TURNSTILE_KEY to your site key
       # when you set CAPTCHA_PROVIDER=turnstile.
       WARMBLY_TURNSTILE_KEY: ${WARMBLY_TURNSTILE_KEY:-1x00000000000000000000AA}
-<<<<<<< HEAD
-      # WARMBLY_SENTRY_DSN is no longer declared here so Coolify can delete it
-      # when unused; set it in .env or Coolify's environment to enable browser
-      # error reporting later.
-      # Cookieless product analytics, hosted-only. Unset (the default, and what
-      # every self-host has) means the SDK chunk is never fetched and no
-      # PostHog host is contacted.
-=======
       # Cookieless product analytics and browser error tracking, one key for
       # both. Unset (the default, and what every self-host has) means the SDK
       # chunk is never fetched and no PostHog host is contacted.
->>>>>>> upstream/main
       WARMBLY_POSTHOG_KEY: ${WARMBLY_POSTHOG_KEY:-}
       WARMBLY_POSTHOG_HOST: ${WARMBLY_POSTHOG_HOST:-}
       WARMBLY_POSTHOG_ERROR_TRACKING: ${WARMBLY_POSTHOG_ERROR_TRACKING:-}
@@ -640,11 +630,6 @@ services:
       WARMBLY_DASHBOARD_URL: ${APP_URL:-http://${PUBLIC_HOST:-localhost}:5173}
       WARMBLY_ENV_LABEL: ${ENV_LABEL:-development}
       WARMBLY_TURNSTILE_KEY: ${WARMBLY_TURNSTILE_KEY:-1x00000000000000000000AA}
-<<<<<<< HEAD
-      # WARMBLY_SENTRY_DSN is no longer declared here so Coolify can delete it
-      # when unused; set it in .env or Coolify's environment to enable browser
-      # error reporting later.
-=======
       # Unset means the panel initialises no error reporting and contacts no
       # host at all, exactly like the dashboard above. The panel reports only
       # exceptions: it measures nothing about an operator's session.
@@ -652,7 +637,6 @@ services:
       WARMBLY_POSTHOG_HOST: ${WARMBLY_POSTHOG_HOST:-}
       WARMBLY_POSTHOG_ERROR_TRACKING: ${WARMBLY_POSTHOG_ERROR_TRACKING:-}
       WARMBLY_SENTRY_DSN: ${WARMBLY_SENTRY_DSN:-}
->>>>>>> upstream/main
     depends_on:
       backend: { condition: service_healthy }
 
