@@ -104,7 +104,7 @@ func TestExhaustedAccountWithoutBalanceIsHeldPastTheLookupCache(t *testing.T) {
 	}
 	s.creditsMu.Lock()
 	for k, e := range s.credits {
-		e.at = e.at.Add(-2 * time.Minute)
+		e.at, e.until = e.at.Add(-2*time.Minute), e.until.Add(-2*time.Minute)
 		s.credits[k] = e
 	}
 	s.creditsMu.Unlock()

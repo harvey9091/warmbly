@@ -273,16 +273,13 @@ func (s *service) Connect(ctx context.Context, orgID, userID uuid.UUID, provider
 
 	displayFields := buildDisplayFields(provider, config)
 
-	if slices.Contains(models.VerificationProviders, provider) {
+	verifier := slices.Contains(models.VerificationProviders, provider)
+	if verifier {
 		// One verifier at a time. Which connection wins would otherwise be
 		// decided by creation order alone, so connecting a second service
 		// would silently move every check onto a different bill.
-		active, err := s.activeVerificationConnection(ctx, orgID)
-		if err != nil {
+		if err := s.refuseSecondVerifier(ctx, orgID); err != nil {
 			return nil, err
-		}
-		if active != nil {
-			return nil, fmt.Errorf("%s already verifies this workspace's addresses. Disconnect it first", ProviderLabel(active.Provider))
 		}
 		// A verification key is checked before it is stored: a mistyped key
 		// would otherwise quietly leave every contact on the built-in check.
@@ -307,6 +304,16 @@ func (s *service) Connect(ctx context.Context, orgID, userID uuid.UUID, provider
 	configEnc, err := s.sealConfig(ctx, orgID, config)
 	if err != nil {
 		return nil, err
+	}
+
+	// Asked again next to the write: validating the key above is a round trip
+	// to the provider, which is long enough for a second connect to pass the
+	// first check. Two that still cross leave an inert connection on the
+	// Integrations page, never a lost one.
+	if verifier {
+		if err := s.refuseSecondVerifier(ctx, orgID); err != nil {
+			return nil, err
+		}
 	}
 
 	status := models.IntegrationStatusPending
@@ -1406,6 +1413,16 @@ func checkVerificationKey(ctx context.Context, provider models.IntegrationProvid
 		return nil, fmt.Errorf("could not reach %s: %w", name, err)
 	}
 	return balance, nil
+}
+
+// refuseSecondVerifier reports the verifier already connected to the workspace,
+// so connecting another one is refused rather than silently taking over.
+func (s *service) refuseSecondVerifier(ctx context.Context, orgID uuid.UUID) error {
+	active, err := s.activeVerificationConnection(ctx, orgID)
+	if err != nil || active == nil {
+		return err
+	}
+	return fmt.Errorf("%s already verifies this workspace's addresses. Disconnect it first", ProviderLabel(active.Provider))
 }
 
 // activeVerificationConnection returns the connection that verifies this
