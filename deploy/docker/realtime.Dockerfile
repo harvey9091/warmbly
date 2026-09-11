@@ -14,7 +14,7 @@ ENV MIX_ENV=prod
 COPY realtime/mix.exs ./
 COPY realtime/mix.lock ./
 RUN mix deps.get --only prod
-RUN mix deps.compile
+RUN mix deps.compile --verbose
 
 # Copy application code
 COPY realtime/config config/
