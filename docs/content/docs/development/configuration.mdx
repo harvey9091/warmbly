@@ -169,6 +169,11 @@ Full behavior, including what each registration mode does to the sign-up form, i
 
 ### Proxying PostHog
 
+<Callout title="Set the UI host whenever you proxy">
+`POSTHOG_HOST` is where events are sent; `POSTHOG_UI_HOST` is where PostHog's own app lives. They are the same thing only when you are not proxying. Point the first at your proxy and leave the second at `https://us.posthog.com` (or `https://eu.posthog.com`), or the SDK builds toolbar and session-replay links against the proxy, which does not serve the app.
+</Callout>
+
+
 Content blockers drop requests to `posthog.com`, so analytics and error reporting quietly stop for a large share of visitors. The backend serves a reverse proxy at `/ingest` for this. Point each frontend at it:
 
 | Tree | Setting | Value |
@@ -430,6 +435,7 @@ Set both and every error goes to both. Each variable is read by one process, so 
 | Variable | Read by | What it does | Default |
 |---|---|---|---|
 | `POSTHOG_KEY` | backend, consumer, worker | Server-side error tracking, and the server-side product events below | unset |
+| `WARMBLY_POSTHOG_UI_HOST` / `PUBLIC_POSTHOG_UI_HOST` | Where PostHog's own app is, used for toolbar and session-replay links. Only differs from the host above when you proxy, and it must when you do | `https://us.posthog.com` | yes (build or container start) |
 | `POSTHOG_PROXY_INGEST` | Upstream the `/ingest` reverse proxy forwards capture traffic to. The frontends are pointed at `https://<api host>/ingest` so content blockers, which drop requests to posthog.com, do not silently remove your analytics and error reporting | `https://us.i.posthog.com` | yes |
 | `POSTHOG_PROXY_ASSETS` | Upstream for `/ingest/static/*`. PostHog serves its browser bundle from a different host than it ingests on, and sending one to the other 404s | `https://us-assets.i.posthog.com` | yes |
 | `POSTHOG_KEY` | forms service | The forms service's own errors. It reads its own environment, like tracking | unset |
