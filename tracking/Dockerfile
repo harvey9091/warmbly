@@ -10,7 +10,7 @@
 FROM rust:1.93-alpine AS builder
 
 ARG CARGO_FEATURES=""
-RUN apk add --no-cache musl-dev && \
+RUN apk add --no-cache musl-dev perl && \
     if echo "$CARGO_FEATURES" | grep -qw kafka; then \
       apk add --no-cache cmake make gcc g++ pkgconfig openssl-dev openssl-libs-static curl-dev zlib-static; \
     fi
