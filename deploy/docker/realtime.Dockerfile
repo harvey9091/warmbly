@@ -13,8 +13,8 @@ ENV MIX_ENV=prod
 # Copy dependency files
 COPY realtime/mix.exs ./
 COPY realtime/mix.lock ./
-RUN mix deps.get --only prod
-RUN mix deps.compile --verbose
+RUN mix deps.get --only prod > /tmp/deps-get.log 2>&1 && true || (cat /tmp/deps-get.log; exit 1)
+RUN mix deps.compile
 
 # Copy application code
 COPY realtime/config config/
