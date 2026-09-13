@@ -23,9 +23,12 @@ import PresenceAvatars from "@/components/app/presence/PresenceAvatars";
 import OutboxIndicator from "@/components/app/unibox/compose/OutboxIndicator";
 import { NotificationBell } from "./NotificationBell";
 import { OrgSwitcher } from "./OrgSwitcher";
+import { BetaPill } from "./BetaPill";
 import { PlanPill } from "./PlanPill";
 import { VersionPill } from "./VersionPill";
 import { CreditsMeter } from "./CreditsMeter";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { cn } from "@/lib/utils";
 
 // Pretty labels for path segments. Anything missing falls back to the
 // raw segment with its first letter capitalised.
@@ -64,6 +67,10 @@ function pretty(segment: string): string {
 export function AppHeader({ onMenu }: { onMenu?: () => void }) {
     const { pathname } = useLocation();
     const setCommandPaletteOpen = useAppStore((s) => s.setCommandPaletteOpen);
+    // The logo zone spans the sidebar column, so it has to collapse with it or
+    // the breadcrumb stops lining up with the content panel below.
+    const isMobile = useIsMobile();
+    const navCollapsed = useAppStore((s) => s.navCollapsed) && !isMobile;
 
     // Path under /app — first segment is the section ("emails", "admin", ...),
     // subsequent ones are subpages. Don't show UUID-looking segments verbatim
@@ -96,7 +103,10 @@ export function AppHeader({ onMenu }: { onMenu?: () => void }) {
             </button>
             <Link
                 to="/app/emails"
-                className="h-full flex items-center gap-2.5 shrink-0 group pl-2 pr-3 md:w-64 md:px-5"
+                className={cn(
+                    "h-full flex items-center gap-2.5 shrink-0 group pl-2 pr-3 md:transition-[width,padding] md:duration-200 md:ease-out",
+                    navCollapsed ? "md:w-14 md:px-0 md:justify-center" : "md:w-64 md:px-5",
+                )}
             >
                 {/* Cool blue-leaning gray at rest; deeper blue-gray on hover.
                     Light enough to read as neutral chrome, but with a clear
@@ -111,7 +121,10 @@ export function AppHeader({ onMenu }: { onMenu?: () => void }) {
                     header carry it there, leaving room for the workspace pill. */}
                 <span
                     style={{ fontFamily: "var(--font-display)" }}
-                    className="hidden md:inline font-extrabold text-[15.5px] tracking-tight text-foreground"
+                    className={cn(
+                        "font-extrabold text-[15.5px] tracking-tight text-slate-900",
+                        navCollapsed ? "hidden" : "hidden md:inline",
+                    )}
                 >
                     Warmbly
                 </span>
@@ -144,6 +157,10 @@ export function AppHeader({ onMenu }: { onMenu?: () => void }) {
             </div>
 
             <div className="flex items-center gap-2 px-2 sm:px-4 shrink-0">
+                {/* Outside the sm-only group on purpose: once the dialog is
+                    dismissed this pill is the only way back to it, and a phone
+                    is exactly where someone dismisses it fastest. */}
+                <BetaPill />
                 <div className="hidden sm:flex items-center gap-2">
                     <PlanPill />
                     <VersionPill />

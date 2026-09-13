@@ -131,9 +131,9 @@ func Run(
 	// Internal backend-to-backend endpoints. Workers call these instead of
 	// touching Postgres directly, per the no-direct-data-services rule in
 	// CLAUDE.md. Auth: shared bearer token (INTERNAL_API_TOKEN).
-	// The two broker endpoints sit in their own group. They perform a
-	// privileged operation for the caller rather than moving a record, so they
-	// take NODE_BROKER_TOKEN, which falls back to INTERNAL_API_TOKEN but lets a
+	// The broker endpoints sit in their own group. They perform a privileged
+	// operation for the caller rather than moving a record, so they take
+	// NODE_BROKER_TOKEN, which falls back to INTERNAL_API_TOKEN but lets a
 	// split deployment keep the edge services off this credential.
 	broker := r.Group("/api/v1/internal")
 	broker.Use(m.NodeBrokerAuthMiddleware())
@@ -146,6 +146,11 @@ func Run(
 		// The node then transfers directly against the object store, so bodies
 		// and attachments never pass through here.
 		broker.POST("/blobs/presign", h.InternalPresignBlob)
+
+		// Mints a live provider access token for a mailbox Warmbly Cloud
+		// manages, which is worth more than any record the rest of the
+		// internal API moves.
+		broker.GET("/cloud-link/token/:id", h.InternalCloudLinkToken)
 	}
 
 	internal := r.Group("/api/v1/internal")
@@ -173,9 +178,6 @@ func Run(
 		// Sync governor priority lane: "is this new message a reply to
 		// something the mailbox sent?" (tasks, message map, unibox threads).
 		internal.GET("/sync/own-conversation", h.InternalSyncOwnConversation)
-
-		// Brokered credential for a mailbox managed by Warmbly Cloud.
-		internal.GET("/cloud-link/token/:id", h.InternalCloudLinkToken)
 
 		// Worker bootstrap config + heartbeat. Workers POST their identity
 		// on boot (worker_id + bind_ip + tag) and pull their runtime config
@@ -1326,6 +1328,7 @@ func Run(
 				poolLinkInstance.POST("/oauth/finish", h.PoolLinkOAuthFinish)
 				poolLinkInstance.GET("/mailboxes/:remoteId/token", h.PoolLinkAccessToken)
 				poolLinkInstance.GET("/mailboxes/:remoteId/warmup-tokens/:token", h.PoolLinkVerifyWarmupToken)
+				poolLinkInstance.POST("/mailboxes/:remoteId/warmup-deliveries", h.PoolLinkVerifyWarmupDelivery)
 				poolLinkInstance.GET("/workspace-mailboxes", h.PoolLinkWorkspaceMailboxes)
 				poolLinkInstance.POST("/mailboxes/adopt", h.PoolLinkAdopt)
 			}
@@ -1418,6 +1421,14 @@ func Run(
 		adminRoutes.GET("/users", middleware.RequireAdminPermission(models.AdminPermViewUsers), h.AdminSearchUsers)
 		adminRoutes.GET("/users/:id", middleware.RequireAdminPermission(models.AdminPermViewUsers), h.AdminGetUser)
 		adminRoutes.GET("/users/:id/preview", middleware.RequireAdminPermission(models.AdminPermViewUsers), h.AdminGetUserPreview)
+		// Tester accounts: an account handed to somebody outside the team, with
+		// the emailed login code excused because they cannot read this
+		// instance's mail. Creating one has its own permission: it mints an
+		// account and hands back its password, which is more than any of the
+		// other user routes can do.
+		adminRoutes.GET("/testers", middleware.RequireAdminPermission(models.AdminPermViewUsers), h.AdminListTesters)
+		adminRoutes.POST("/testers", middleware.RequireAdminPermission(models.AdminPermManageTesters), h.AdminCreateTester)
+		adminRoutes.DELETE("/testers/:id", middleware.RequireAdminPermission(models.AdminPermManageTesters), h.AdminRevokeTester)
 		adminRoutes.POST("/users/:id/ban", middleware.RequireAdminPermission(models.AdminPermBanUsers), h.AdminBanUser)
 		adminRoutes.POST("/users/:id/unban", middleware.RequireAdminPermission(models.AdminPermBanUsers), h.AdminUnbanUser)
 		adminRoutes.GET("/users/:id/bans", middleware.RequireAdminPermission(models.AdminPermViewUsers), h.AdminGetUserBans)
@@ -1432,6 +1443,12 @@ func Run(
 		adminRoutes.GET("/organizations/:id/members", middleware.RequireAdminPermission(models.AdminPermViewOrganizations), h.AdminGetOrganizationMembers)
 		adminRoutes.GET("/organizations/:id/overrides", middleware.RequireAdminPermission(models.AdminPermViewOrganizations), h.AdminGetOrgOverrides)
 		adminRoutes.PUT("/organizations/:id/overrides", middleware.RequireAdminPermission(models.AdminPermManageOrganizations), h.AdminUpdateOrgOverrides)
+		// A plan granted by an operator rather than Stripe. Same permission as
+		// the overrides above: it changes what a workspace is entitled to.
+		adminRoutes.GET("/plans", middleware.RequireAdminPermission(models.AdminPermViewOrganizations), h.AdminListPlans)
+		adminRoutes.GET("/organizations/:id/managed-plan", middleware.RequireAdminPermission(models.AdminPermViewOrganizations), h.AdminGetOrgManagedPlan)
+		adminRoutes.PUT("/organizations/:id/managed-plan", middleware.RequireAdminPermission(models.AdminPermManageOrganizations), h.AdminGrantOrgManagedPlan)
+		adminRoutes.DELETE("/organizations/:id/managed-plan", middleware.RequireAdminPermission(models.AdminPermManageOrganizations), h.AdminRevokeOrgManagedPlan)
 
 		// Workspace abuse posture. The customer route withholds the evidence;
 		// this is where an operator reads it, pins a decision over it, and
@@ -1601,8 +1618,7 @@ func Run(
 		adminRoutes.DELETE("/organizations/:id/api-keys/:keyId", middleware.RequireAdminPermission(models.AdminPermManageOrganizations), h.AdminRevokeOrgAPIKey)
 		adminRoutes.GET("/organizations/:id/webhooks", middleware.RequireAdminPermission(models.AdminPermViewOrganizations), h.AdminListOrgWebhooks)
 
-		// Warmup abuse signals and the block/unblock history.
-		adminRoutes.GET("/warmup/abuse", middleware.RequireAdminPermission(models.AdminPermViewWarmupPool), h.AdminWarmupAbuse)
+		// Warmup block/unblock history.
 		adminRoutes.GET("/warmup/actions", middleware.RequireAdminPermission(models.AdminPermViewWarmupPool), h.AdminWarmupActions)
 
 		// Admin Management

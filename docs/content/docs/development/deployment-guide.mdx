@@ -329,7 +329,7 @@ DEPLOYMENT_MODE=self_hosted
 # AWS_SECRET_ACCESS_KEY=
 # KMS_PROVIDER=aws
 # KMS_AWS_KEY_ID=alias/warmbly
-# EVENTBUS_PROVIDER=kafka           # needs images built with GO_TAGS=kafka
+# EVENTBUS_PROVIDER=kafka           # needs the -kafka images (see below)
 # KAFKA_BOOTSTRAP_SERVERS=broker:9092
 # PRIMARY_DB=postgres://user:pass@host:5432/warmbly?sslmode=require
 # REDIS=redis://host:6379
@@ -633,7 +633,16 @@ Pair it with `DISABLE_PASSWORD_LOGIN=true` for an SSO-only deployment.
 Three things to know:
 
 - **Bare binaries default to the cloud values** (`kafka`, `avro`, `s3`, `aws`). Compose, the Makefile, and both env templates set the local values for you. A hand-rolled environment must set them or the process exits at boot.
-- Kafka and Avro are also build-time opt-ins: `--build-arg GO_TAGS=kafka` for Go, `--build-arg CARGO_FEATURES=kafka` for tracking.
+- Kafka and Avro are build-time opt-ins, so `EVENTBUS_PROVIDER=kafka` needs a build that has them. Each release publishes those builds as a second tag on the same image, suffixed `-kafka`, for the four services that touch the bus:
+
+  ```
+  ghcr.io/warmbly/warmbly/backend:prod-kafka
+  ghcr.io/warmbly/warmbly/consumer:prod-kafka
+  ghcr.io/warmbly/warmbly/worker:prod-kafka
+  ghcr.io/warmbly/warmbly/tracking:prod-kafka
+  ```
+
+  `forms`, `updater`, `realtime`, `web`, and `admin` never read the bus and have one image each. To build your own instead, pass `--build-arg GO_TAGS=kafka` (Go) or `--build-arg CARGO_FEATURES=kafka` (tracking); cgo cannot cross-compile, so each architecture has to be built on a machine of that architecture.
 - `PUBSUB_ENABLED` must match across backend, consumer, and realtime.
 
 ## Optional subsystems
@@ -771,6 +780,8 @@ warmblyctl fleet pin <node> v1.4.1  # hold or canary one machine
 
 Setting a tag also pins the channel, so a release landing later does not silently undo a deliberate rollback. `fleet channel stable` resumes following releases.
 
+The version a node is told to run also names which build of the image it runs. An instance on `EVENTBUS_PROVIDER=kafka` hands its nodes `v1.4.2-kafka`, because the default images are CGO-free and carry no librdkafka: a node running one would take `EVENTBUS_PROVIDER=kafka` from its config and fail at boot. The suffix is added to whatever the version resolved to, including a pin, so `fleet pin <node> v1.4.1` still reaches the machine as something it can run. Set `FLEET_IMAGE_VARIANT` on the backend to change or disable it if you publish your own images under a different convention; setting it empty turns it off.
+
 The backend is deliberately excluded: it is the thing that tells every node what version to be, so it is upgraded the same way as the rest of your infrastructure. Upgrade the backend, and the fleet follows.
 
 ### Watching the fleet
@@ -803,7 +814,7 @@ One thing to know if you are running a fork: GHCR creates each package private a
 
 Every app service in `docker-compose.yml` carries both an `image:` and a `build:` key, so the same file serves both paths. `docker compose pull && docker compose up -d` runs the published images and compiles nothing; `docker compose up --build` still builds this checkout. Pin a release with `WARMBLY_TAG=v1.4.2` in `.env`, or point `WARMBLY_IMAGE_PREFIX` at your own registry.
 
-To move a worker fleet onto a new release, update `WORKER_IMAGE` and use "Pull latest and restart" on each worker. Control-plane migrations are forward-only, so prefer rolling forward over rolling back.
+To move a fleet onto a new release, set the target once with `warmblyctl fleet version vX.Y.Z`. Nothing is pushed: each node asks what it should be running on its next heartbeat and its own update timer pulls and restarts it. Control-plane migrations are forward-only, so prefer rolling forward over rolling back.
 
 ## Upgrading and backups
 

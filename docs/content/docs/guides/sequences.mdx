@@ -22,7 +22,7 @@ A step has an internal **name** (never seen by recipients), a **subject** with a
 
 ### The body editor
 
-The toolbar carries undo and redo (`Ctrl+Z` and `Ctrl+Shift+Z`, or `Cmd` on a Mac), bold, italic, underline and strikethrough, a heading, bullet and numbered lists, links, images, the font menu, text and highlight colour, alignment, tables, the personalization menu, an AI block, a condition, spintax, and a form link. `Shift+Enter` puts a line break inside a paragraph rather than starting a new one.
+The toolbar carries undo and redo (`Ctrl+Z` and `Ctrl+Shift+Z`, or `Cmd` on a Mac), bold, italic, underline and strikethrough, a heading, bullet and numbered lists, links, images, buttons, the font menu, text and highlight colour, alignment, tables, the personalization menu, an AI block, a condition, spintax, and a form link. `Shift+Enter` puts a line break inside a paragraph rather than starting a new one.
 
 **Alignment** is left, centre, right and justify, applied to whichever blocks the selection covers. Pressing the alignment a block already has clears it again, so a body can go back to inheriting rather than pinning one on every paragraph.
 
@@ -36,6 +36,12 @@ Pasting copy from Gmail, Outlook, Word or another email tool keeps its paragraph
 
 Tables are worth knowing about: they are the only layout Outlook on Windows renders reliably, because it lays messages out with Word rather than a browser engine. Anything built with `position`, `flex` or `grid` collapses there. The table menu inserts a two by two grid and, once the cursor is inside one, adds and removes rows and columns, merges cells and deletes the table. The dashed cell borders you see while editing are the editing surface only; the sent email carries whatever borders the markup asks for.
 
+#### Writing and editing with AI
+
+Two AI surfaces live in the body itself. With the cursor somewhere in the copy, a sparkle appears in the right gutter: click it, or press **⌘J**, to ask for text at the cursor or to continue the draft. Select some text instead and a floating **Edit with AI** pill appears over it, with quick actions (improve, shorten, expand, fix grammar, friendlier, more formal) or a free instruction. Both cost [AI credits](/guides/ai-credits/) and both offer **Undo** and **Again** before you move on.
+
+An edit changes what you asked for and leaves the rest of the passage as you wrote it. Merge fields, conditions, spintax, AI blocks, form links and links travel through the model as themselves and come back as themselves, so a rewrite never quietly drops a `{{.FirstName}}`, empties an AI block or unlinks your booking or opt-out link. Bold, italic and headings inside the selection are the exception: they are not preserved, so select around them when the styling matters. A rewrite that lands inside a sentence stays inside it rather than breaking the paragraph in two, and when the model concludes the copy already satisfies the instruction the review row says **No change** instead of reporting a rewrite that is not there.
+
 #### Images
 
 The image button offers three ways in: upload a file, paste an address, or pick something already in the workspace library. You can also drag an image straight onto the body, or paste a screenshot from the clipboard.
@@ -44,10 +50,24 @@ Uploads go to a library shared by the whole workspace, so a logo uploaded once i
 
 Select a placed image and a small bar appears over it: quarter, half or full column width (or the image's own size), left, center or right alignment, and the alt text. Alt text is worth filling in. Most clients block remote images until the reader allows them, so alt text is what the first look actually shows, and it is what the plain-text version of the email carries in the image's place.
 
+The same bar is where an image becomes a link. Put an address in the link field and the image ships wrapped in an anchor, so the picture itself is clickable, and the unlink button next to the field takes it off again. An address typed without `https://` gets it added when you leave the field, because a mail client reads one without a scheme as a path inside itself and it goes nowhere. A linked image is tracked and counted like any other link in the body, the click report names it by its alt text, and the plain-text half carries the alt text with the destination after it.
+
 Deleting an image from the library also deletes the file, so it stops loading in mail already sent. The dashboard asks before it does.
 
 <Callout type="warn" title="Images cost you deliverability">
 Cold email from a real person rarely has images. An image-heavy body reads as a marketing blast to filters that cannot read the picture, and the content check flags it. One signature logo or one product shot is usually the most a first touch should carry.
+</Callout>
+
+#### Buttons
+
+The button beside the image button drops a call to action into the body and opens its bar: the text, the address it opens, a colour, three sizes, square, rounded or pill corners, left, centre or right, and a switch that stretches it to the full width of the column. The text colour follows the colour you pick, so a light button gets dark type rather than white on yellow. The label takes merge fields and spintax like any other copy, so `Book a call, {{.FirstName}}` works there too.
+
+What it writes is a one-cell table, not a styled link. Outlook on Windows lays out with Word, which ignores `display: inline-block`, so a padded anchor arrives there as a coloured word with no box around it. Putting the colour and the padding on a table cell instead is the shape that holds everywhere, which is also why a button shows up as a small table in the HTML view.
+
+A button with no address ships as the box it looks like and nothing else, rather than as a link to nowhere. Its link field stays amber until you fill it in, and fills in `https://` for you the same way the image's does.
+
+<Callout type="warn" title="A button is a marketing signal">
+A first touch that looks like a newsletter gets read like one. In cold outreach a plain sentence with a link in it usually beats a button, and filters read heavy markup as a blast. Save the button for a later step, an event invitation, or a reply to someone already in a conversation.
 </Callout>
 
 #### Writing the HTML yourself
@@ -83,7 +103,13 @@ Every HTML email ships with a plain-text alternative beside it, and inbox provid
 
 For a step written in HTML in the dashboard, Warmbly stores no plain-text half and renders one when the email sends: headings and paragraphs keep their line breaks, list items are bulleted, table rows become lines, each link keeps its destination in brackets after its text, and the stylesheet and any hidden preheader are left out. The mailbox's plain-text signature and the opt-out line follow it. The Preview tab shows the result, so you can read what a text-only client gets.
 
+A step written in the visual editor gets its plain-text half as you type, and it keeps the same things: an image stands in as its alt text in brackets, and a link, a linked image and a button all keep their destination in brackets after the label. Without that a text-only reader gets a button with nowhere to go.
+
 This only applies when there is no plain-text body to send. Set `body_plain` through the API and that text is sent as written; leave it empty and the send path renders one from the HTML.
+
+The reverse holds too. A step written through the API or an agent tool usually carries `body_plain` and nothing else, and the HTML half is rendered from that text: the lines are kept and bare URLs become links, so click tracking has something to wrap. The step is stored with the composer's empty HTML document until then, and that empty document, not the absence of one, is what used to arrive as a blank email: clients prefer the HTML alternative and would show an empty one in place of the text. A step that already has an HTML body is never overwritten.
+
+A step with nothing in either body is refused at start rather than sent: a blank email to every lead is not a campaign anyone meant to launch.
 
 ### Preview and test
 

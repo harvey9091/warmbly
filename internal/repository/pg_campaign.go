@@ -16,6 +16,7 @@ import (
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/mailhtml"
 	"github.com/warmbly/warmbly/internal/utils/paging"
 	"github.com/warmbly/warmbly/internal/utils/validate"
 )
@@ -559,10 +560,15 @@ func (r *campaignRepository) Create(ctx context.Context, userID string, orgID *u
 		campaign.OrganizationID = orgID
 	}
 
-	// Sender pool — email tag links.
+	// Sender pool — email tag links. The tag registry is workspace-scoped, so
+	// linking one without a workspace would quietly drop every id rather than
+	// say why.
 	campaign.EmailTags = make([]string, 0)
+	if (len(data.EmailTagIDs) > 0 || len(data.FolderIDs) > 0) && orgID == nil {
+		return nil, errx.ErrNoOrganization
+	}
 	if len(data.EmailTagIDs) > 0 {
-		tags, xerr := SyncCampaignEmailTags(ctx, tx, campaign.ID.String(), data.EmailTagIDs)
+		tags, xerr := SyncCampaignEmailTags(ctx, tx, orgID, campaign.ID.String(), data.EmailTagIDs)
 		if xerr != nil {
 			return nil, xerr
 		}
@@ -572,7 +578,7 @@ func (r *campaignRepository) Create(ctx context.Context, userID string, orgID *u
 	// Folder links.
 	campaign.Folders = make([]string, 0)
 	if len(data.FolderIDs) > 0 {
-		folders, xerr := SyncCampaignFolders(ctx, tx, campaign.ID.String(), data.FolderIDs)
+		folders, xerr := SyncCampaignFolders(ctx, tx, orgID, campaign.ID.String(), data.FolderIDs)
 		if xerr != nil {
 			return nil, xerr
 		}
@@ -620,9 +626,17 @@ func (r *campaignRepository) Create(ctx context.Context, userID string, orgID *u
 			if seq.BodyCode != nil {
 				bodyCode = *seq.BodyCode
 			}
+			// A step given a plain body and no HTML is the API/agent shape.
+			// The placeholder below is what the composer stores for an empty
+			// step, and the send path puts body_html on the wire as the
+			// text/html alternative, so leaving it would ship a blank email
+			// with the real copy only in the fallback part.
 			bodyHTML := seq.BodyHTML
+			if !mailhtml.HasContent(bodyHTML) {
+				bodyHTML = mailhtml.FromText(seq.BodyPlain)
+			}
 			if bodyHTML == "" {
-				bodyHTML = "<div></div>"
+				bodyHTML = emptyBodyHTML
 			}
 			seqInsert := `
 				INSERT INTO sequences (
@@ -1334,20 +1348,36 @@ func (r *campaignRepository) Update(ctx context.Context, userID, campaignID stri
 	}
 
 	campaign.EmailTags = make([]string, 0)
-	if data.EmailTags != nil {
-		var err *errx.Error
-		campaign.EmailTags, err = SyncCampaignEmailTags(ctx, tx, campaignID, data.EmailTags)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	campaign.Folders = make([]string, 0)
-	if data.Folders != nil {
-		var err *errx.Error
-		campaign.Folders, err = SyncCampaignFolders(ctx, tx, campaignID, data.Folders)
-		if err != nil {
-			return nil, err
+	if data.EmailTags != nil || data.Folders != nil {
+		// The campaign's own workspace bounds which tags and folders may be
+		// linked. CAMPAIGN_SELECT does not carry it, so read it here rather
+		// than trusting ids the client sent.
+		var orgID *uuid.UUID
+		if err := tx.QueryRow(ctx, `SELECT organization_id FROM campaigns WHERE id = $1`, campaignID).Scan(&orgID); err != nil {
+			db.CaptureError(err, "campaign org lookup", []any{campaignID}, "queryrow")
+			return nil, errx.InternalError()
+		}
+		// Without one the scope check matches nothing, which would read as
+		// "clear every tag and folder" instead of as the refusal it is.
+		if orgID == nil {
+			return nil, errx.ErrNoOrganization
+		}
+
+		if data.EmailTags != nil {
+			var err *errx.Error
+			campaign.EmailTags, err = SyncCampaignEmailTags(ctx, tx, orgID, campaignID, data.EmailTags)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		if data.Folders != nil {
+			var err *errx.Error
+			campaign.Folders, err = SyncCampaignFolders(ctx, tx, orgID, campaignID, data.Folders)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -1608,6 +1638,19 @@ func (r *campaignRepository) ValidateCampaignReady(ctx context.Context, campaign
 	}
 	if senderCount > 0 || tagCount > 0 {
 		return nil
+	}
+	// A campaign that named its mailboxes by hand does NOT fall back to every
+	// active mailbox (see ExplicitSenderPool), so the check must not either:
+	// a check that passes a pool the scheduler would find empty is how a
+	// campaign starts and then parks itself on its first tick (issue #340 is
+	// the same mistake in the other direction).
+	var strategy string
+	if err := r.DB.QueryRow(ctx, `SELECT sender_strategy FROM campaigns WHERE id = $1`, campaignID).Scan(&strategy); err != nil {
+		return err
+	}
+	if strategy == CampaignSenderStrategyExplicit {
+		return errx.New(errx.BadRequest,
+			"this campaign sends from mailboxes picked by hand and none are left; pick its sending accounts again, or switch it back to selecting by tag")
 	}
 	var activeMailboxes int
 	if err := r.DB.QueryRow(ctx, `
@@ -1979,15 +2022,15 @@ func (r *campaignRepository) GetCampaignSenders(ctx context.Context, campaignID 
 	return senders, nil
 }
 
-// ReplaceCampaignSenders atomically swaps the explicit sender pool. An empty
-// list is rejected — clearing senders should be done by switching the campaign
-// back to sender_strategy='tags'.
+// ReplaceCampaignSenders atomically swaps the explicit sender pool.
+//
+// An empty list is allowed and clears the pool: it is how the dashboard's
+// sending-accounts picker deselects everything. What that then means depends
+// on the campaign's sender_strategy, which is the safety boundary — a 'tags'
+// campaign falls back to its tags or to every active mailbox, and an
+// 'explicit' one resolves to no mailboxes at all rather than widening to the
+// whole workspace (see ExplicitSenderPool).
 func (r *campaignRepository) ReplaceCampaignSenders(ctx context.Context, campaignID uuid.UUID, in []models.CampaignSenderInput) ([]models.CampaignSender, *errx.Error) {
-	// An empty list is allowed: it clears the explicit sender pool, so the
-	// campaign falls back to its email tags or, with neither, to every active
-	// mailbox of the owner. syncCampaignSendersTx handles the empty set safely
-	// (it deletes all current rows and inserts none).
-
 	// Resolve the campaign owner + organization so we can validate mailbox
 	// ownership against the org (the senders route is org-scoped).
 	var userID string

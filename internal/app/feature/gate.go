@@ -234,7 +234,7 @@ func (s *featureGateService) GetDailyEmailLimit(ctx context.Context, orgID uuid.
 		if ov := s.dailyOverride(ctx, orgID); ov > 0 {
 			return ov, nil
 		}
-		plan, err := s.planRepo.GetByID(ctx, sub.PlanID)
+		plan, err := s.planRepo.GetByID(ctx, sub.EffectivePlanID())
 		if err != nil || plan == nil {
 			return UnlimitedEmails, nil // Default to unlimited if plan not found
 		}
@@ -283,7 +283,7 @@ func (s *featureGateService) GetSubscriptionStatus(ctx context.Context, orgID uu
 	status.IsPaidSubscriber = sub.HasPaidSubscription()
 
 	// Load plan
-	plan, _ := s.planRepo.GetByID(ctx, sub.PlanID)
+	plan, _ := s.planRepo.GetByID(ctx, sub.EffectivePlanID())
 	status.Plan = plan
 
 	// Calculate daily limit
@@ -332,7 +332,11 @@ func (s *featureGateService) CanUseWritingAssistant(ctx context.Context, orgID u
 	if sub == nil {
 		return false, nil
 	}
-	return sub.HasPaidSubscription() || sub.IsInFreeTrial(), nil
+	// Paid only, like the inbox agent. The free plan carries no credit
+	// allowance, so admitting a trial here would put the assistant in front of
+	// someone who can only ever be told they have no credits, which reads as a
+	// broken feature rather than a locked one.
+	return sub.HasPaidSubscription(), nil
 }
 
 // CanUseInboxAgent gates the inbox agent to paid subscribers only. Unlike the

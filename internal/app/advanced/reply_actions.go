@@ -157,7 +157,7 @@ func (s *service) fireInstantActions(ctx context.Context, campaignID, contactID,
 		s.executeInstantActionNode(ctx, campaign, contact, &cfg, eventKind)
 
 		// Stamp this action node as "sent" for the contact. The scheduler's
-		// FindNextRoutedPair loop-guard (sentIDs) skips steps with sent_at set, so
+		// FindRoutedPairs loop-guard (sentIDs) skips steps with sent_at set, so
 		// this is what stops the scheduler from re-running the very same chain when
 		// it later routes the contact through this branch at the next step boundary.
 		// Without it the chain would double-fire (deals/tasks/webhooks) whenever the
@@ -282,15 +282,11 @@ func (s *service) executeInstantActionNode(ctx context.Context, campaign *models
 		}
 	case "label_email":
 		// Label the conversation the contact just replied on. The most recent
-		// thread for the contact in the campaign owner's unibox is that reply.
-		if len(cfg.LabelIDs) == 0 {
+		// thread for the contact in the campaign's workspace is that reply.
+		if len(cfg.LabelIDs) == 0 || campaign.OrganizationID == nil {
 			return
 		}
-		owner, perr := uuid.Parse(campaign.UserID)
-		if perr != nil {
-			return
-		}
-		if _, xerr := s.LabelLatestThreadForContact(ctx, owner, contact.Email, cfg.LabelIDs); xerr != nil {
+		if _, xerr := s.LabelLatestThreadForContact(ctx, *campaign.OrganizationID, contact.Email, cfg.LabelIDs); xerr != nil {
 			s.logActionErr(campaign, contact, cfg.Type, eventKind, xerr)
 		}
 	case "unsubscribe":

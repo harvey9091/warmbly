@@ -54,7 +54,7 @@ const defaults = [
   { k: 'Warmup ramp',       v: '+1 / day',   why: 'One more warmup message per day. Faster ramps look odd to the receiver.' },
   { k: 'Sync burst limit',  v: '100 / 5m',   why: 'If a mailbox pulls in more than 100 new messages in five minutes, the worker throttles it.' },
   { k: 'Sync hourly limit', v: '500 / hr',   why: 'Past this we pause the mailbox ourselves, before the provider has to.' },
-  { k: 'Invalid token block', v: '3 / 24h',  why: 'Three malformed warmup tokens in a day drop the mailbox from the pool.' },
+  { k: 'Tampering block',     v: 'on review', why: 'Deleting or spam-flagging warmup mail a mailbox received removes it from the pool until an operator reviews it.' },
 ];
 
 // =========================================================================
@@ -204,7 +204,7 @@ const faq = [
   ['Is deliverability tracked per mailbox or per account?',
    'Per mailbox. Each one is scored and capped on its own, so a single account can hold five mailboxes in five different states at once.'],
   ['What pulls a mailbox out of the pool automatically?',
-   'Any of these: three bad warmup tokens in 24 hours, spam placement at or above 20% with at least 20 warmup deliveries in the last 7 days, a complaint rate at or above 0.10%, or a bounce rate at or above 5%.'],
+   'Any of these: spam placement at or above 20% with at least 20 warmup deliveries in the last 7 days, a complaint rate at or above 0.10%, a bounce rate at or above 5%, or tampering with warmup mail the mailbox received.'],
   ['How does suppression carry across campaigns?',
    'Bounces, complaints, and unsubscribes are workspace-wide. Once someone is suppressed, every running campaign skips them on the next send, and nothing else ever queues to them.'],
   ['Why is the cap only 50 a day?',

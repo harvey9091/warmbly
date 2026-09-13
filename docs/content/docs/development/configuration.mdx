@@ -57,7 +57,7 @@ Five values protect the whole instance. Compose ships a working default for each
 |---|---|---|---|
 | `AUTH_SECRET` | 32 characters or more | JWT and session signing. The realtime service reads the same value as `JWT_SECRET` | yes |
 | `INTERNAL_API_TOKEN` | any random string | The backend's `/api/v1/internal/` routes, which workers and the tracking service authenticate against | yes |
-| `NODE_BROKER_TOKEN` | any random string | The two routes that perform a privileged operation for the caller: opening a sealed data key and signing a blob operation. Optional, and falls back to `INTERNAL_API_TOKEN`. Worth setting in a split deployment, where the tracking and forms services are internet-facing and hold the shared token | yes |
+| `NODE_BROKER_TOKEN` | any random string | The routes that perform a privileged operation for the caller: opening a sealed data key, signing a blob operation, and minting a provider access token for a mailbox Warmbly Cloud manages. Optional, and falls back to `INTERNAL_API_TOKEN`. The same value has to be set on the control plane and on every node that calls those routes, or they answer 401. Worth setting in a split deployment, where the tracking and forms services are internet-facing and hold the shared token | yes |
 | `SECRET_KEY_BASE` | 64 characters or more | Phoenix session signing in the realtime service | yes |
 | `KMS_LOCAL_MASTER_KEY` | base64, exactly 32 bytes | The root key that seals every per-organization data key | yes |
 | `CREDENTIALS_ENCRYPTION_KEY` | exactly 64 hex characters | Mailbox credentials at rest: SMTP and IMAP passwords, and Gmail and Outlook OAuth access and refresh tokens | yes |
@@ -192,6 +192,7 @@ The proxy forwards only what PostHog needs to read the request. Cookies and `Aut
 | `CAPTCHA_PROVIDER` | `none` or `turnstile` | derived, see below | yes |
 | `TURNSTILE_SECRET` | Cloudflare Turnstile secret, read by the backend | unset | yes |
 | `WARMBLY_TURNSTILE_KEY` | The Turnstile site key, read by the dashboard and admin panel at container start | a test key under compose | yes (container start) |
+| `WARMBLY_BETA_NOTICE` | One sentence shown to everyone in the dashboard: once in a dialog on first visit, then as a `Beta` pill in the header that reopens it. Empty renders nothing, so a production deployment needs nothing set. Written into `config.js` when the container starts (or when the Pages build runs), so a change needs a restart or a rebuild rather than a reload | unset | yes |
 | `WARMBLY_CONFIG_OUT` | Where the dashboard and admin panel write their runtime `config.js`. Defaults to the path nginx serves; a static host sets it to the build output so the same script renders the file at build time instead of container start | the nginx path | yes (build or container start) |
 | `TURNSTILE_BYPASS_TOKEN` | A token that skips verification. Only honoured when `APP_ENV=dev` | unset | yes |
 | `TURNSTILE_SITE_KEY` | The public Turnstile widget key. The backend hands it to the forms service, which renders it on hosted form pages that enable spam protection. The frontends carry their own copy in `WARMBLY_TURNSTILE_KEY` | unset | no (read per request) |
@@ -289,8 +290,12 @@ On `filesystem`, a remote worker writes blobs to its own disk rather than a volu
 
 | Variable | What it does | Default | Restart needed |
 |---|---|---|---|
-| `EVENTBUS_PROVIDER` | `nats` or `kafka`. Kafka needs images built with `GO_TAGS=kafka` | `nats` under compose, `kafka` for a bare binary | yes |
+| `EVENTBUS_PROVIDER` | `nats` or `kafka`. Kafka needs the `-kafka` images, or a build with `GO_TAGS=kafka` | `nats` under compose, `kafka` for a bare binary | yes |
+| `FLEET_IMAGE_VARIANT` | Tag suffix appended to the version handed to fleet nodes, so they pull a build that can talk to this instance's event bus. Defaults to `-kafka` when `EVENTBUS_PROVIDER=kafka` and nothing otherwise; set it empty to turn it off | derived from `EVENTBUS_PROVIDER` | no |
 | `NATS_URL` | JetStream address. Credentials in the URL are honored by every service, including the Rust tracking publisher: `nats://user:pass@host:4222` for a user, `nats://token@host:4222` for a token, `tls://` for TLS | `nats://nats:4222` | yes |
+| `NATS_CREDS` | Path to a NATS credentials file (user JWT plus nkey seed), for a bus that authenticates with JWT rather than a token. Synadia Cloud and any nsc-managed account issue one | unset | yes |
+| `NATS_CREDS_B64` | The same file, base64 encoded, as a single line. This is the form the fleet uses: a node receives environment variables rather than files, and the env file docker reads cannot express a multi-line value. Takes precedence over `NATS_CREDS` | unset | yes |
+| `NATS_MAX_BYTES` | Ceiling on the stream's size on disk. Accepts a plain byte count or a size (`2GiB`, `512MB`, `1G`). Unset leaves the stream bounded only by `NATS_STREAM_MAX_AGE` and the account's own quota, which a managed bus may refuse: Synadia's "Max Bytes Required" rejects any stream created without one | unset (unlimited) | yes |
 | `NATS_STREAM_NAME`, `NATS_SUBJECT_PREFIX` | Stream and subject naming | `warmbly` | yes |
 | `KAFKA_BOOTSTRAP_SERVERS` | Broker list when `EVENTBUS_PROVIDER=kafka` | unset | yes |
 | `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD` | Broker credentials | unset | yes |
@@ -299,6 +304,11 @@ On `filesystem`, a remote worker writes blobs to its own disk rather than a volu
 | `EVENTBUS_HANDLER_TIMEOUT` | How long one handler may take before the delivery is abandoned | `30s` | yes |
 | `PUBSUB_ENABLED` | `false` uses the Redis bridge for realtime fanout, `true` uses Google Pub/Sub | `false` | yes |
 | `GCP_PROJECT_ID` | Project when `PUBSUB_ENABLED=true` | unset | yes |
+
+<Callout title="Topics are created by the bus, not by hand">
+A worker's command topic is named after the node id issued when it joined, so the set of topics is not knowable in advance. The Kafka backend creates what it uses, once per topic per process, rather than depending on the broker's `auto.create.topics.enable` — which is off by default on Confluent Cloud and configurable only on Dedicated clusters, not on Basic, Standard, Enterprise or Freight. The credential therefore needs `CREATE` on topics as well as read and write.
+</Callout>
+
 
 `CODEC_PROVIDER=json` is required wherever workers run: the worker command and result envelopes carry untyped bodies Avro cannot serialize, so any other value makes every worker command fail to encode. `PUBSUB_ENABLED` must agree across backend, consumer and realtime.
 
@@ -315,6 +325,7 @@ On `filesystem`, a remote worker writes blobs to its own disk rather than a volu
 | `DATABASE_URL` | The realtime service's own name for the same database | the compose postgres | yes |
 | `DATABASE_POOL_SIZE` | Maximum pooled connections **for the realtime service only**. The Go services use the driver default and do not read it | `10` | yes |
 | `DATABASE_SSL` | Whether the realtime service connects to Postgres over TLS | `true`, and `false` under compose | yes |
+| `DATABASE_SSL_CA_FILE` | CA bundle the realtime service verifies Postgres against. Unset verifies against the system store, which has no Amazon RDS root in it, so an RDS database needs this set to `/etc/ssl/rds/global-bundle.pem` (shipped in the image) | unset | yes |
 
 Migrations are embedded in the backend binary and applied on boot. There is no separate migration step, and a standalone `/app/migrate` binary ships in the image for the cases where you want one.
 
@@ -343,7 +354,6 @@ The variable must be set on the backend in every environment. The file itself is
 | `WORKER_BIND_IP` | Source address to bind outbound connections to, and the seed for a derived `WORKER_ID` | unset | yes |
 | `WORKER_PUBLIC_IP` | The address the worker reports to the control plane | detected | yes |
 | `WARMBLY_NODE_REGION` | Free-form label for where this node egresses from, e.g. `eu-central`. Placement prefers a worker near where a mailbox's provider expects sign-ins; unset scores neutral. Written by the join script from `--region` | unset | yes |
-| `WORKER_IMAGE` | Image the remote installer pulls. The built-in default does not match what CI publishes, so set it | built-in | yes |
 | `ENCRYPTED_KEYS_BACKEND_URL` | Backend base the worker fetches organization keys from | unset | yes |
 | `ENCRYPTED_KEYS_WORKER_TOKEN` | The worker's copy of `INTERNAL_API_TOKEN` | unset | yes |
 | `MAIL_TLS_INSECURE` | Skips certificate verification on mailbox connections | `false` | yes |
@@ -558,8 +568,9 @@ The Rust open and click service. It reads its own environment, so these have to 
 | `TRACKING_SCANNER_NETWORKS` | Extra scanner sources, comma separated, each a CIDR or `asn:<number>` with an optional label. For sources that never carry a person's own request, so their pixel fetches and their clicks are both treated as automated | empty |
 | `TRACKING_SCANNER_CLICK_NETWORKS` | The same, for sources that also proxy a mail client's own image fetches. Only their click tickets are treated as automated, because their pixel fetches are genuine opens | empty |
 | `TRACKING_SCANNER_ASN_HEADER` | Header a trusted proxy sets with the source ASN, which is what makes `asn:` entries match. Read only from a proxy in `TRACKING_TRUSTED_PROXIES`. On Cloudflare, a transform rule writing `ip.src.asnum`. Empty disables ASN matching | empty |
-| `EVENTBUS_PROVIDER` | `nats` or `kafka`. Kafka needs an image built with `CARGO_FEATURES=kafka` | `nats` |
+| `EVENTBUS_PROVIDER` | `nats` or `kafka`. Kafka needs the `tracking:*-kafka` image, or a build with `CARGO_FEATURES=kafka` | `nats` |
 | `NATS_URL`, `NATS_SUBJECT_PREFIX` | JetStream address and subject prefix. The publish subject is `<prefix>.<topic>` | `nats://localhost:4222`, `warmbly` |
+| `CODEC_PROVIDER` | `json` or `avro`, and it has to match the consumer's. `avro` is refused at boot without `SCHEMA_REGISTRY_URL` | `json` |
 | `KAFKA_TRACKING_TOPIC` | Event topic, read by the Rust publisher **and** the Go subscriber | `tracking-events` |
 | `KAFKA_BOOTSTRAP_SERVERS`, `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD` | Broker transport when `EVENTBUS_PROVIDER=kafka` | unset |
 | `SCHEMA_REGISTRY_URL`, `SCHEMA_REGISTRY_KEY`, `SCHEMA_REGISTRY_SECRET` | Registry for the Avro codec | unset |

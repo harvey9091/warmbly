@@ -179,7 +179,7 @@ Do not:
 
 ## Local Development
 
-Event codec: `CODEC_PROVIDER=json` is required wherever workers are exercised (the worker command/result envelopes carry untyped bodies Avro cannot serialize); the Makefile and docker-compose set it everywhere. `tracking-events` keeps its own Avro path regardless.
+Event codec: `CODEC_PROVIDER=json` is required wherever workers are exercised (the worker command/result envelopes carry untyped bodies Avro cannot serialize); the Makefile and docker-compose set it everywhere. `tracking-events` reads the same setting: the consumer decodes both of its topics with one codec, so the Rust publisher honours `CODEC_PROVIDER` on Kafka as well as on NATS. Avro there needs a Schema Registry and is refused at boot without one; JSON needs nothing.
 
 Infra runs in docker; the Go services and frontends run natively on the host for fast iteration — no docker image rebuilds when you change app code. Targets live in the `Makefile`.
 
@@ -359,6 +359,7 @@ Auto-update:
 - the heartbeat reply carries `desired_version`; the node writes it to a file and a systemd timer (`warmbly-node-update`, installed by the join script) pulls and restarts. The process being replaced is never the process doing the replacing
 - an empty `desired_version` means "no opinion" and must never be read as "downgrade to nothing". A node that cannot be told what to run keeps running what it has
 - a per-node `pinned_version` overrides the fleet target, for canarying or holding a machine back
+- **the version names the build, not just the release.** The default images are CGO-free and carry no librdkafka, so a node running one cannot speak Kafka: it would take `EVENTBUS_PROVIDER=kafka` from its rendered env and fail at boot. `imageVariant` in `internal/app/fleetnode/service.go` appends `-kafka` to every version an instance on Kafka hands out, pins included, because the control plane is the only side that knows which bus it runs. The node needs no change for this: `join.sh` writes the resolved version to `WARMBLY_VERSION`, the node reports that back, and the updater compares against it, so the suffix stays consistent through join, heartbeat and self-update. `FLEET_IMAGE_VARIANT` overrides it, and set-and-empty disables it
 - **the backend is deliberately excluded.** It is what tells everyone else their version; a self-update that goes wrong leaves nothing to recover with
 
 The join script is `internal/api/handler/nodescript/join.sh`, embedded and served at `GET /join.sh` by the instance itself, so a self-hosted fleet never depends on a vendor host and always gets a script matching its backend. There is exactly one copy: do not add a mirror under `scripts/` or `site/public/`. All the POSIX-sh rules for published scripts apply to it (`sh -n`, `shellcheck -s sh`, everything in a function, `main "$@"` last).
@@ -571,7 +572,7 @@ Warmup pools are mailbox pools, not campaign lists.
 The intent is:
 
 - only other participating mailboxes are used as warmup recipients
-- recipients can be blocked from the pool if their spam score or invalid-token behavior looks bad
+- recipients can be blocked from the pool if their spam score or their treatment of received warmup mail looks bad
 - repeated pairings should be reduced
 - warmup should look like low-volume natural traffic, not repetitive synthetic blasting
 
@@ -579,7 +580,7 @@ Pool safety signals in code include:
 
 - recent-partner avoidance
 - warmup token validation
-- invalid-token attempt counting
+- single-use, recipient-bound tokens, so warmup mail cannot be replayed or redirected
 - spam-score tracking
 - auto-blocking from pools
 
@@ -628,7 +629,7 @@ Instead, the codebase uses layered abuse controls and trust signals across auth,
 - CAPTCHA on auth-sensitive entry points
 - per-user API rate limiting
 - WebSocket rate limiting
-- warmup-token verification and invalid-attempt tracking
+- warmup-token verification (single-use, recipient-bound)
 - warmup spam-score tracking and auto-blocking from pools
 - tracking-event deduplication and replay resistance
 - deliverability-event idempotency and suppression lists
@@ -681,17 +682,15 @@ Warmup has the clearest explicit abuse-detection path in the repo.
 
 Signals used:
 
-- every warmup email carries a verification token
-- invalid token format is recorded
-- missing, expired, or mismatched tokens are treated as suspicious
-- invalid token attempts are counted over time
+- every warmup email carries a verification token, minted by the platform, single-use, bound to its recipient
+- no inbound token is evidence against the mailbox that received it. It did not present the token; its worker synced whatever landed in its inbox, and inbound mail is attacker-controlled: every pool member holds tokens naming itself and a partner, and forwarding three to another member used to block that member for 30 days. The recipient check already makes a token worthless anywhere but its own destination, so nothing is charged on that path (#468, #481). Do not reintroduce a charge there, whether gated by a window, a folder check, a clock or by which pair the token names; each of those was tried and each was a way to be wrong (#477, #480)
+- tampering with warmup mail a mailbox verifiably received (deleting it, flagging it as spam) is attributed to that mailbox, because only its owner can do it
 - spam score is accumulated for abusive or suspicious behavior
 - accounts can be auto-blocked from warmup pools
 
 Current auto-block thresholds in code:
 
-- `>= 3` invalid warmup-token attempts in `24h`
-- spam score `> 50`
+- spam score `> 50` is documented intent, not code: nothing reads `spam_score` to decide a state (#491); the bands that act are placement, complaint, bounce and tampering
 
 Relevant code:
 
@@ -716,7 +715,6 @@ Use separate metrics for separate failure modes:
 - user complaint rate: recipients explicitly mark mail as spam
 - spam-folder placement rate: warmup or seed observations indicate messages are landing in junk/spam
 - bounce rate: especially hard bounces
-- suspicious warmup-token behavior
 - mailbox-sync abuse and provider throttling
 
 Recommended internal policy for shared paid pools:
@@ -736,14 +734,14 @@ Suggested automatic actions:
   spam-folder placement `>= 20%`
   or complaint rate `>= 0.10%`
   or bounce rate `>= 5%`
-  or repeated suspicious warmup-token failures
+  or repeated tampering with received warmup mail
   Action: immediately remove mailbox from the shared paid warmup pool for `7 days`
 
 - hard block band:
   spam-folder placement `>= 40%`
   or complaint rate `>= 0.30%`
   or bounce rate `>= 10%`
-  or clear abuse indicators such as token forgery patterns or repeated spam flags
+  or clear abuse indicators such as repeated spam flags on received warmup mail
   Action: block mailbox from shared paid pool for `30 days` and require review before re-entry
 
 - catastrophic band:
@@ -773,11 +771,16 @@ If a recovery pool does not exist yet:
 
 Do not automatically restore a blocked mailbox just because time elapsed.
 
+Two mechanisms make the sentence real, and both are easy to undo by accident:
+
+- a quarantine or block holds until `blocked_until` whatever fresh metrics say. The floor is inside `UpdateParticipantHealth`'s SQL (`internal/repository/pg_warmup.go`), decided against the row at write time, so it is compare-and-swap and an admin unblock landing mid-sweep is not overwritten by the block the sweep read earlier. Equal severity keeps the later end (a 90-day catastrophic block is not cut to 30 by a milder reading); throttled is not floored because the docs promise it lifts on recovery. The bands read windows shorter than the terms they hand out (seven days of placement against a 30-day block), so without this every block cleared within a week, and a re-added mailbox with no history on the next sweep
+- the standing follows the address within the workspace: `warmup_reputation_ledger` is a mirror of the address's worst live standing, written only by the `warmup_reputation_mirror` trigger on `warmup_pool_participants` (migration 000152), so every path that writes a standing keeps it current and no caller can bypass it. The pool row dies on paths that never touch the mailbox (`LeaveAllPools` on an auth error, a lapsed plan, warmup toggled off) and on `HardDeleteUser`'s cascade, which is why a snapshot at mailbox deletion was not enough. `MoveToPool` seeds a new row from it and never consumes it; `Delete` and `LeaveAllPools` only restart its retention window (`config.WarmupReputationLedgerDays`, applied by the purge in `EvaluateAllParticipants`, never while a live row backs it). A review-required block (`blocked_until NULL`) never lapses. A mailbox in good standing has no row, and recovery clears it (#476)
+
 Require the mailbox to pass re-entry checks such as:
 
 - authentication still healthy: SPF, DKIM, DMARC, PTR where relevant
 - no recent provider complaints or hard-bounce spikes
-- no recent invalid warmup-token attempts
+- no recent tampering with received warmup mail
 - spam-folder placement back below `10%` on a fresh probation sample
 - gradual re-entry with low volume, for example `5-10/day` warmup at first
 
@@ -803,7 +806,7 @@ For this repo, the most practical implementation is:
   warmup spam flags
   deliverability complaints
   bounce events
-  invalid warmup-token attempts
+  tampering with received warmup mail (deletion, spam flag)
   provider rate-limit or abuse signals
 - make pool selection exclude any mailbox not in `healthy`
 - keep positive engagement as a weak positive signal only; it should not instantly offset complaints or spam placement

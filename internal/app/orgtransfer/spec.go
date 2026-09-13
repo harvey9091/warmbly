@@ -196,13 +196,11 @@ var Tables = []Table{
 		Scope: `email_account_id IN ` + orgMailboxes,
 	},
 	{
+		// Below organization_members: user_id names the creator, and the
+		// importer needs that row present or it blanks the attribution.
 		Name: "tags", Group: models.OrgDataGroupCore,
-		// Labels are user-scoped in the schema, so they are collected by what
-		// the organization's own rows reference. Scoping them by owning user
-		// instead would drag that user's other workspaces into the archive.
-		Scope: `id IN (SELECT tag_id FROM email_tags WHERE email_id IN ` + orgMailboxes + `)
-		     OR id IN (SELECT tag_id FROM campaign_email_tags WHERE campaign_id IN ` + orgCampaigns + `)`,
-		Note: "Only tags this workspace actually uses travel; tags are owned by a user, not an organization.",
+		Scope: scopeOrg,
+		Note:  "The whole tag registry travels, including tags nothing is filed under yet.",
 	},
 	{
 		Name: "email_tags", Group: models.OrgDataGroupCore,
@@ -246,9 +244,8 @@ var Tables = []Table{
 	// ---------- contacts ----------
 	{
 		Name: "categories", Group: models.OrgDataGroupContacts,
-		Scope: `id IN (SELECT category_id FROM contact_categories WHERE contact_id IN ` + orgContacts + `)
-		     OR id IN (SELECT category_id FROM unibox_thread_labels WHERE thread_id IN ` + orgThreads + `)`,
-		Note: "Same user-scoped-label rule as tags.",
+		Scope: scopeOrg,
+		Note:  "The whole category registry travels, including ones no contact or conversation carries yet.",
 	},
 	{
 		Name: "contacts", Group: models.OrgDataGroupContacts,
@@ -303,7 +300,8 @@ var Tables = []Table{
 	// ---------- campaigns ----------
 	{
 		Name: "folders", Group: models.OrgDataGroupCampaigns,
-		Scope: `id IN (SELECT folder_id FROM campaign_folders WHERE campaign_id IN ` + orgCampaigns + `)`,
+		Scope: scopeOrg,
+		Note:  "The whole folder registry travels, including empty folders.",
 	},
 	{
 		Name: "campaigns", Group: models.OrgDataGroupCampaigns,
@@ -545,10 +543,6 @@ var Tables = []Table{
 		Scope: `email_account_id IN ` + orgMailboxes,
 	},
 	{
-		Name: "warmup_invalid_token_attempts", Group: models.OrgDataGroupWarmup,
-		Scope: `email_account_id IN ` + orgMailboxes,
-	},
-	{
 		Name: "warmup_spam_reports", Group: models.OrgDataGroupWarmup,
 		Scope: `reporter_account_id IN ` + orgMailboxes,
 	},
@@ -557,6 +551,11 @@ var Tables = []Table{
 		Scope:      `email_account_id IN ` + orgMailboxes,
 		ImportSkip: true,
 		Note:       "Pool rows are instance-global, so membership is re-earned on the destination rather than asserted by an archive.",
+	},
+	{
+		Name: "warmup_reputation_ledger", Group: models.OrgDataGroupWarmup,
+		Scope: `organization_id = $1`,
+		Note:  "The standing of every penalised address, current or removed, kept by a trigger on the pool rows so adding a mailbox back is not a reset. It travels: a block is about the mailbox's conduct rather than this instance, and since pool rows do not, this is how a blocked mailbox arrives blocked.",
 	},
 	{
 		Name: "warmup_admin_actions", Group: models.OrgDataGroupWarmup,
@@ -576,7 +575,7 @@ var Tables = []Table{
 	},
 	{
 		Name: "unibox_thread_labels", Group: models.OrgDataGroupInbox,
-		Scope: `thread_id IN ` + orgThreads,
+		Scope: scopeOrg,
 	},
 	{
 		Name: "unibox_snoozes", Group: models.OrgDataGroupInbox,

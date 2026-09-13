@@ -53,6 +53,10 @@ func (s *JobsService) HandleNewEmail(ctx context.Context, e *models.JobEventNewE
 		// mailbox sends this way, so without this branch its warmup mail is
 		// filed as ordinary inbox mail at every recipient.
 		return nil
+	} else if s.isCloudWarmupDelivery(ctx, e) {
+		// The same message, in a mailbox Warmbly Cloud warms: the token lives
+		// there, so only the cloud can recognise it.
+		return nil
 	}
 
 	// A pool-linked mailbox is warmup-only: everything else is dropped unread.
@@ -150,7 +154,14 @@ func extractHeaderValue(msg *models.EmailMessageStoreData, headerName string) st
 	return ""
 }
 
-// handleWarmupEmail handles a detected warmup email
+// handleWarmupEmail verifies a message carrying a warmup token: a live token
+// naming this mailbox as recipient is accepted, anything else is filed as
+// ordinary mail. Nothing here is evidence against the mailbox. It did not
+// present the token, its worker synced whatever landed in its inbox, and
+// inbound mail is attacker-controlled: every pool member holds tokens naming
+// itself and a partner, and forwarding three of them to another member used to
+// block that member for 30 days. The recipient check already makes a token
+// worthless anywhere but its own destination, so a charge protected nothing.
 func (s *JobsService) handleWarmupEmail(ctx context.Context, e *models.JobEventNewEmail, tokenStr string) (bool, error) {
 	if s.WarmupRepo == nil {
 		return false, nil
@@ -158,21 +169,29 @@ func (s *JobsService) handleWarmupEmail(ctx context.Context, e *models.JobEventN
 
 	tokenUUID, err := uuid.Parse(tokenStr)
 	if err != nil {
-		// Invalid format → record attempt
-		s.applyInvalidWarmupAttempt(ctx, e.Message.EmailID, tokenStr, 0)
-		return false, nil // Process as normal email
-	}
-
-	token, err := s.WarmupRepo.GetWarmupToken(ctx, tokenUUID)
-	if err != nil || token == nil {
-		// Token not found/expired → suspicious
-		s.applyInvalidWarmupAttempt(ctx, e.Message.EmailID, tokenStr, 5)
 		return false, nil
 	}
 
-	// Verify recipient matches
+	token, err := s.WarmupRepo.GetWarmupToken(ctx, tokenUUID)
+	if err != nil {
+		return false, fmt.Errorf("warmup token lookup: %w", err)
+	}
+	if token == nil {
+		return false, nil
+	}
 	if token.RecipientAccountID != e.Message.EmailID {
-		s.applyInvalidWarmupAttempt(ctx, e.Message.EmailID, tokenStr, 0)
+		// The sender's own Sent copy carries the recipient's token and reaches
+		// here on every send: routine, not worth a line. Anyone else's warmup
+		// mail landing here is worth seeing (a forwarding rule between pool
+		// members wastes both mailboxes' warmup), never a mark against this
+		// mailbox.
+		if token.SenderAccountID != e.Message.EmailID {
+			log.Info().
+				Str("email_account_id", e.Message.EmailID.String()).
+				Str("token_sender", token.SenderAccountID.String()).
+				Str("token_recipient", token.RecipientAccountID.String()).
+				Msg("warmup token for another mailbox arrived; filed as ordinary mail")
+		}
 		return false, nil
 	}
 
@@ -185,10 +204,6 @@ func (s *JobsService) handleWarmupEmail(ctx context.Context, e *models.JobEventN
 // re-stamps the Message-ID), so mail sent from an Outlook or Microsoft 365
 // mailbox reaches every recipient carrying no marker at all; matched only on
 // the header it would count for nobody and be filed as ordinary inbox mail.
-//
-// Unlike the header path a miss here is not suspicious — almost every message
-// that reaches this point is simply ordinary mail — so nothing is recorded as
-// an invalid attempt.
 func (s *JobsService) handleUnmarkedWarmupEmail(ctx context.Context, e *models.JobEventNewEmail) bool {
 	if s.WarmupRepo == nil || e.Message == nil {
 		return false
@@ -213,6 +228,36 @@ func (s *JobsService) handleUnmarkedWarmupEmail(ctx context.Context, e *models.J
 		Msg("verified warmup mail that arrived without its verify header")
 	s.acceptWarmupEmail(ctx, e, token)
 	return true
+}
+
+// cloudWarmupCheckTimeout bounds the one call this handler makes off-box. It
+// runs on every message in an enrolled mailbox, so a slow cloud would otherwise
+// hold up ingest for everything behind it.
+const cloudWarmupCheckTimeout = 5 * time.Second
+
+// isCloudWarmupDelivery asks the cloud whether an unrecognised message in a
+// mailbox it warms is its own warmup mail. Best-effort: an unreachable cloud
+// files the message as ordinary mail rather than dropping the owner's.
+func (s *JobsService) isCloudWarmupDelivery(ctx context.Context, e *models.JobEventNewEmail) bool {
+	if s.CloudLink == nil || e.Message == nil {
+		return false
+	}
+	// Nothing the cloud could match on: skip both lookups.
+	sender := firstSenderAddress(e.Message.FromAddr)
+	if e.Message.MessageID == "" && (sender == "" || e.Message.Subject == "") {
+		return false
+	}
+	if !s.CloudLink.IsEnrolled(ctx, e.Message.EmailID) {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, cloudWarmupCheckTimeout)
+	defer cancel()
+	ok, err := s.CloudLink.IsCloudWarmupDelivery(ctx, e.Message.EmailID, sender, e.Message.MessageID, e.Message.Subject)
+	if err != nil {
+		log.Warn().Err(err).Str("email_account_id", e.Message.EmailID.String()).Msg("cloud warmup delivery check failed; filing as ordinary mail")
+		return false
+	}
+	return ok
 }
 
 // firstSenderAddress pulls the bare address out of the first From value
@@ -374,31 +419,6 @@ func (s *JobsService) recipientProviderDomain(ctx context.Context, accountID uui
 		domain = strings.ToLower(acc.Email[at+1:])
 	}
 	return acc.Provider, domain
-}
-
-func (s *JobsService) applyInvalidWarmupAttempt(ctx context.Context, accountID uuid.UUID, attemptedToken string, scoreDelta int) {
-	if s.WarmupService != nil {
-		if health, err := s.WarmupService.ApplyInvalidTokenAttempt(ctx, accountID, attemptedToken, scoreDelta); err == nil {
-			s.markRiskBandFromWarmupHealth(ctx, accountID, health)
-			return
-		}
-	}
-
-	if s.WarmupRepo == nil {
-		return
-	}
-
-	// Degraded mode (no warmup service): record the raw signal only. All
-	// blocking is owned by the banded health model (evaluateMetrics), which
-	// already enforces the invalid-token threshold with a blocked_until and an
-	// appeal path. The old checkAndAutoBlock issued permanent blocks
-	// (blocked_until = NULL) that UpdateParticipantHealth then refused to ever
-	// re-evaluate — a divergent dead-end that is now removed.
-	_ = s.WarmupRepo.RecordInvalidTokenAttempt(ctx, accountID, attemptedToken)
-	if scoreDelta > 0 {
-		_, _ = s.WarmupRepo.IncrementSpamScore(ctx, accountID, scoreDelta)
-	}
-	s.markRiskBandFromWarmupHealth(ctx, accountID, nil)
 }
 
 // containsSpamFlag checks if any flag is a spam flag
