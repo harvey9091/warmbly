@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"sort"
 	"testing"
 	"time"
 
@@ -20,12 +21,14 @@ type repairInbox struct {
 
 func (r *repairInbox) ListUnprocessedCampaignReplies(_ context.Context, since time.Time, afterID uuid.UUID, limit int) ([]models.JobEventNewEmail, error) {
 	r.since = since
+	// Ordered by id like the query, so the cursor is deterministic.
 	var out []models.JobEventNewEmail
 	for _, e := range r.events {
 		if e.Message.ID.String() > afterID.String() {
 			out = append(out, e)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Message.ID.String() < out[j].Message.ID.String() })
 	return out[:min(len(out), limit)], nil
 }
 
