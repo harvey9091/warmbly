@@ -8,7 +8,52 @@ import (
 	"github.com/emersion/go-imap/v2"
 )
 
-const WarmupFolderName = "Warmbly"
+// FindUIDByMessageID returns the UID of the message with the given RFC 5322
+// Message-ID in mailboxName, or 0 when the folder does not have it.
+//
+// Warmup engagement arrives in two legs and the first one moves the message, so
+// by the time the second runs the UID it carries addresses nothing in the folder
+// the mail arrived in. This is the IMAP equivalent of re-resolving a Graph id:
+// the Message-ID is the one identifier a move does not change.
+func (c *Client) FindUIDByMessageID(ctx context.Context, mailboxName, rfcMessageID string) (uint32, error) {
+	rfcMessageID = strings.TrimSpace(rfcMessageID)
+	if mailboxName == "" || rfcMessageID == "" {
+		return 0, nil
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if merr := c.ensureConnected(); merr != nil {
+		return 0, merr
+	}
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	defer c.begin()()
+	name := c.qualifyMailboxLocked(mailboxName)
+	if _, err := c.selectMailbox(name, nil); err != nil {
+		// A folder that does not exist is not an error here: the caller is
+		// asking whether the message is in it.
+		return 0, nil
+	}
+
+	// SEARCH HEADER matches on a substring of the header value, so the angle
+	// brackets are kept: a bare id would also match any message whose
+	// References or In-Reply-To names it.
+	data, err := c.client.UIDSearch(&imap.SearchCriteria{
+		Header: []imap.SearchCriteriaHeaderField{{Key: "Message-Id", Value: "<" + strings.Trim(rfcMessageID, "<>") + ">"}},
+	}, nil).Wait()
+	if err != nil {
+		return 0, fmt.Errorf("search %q for message id: %w", name, err)
+	}
+	uids := data.AllUIDs()
+	if len(uids) == 0 {
+		return 0, nil
+	}
+	// Newest wins: a duplicate under an older UID is the copy a failed move
+	// left behind.
+	return uint32(uids[len(uids)-1]), nil
+}
 
 // MarkAsRead sets the \Seen flag on the given UID in mailboxName.
 func (c *Client) MarkAsRead(ctx context.Context, mailboxName string, uid uint32) error {
@@ -74,23 +119,40 @@ func (c *Client) RemoveFromSpam(ctx context.Context, sourceMailbox, inboxName st
 }
 
 // MoveToFolder moves the UID from sourceMailbox into dstFolder, creating
-// dstFolder if it does not exist. Use for the "Warmbly" sorting label.
-func (c *Client) MoveToFolder(ctx context.Context, sourceMailbox, dstFolder string, uid uint32) error {
+// dstFolder if it does not exist. Use for the warmup sorting folder.
+//
+// A message already in the destination is left alone. Warmup mail can arrive
+// there directly — a server-side rule, or another tool's filter, put it in the
+// folder we were going to move it to — and a MOVE onto the same mailbox is a
+// copy and an expunge, so the message would come back under a new UID and be
+// re-imported as a fresh arrival on the next pass.
+// It reports whether the message actually moved, because only then is the UID
+// void: the caller has more to do with it when it did not.
+func (c *Client) MoveToFolder(ctx context.Context, sourceMailbox, dstFolder string, uid uint32) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if merr := c.ensureConnected(); merr != nil {
-		return merr
+		return false, merr
 	}
 	c.lifecycle.RLock()
 	defer c.lifecycle.RUnlock()
 	defer c.begin()()
+	// Qualified on both sides: the caller names a bare folder, the server names
+	// the one it listed, and on a Dovecot that keeps user folders under "INBOX."
+	// those two spellings of the same mailbox are not equal as strings.
 	dst := c.qualifyMailboxLocked(dstFolder)
+	if strings.EqualFold(c.qualifyMailboxLocked(sourceMailbox), dst) {
+		return false, nil
+	}
 	if err := c.ensureMailboxExists(dst); err != nil {
-		return err
+		return false, err
 	}
 
-	return c.moveUIDLocked(sourceMailbox, dst, uid)
+	if err := c.moveUIDLocked(sourceMailbox, dst, uid); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // personalPrefixLocked is the prefix this server keeps user folders under. It
@@ -202,6 +264,31 @@ func IsSpamMailbox(name string, attrs []string) bool {
 		}
 	}
 	return IsSpamMailboxName(name)
+}
+
+// IsArchiveMailbox returns true if the mailbox's attributes or name identify it
+// as the archive, under RFC 6154 SPECIAL-USE or by name match. \All is
+// included because Gmail-over-IMAP and a few hosted servers expose their
+// archive as the "all mail" view and nothing else.
+func IsArchiveMailbox(name string, attrs []string) bool {
+	for _, a := range attrs {
+		switch strings.ToLower(a) {
+		case "\\archive", "\\all":
+			return true
+		}
+	}
+	return matchesFolderName(strings.ToLower(leaf(strings.TrimSpace(name))), ImapArchive)
+}
+
+// IsSentMailbox returns true if the mailbox's attributes or name identify it as
+// the Sent folder, under RFC 6154 SPECIAL-USE or by name match.
+func IsSentMailbox(name string, attrs []string) bool {
+	for _, a := range attrs {
+		if strings.EqualFold(a, "\\Sent") {
+			return true
+		}
+	}
+	return matchesFolderName(strings.ToLower(leaf(strings.TrimSpace(name))), ImapSent)
 }
 
 // IsInboxMailbox returns true for the canonical INBOX (case-insensitive) or

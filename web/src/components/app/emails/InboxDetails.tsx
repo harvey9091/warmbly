@@ -59,6 +59,7 @@ import useSendIdentity from "@/lib/api/hooks/app/emails/useSendIdentity";
 import useRefreshSendIdentity from "@/lib/api/hooks/app/emails/useRefreshSendIdentity";
 import getEmail from "@/lib/api/client/app/emails/getEmail";
 import { SelectMenu, type SelectOption } from "@/components/ui/select-menu";
+import { OptionSelect } from "@/components/app/campaigns/preferences/components/CampaignPreferenceBoolBox";
 import useUpdateEmailTrackingDomain from "@/lib/api/hooks/app/emails/useUpdateEmailTrackingDomain";
 import useEmailTrackingDomain from "@/lib/api/hooks/app/emails/useEmailTrackingDomain";
 import useVerifyEmailTrackingDomain from "@/lib/api/hooks/app/emails/useVerifyEmailTrackingDomain";
@@ -375,6 +376,7 @@ const EDITABLE: (keyof Inbox)[] = [
     "tags", "campaign_limit", "min_wait_time", "reply_to", "save_to_sent",
     "warmup_base", "warmup_max", "warmup_increase", "warmup_reply_rate",
     "warmup_tag", "warmup_start_time", "warmup_end_time", "warmup_days",
+    "warmup_placement", "warmup_folder",
 ];
 
 function Detail({ mailbox, onClose, initialTab = "overview", canWarmup = true }: { mailbox: Inbox; onClose: () => void; initialTab?: string; canWarmup?: boolean }) {
@@ -1260,6 +1262,11 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
                 </FieldShell>
             </div>
 
+            {/* Where warmup mail lands in the real mail client */}
+            <div className="px-5 py-5 space-y-4">
+                <WarmupPlacementFields form={form} update={update} provider={mailbox.provider} />
+            </div>
+
             {/* Schedule */}
             <div className="px-5 py-5 space-y-5">
                 <Eyebrow>Sending window</Eyebrow>
@@ -1282,6 +1289,76 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
                 </FieldShell>
             </div>
         </div>
+    );
+}
+
+/* ── Where warmup mail lands in the customer's own mail client ────────── */
+
+// Warmup mail is hidden from the unibox, but it is real mail in a real mailbox,
+// and the mailbox owner does see it. These two settings are the only thing that
+// decides what they see: mail they received AND the copy of what this mailbox
+// sent are both filed the same way, so one folder holds all of it and nothing
+// else does. That is also how someone tells a warmup message apart from a
+// stranger's email, which is why the folder is named rather than hidden.
+function WarmupPlacementFields({
+    form,
+    update,
+    provider,
+}: {
+    form: Inbox;
+    update: (patch: Partial<Inbox>) => void;
+    provider: string;
+}) {
+    const gmail = provider === "gmail";
+    const noun = gmail ? "label" : "folder";
+    const placement = form.warmup_placement ?? "folder";
+    const folder = form.warmup_folder ?? "";
+
+    return (
+        <>
+            <Eyebrow>In this mailbox</Eyebrow>
+            <FieldShell
+                label="Where warmup mail goes"
+                hint={`Applies to warmup mail this inbox receives and to the copy of every warmup message it sends, so warmup never shows up in ${gmail ? "your inbox or Sent" : "your inbox or Sent folder"}.`}
+            >
+                <OptionSelect<"folder" | "inbox" | "archive">
+                    aria-label="Warmup filing"
+                    value={placement}
+                    onChange={(v) => update({ warmup_placement: v })}
+                    options={[
+                        {
+                            value: "folder",
+                            label: `Its own ${noun}`,
+                            hint: "Recommended. Everything warmup in one place you can open, search and ignore.",
+                        },
+                        {
+                            value: "inbox",
+                            label: "Leave it in the inbox",
+                            hint: "Warmup mail stays where the provider put it. Mail that landed in spam is still rescued.",
+                        },
+                        {
+                            value: "archive",
+                            label: "Archive it",
+                            hint: `Out of the inbox with no ${noun} of its own. Findable by search only.`,
+                        },
+                    ]}
+                />
+            </FieldShell>
+            {placement === "folder" && (
+                <FieldShell
+                    label={`${gmail ? "Label" : "Folder"} name`}
+                    hint={`Created on first use. Leave empty for "Warmbly". Point it at a ${noun} you already use for this if another tool set one up.`}
+                >
+                    <TextInput
+                        value={folder}
+                        placeholder="Warmbly"
+                        maxLength={64}
+                        onChange={(v) => update({ warmup_folder: v.replace(/[/\\.%*"]/g, "") })}
+                        className="w-full h-9"
+                    />
+                </FieldShell>
+            )}
+        </>
     );
 }
 

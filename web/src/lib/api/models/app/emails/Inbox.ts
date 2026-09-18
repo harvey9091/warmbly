@@ -53,6 +53,14 @@ export default interface Inbox {
     warmup_start_time?: string;
     warmup_end_time?: string;
     warmup_days?: number;
+    /**
+     * Where warmup mail is filed in the mail client itself: "folder" moves it
+     * into warmup_folder, "inbox" leaves it where the provider put it,
+     * "archive" takes it out of the inbox without a folder of its own.
+     */
+    warmup_placement?: "folder" | "inbox" | "archive";
+    /** Folder (Gmail label) for warmup mail. Empty = the default, "Warmbly". */
+    warmup_folder?: string;
     created_at: Date;
     updated_at: Date;
 }

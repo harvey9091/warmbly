@@ -100,3 +100,25 @@ func TestEngagementPlan_SometimesNeglects(t *testing.T) {
 		t.Error("engagement is never neglected — every message gets perfect engagement")
 	}
 }
+
+func TestSentFolderCopy(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  models.EmailMessageStoreData
+		want bool
+	}{
+		{"resolved sent folder", models.EmailMessageStoreData{Folder: models.FolderSent}, true},
+		{"provider still reports sent", models.EmailMessageStoreData{ProviderFolder: models.FolderSent}, true},
+		{"an inbox arrival is not our own copy", models.EmailMessageStoreData{Folder: models.FolderInbox}, false},
+		{"warmup that landed in spam is not our own copy", models.EmailMessageStoreData{Flags: []string{"\\Junk"}}, false},
+		{"a folderless event falls back to inbox", models.EmailMessageStoreData{}, false},
+		{"a draft is not a sent copy", models.EmailMessageStoreData{Folder: models.FolderDrafts}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sentFolderCopy(&tc.msg); got != tc.want {
+				t.Fatalf("sentFolderCopy() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

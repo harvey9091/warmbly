@@ -2,6 +2,8 @@ package goog
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/cache"
@@ -18,6 +20,16 @@ type Client struct {
 
 	srv   *gmail.Service
 	Cache *cache.Cache
+
+	// sentLabelStuck records that this mailbox's Gmail refused to remove the
+	// SENT label, so FileWarmup stops asking. Gmail documents INBOX as
+	// removable and says nothing either way about SENT; the answer is learned
+	// from the API rather than assumed, once per mailbox.
+	sentLabelStuck atomic.Bool
+
+	// labelIDs caches label-name → id for this mailbox.
+	labelMu  sync.Mutex
+	labelIDs map[string]string
 
 	// OnMessageAdded is offered every message the history feed reports as
 	// added, with only its ids: the caller decides whether to hydrate it. It
