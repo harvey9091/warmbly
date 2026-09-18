@@ -376,7 +376,9 @@ Only works while the instance has no accounts. On a claimed instance it refuses 
 
 ### The browser reset path
 
-The ordinary **Forgot password** flow still works, if mail delivers. It is capped at **2 requests per address per 4 hours**, so repeated attempts during an outage will lock you out of the flow for a while.
+The ordinary **Forgot password** flow still works, if mail delivers. It is capped at **2 requests per address per 4 hours**, so repeated attempts during an outage will lock you out of the flow for a while. The emailed link is good for **1 hour**.
+
+The address is matched case-insensitively and surrounding whitespace is ignored, so `You@Example.com` finds the account created as `you@example.com`. An address with no account still answers `200` on purpose, so the form cannot be used to find out who has an account here; the backend logs the attempt, so an operator can tell a typo apart from a mail failure.
 
 <Callout type="warn" title="Do not flush Redis on an unclaimed instance">
 `redis-cli FLUSHDB` destroys the `bootstrap:setup_token` entry along with every pending auth session and rate limit counter. On an instance you have not claimed yet, that throws away the only way in. Delete the single key you meant to clear instead.

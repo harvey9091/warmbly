@@ -46,6 +46,9 @@ func (s *authService) createAccount(ctx context.Context, address, passwordHash s
 	if perr != nil {
 		return nil, errx.ErrEmail
 	}
+	// The single write path for a new account, so the stored form is decided
+	// here even though every caller already folded it.
+	email.Address = normalizeEmail(email.Address)
 
 	// Whether the invitation is the only thing that permitted this signup.
 	// When it is, a failed accept cannot fall through to a personal workspace:

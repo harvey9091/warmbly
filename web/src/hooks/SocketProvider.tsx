@@ -711,10 +711,19 @@ export default function SocketProvider({
             // is already gone (Request refreshes and retries once before it
             // throws). Both are expected and handled: the retry below, and the
             // app-wide auth redirect. Only an unexpected answer is an error.
+            //
+            // And only the FIRST of a streak. The retry below never gives up,
+            // so a backend that stays down reports once every few seconds for
+            // as long as the tab is open: one afternoon's outage filed 1158
+            // copies of the same failure from a single tab, which buries every
+            // other error in the project. The attempt counter resets on a
+            // successful open, so each outage still reports itself once.
             if (!error.status || error.status === 401) {
                 console.warn('[WS] Init failed, retrying -', detail);
-            } else {
+            } else if (reconnectAttemptRef.current === 0) {
                 console.error('[WS] Init failed -', detail);
+            } else {
+                console.warn('[WS] Init failed, still retrying -', detail);
             }
             // Token fetch / handshake failed — retry on the same fast backoff
             // rather than a flat 15s wait.

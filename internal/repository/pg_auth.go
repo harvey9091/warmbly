@@ -43,7 +43,7 @@ func (r *authRepository) IsValidCredentials(ctx context.Context, email, password
 	`
 
 	params := []any{
-		email,
+		normalizeUserEmail(email),
 	}
 
 	err := r.DB.QueryRow(
@@ -66,8 +66,13 @@ func (r *authRepository) IsValidCredentials(ctx context.Context, email, password
 
 	val, err := argon2.Verify(password, *pw)
 	if err != nil {
+		// A stored hash this cannot parse is an operator problem, so it is
+		// still reported. It is not the caller's, though: answering 500 told
+		// someone with a correct password that the site was down, and they
+		// retried into it. The credential cannot be verified, which is what
+		// ErrCredentials says.
 		errs.CaptureException(err)
-		return uuid.Nil, errx.InternalError()
+		return uuid.Nil, errx.ErrCredentials
 	}
 
 	if !val {
@@ -98,7 +103,7 @@ func (r *authRepository) ExternalLogin(ctx context.Context, email string) (*mode
 
 	var params = []any{
 		id,
-		email,
+		normalizeUserEmail(email),
 		"",
 		firstName,
 		lastName,

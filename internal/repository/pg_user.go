@@ -88,9 +88,14 @@ func NewUserRepostory(db *db.DB, kms kms.Provider) UserRepository {
 func (r *userRepository) CreateUser(ctx context.Context, email *mail.Address, passwordHash string) (*models.User, error) {
 	id := uuid.New()
 
+	// The stored form is decided here, not by the caller, because the account
+	// lookups all fold and `users_email_key` does not: a row written with the
+	// case someone typed is a row no sign-in and no reset can find.
+	address := normalizeUserEmail(email.Address)
+
 	var firstName string
 
-	nameSplit := strings.SplitN(email.Address, "@", 2)
+	nameSplit := strings.SplitN(address, "@", 2)
 	if len(nameSplit) < 2 {
 		firstName = "Unknown"
 	} else {
@@ -114,7 +119,7 @@ func (r *userRepository) CreateUser(ctx context.Context, email *mail.Address, pa
 	`
 
 	var params = []any{
-		id, email.Address, passwordHash,
+		id, address, passwordHash,
 		firstName, lastName,
 		now,
 	}
@@ -133,7 +138,7 @@ func (r *userRepository) CreateUser(ctx context.Context, email *mail.Address, pa
 
 		FirstName: firstName,
 		LastName:  lastName,
-		Email:     email.Address,
+		Email:     address,
 		Roles:     make([]uuid.UUID, 0),
 
 		CreatedAt: now,
@@ -185,12 +190,19 @@ func (r *userRepository) getUser(ctx context.Context, key string, value any) (*m
 	return &u, nil
 }
 
+// normalizeUserEmail is the form `users.email` is written and matched in.
+// `users_email_key` is a plain unique index on the raw column, so the case a
+// row was written with is the only case that will ever find it again.
+func normalizeUserEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
 func (r *userRepository) GetUser(ctx context.Context, userID uuid.UUID) (*models.User, error) {
 	return r.getUser(ctx, "id", userID)
 }
 
 func (r *userRepository) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
-	return r.getUser(ctx, "email", email)
+	return r.getUser(ctx, "email", normalizeUserEmail(email))
 }
 
 func (r *userRepository) SetFreeTrialUsed(ctx context.Context, userID uuid.UUID) error {
@@ -356,21 +368,22 @@ func (r *userRepository) CreateExemptUser(ctx context.Context, email *mail.Addre
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	id := uuid.New()
+	address := normalizeUserEmail(email.Address)
 	firstName := "Unknown"
-	if parts := strings.SplitN(email.Address, "@", 2); len(parts) == 2 {
+	if parts := strings.SplitN(address, "@", 2); len(parts) == 2 {
 		firstName = parts[0]
 	}
 	now := time.Now()
 	if _, ierr := tx.Exec(ctx, `
 		INSERT INTO users (id, email, password_hash, first_name, last_name, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, '', $5, $5)`,
-		id, email.Address, passwordHash, firstName, now); ierr != nil {
+		id, address, passwordHash, firstName, now); ierr != nil {
 		return nil, ierr
 	}
 	created := &models.User{
 		ID:        id,
 		FirstName: firstName,
-		Email:     email.Address,
+		Email:     address,
 		Roles:     make([]uuid.UUID, 0),
 		CreatedAt: now,
 		UpdatedAt: now,

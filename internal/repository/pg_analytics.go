@@ -218,6 +218,10 @@ func (r *analyticsRepository) GetCampaignEngagementBreakdown(ctx context.Context
 	// browser so a plain webmail open still lands in a named bucket, and
 	// unknown stays the empty key.
 	bucket := func(keyExpr string) ([]models.EngagementBucket, *errx.Error) {
+		// The aggregates are grouped in a subquery and ordered outside it
+		// because Postgres only resolves an output column name in ORDER BY
+		// when it stands alone: inside `opens + clicks` it looked for a column
+		// named `opens` on email_opens and every call failed with 42703.
 		query := `
 			WITH ev AS (
 				SELECT contact_id, 'open' AS kind, client, browser, device_type, country_code
@@ -227,12 +231,15 @@ func (r *analyticsRepository) GetCampaignEngagementBreakdown(ctx context.Context
 				SELECT contact_id, 'click' AS kind, client, browser, device_type, country_code
 				FROM email_link_clicks
 				WHERE campaign_id = $1 AND NOT machine
+			), buckets AS (
+				SELECT ` + keyExpr + ` AS key,
+				       COUNT(DISTINCT contact_id) FILTER (WHERE kind = 'open') AS opens,
+				       COUNT(DISTINCT contact_id) FILTER (WHERE kind = 'click') AS clicks
+				FROM ev
+				GROUP BY 1
 			)
-			SELECT ` + keyExpr + ` AS key,
-			       COUNT(DISTINCT contact_id) AS opens,
-			       COUNT(DISTINCT contact_id) FILTER (WHERE kind = 'click') AS clicks
-			FROM ev
-			GROUP BY 1
+			SELECT key, opens, clicks
+			FROM buckets
 			ORDER BY opens + clicks DESC, key ASC
 			LIMIT $2
 		`

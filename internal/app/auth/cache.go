@@ -158,6 +158,35 @@ func (s *authService) passwordResetLimit(ctx context.Context, email string) *err
 	return nil
 }
 
+// refundPasswordResetLimit gives back an attempt that produced no mail through
+// no fault of the person asking. The budget is only two requests per four
+// hours, so without this a transient SES rejection or a cache blip spent half
+// of someone's allowance and a second one locked them out of the flow for the
+// rest of the afternoon, with nothing in their inbox to explain why. Best
+// effort: failing to refund must never turn into a failed request on top of
+// the one that already failed.
+//
+// Only OUR failures are refunded. An address with no account still pays, or
+// the counter stops costing an attacker anything to probe with.
+func (s *authService) refundPasswordResetLimit(ctx context.Context, email string) {
+	key := getPasswordResetLimitKey(email)
+
+	// DECR cannot take the counter below what this request added: the key is
+	// only ever incremented by a request that reaches here to undo it, and a
+	// key that expired in between comes back at -1 with no TTL, which would
+	// hand out unlimited attempts. Refuse that case rather than create it.
+	count, err := s.cache.Decr(ctx, key).Result()
+	if err != nil {
+		errs.CaptureException(err)
+		return
+	}
+	if count < 0 {
+		if err := s.cache.Del(ctx, key).Err(); err != nil {
+			errs.CaptureException(err)
+		}
+	}
+}
+
 // saveResetPasswordSession binds the emailed reset JWT to a server-side nonce.
 // The TTL is PasswordResetTTL, the same lifetime the JWT carries and the same
 // one the email quotes: it used to be SessionTTL (10 minutes) against a 1-hour

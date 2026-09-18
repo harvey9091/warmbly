@@ -67,6 +67,10 @@ func (s *authService) externalIDTokenAuth(ctx context.Context, verifier IDTokenV
 	if perr != nil {
 		return nil, errx.ErrEmail
 	}
+	// A provider asserts whatever case it holds. Unfolded, the address lookup
+	// below missed the local account and provisioned a second one alongside
+	// it, because the unique index is on the raw column.
+	email.Address = normalizeEmail(email.Address)
 
 	userID, rerr := s.resolveFederatedUser(ctx, provider, claims.Issuer, claims.Subject, email, firstName, lastName)
 	if rerr != nil {

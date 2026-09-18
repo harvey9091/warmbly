@@ -19,6 +19,10 @@ func (s *authService) RegistrationStart(ctx context.Context, data *AuthData, ori
 		return nil, errx.New(errx.Forbidden, "password sign-up is disabled on this deployment")
 	}
 
+	// Folded before the duplicate check, or "Vincent@" and "vincent@" both get
+	// past it and become two accounts for one person.
+	data.Email = normalizeEmail(data.Email)
+
 	if err := s.signupAllowed(ctx, data.Email, data.Invite); err != nil {
 		return nil, err
 	}

@@ -206,7 +206,7 @@ func TestGenerateRegistrationCodeHTML_DifferentCodes(t *testing.T) {
 
 func TestGenerateResetPasswordHTML(t *testing.T) {
 	url := "https://app.warmbly.com/reset?token=abc123def456"
-	html, err := GenerateResetPasswordHTML("", url)
+	html, err := GenerateResetPasswordHTML("", url, time.Hour)
 	if err != nil {
 		t.Fatalf("GenerateResetPasswordHTML returned error: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestGenerateResetPasswordHTML(t *testing.T) {
 		{"button text", "Reset password</a>"},
 		{"reset prompt", "Reset your password"},
 		{"ignore notice", "safely ignore this email"},
-		{"expiry notice", "expires in 4 hours"},
+		{"expiry notice", "expires in 1 hour"},
 		{"title tag", "<title>Reset Your Password</title>"},
 	}
 
@@ -240,9 +240,32 @@ func TestGenerateResetPasswordHTML(t *testing.T) {
 	}
 }
 
+// The mail used to quote a flat "4 hours" while the token died in one, so a
+// link that read as good for the afternoon was refused. The lifetime is now an
+// argument; this is what keeps it one.
+func TestGenerateResetPasswordHTMLQuotesTheLifetimeItIsGiven(t *testing.T) {
+	cases := []struct {
+		ttl  time.Duration
+		want string
+	}{
+		{time.Hour, "expires in 1 hour"},
+		{4 * time.Hour, "expires in 4 hours"},
+		{30 * time.Minute, "expires in 30 minutes"},
+	}
+	for _, c := range cases {
+		html, err := GenerateResetPasswordHTML("", "https://app.warmbly.com/reset?token=abc", c.ttl)
+		if err != nil {
+			t.Fatalf("GenerateResetPasswordHTML(%s) returned error: %v", c.ttl, err)
+		}
+		if !strings.Contains(html, c.want) {
+			t.Errorf("GenerateResetPasswordHTML(%s): expected HTML to contain %q", c.ttl, c.want)
+		}
+	}
+}
+
 func TestGenerateResetPasswordHTML_URLEncoding(t *testing.T) {
 	url := "https://app.warmbly.com/reset?token=abc&user=test@example.com"
-	html, err := GenerateResetPasswordHTML("", url)
+	html, err := GenerateResetPasswordHTML("", url, time.Hour)
 	if err != nil {
 		t.Fatalf("GenerateResetPasswordHTML returned error: %v", err)
 	}
@@ -264,7 +287,7 @@ func TestTemplatesProduceDistinctOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resetHTML, err := GenerateResetPasswordHTML("", "https://example.com/reset")
+	resetHTML, err := GenerateResetPasswordHTML("", "https://example.com/reset", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +314,7 @@ func TestLoginCodeDoesNotContainResetContent(t *testing.T) {
 }
 
 func TestResetPasswordDoesNotContainCodeBlock(t *testing.T) {
-	html, _ := GenerateResetPasswordHTML("", "https://example.com/reset")
+	html, _ := GenerateResetPasswordHTML("", "https://example.com/reset", time.Hour)
 	if strings.Contains(html, "letter-spacing:8px") {
 		t.Error("reset password template should not contain a code display block")
 	}
@@ -315,7 +338,7 @@ func TestPreview(t *testing.T) {
 		{"login-code.html", func() (string, error) { return GenerateLoginCodeHTML("123456") }},
 		{"registration-code.html", func() (string, error) { return GenerateRegistrationCodeHTML("789012") }},
 		{"reset-password.html", func() (string, error) {
-			return GenerateResetPasswordHTML("", "https://app.warmbly.com/reset?token=abc123def456")
+			return GenerateResetPasswordHTML("", "https://app.warmbly.com/reset?token=abc123def456", time.Hour)
 		}},
 		{"trial-expired.html", func() (string, error) { return GenerateTrialExpiredHTML() }},
 		{"invitation.html", func() (string, error) {
