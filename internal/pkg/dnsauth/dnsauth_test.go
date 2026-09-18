@@ -415,6 +415,27 @@ func TestCheckSelectorHintsFromMX(t *testing.T) {
 	}
 }
 
+func TestCheckFindsHostingersHyphenatedSelectors(t *testing.T) {
+	// Hostinger publishes hostingermail-a and -b; the numbered pair is absent.
+	res := checkWith("acme.com", nil, stubResolverMX(map[string][]string{
+		"acme.com":                            {"v=spf1 include:_spf.mail.hostinger.com ~all"},
+		"_dmarc.acme.com":                     {"v=DMARC1; p=none"},
+		"hostingermail-a._domainkey.acme.com": {"v=DKIM1; k=rsa; p=MIGf"},
+		"hostingermail-b._domainkey.acme.com": {"v=DKIM1; k=rsa; p=MIGf"},
+	}, []string{"mx1.hostinger.com", "mx2.hostinger.com"}))
+
+	if !res.DKIMFound {
+		t.Fatal("DKIMFound = false, want true (hyphenated Hostinger selectors)")
+	}
+	got := map[string]bool{}
+	for _, s := range res.DKIMSelectors {
+		got[s] = true
+	}
+	if len(got) != 2 || !got["hostingermail-a"] || !got["hostingermail-b"] {
+		t.Errorf("DKIMSelectors = %v, want [hostingermail-a hostingermail-b]", res.DKIMSelectors)
+	}
+}
+
 func TestSelectorHints(t *testing.T) {
 	got := selectorHints("v=spf1 include:_spf.google.com include:spf.protection.outlook.com -all", []string{"mx.zoho.com"})
 	want := map[string]bool{"google": true, "selector1": true, "selector2": true, "zoho": true, "zmail": true}
