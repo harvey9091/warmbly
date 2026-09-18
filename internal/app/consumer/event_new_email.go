@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/mail"
 	"slices"
 	"strings"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/mailhdr"
 )
 
 func (s *JobsService) HandleNewEmail(ctx context.Context, e *models.JobEventNewEmail) error {
@@ -409,24 +409,16 @@ func parentMessageIDs(inReplyTo []string) []string {
 	return out
 }
 
-// firstSenderAddress pulls the bare address out of the first From value
-// ("Name <addr>" or a bare address).
+// firstSenderAddress pulls the bare address out of the first From value, in
+// any form a sync has stored it ("Name <addr>", "Name (addr)", bare).
 func firstSenderAddress(from []string) string {
 	for _, raw := range from {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
 			continue
 		}
-		if addr, err := mail.ParseAddress(raw); err == nil {
-			return strings.TrimSpace(addr.Address)
-		}
-		if i := strings.LastIndex(raw, "<"); i >= 0 {
-			if j := strings.Index(raw[i:], ">"); j > 0 {
-				return strings.TrimSpace(raw[i+1 : i+j])
-			}
-		}
-		if strings.Contains(raw, "@") {
-			return raw
+		if addr := mailhdr.Bare(raw); strings.Contains(addr, "@") {
+			return addr
 		}
 	}
 	return ""

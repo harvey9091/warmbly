@@ -30,7 +30,7 @@ import AnalyticsShareButton from "@/components/app/analytics/AnalyticsShareButto
 import useDashboard from "@/lib/api/hooks/app/analytics/useDashboard";
 import DirectMailSection from "@/components/app/analytics/DirectMailSection";
 
-const AUTO_OPENS_TIP = "Auto-opens: pixel fetches from privacy proxies (e.g. Apple Mail) or within seconds of sending, not a person reading";
+const AUTO_OPENS_TIP = "Auto-opens: pixel fetches from privacy proxies (e.g. Apple Mail) or within seconds of sending, not a person reading. Logged as delivery proof, not counted as opens";
 const AUTO_CLICKS_TIP = "Auto-clicks: links followed by a security gateway scanning the email, not a person; not counted as clicks";
 
 type Range = "7d" | "30d" | "90d";
@@ -86,7 +86,7 @@ export default function AnalyticsPage() {
 
     const breakdown = [
         { label: "Sent", value: os?.total_emails_sent, icon: SendIcon, dot: "bg-slate-400" },
-        { label: "Opens", value: os?.total_opens, icon: MailCheckIcon, dot: "bg-emerald-500", note: os?.machine_opens ? `${num(os.machine_opens)} auto` : undefined, noteTitle: AUTO_OPENS_TIP },
+        { label: "Opens", value: os?.total_opens, icon: MailCheckIcon, dot: "bg-emerald-500", note: os?.machine_opens ? `${num(os.machine_opens)} auto, not counted` : undefined, noteTitle: AUTO_OPENS_TIP },
         { label: "Clicks", value: os?.total_clicks, icon: MousePointerClickIcon, dot: "bg-violet-500", note: os?.machine_clicks ? `${num(os.machine_clicks)} auto` : undefined, noteTitle: AUTO_CLICKS_TIP },
         { label: "Replies", value: os?.total_replies, icon: ReplyIcon, dot: "bg-amber-500" },
         { label: "Bounces", value: os?.total_bounces, icon: TriangleAlertIcon, dot: "bg-rose-500" },

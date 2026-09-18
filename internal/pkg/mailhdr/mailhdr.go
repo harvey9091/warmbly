@@ -62,6 +62,12 @@ func AddressList(addrs []string) string {
 // Bare strips a display name down to the routable address ("Ana <a@b.com>" ->
 // "a@b.com"). SMTP envelope commands take the address alone; a display name in
 // RCPT TO is a syntax error and the server rejects the recipient.
+//
+// It also reads "Ana (a@b.com)", which is what the IMAP sync stored for every
+// address until v0.4.25 and what older rows and older workers still carry. Any
+// reader that compares a stored address against a mailbox or a contact has to
+// go through here; the reply path did not, and every reply into an IMAP
+// mailbox stopped counting the day address checks were added there.
 func Bare(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -73,6 +79,13 @@ func Bare(s string) string {
 	if i := strings.LastIndex(s, "<"); i != -1 {
 		if j := strings.Index(s[i:], ">"); j != -1 {
 			return strings.TrimSpace(s[i+1 : i+j])
+		}
+	}
+	if i := strings.LastIndex(s, "("); i != -1 {
+		if j := strings.Index(s[i:], ")"); j != -1 {
+			if inner := strings.TrimSpace(s[i+1 : i+j]); strings.Contains(inner, "@") {
+				return inner
+			}
 		}
 	}
 	return s

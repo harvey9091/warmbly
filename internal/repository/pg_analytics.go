@@ -127,7 +127,7 @@ func (r *analyticsRepository) GetCampaignSummary(ctx context.Context, orgID, cam
 			cp.total_contacts,
 			COUNT(CASE WHEN ccp.sent_at IS NOT NULL THEN 1 END) as emails_sent,
 			GREATEST(cp.total_contacts * cp.email_steps - COUNT(CASE WHEN ccp.sent_at IS NOT NULL THEN 1 END), 0) as emails_pending,
-			COUNT(CASE WHEN ccp.opened_at IS NOT NULL THEN 1 END) as unique_opens,
+			COUNT(CASE WHEN ccp.opened_at IS NOT NULL AND NOT ccp.opened_machine THEN 1 END) as unique_opens,
 			COUNT(CASE WHEN ccp.opened_at IS NOT NULL AND ccp.opened_machine THEN 1 END) as machine_opens,
 			COUNT(CASE WHEN ccp.clicked_at IS NOT NULL THEN 1 END) as unique_clicks,
 			` + machineClicksCount + `,
@@ -176,7 +176,7 @@ func (r *analyticsRepository) GetCampaignDailyStats(ctx context.Context, campaig
 		SELECT
 			ccp.sent_at::date::text as date,
 			COUNT(*) as sent,
-			COUNT(CASE WHEN ccp.opened_at IS NOT NULL THEN 1 END) as opens,
+			COUNT(CASE WHEN ccp.opened_at IS NOT NULL AND NOT ccp.opened_machine THEN 1 END) as opens,
 			COUNT(CASE WHEN ccp.clicked_at IS NOT NULL THEN 1 END) as clicks,
 			COUNT(CASE WHEN ccp.replied_at IS NOT NULL THEN 1 END) as replies
 		FROM campaign_contact_progress ccp
@@ -289,7 +289,7 @@ func (r *analyticsRepository) GetSequenceStats(ctx context.Context, campaignID u
 			s.name,
 			ROW_NUMBER() OVER (ORDER BY s.created_at) as position,
 			COUNT(CASE WHEN ccp.sent_at IS NOT NULL THEN 1 END) as emails_sent,
-			COUNT(CASE WHEN ccp.opened_at IS NOT NULL THEN 1 END) as opens,
+			COUNT(CASE WHEN ccp.opened_at IS NOT NULL AND NOT ccp.opened_machine THEN 1 END) as opens,
 			COUNT(CASE WHEN ccp.opened_at IS NOT NULL AND ccp.opened_machine THEN 1 END) as machine_opens,
 			COUNT(CASE WHEN ccp.clicked_at IS NOT NULL THEN 1 END) as clicks,
 			` + machineClicksCount + `,
@@ -490,7 +490,7 @@ func (r *analyticsRepository) GetDashboardOverallStats(ctx context.Context, orgI
 	query := `
 		SELECT
 			COUNT(CASE WHEN ccp.sent_at IS NOT NULL AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 THEN 1 END) as total_sent,
-			COUNT(CASE WHEN ccp.opened_at IS NOT NULL AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 THEN 1 END) as total_opens,
+			COUNT(CASE WHEN ccp.opened_at IS NOT NULL AND NOT ccp.opened_machine AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 THEN 1 END) as total_opens,
 			COUNT(CASE WHEN ccp.opened_at IS NOT NULL AND ccp.opened_machine AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 THEN 1 END) as machine_opens,
 			COUNT(CASE WHEN ccp.clicked_at IS NOT NULL AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 THEN 1 END) as total_clicks,
 			COUNT(CASE WHEN ccp.clicked_at IS NULL AND ccp.sent_at >= $2 AND ccp.sent_at <= $3 AND EXISTS (
@@ -550,7 +550,7 @@ func (r *analyticsRepository) GetRecentActivity(ctx context.Context, orgID uuid.
 			FROM campaign_contact_progress ccp
 			JOIN campaigns c ON c.id = ccp.campaign_id
 			JOIN contacts co ON co.id = ccp.contact_id
-			WHERE c.organization_id = $1 AND ccp.opened_at IS NOT NULL
+			WHERE c.organization_id = $1 AND ccp.opened_at IS NOT NULL AND NOT ccp.opened_machine
 
 			UNION ALL
 
@@ -633,7 +633,7 @@ func (r *analyticsRepository) GetTopCampaigns(ctx context.Context, orgID uuid.UU
 			c.status,
 			COUNT(CASE WHEN ccp.sent_at IS NOT NULL THEN 1 END) as emails_sent,
 			CASE WHEN COUNT(CASE WHEN ccp.sent_at IS NOT NULL THEN 1 END) > 0
-				THEN COUNT(CASE WHEN ccp.opened_at IS NOT NULL THEN 1 END)::float / COUNT(CASE WHEN ccp.sent_at IS NOT NULL THEN 1 END) * 100
+				THEN COUNT(CASE WHEN ccp.opened_at IS NOT NULL AND NOT ccp.opened_machine THEN 1 END)::float / COUNT(CASE WHEN ccp.sent_at IS NOT NULL THEN 1 END) * 100
 				ELSE 0 END as open_rate,
 			CASE WHEN COUNT(CASE WHEN ccp.sent_at IS NOT NULL THEN 1 END) > 0
 				THEN COUNT(CASE WHEN ccp.clicked_at IS NOT NULL THEN 1 END)::float / COUNT(CASE WHEN ccp.sent_at IS NOT NULL THEN 1 END) * 100
@@ -679,7 +679,7 @@ func (r *analyticsRepository) GetDashboardDailyTrend(ctx context.Context, orgID 
 		SELECT
 			sent_at::date::text as date,
 			COUNT(*) as sent,
-			COUNT(CASE WHEN opened_at IS NOT NULL THEN 1 END) as opens,
+			COUNT(CASE WHEN opened_at IS NOT NULL AND NOT opened_machine THEN 1 END) as opens,
 			COUNT(CASE WHEN clicked_at IS NOT NULL THEN 1 END) as clicks,
 			COUNT(CASE WHEN replied_at IS NOT NULL THEN 1 END) as replies
 		FROM campaign_contact_progress ccp
@@ -774,7 +774,7 @@ func (r *analyticsRepository) GetCampaignHourlyStats(ctx context.Context, campai
 		SELECT
 			EXTRACT(HOUR FROM ccp.sent_at)::int as hour,
 			COUNT(*) as sent,
-			COUNT(CASE WHEN ccp.opened_at IS NOT NULL THEN 1 END) as opens,
+			COUNT(CASE WHEN ccp.opened_at IS NOT NULL AND NOT ccp.opened_machine THEN 1 END) as opens,
 			COUNT(CASE WHEN ccp.clicked_at IS NOT NULL THEN 1 END) as clicks,
 			COUNT(CASE WHEN ccp.replied_at IS NOT NULL THEN 1 END) as replies
 		FROM campaign_contact_progress ccp
@@ -816,7 +816,7 @@ func (r *analyticsRepository) CompareCampaigns(ctx context.Context, orgID uuid.U
 			c.status,
 			COUNT(CASE WHEN ccp.sent_at IS NOT NULL THEN 1 END) as emails_sent,
 			CASE WHEN COUNT(CASE WHEN ccp.sent_at IS NOT NULL THEN 1 END) > 0
-				THEN COUNT(CASE WHEN ccp.opened_at IS NOT NULL THEN 1 END)::float / COUNT(CASE WHEN ccp.sent_at IS NOT NULL THEN 1 END) * 100
+				THEN COUNT(CASE WHEN ccp.opened_at IS NOT NULL AND NOT ccp.opened_machine THEN 1 END)::float / COUNT(CASE WHEN ccp.sent_at IS NOT NULL THEN 1 END) * 100
 				ELSE 0 END as open_rate,
 			CASE WHEN COUNT(CASE WHEN ccp.sent_at IS NOT NULL THEN 1 END) > 0
 				THEN COUNT(CASE WHEN ccp.clicked_at IS NOT NULL THEN 1 END)::float / COUNT(CASE WHEN ccp.sent_at IS NOT NULL THEN 1 END) * 100
