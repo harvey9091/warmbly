@@ -155,19 +155,31 @@ func (p *campaignPass) explainCap(acct models.Email) capClamp {
 // gate that shut it if one did, and a warmup health band that dampens it.
 // Without this a campaign that sent one email and went quiet had nothing in
 // its feed to say which of five limits decided that.
-func (s *schedulerService) poolBudget(pass *campaignPass, accounts []models.Email, gates map[uuid.UUID]mailboxGate) []map[string]interface{} {
+//
+// sendingFrom is the mailbox about to send when the line is written before the
+// send, so its row counts that send: the pass read sent_today before it, and a
+// cap-one mailbox would otherwise be shown at 0 with no gate on the very line
+// that says its day is over.
+func (s *schedulerService) poolBudget(pass *campaignPass, accounts []models.Email, gates map[uuid.UUID]mailboxGate, sendingFrom uuid.UUID) []map[string]interface{} {
 	out := make([]map[string]interface{}, 0, len(accounts))
 	for _, a := range accounts {
 		c := pass.explainCap(a)
+		sent := pass.sentToday[a.ID]
 		row := map[string]interface{}{
 			"mailbox":    a.Email,
 			"cap":        c.Cap,
 			"limited_by": c.LimitedBy,
-			"sent_today": pass.sentToday[a.ID],
 		}
-		if g, ok := gates[a.ID]; ok && !g.open() {
+		if a.ID == sendingFrom {
+			sent++
+			row["sending_now"] = true
+			if sent >= c.Cap {
+				row["gate"] = gateBudget
+			}
+		} else if g, ok := gates[a.ID]; ok && !g.open() {
 			row["gate"] = g.reason
 		}
+		row["sent_today"] = sent
 		if h, ok := pass.health[a.ID]; ok && h.known && h.state != models.WarmupHealthHealthy && h.state != "" {
 			row["warmup_health"] = string(h.state)
 		}

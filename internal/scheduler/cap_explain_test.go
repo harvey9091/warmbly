@@ -79,7 +79,7 @@ func TestPoolBudgetReportsEveryMailbox(t *testing.T) {
 	}
 	gates := map[uuid.UUID]mailboxGate{shut: {reason: gateBudget, paced: true}}
 
-	rows := (&schedulerService{}).poolBudget(pass, accounts, gates)
+	rows := (&schedulerService{}).poolBudget(pass, accounts, gates, uuid.Nil)
 	if len(rows) != 2 {
 		t.Fatalf("got %d rows, want one per mailbox", len(rows))
 	}
@@ -92,5 +92,24 @@ func TestPoolBudgetReportsEveryMailbox(t *testing.T) {
 	if rows[1]["cap"] != 5 || rows[1]["limited_by"] != capByGraduation || rows[1]["sent_today"] != 5 ||
 		rows[1]["gate"] != gateBudget || rows[1]["warmup_health"] != "watch" {
 		t.Errorf("spent mailbox misreported: %+v", rows[1])
+	}
+}
+
+// The "last email today" line is written before the send it describes, so the
+// sending mailbox has to be shown after it: a cap-one mailbox read at 0 sends
+// with no gate would contradict the line it sits on.
+func TestPoolBudgetCountsTheSendInFlight(t *testing.T) {
+	id := uuid.New()
+	warmed := time.Now().Add(-24 * time.Hour)
+	pass := &campaignPass{
+		campaign:  &models.Campaign{DailyLimit: 50},
+		coldRamp:  map[uuid.UUID]repository.ColdRampState{id: {WarmupStartedAt: &warmed}},
+		risk:      models.OrgRiskRestricted,
+		sentToday: map[uuid.UUID]int{id: 0},
+		health:    map[uuid.UUID]healthRead{},
+	}
+	rows := (&schedulerService{}).poolBudget(pass, []models.Email{{ID: id, Email: "one@example.com", CampaignLimit: 50}}, nil, id)
+	if rows[0]["cap"] != 1 || rows[0]["sent_today"] != 1 || rows[0]["gate"] != gateBudget || rows[0]["sending_now"] != true {
+		t.Errorf("the send in flight is not projected: %+v", rows[0])
 	}
 }

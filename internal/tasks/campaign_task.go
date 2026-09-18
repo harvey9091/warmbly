@@ -98,9 +98,10 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 
 	// Get campaign progress for task progress events
 	campaignProgress, _ := s.campaignProgressRepo.GetCampaignProgress(ctx, *campaignTask.CampaignID)
-	var totalContacts, processedCount int
+	var totalContacts, totalEmails, processedCount int
 	if campaignProgress != nil {
 		totalContacts = campaignProgress.TotalContacts
+		totalEmails = campaignProgress.TotalContacts * campaignProgress.TotalSequences
 		processedCount = campaignProgress.EmailsSent
 	}
 
@@ -130,7 +131,7 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 	// flight and showed "Sending... Unknown contact" for as long as the
 	// campaign was running.
 	if s.streamingPublisher != nil {
-		s.streamingPublisher.PublishTaskProgress(ctx, s.sendProgress(ctx, campaign, taskID, nil, nil, "scheduled", processedCount, totalContacts))
+		s.streamingPublisher.PublishTaskProgress(ctx, s.sendProgress(ctx, campaign, taskID, nil, nil, "scheduled", processedCount, totalEmails, totalContacts))
 	}
 
 	// STEP 5.4: Tenancy gate. organization_id is what scopes the entitlement
@@ -841,7 +842,7 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 	// Now there is a send in flight, and the live panel may say so: this is
 	// the one event that carries "active", and it always names the contact.
 	if s.streamingPublisher != nil {
-		s.streamingPublisher.PublishTaskProgress(ctx, s.sendProgress(ctx, campaign, taskID, contact, sequence, "active", processedCount, totalContacts))
+		s.streamingPublisher.PublishTaskProgress(ctx, s.sendProgress(ctx, campaign, taskID, contact, sequence, "active", processedCount, totalEmails, totalContacts))
 	}
 
 	if err := s.emailSender.Send(ctx, taskID, emailMsg, *account); err != nil {
@@ -885,7 +886,7 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 				"error":       err.Error(),
 			})
 
-			s.streamingPublisher.PublishTaskProgress(ctx, s.sendProgress(ctx, campaign, taskID, contact, sequence, "failed", processedCount, totalContacts))
+			s.streamingPublisher.PublishTaskProgress(ctx, s.sendProgress(ctx, campaign, taskID, contact, sequence, "failed", processedCount, totalEmails, totalContacts))
 		}
 		if s.advanced != nil {
 			_ = s.advanced.CaptureTaskDeadLetter(ctx, taskID, "campaign", map[string]interface{}{
@@ -998,7 +999,7 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 		// EMAIL_SENT (org-scoped): the whole team sees the send + which
 		// lead/step fired, live in the campaign view. It is also what ends
 		// the "Sending..." card the active event above opened.
-		s.streamingPublisher.PublishEmailSent(ctx, s.sendProgress(ctx, campaign, taskID, contact, sequence, "completed", processedCount+1, totalContacts))
+		s.streamingPublisher.PublishEmailSent(ctx, s.sendProgress(ctx, campaign, taskID, contact, sequence, "completed", processedCount+1, totalEmails, totalContacts))
 	}
 
 	// STEP 19: Publish events to Kafka
@@ -1571,18 +1572,23 @@ func (s *tasksService) createCampaignTask(ctx context.Context, campaignID, accou
 // and, when a contact is given, who this send goes to and from which step.
 // status is "scheduled" for a wake-up that may send nothing, "active" for a
 // send in flight, and "completed" or "failed" for its outcome.
-func (s *tasksService) sendProgress(ctx context.Context, campaign *models.Campaign, taskID uuid.UUID, contact *models.Contact, sequence *Sequence, status string, processed, total int) *pubsub.TaskProgressEvent {
+//
+// processed counts sent steps, so the percentage is over totalEmails
+// (contacts x steps), not over contacts: a six-step campaign used to read
+// 100% once every contact had its first email.
+func (s *tasksService) sendProgress(ctx context.Context, campaign *models.Campaign, taskID uuid.UUID, contact *models.Contact, sequence *Sequence, status string, processed, totalEmails, totalContacts int) *pubsub.TaskProgressEvent {
 	ev := &pubsub.TaskProgressEvent{
 		BaseEvent:      pubsub.BaseEvent{UserID: campaign.UserID},
 		OrgID:          campaignOrgID(campaign),
 		CampaignID:     campaign.ID.String(),
 		TaskID:         taskID.String(),
 		Status:         status,
-		TotalContacts:  total,
+		TotalContacts:  totalContacts,
+		TotalEmails:    totalEmails,
 		ProcessedCount: processed,
 	}
-	if total > 0 {
-		ev.Progress = min((processed*100)/total, 100)
+	if totalEmails > 0 {
+		ev.Progress = min((processed*100)/totalEmails, 100)
 	}
 	if contact != nil {
 		ev.ContactID = contact.ID.String()

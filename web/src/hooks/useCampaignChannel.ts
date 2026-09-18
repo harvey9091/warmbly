@@ -16,6 +16,9 @@ export interface TaskProgressPayload {
     step_index: number;
     progress: number;
     total_contacts: number;
+    // processed_count and progress are in emails (contacts × steps), which
+    // total_emails is the size of.
+    total_emails: number;
     processed_count: number;
     timestamp: string;
 }

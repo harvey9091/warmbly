@@ -266,19 +266,22 @@ func (p *StreamingPublisher) PublishPageHit(ctx context.Context, event *PageHitE
 // TaskProgressEvent for detailed campaign task progress
 type TaskProgressEvent struct {
 	BaseEvent
-	OrgID          string `json:"org_id,omitempty"`
-	CampaignID     string `json:"campaign_id"`
-	TaskID         string `json:"task_id"`
-	Status         string `json:"status"` // pending, active, completed, failed
-	ContactID      string `json:"contact_id"`
-	ContactEmail   string `json:"contact_email"`
-	ContactName    string `json:"contact_name"`
-	SequenceID     string `json:"step_id"`
-	SequenceName   string `json:"step_name"`
-	SequenceIndex  int    `json:"step_index"`
-	Progress       int    `json:"progress"` // Percentage 0-100
-	TotalContacts  int    `json:"total_contacts"`
-	ProcessedCount int    `json:"processed_count"`
+	OrgID         string `json:"org_id,omitempty"`
+	CampaignID    string `json:"campaign_id"`
+	TaskID        string `json:"task_id"`
+	Status        string `json:"status"` // pending, active, completed, failed
+	ContactID     string `json:"contact_id"`
+	ContactEmail  string `json:"contact_email"`
+	ContactName   string `json:"contact_name"`
+	SequenceID    string `json:"step_id"`
+	SequenceName  string `json:"step_name"`
+	SequenceIndex int    `json:"step_index"`
+	Progress      int    `json:"progress"` // Percentage 0-100
+	TotalContacts int    `json:"total_contacts"`
+	// TotalEmails is contacts x steps, the unit ProcessedCount and Progress
+	// are in: one sent step, not one finished contact.
+	TotalEmails    int `json:"total_emails"`
+	ProcessedCount int `json:"processed_count"`
 }
 
 // MeetingEvent for booked / rescheduled / canceled meetings from Calendly /
