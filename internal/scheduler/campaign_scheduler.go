@@ -623,6 +623,9 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 	// from, so once this is set there is nothing left to choose: no rotation, no
 	// ESP matching, no weighting. Those decide which mailbox STARTS a lead.
 	boundCand := pickBound(candidates, prefer)
+	// Every mailbox with budget today, before ESP matching narrows the set:
+	// the "last email today" line below must speak for the whole pool.
+	wholePool := candidates
 
 	// STEP 8.25: Apply ESP matching to the under-budget candidate set.
 	//   strict → only matching mailboxes are eligible; if none, DEFER (never
@@ -762,7 +765,7 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 	// and hourly ceiling gated it into this set, and the min-gap plus conflict
 	// resolution below space its own sends.
 	remainingEmails := poolRemainingOn(pool, candidateTime)
-	if !preview && remainingEmails == 1 {
+	if !preview && remainingEmails == 1 && poolRemainingOn(wholePool, candidateTime) == 1 {
 		// This send uses the pool's last budget for the day, so the successor
 		// it paces lands tomorrow and no tick runs today to say why. A
 		// campaign sending one email a morning is this line's whole story:
