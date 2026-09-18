@@ -130,7 +130,11 @@ Anything that landed in spam is rescued before it is filed, so the provider reco
 
 Mail that arrives somewhere unexpected is still handled. A server-side rule, or another warmup tool's filter, can put warmup mail in a folder of its own choosing before Warmbly sees it; the message is found there and filed from there, and one already sitting in the destination is left alone rather than moved onto itself.
 
-Filing happens as each message arrives, so changing the setting applies to warmup from that point on and never reaches back through mail already in the mailbox. To clear a backlog on Gmail, search `label:Warmbly` and archive the results: warmup mail has always carried the label, so that selects exactly it. On Outlook and IMAP the received mail is already in the folder, and only the Sent copies from before this change stay in Sent.
+Filing happens as each message arrives, so changing the setting applies to warmup from that point on.
+
+One case reaches back. If a warmup message is ever missed on arrival and shows up in the unibox, a daily sweep recognises it later, removes it from the unibox and files it in your mail client too. Only the filing runs on that path: read state, importance and stars are how fresh warmup earns its placement signal, and replaying them on old mail would be a burst of activity no real reader produces. A mailbox set to leave warmup in the inbox is left alone, because that is a choice rather than a leak.
+
+The sweep repairs what it can still see, so it does not clear a backlog that built up before the setting existed. To do that on Gmail, search `label:Warmbly` and archive the results: warmup mail has always carried the label, so that selects exactly it. On Outlook and IMAP the received mail is already in the folder, and only the Sent copies from before this change stay in Sent.
 
 <Callout type="info" title="Gmail and the Sent copy">
   Gmail exposes folders as labels and does not document whether `SENT` may be removed. Warmbly asks once per mailbox: where Gmail allows it, the sent copy leaves Sent entirely; where it refuses, the copy keeps its place in Sent and carries the warmup label, and nothing asks again. Outlook, Microsoft 365 and IMAP mailboxes move the copy out of Sent normally. SMTP mailboxes never get one in the first place, because Warmbly does not file a Sent copy for warmup.

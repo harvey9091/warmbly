@@ -15,6 +15,7 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/schemaregistry"
 	"github.com/hamba/avro/v2"
+	"github.com/warmbly/warmbly/internal/models"
 )
 
 // Confluent's framing: a zero byte, the schema's registry id big-endian, then
@@ -113,14 +114,24 @@ func (c *AvroCodec) Deserialize(_ context.Context, topic string, payload []byte,
 // same id forever, and a lookup per published event would put the registry on
 // the send path.
 func (c *AvroCodec) register(subject string, schema avro.Schema) (int, error) {
-	key := subject + "\x00" + schema.String()
+	// The registered document, not String(): String() omits every field
+	// default, so registering it hands the registry a schema where no field
+	// can be added later without breaking compatibility (#583), and the raw
+	// marshal writes a fixed default in a form no reader parses (#586). The
+	// cache key has to be the same text, or two schemas differing only in
+	// their defaults share an id.
+	doc, err := models.SchemaDocument(schema)
+	if err != nil {
+		return 0, fmt.Errorf("codec: schema document for %s: %w", subject, err)
+	}
+	key := subject + "\x00" + string(doc)
 	c.mu.RLock()
 	id, ok := c.ids[key]
 	c.mu.RUnlock()
 	if ok {
 		return id, nil
 	}
-	id, err := c.client.Register(subject, schemaregistry.SchemaInfo{Schema: schema.String()}, true)
+	id, err = c.client.Register(subject, schemaregistry.SchemaInfo{Schema: string(doc)}, true)
 	if err != nil {
 		return 0, fmt.Errorf("codec: register %s: %w", subject, err)
 	}
