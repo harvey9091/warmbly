@@ -573,7 +573,8 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 			case budgetSpent > 0 && hoursClosed == 0:
 				logDecisionOnce("daily_cap_reached",
 					"Every available mailbox has used its daily budget; sending resumes tomorrow",
-					map[string]interface{}{"capped_mailboxes": budgetSpent, "pool_size": len(accounts)})
+					map[string]interface{}{"capped_mailboxes": budgetSpent, "pool_size": len(accounts),
+						"mailboxes": s.poolBudget(pass, accounts, gates)})
 			case budgetSpent > 0:
 				logDecisionOnce("mailboxes_unavailable",
 					fmt.Sprintf("No mailbox can send right now: %d out of budget for today, %d outside their own sending hours",
@@ -583,6 +584,7 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 						"hours_closed":     hoursClosed,
 						"pool_size":        len(accounts),
 						"resumes_at":       resume.UTC().Format(time.RFC3339),
+						"mailboxes":        s.poolBudget(pass, accounts, gates),
 					})
 			}
 			return resume, nil, accounts[0].ID, ErrCampaignDeferred
@@ -759,7 +761,17 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 	// per-mailbox guard still binds afterwards — each mailbox's own daily cap
 	// and hourly ceiling gated it into this set, and the min-gap plus conflict
 	// resolution below space its own sends.
-	if remainingEmails := poolRemainingOn(pool, candidateTime); !preview && remainingEmails > 0 {
+	remainingEmails := poolRemainingOn(pool, candidateTime)
+	if !preview && remainingEmails == 1 {
+		// This send uses the pool's last budget for the day, so the successor
+		// it paces lands tomorrow and no tick runs today to say why. A
+		// campaign sending one email a morning is this line's whole story:
+		// the breakdown names the clamp behind each mailbox's cap.
+		logDecisionOnce("daily_cap_reached",
+			"Sending today's last email: after this one every mailbox on the campaign has used its daily budget, so sending resumes tomorrow",
+			map[string]interface{}{"pool_size": len(accounts), "mailboxes": s.poolBudget(pass, accounts, gates)})
+	}
+	if !preview && remainingEmails > 0 {
 		remainingMinutes, ok := remainingSendMinutes(selected, candidateTime, windows, campaignTZ)
 		if ok && remainingMinutes > 0 {
 			// Vary the pace multiplicatively (bursts and lulls) — evenly

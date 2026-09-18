@@ -1049,37 +1049,26 @@ func (r *campaignProgressRepository) ClaimInstantFire(ctx context.Context, campa
 	return tag.RowsAffected() == 1, nil
 }
 
-// GetCampaignProgress retrieves overall campaign progress statistics
+// GetCampaignProgress retrieves overall campaign progress statistics.
+//
+// Each count comes from its own table. The earlier version joined leads,
+// steps and progress rows side by side on campaign_id, which multiplied every
+// progress count by leads x steps: one sent email on a 63-lead, 6-step
+// campaign read as 378 sent, and the dashboard showed "378 of 63 contacts" at
+// 100%.
 func (r *campaignProgressRepository) GetCampaignProgress(ctx context.Context, campaignID uuid.UUID) (*CampaignProgress, error) {
 	query := `
-		WITH campaign_stats AS (
-			SELECT
-				COUNT(DISTINCT cl.contact_id) as total_contacts,
-				COUNT(DISTINCT s.id) as total_sequences,
-				COUNT(CASE WHEN ccp.sent_at IS NOT NULL THEN 1 END) as emails_sent,
-				COUNT(CASE WHEN ccp.opened_at IS NOT NULL THEN 1 END) as emails_opened,
-				COUNT(CASE WHEN ccp.clicked_at IS NOT NULL THEN 1 END) as emails_clicked,
-				COUNT(CASE WHEN ccp.replied_at IS NOT NULL THEN 1 END) as emails_replied,
-				COUNT(CASE WHEN ccp.bounced_at IS NOT NULL THEN 1 END) as emails_bounced,
-				COUNT(CASE WHEN ccp.complained_at IS NOT NULL THEN 1 END) as emails_complained
-			FROM campaigns c
-			LEFT JOIN campaign_leads cl ON c.id = cl.campaign_id
-			LEFT JOIN sequences s ON c.id = s.campaign_id
-			LEFT JOIN campaign_contact_progress ccp ON c.id = ccp.campaign_id
-			WHERE c.id = $1
-			GROUP BY c.id
-		)
 		SELECT
-			total_contacts,
-			total_sequences,
-			emails_sent,
-			(total_contacts * total_sequences) - emails_sent as emails_pending,
-			emails_opened,
-			emails_clicked,
-			emails_replied,
-			emails_bounced,
-			emails_complained
-		FROM campaign_stats
+			(SELECT COUNT(DISTINCT contact_id) FROM campaign_leads WHERE campaign_id = $1) AS total_contacts,
+			(SELECT COUNT(*) FROM sequences WHERE campaign_id = $1) AS total_sequences,
+			COUNT(*) FILTER (WHERE ccp.sent_at IS NOT NULL) AS emails_sent,
+			COUNT(*) FILTER (WHERE ccp.opened_at IS NOT NULL) AS emails_opened,
+			COUNT(*) FILTER (WHERE ccp.clicked_at IS NOT NULL) AS emails_clicked,
+			COUNT(*) FILTER (WHERE ccp.replied_at IS NOT NULL) AS emails_replied,
+			COUNT(*) FILTER (WHERE ccp.bounced_at IS NOT NULL) AS emails_bounced,
+			COUNT(*) FILTER (WHERE ccp.complained_at IS NOT NULL) AS emails_complained
+		FROM campaign_contact_progress ccp
+		WHERE ccp.campaign_id = $1
 	`
 
 	progress := &CampaignProgress{}
@@ -1087,13 +1076,13 @@ func (r *campaignProgressRepository) GetCampaignProgress(ctx context.Context, ca
 		&progress.TotalContacts,
 		&progress.TotalSequences,
 		&progress.EmailsSent,
-		&progress.EmailsPending,
 		&progress.EmailsOpened,
 		&progress.EmailsClicked,
 		&progress.EmailsReplied,
 		&progress.EmailsBounced,
 		&progress.EmailsComplained,
 	)
+	progress.EmailsPending = max(progress.TotalContacts*progress.TotalSequences-progress.EmailsSent, 0)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &CampaignProgress{}, nil

@@ -93,7 +93,15 @@ export default function TaskPreview({ campaignId, campaignStatus: initialStatus,
           ? "Connecting…"
           : "Disconnected";
 
-    const showNowSending = !!taskProgress && isActive && taskProgress.status === "active";
+    // Only a send in flight, for a named contact. The chain's wake-ups arrive
+    // as "scheduled" and carry no contact; showing those as "Sending…" is how
+    // this card read "Unknown contact" for a whole day on a campaign that had
+    // sent one email.
+    const showNowSending =
+        !!taskProgress &&
+        isActive &&
+        taskProgress.status === "active" &&
+        !!(taskProgress.contact_email || taskProgress.contact_name);
 
     const progress = Math.min(100, Math.max(0, taskProgress?.progress ?? 0));
     const processed = taskProgress?.processed_count ?? 0;
