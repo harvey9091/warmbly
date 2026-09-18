@@ -28689,6 +28689,18 @@
             "type": "integer",
             "deprecated": true,
             "description": "Always 0. The accumulating warmup spam score was retired; read score and reason. Removed at the next API version."
+          },
+          "partner_mailboxes_7d": {
+            "type": "integer",
+            "description": "Distinct warmup partner mailboxes this mailbox reached over the last seven days."
+          },
+          "partner_domains_7d": {
+            "type": "integer",
+            "description": "Distinct recipient domains among those partners."
+          },
+          "partner_organizations_7d": {
+            "type": "integer",
+            "description": "Distinct workspaces behind those partners. 1 over a full week means the mailbox is only warming inside one workspace."
           }
         }
       },

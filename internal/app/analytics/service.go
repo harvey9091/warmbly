@@ -256,6 +256,10 @@ func warmupHealthState(h *models.WarmupHealthInfo) models.WarmupHealthState {
 	return models.WarmupHealthState(h.State)
 }
 
+// warmupDiversityWindow is the lookback for the partner-diversity counts, the
+// same week the selector's own domain histogram uses.
+const warmupDiversityWindow = 7 * 24 * time.Hour
+
 // buildWarmupHealth looks up the mailbox's warmup-pool health (premium pool
 // first) and maps it into the API shape. Returns nil when the mailbox is not
 // in a pool or the lookup fails — health surfacing must never break status.
@@ -276,6 +280,12 @@ func (s *analyticsService) buildWarmupHealth(ctx context.Context, accountID uuid
 		}
 		if h.LastHealthReason != nil {
 			info.Reason = *h.LastHealthReason
+		}
+		// Best-effort: the counts are a read-out, never a reason to fail status.
+		if d, derr := s.warmupRepo.GetPartnerDiversity(ctx, accountID, time.Now().Add(-warmupDiversityWindow)); derr == nil {
+			info.PartnerMailboxes7d = d.Mailboxes
+			info.PartnerDomains7d = d.Domains
+			info.PartnerOrganizations7d = d.Organizations
 		}
 		return info
 	}

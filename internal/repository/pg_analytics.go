@@ -351,6 +351,13 @@ func (r *analyticsRepository) GetAccountsWithErrors(ctx context.Context, userID 
 	return accountIDs, nil
 }
 
+// GetAccountDailyUsage is the day's sending for one mailbox. Both halves count
+// completed tasks, which is what the two caps count
+// (CountCampaignEmailsSentToday, CountWarmupEmailsSentToday), so the number
+// reported to a user cannot exceed the target the scheduler is enforcing.
+// Reading warmup_statistics here instead let a failed send be reported forever
+// while the cap had already freed the slot, which showed as sent_today past
+// target_volume (#574).
 func (r *analyticsRepository) GetAccountDailyUsage(ctx context.Context, accountID uuid.UUID, date time.Time) (*models.AccountDailyUsage, *errx.Error) {
 	query := `
 		SELECT
@@ -366,10 +373,17 @@ func (r *analyticsRepository) GetAccountDailyUsage(ctx context.Context, accountI
 				  AND ` + taskDispatchedEmail + `
 			) as campaign_sent,
 			COALESCE(ea.campaign_limit, 50) as campaign_limit,
-			COALESCE(ws.emails_sent, 0) as warmup_sent,
+			(
+				SELECT COUNT(*)
+				FROM tasks t
+				WHERE t.email_account_id = ea.id
+				  AND t.status = 'completed'
+				  AND t.task_type = 'warmup'
+				  AND t.completed_at >= $2::date
+				  AND t.completed_at < $2::date + INTERVAL '1 day'
+			) as warmup_sent,
 			COALESCE(ea.warmup_max, 0) as warmup_limit
 		FROM email_accounts ea
-		LEFT JOIN warmup_statistics ws ON ws.email_account_id = ea.id AND ws.date = $2::date
 		WHERE ea.id = $1
 	`
 

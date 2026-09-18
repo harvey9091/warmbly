@@ -470,6 +470,9 @@ Returns the detailed status for one email account: a combined health score (fold
     "state": "watch",
     "score": 78,
     "spam_score": 0,
+    "partner_mailboxes_7d": 14,
+    "partner_domains_7d": 11,
+    "partner_organizations_7d": 9,
     "evaluated_at": "2026-06-12T06:00:00Z"
   },
   "in_campaign": true
@@ -477,6 +480,10 @@ Returns the detailed status for one email account: a combined health score (fold
 ```
 
 `warmup_status` is present only when warmup has ever been enabled; `warmup_health` is present only when the mailbox is in a warmup pool. `in_campaign` reports whether the mailbox currently backs a live campaign.
+
+`daily_usage.warmup_sent` and `campaign_sent` both count sends the mailbox completed on that date, which is what the caps are enforced against, so neither can read above the target in force.
+
+The three `partner_*_7d` counters are the distinct warmup partners the mailbox reached over the last seven days: mailboxes, their domains, and the workspaces behind them. `partner_organizations_7d` of `1` over a full week means the mailbox is only warming inside one workspace, which is expected on a self-hosted instance that is not linked to Warmbly Cloud and worth investigating anywhere else.
 
 ## Get usage overview
 

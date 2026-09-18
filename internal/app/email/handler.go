@@ -339,6 +339,16 @@ func (s *emailService) Delete(ctx context.Context, userID, emailAccountID string
 		return errx.ErrNotFound
 	}
 
+	// Revoked before anything local goes: a mailbox the cloud pool warms is
+	// enrolled there with its own SMTP/IMAP password, and deleting the row only
+	// cascaded the link away, so the pool went on holding the credential and
+	// warming a mailbox this instance no longer knew was enrolled. Afterwards
+	// there is no row left to retry from, which is why a revocation that cannot
+	// be made fails the delete rather than being logged (#574).
+	if xerr := s.unenrollFromCloud(ctx, account); xerr != nil {
+		return xerr
+	}
+
 	if xerr := s.dropFromWorker(ctx, userID, accountID); xerr != nil {
 		return xerr
 	}
@@ -363,6 +373,38 @@ func (s *emailService) Delete(ctx context.Context, userID, emailAccountID string
 			"email":            account.Email,
 			"provider":         account.Provider,
 		})
+	}
+	return nil
+}
+
+// ErrCloudEnrollmentStuck refuses a delete whose Warmbly Cloud enrollment
+// could not be revoked. Retryable: nothing local has changed yet.
+var ErrCloudEnrollmentStuck = errx.NewWithIdentifier(
+	errx.Conflict,
+	"mailbox_cloud_unenroll_failed",
+	"This mailbox is enrolled in Warmbly Cloud and its enrollment could not be removed, so deleting it would leave its password in the pool. Try again in a moment, or unenroll it under Settings first.",
+)
+
+// unenrollFromCloud revokes the mailbox's Warmbly Cloud enrollment, which is
+// what takes its stored credential out of the pool.
+func (s *emailService) unenrollFromCloud(ctx context.Context, account *models.Email) *errx.Error {
+	if s.cloudUnenroll == nil || s.cloudLink == nil || account.OrganizationID == nil {
+		return nil
+	}
+	link, err := s.cloudLink.GetByAccount(ctx, account.ID)
+	if err != nil {
+		log.Warn().Err(err).Str("account_id", account.ID.String()).Msg("cloud enrollment unreadable; delete refused rather than leaving the credential in the pool")
+		return ErrCloudEnrollmentStuck
+	}
+	// A managed mailbox is the cloud's own and its mirror here holds no
+	// credential. cloudlink deletes that mirror through this very path, so
+	// calling back into it would recurse.
+	if link == nil || link.Managed {
+		return nil
+	}
+	if xerr := s.cloudUnenroll.Unenroll(ctx, *account.OrganizationID, account.ID); xerr != nil {
+		log.Warn().Str("account_id", account.ID.String()).Str("error", xerr.Message).Msg("cloud unenroll failed; mailbox delete refused")
+		return ErrCloudEnrollmentStuck
 	}
 	return nil
 }

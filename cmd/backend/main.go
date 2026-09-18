@@ -1201,6 +1201,9 @@ func main() {
 		cloudLinkRepository := repository.NewCloudLinkRepository(primaryDB.Pool, credEncrypter)
 		emailService.WireCloudLink(cloudLinkRepository)
 		cloudLinkService = cloudlink.NewService(cloudLinkRepository, emailRepostory, emailService)
+		// Deleting a mailbox revokes its cloud enrollment, so the pool stops
+		// holding a credential for a mailbox that no longer exists here.
+		emailService.WireCloudUnenroll(cloudLinkService)
 
 		rateLimitRepository := repository.NewRateLimitRepository(primaryDB)
 		rateLimitService = ratelimit.NewService(cache, rateLimitRepository)

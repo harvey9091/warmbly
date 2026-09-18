@@ -589,14 +589,29 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 		partnerCounts = nil
 	}
 
-	// Own tier first, fresh before recently used: a premium mailbox reaches for
-	// a borrowed one only when its own tier has nothing fresh.
-	var buckets [4][]uuid.UUID
+	// Foreign workspaces first, then own tier before borrowed, then fresh
+	// before recently used. Warming against the sender's own sibling mailboxes
+	// teaches the providers that will receive the cold mail nothing, costs the
+	// mailbox its daily ramp, and is the closed loop a spam filter reads as
+	// one; a customer who brings twenty mailboxes used to make up most of its
+	// own candidate set (#575).
+	//
+	// A preference, not an exclusion, because a self-hosted instance's pool IS
+	// one organization: the same-org buckets are only reached once every
+	// foreign partner is used up, so warmup never stops for want of an
+	// external partner.
+	var buckets [8][]uuid.UUID
+	foreign := 0
 	for _, c := range candidates {
 		if _, usedToday := todayPartnerSet[c.ID]; usedToday {
 			continue
 		}
 		rank := 0
+		if sameOrganization(account.OrganizationID, c.OrganizationID) {
+			rank += 4
+		} else {
+			foreign++
+		}
 		if _, recentlyUsed := recentPartnerSet[c.ID]; recentlyUsed || partnerCounts[c.ID] >= partnerMaxSharedWindow {
 			rank += 2
 		}
@@ -604,6 +619,18 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 			rank++
 		}
 		buckets[rank] = append(buckets[rank], c.ID)
+	}
+	if foreign == 0 && len(candidates) > 0 {
+		// Every partner left is one of the sender's own mailboxes. Said out
+		// loud because the mail still goes out and nothing else in the logs
+		// reports that the pool had no outside partner for this mailbox. Info,
+		// not a warning: on a self-hosted instance that is not linked to
+		// Warmbly Cloud it is the only thing that can happen, every tick.
+		log.Info().
+			Int("participants", len(candidates)).
+			Str("pool", poolType).
+			Str("email_account_id", account.ID.String()).
+			Msg("warmup: no partner outside this workspace is available; pairing within the organization")
 	}
 
 	sig := partnerSignals{
@@ -653,6 +680,13 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 	}
 
 	return nil, errNoEligibleWarmupPartners
+}
+
+// sameOrganization reports whether two mailboxes provably belong to one
+// workspace. An unset owner on either side is not a match: it cannot be shown
+// to be the same workspace, and guessing would demote a legitimate partner.
+func sameOrganization(a, b *uuid.UUID) bool {
+	return a != nil && b != nil && *a == *b
 }
 
 // removePartnerID returns ids without the first occurrence of target. Used to

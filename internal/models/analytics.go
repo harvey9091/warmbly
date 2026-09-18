@@ -178,6 +178,13 @@ type WarmupHealthInfo struct {
 	SpamScore    int        `json:"spam_score"`
 	BlockedUntil *time.Time `json:"blocked_until,omitempty"`
 	EvaluatedAt  *time.Time `json:"evaluated_at,omitempty"`
+	// Partner diversity over the last 7 days: how many distinct mailboxes this
+	// one warmed with, on how many domains, in how many workspaces. One
+	// workspace means it is warming against its own siblings, which nothing
+	// else in the product reported (#575).
+	PartnerMailboxes7d     int `json:"partner_mailboxes_7d"`
+	PartnerDomains7d       int `json:"partner_domains_7d"`
+	PartnerOrganizations7d int `json:"partner_organizations_7d"`
 }
 
 type AccountHealth struct {

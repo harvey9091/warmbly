@@ -158,10 +158,36 @@ func (s *JobsService) HandleEmailFailed(ctx context.Context, result models.SendE
 	switch task.TaskType {
 	case "campaign":
 		return s.failCampaignSend(ctx, task, reason, code, nil)
+	case "warmup":
+		s.failWarmupSend(ctx, task)
 	case "email":
 		s.notifyUserSendFailed(ctx, task, reason)
 	}
 	return nil
+}
+
+// failWarmupSend gives the day back for a warmup send the worker refused. The
+// counters are taken at dispatch and the scheduler's cap counts completed
+// tasks, so a failure that is not given back here is counted by the reported
+// number forever while the cap immediately frees the slot: the mailbox sends
+// one extra message past its target per failure, which is what a mailbox whose
+// provider refused every connection looked like (#574).
+func (s *JobsService) failWarmupSend(ctx context.Context, task *repository.Task) {
+	if s.WarmupRepo == nil {
+		return
+	}
+	// The day the send was counted on, which is the day the control plane
+	// stamped it, not the day its failure came back.
+	day := time.Now()
+	if task.CompletedAt != nil {
+		day = *task.CompletedAt
+	}
+	if err := s.WarmupRepo.GiveBackDailySend(ctx, task.EmailAccountID, task.ID, day); err != nil {
+		log.Warn().Err(err).
+			Str("task_id", task.ID.String()).
+			Str("email_account_id", task.EmailAccountID.String()).
+			Msg("could not give back the failed warmup send's daily count")
+	}
 }
 
 // failCampaignSend is the campaign half of HandleEmailFailed. countedOn is the

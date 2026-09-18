@@ -152,6 +152,9 @@ type WarmupRepository interface {
 	// Statistics
 	IncrementDailyCount(ctx context.Context, accountID uuid.UUID, date time.Time) error
 	IncrementReplyCount(ctx context.Context, accountID uuid.UUID, date time.Time) error
+	// GiveBackDailySend reverses the two counters a dispatched warmup send
+	// took, for a send the worker then could not deliver.
+	GiveBackDailySend(ctx context.Context, accountID, taskID uuid.UUID, date time.Time) error
 	GetWarmupStatistics(ctx context.Context, accountID uuid.UUID, from, to time.Time) ([]WarmupStatistic, error)
 	GetOrCreateDailyStats(ctx context.Context, accountID uuid.UUID, date time.Time, targetVolume int) (*WarmupStatistic, error)
 
@@ -192,6 +195,9 @@ type WarmupRepository interface {
 	// scheduler caps volume on the same set the selector draws from.
 	WarmupPartnerCandidates(ctx context.Context, poolType string, senderID uuid.UUID) ([]models.WarmupPartnerCandidate, error)
 	GetRecentPartnerDomainCounts(ctx context.Context, accountID uuid.UUID, since time.Time) (map[string]int, error)
+	// GetPartnerDiversity is how wide a sender's warmup traffic actually
+	// spread over the window, which is what says whether it is in a loop.
+	GetPartnerDiversity(ctx context.Context, accountID uuid.UUID, since time.Time) (WarmupPartnerDiversity, error)
 
 	// Tampering protection: track delivered warmup mail so a later deletion or
 	// spam-flag can be attributed, and count "harm" events per mailbox.
@@ -821,6 +827,34 @@ func (r *warmupRepository) IncrementReplyCount(ctx context.Context, accountID uu
 	return err
 }
 
+// GiveBackDailySend hands the day back for a warmup send the worker could not
+// deliver. The counters are taken at dispatch, before the worker has done
+// anything, so without this a failed attempt is counted forever while the
+// scheduler's cap (which counts completed tasks) stops counting it: the
+// mailbox then sends past its target, one extra send per failure (#574).
+//
+// The reply counter is only given back when the attempt was a reply, which is
+// what the send's own token records. Floored at zero and scoped to the day the
+// send was counted on, so a result arriving after midnight cannot go negative
+// or take a send off the wrong day.
+func (r *warmupRepository) GiveBackDailySend(ctx context.Context, accountID, taskID uuid.UUID, date time.Time) error {
+	query := `
+		UPDATE warmup_statistics ws
+		SET emails_sent = GREATEST(ws.emails_sent - 1, 0),
+		    emails_replied = CASE
+		      WHEN EXISTS (
+		        SELECT 1 FROM warmup_tokens wt
+		        WHERE wt.task_id = $2 AND wt.conversation_turn > 0
+		      ) THEN GREATEST(ws.emails_replied - 1, 0)
+		      ELSE ws.emails_replied
+		    END
+		WHERE ws.email_account_id = $1
+		  AND ws.date = DATE($3)
+	`
+	_, err := r.db.Exec(ctx, query, accountID, taskID, date)
+	return err
+}
+
 // PoolSpamPlacementRate returns the pool-wide warmup spam-placement rate (%)
 // over the window: spam_placement events divided by total warmup sends. This is
 // the number surfaced as avg_spam_placement_rate in the admin health summary.
@@ -950,10 +984,15 @@ func (r *warmupRepository) SenderPlacementByProvider(ctx context.Context, sender
 // WarmupPartnerCandidates returns the sender's own tier minus itself and, when
 // a premium tier is below the floor, up to the floor of proven free mailboxes.
 // The direction, the floor and what "proven" means live only here.
+//
+// A sibling mailbox of the sender's own workspace stays in the set: on a
+// self-hosted instance the pool IS one organization, so excluding it here
+// would leave warmup with no partner at all. Each candidate carries its owner
+// instead, and the selector prefers a foreign one (#575).
 func (r *warmupRepository) WarmupPartnerCandidates(ctx context.Context, poolType string, senderID uuid.UUID) ([]models.WarmupPartnerCandidate, error) {
 	// An expired quarantine or block is offered again; the gate re-evaluates it.
 	own, err := r.queryPartnerCandidates(ctx, `
-		SELECT wpp.email_account_id, ea.email
+		SELECT wpp.email_account_id, ea.email, ea.organization_id
 		FROM warmup_pool_participants wpp
 		JOIN warmup_pools wp ON wpp.pool_id = wp.id
 		JOIN email_accounts ea ON ea.id = wpp.email_account_id
@@ -985,7 +1024,7 @@ func (r *warmupRepository) WarmupPartnerCandidates(ctx context.Context, poolType
 	// a workspace in good standing. A pool move keeps joined_at, so the risk
 	// check is what keeps a demoted mailbox out. A random sample bounds the cost.
 	borrowed, err := r.queryPartnerCandidates(ctx, `
-		SELECT wpp.email_account_id, ea.email
+		SELECT wpp.email_account_id, ea.email, ea.organization_id
 		FROM warmup_pool_participants wpp
 		JOIN warmup_pools wp ON wpp.pool_id = wp.id
 		JOIN email_accounts ea ON ea.id = wpp.email_account_id
@@ -1015,7 +1054,7 @@ func (r *warmupRepository) queryPartnerCandidates(ctx context.Context, query str
 	var out []models.WarmupPartnerCandidate
 	for rows.Next() {
 		c := models.WarmupPartnerCandidate{Borrowed: borrowed}
-		if err := rows.Scan(&c.ID, &c.Email); err != nil {
+		if err := rows.Scan(&c.ID, &c.Email, &c.OrganizationID); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -1467,6 +1506,32 @@ func (r *warmupRepository) GetRecentPartnerDomainCounts(ctx context.Context, acc
 		out[domain] = count
 	}
 	return out, rows.Err()
+}
+
+// WarmupPartnerDiversity counts the distinct partners a sender's warmup mail
+// reached over a window. One organization means the mailbox is warming against
+// its own workspace, which teaches the providers it will cold-mail nothing.
+type WarmupPartnerDiversity struct {
+	Mailboxes     int
+	Domains       int
+	Organizations int
+}
+
+// GetPartnerDiversity counts them. Nothing sent means three zeros, not an error.
+func (r *warmupRepository) GetPartnerDiversity(ctx context.Context, accountID uuid.UUID, since time.Time) (WarmupPartnerDiversity, error) {
+	query := `
+		SELECT
+			COUNT(DISTINCT wt.recipient_account_id),
+			COUNT(DISTINCT lower(split_part(ea.email, '@', 2))),
+			COUNT(DISTINCT ea.organization_id)
+		FROM warmup_tokens wt
+		JOIN email_accounts ea ON ea.id = wt.recipient_account_id
+		WHERE wt.sender_account_id = $1
+		  AND wt.created_at >= $2
+	`
+	var out WarmupPartnerDiversity
+	err := r.db.QueryRow(ctx, query, accountID, since).Scan(&out.Mailboxes, &out.Domains, &out.Organizations)
+	return out, err
 }
 
 // GetLatestReplyCandidate finds the latest completed warmup email from sender to recipient.

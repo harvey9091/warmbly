@@ -145,7 +145,22 @@ var (
 	ErrMailGoogleUnknown = func(code int, message string) *MailError {
 		return MError(MailErrorWarning, MailErrorCodeGoogleUnknown(code), message, MailErrorResolveMethodRetry)
 	}
-	ErrMailServerUnreachable     = MError(MailErrorWarning, MailErrorCodeServerUnreachable, "The connection to the mail server could not be established. The server may be offline or blocking the connection.", MailErrorResolveMethodRetry)
+	ErrMailServerUnreachable = MError(MailErrorWarning, MailErrorCodeServerUnreachable, "The connection to the mail server could not be established. The server may be offline or blocking the connection.", MailErrorResolveMethodRetry)
+	// ErrMailServerUnreachableAt is the same code with the step that failed and
+	// the cause behind it. One bare sentinel returned from a dozen points in
+	// the SMTP send made a refused dial, a timeout, an EHLO rejection and a
+	// TLS handshake failure indistinguishable from the outside (#574).
+	ErrMailServerUnreachableAt = func(stage string, cause error) *MailError {
+		if stage == "" || cause == nil {
+			return ErrMailServerUnreachable
+		}
+		return MError(
+			MailErrorWarning,
+			MailErrorCodeServerUnreachable,
+			fmt.Sprintf("The connection to the mail server could not be established (%s: %s). The server may be offline or blocking the connection.", stage, cause),
+			MailErrorResolveMethodRetry,
+		)
+	}
 	ErrMailResourceNotFound      = MError(MailErrorWarning, MailErrorCodeNotFound, "The mail server does not have the folder or message that was requested.", MailErrorResolveMethodRetry)
 	ErrMailCondStoreNotSupported = MError(MailErrorCritical, MailErrorCodeUnsupported, "The mail server does not support the required CONDSTORE extension. Synchronization cannot continue.", MailErrorResolveMethodReload)
 	ErrMailInvalidCredentials    = MError(

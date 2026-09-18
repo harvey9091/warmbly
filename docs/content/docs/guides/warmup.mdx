@@ -50,7 +50,9 @@ Self-hosted instances warm only among their own mailboxes unless they are linked
 
 ### Choosing partners
 
-Within a pool, partners are picked by weight rather than at random. Three things move the weight:
+Partners outside your own workspace come first. Mail your own mailboxes exchange between your own domains teaches the providers that will receive your cold outreach nothing, costs the mailbox its daily ramp, and is the closed loop a spam filter is most likely to read as one, so a mailbox works through every available outside partner before any of its siblings. It is a preference rather than a rule, because a self-hosted instance's pool is your workspace and nothing else: there, siblings are the only partners there are, and warmup would otherwise stop. Bringing more mailboxes into a shared pool therefore widens your diversity instead of narrowing it.
+
+Within that order, partners are picked by weight rather than at random. Three things move the weight:
 
 - **Domain spread.** Recipient domains you have already used a lot recently are downweighted, so warmup does not loop through the same handful of inboxes.
 - **Where you are landing.** Warmbly tracks your spam-placement rate separately for each recipient provider over the last seven days, grouped by who actually runs that recipient's mail (Google, Microsoft, Yahoo and so on, the same grouping routing rules use). A mailbox landing in spam at Microsoft but not Google is sent fewer Microsoft partners until that rate falls, without waiting for an overall health band to trip.
@@ -59,6 +61,10 @@ Within a pool, partners are picked by weight rather than at random. Three things
 An exclusion is honoured even when it leaves nothing: if every available partner is excluded by your rules, the mailbox sends no warmup mail that tick and tries again later, rather than mailing someone you ruled out because the pool had nobody else. The same holds when a partner writes first: your mailbox does not reply to an address your rules exclude. Rules apply to paid-tier mailboxes.
 
 A struggling provider is downweighted, never excluded: a sender that stops mailing a provider entirely can never discover that it recovered there. A provider is only judged once you have sent it at least five warmup emails in the window, so one bad delivery out of two is treated as noise rather than a pattern. You can see the per-domain numbers this reads under **Deliverability > Warmup placement by domain**.
+
+### Seeing the diversity you are getting
+
+A mailbox's drawer shows, next to its warmup reputation, how many distinct partners it reached over the last seven days, on how many domains, in how many workspaces. One workspace over a whole week means the mailbox is warming inside your own account, which is worth knowing: it happens when a pool has no outside partner available for it, and on a self-hosted instance that is not linked to Warmbly Cloud it is the only thing that can happen.
 
 Turning off outbound warmup does not remove a healthy mailbox from the recipient pool. Disconnecting it, losing warmup-plan access, or entering a quarantined or blocked state does. Losing access removes the mailbox from its pool within minutes, whether or not it was still warming.
 

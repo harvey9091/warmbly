@@ -106,9 +106,14 @@ func WarmupPoolBorrowsFrom(poolType string) (string, bool) {
 // WarmupPartnerCandidate is a recipient the partner selector may draw: a
 // member of the sender's tier, or one borrowed from the tier it may draw on.
 type WarmupPartnerCandidate struct {
-	ID       uuid.UUID
-	Email    string
-	Borrowed bool
+	ID    uuid.UUID
+	Email string
+	// OrganizationID is who owns the candidate, so the selector can prefer a
+	// partner outside the sender's own workspace. Nil where the mailbox has no
+	// organization, which is never treated as a match: warming against an
+	// unattributable mailbox is not provably a closed loop.
+	OrganizationID *uuid.UUID
+	Borrowed       bool
 }
 
 type WarmupHealthState string
