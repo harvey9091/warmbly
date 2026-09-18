@@ -22,8 +22,17 @@ func (s *service) RecordInboundBounce(ctx context.Context, emailAccountID uuid.U
 
 	task, err := s.taskRepo.GetTaskByMessageID(ctx, originalMessageID)
 	if err != nil || task == nil {
-		// Unknown message id (warmup mail, non-campaign send, or already
-		// pruned) — nothing to attribute the bounce to.
+		// Unknown message id (a non-Warmbly send, or already pruned) — nothing
+		// to attribute the bounce to.
+		return nil
+	}
+
+	// A warmup send's NDR is warmup's business and nobody else's. Warmup tasks
+	// carry a message_id exactly like campaign tasks, so this used to resolve
+	// and then suppress a POOL PARTNER'S address in the customer's suppression
+	// list and record the bounce against their deliverability, where it fed the
+	// breaker. Warmup bounce rate is already a band in the warmup health model.
+	if task.TaskType == models.TaskTypeWarmup {
 		return nil
 	}
 
@@ -78,7 +87,12 @@ func (s *service) RecordInboundComplaint(ctx context.Context, emailAccountID uui
 
 	task, err := s.taskRepo.GetTaskByMessageID(ctx, originalMessageID)
 	if err != nil || task == nil {
-		// Warmup mail, a non-campaign send, or already pruned.
+		// A non-Warmbly send, or already pruned.
+		return nil
+	}
+	// Warmup never reaches the customer's deliverability record. The campaign
+	// task below would refuse it anyway; refusing it here says so once.
+	if task.TaskType == models.TaskTypeWarmup {
 		return nil
 	}
 	if task.EmailAccountID != emailAccountID {

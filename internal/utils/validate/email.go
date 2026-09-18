@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 )
 
@@ -75,6 +76,32 @@ func EmailTimezone(tz string) *errx.Error {
 	}
 	if _, err := time.LoadLocation(tz); err != nil {
 		return errx.ErrEmailTimezone
+	}
+	return nil
+}
+
+// WarmupFolder accepts the folder (Gmail label) name warmup mail is filed
+// into, or the empty string meaning the instance default.
+//
+// The value is handed straight to a provider as a mailbox name, so it stays a
+// single-level printable name: a separator would create a child of whatever it
+// names (and "INBOX/Warmbly" on a server whose delimiter is "." is one folder
+// literally called that), and IMAP refuses control characters outright.
+func WarmupFolder(name string) *errx.Error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	if len([]rune(name)) > config.WarmupFolderMaxLen {
+		return errx.ErrEmailWarmupFolder
+	}
+	if strings.ContainsAny(name, `/\.%*"`) {
+		return errx.ErrEmailWarmupFolder
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return errx.ErrEmailWarmupFolder
+		}
 	}
 	return nil
 }

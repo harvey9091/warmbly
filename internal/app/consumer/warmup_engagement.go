@@ -62,13 +62,13 @@ func engagementPlan(accountID uuid.UUID, e models.WarmupEngagementSettings) (act
 	p := warmpersona.For(accountID)
 
 	// Foldering is organisational, not an engagement fingerprint — always do it.
-	actions = append(actions, "move_to_warmbly")
+	actions = append(actions, models.WarmupActionFile)
 
 	// Spam-rescue is the reputation-critical "not spam" signal warmup exists for,
 	// so it fires regardless of neglect (and the worker only acts if it's really
 	// in spam).
 	if rollPct(e.SpamRescueRate, p.Bias("rescue", 0.8, 1.2)) {
-		actions = append(actions, "remove_from_spam")
+		actions = append(actions, models.WarmupActionRescueFromSpam)
 	}
 
 	// Occasionally a mailbox files a message but never engages with it — real
@@ -78,16 +78,16 @@ func engagementPlan(accountID uuid.UUID, e models.WarmupEngagementSettings) (act
 	neglect := rand.Float64() < 0.07*p.Bias("neglect", 0.6, 1.4)
 	if !neglect {
 		if rollPct(e.MarkReadRate, p.Bias("read", 0.85, 1.15)) {
-			actions = append(actions, "mark_read")
+			actions = append(actions, models.WarmupActionMarkRead)
 		}
 		if rollPct(e.MarkImportantRate, p.Bias("important", 0.7, 1.3)) {
-			actions = append(actions, "mark_important")
+			actions = append(actions, models.WarmupActionMarkImportant)
 		}
 		// Starring is a separate, lower-rate positive signal (Gmail STARRED). On
 		// IMAP the worker no-ops it because \Flagged is already covered by
 		// mark_important — so it never double-flags the same message.
 		if rollPct(e.StarRate, p.Bias("star", 0.6, 1.4)) {
-			actions = append(actions, "star")
+			actions = append(actions, models.WarmupActionStar)
 		}
 	}
 
@@ -103,7 +103,7 @@ func engagementPlan(accountID uuid.UUID, e models.WarmupEngagementSettings) (act
 // a worker restart can no longer drop the delayed leg.
 func splitEngagementLegs(actions []string) (immediate, delayed []string) {
 	for _, a := range actions {
-		if a == "move_to_warmbly" || a == "remove_from_spam" {
+		if a == models.WarmupActionFile || a == models.WarmupActionRescueFromSpam {
 			immediate = append(immediate, a)
 		} else {
 			delayed = append(delayed, a)

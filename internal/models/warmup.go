@@ -41,6 +41,23 @@ type WarmupToken struct {
 	ExpiresAt     time.Time  `json:"expires_at"`
 }
 
+// TaskTypeWarmup is the tasks.task_type a warmup send is recorded under. It is
+// named here because warmup sends carry a message_id exactly like campaign
+// sends, so anything resolving an inbound report back to a send has to be able
+// to tell the two apart before it attributes anything to the customer.
+const TaskTypeWarmup = "warmup"
+
+// The warmup actions a worker knows how to run. These names travel on the bus,
+// so WarmupActionFile keeps its original spelling even though it now files the
+// mailbox's own sent copy as well as the copy it received.
+const (
+	WarmupActionFile           = "move_to_warmbly"
+	WarmupActionRescueFromSpam = "remove_from_spam"
+	WarmupActionMarkRead       = "mark_read"
+	WarmupActionMarkImportant  = "mark_important"
+	WarmupActionStar           = "star"
+)
+
 // WarmupEmailAction represents actions to perform on a detected warmup email.
 //
 // For Gmail accounts the worker uses GmailID to issue Users.Messages.Modify
@@ -64,6 +81,14 @@ type WarmupEmailAction struct {
 	// the live Graph id from this stable key at action time.
 	RFCMessageID string   `json:"rfc_message_id,omitempty" avro:"rfc_message_id"`
 	Actions      []string `json:"actions" avro:"actions"` // "move_to_warmbly", "mark_read", "remove_from_spam", "mark_important"
+
+	// Placement and TargetFolder are where "move_to_warmbly" files the message
+	// in the customer's own mail client, resolved from the mailbox's settings by
+	// the control plane (Email.WarmupFiling). An event from a consumer predating
+	// them carries neither, and the worker falls back to the default folder,
+	// which is what every mailbox did before the setting existed.
+	Placement    string `json:"placement,omitempty" avro:"placement"`
+	TargetFolder string `json:"target_folder,omitempty" avro:"target_folder"`
 
 	// DelaySeconds is retained for wire compatibility but is now always 0: the
 	// recipient-side "dwell" is owned by the consumer's durable schedule

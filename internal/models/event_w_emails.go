@@ -5,6 +5,15 @@ import "github.com/google/uuid"
 type JobEventNewEmail struct {
 	UserID  uuid.UUID              `json:"user_id" avro:"user_id"`
 	Message *EmailMessageStoreData `json:"message" avro:"message"`
+	// ReportOriginalMessageID is set when this arrival is a delivery-status
+	// notification or an abuse report ABOUT one of our own sends, and carries
+	// that send's RFC Message-ID. The worker is the only side that can read it
+	// (the id lives in the report's body, which the consumer has no access to),
+	// and the consumer needs it to tell a report about a campaign send, which
+	// the customer should see, from one about a warmup send, which is pool
+	// traffic they never sent and cannot act on. Empty on ordinary mail and on
+	// events from workers predating the field.
+	ReportOriginalMessageID string `json:"report_original_message_id,omitempty" avro:"report_original_message_id"`
 }
 
 type JobEventRemoveEmail struct {

@@ -48,8 +48,13 @@ type ImapConn interface {
 	// one STORE, in either direction.
 	SetSeen(ctx context.Context, mailboxName string, uids []uint32, seen bool) error
 	MarkImportant(ctx context.Context, mailboxName string, uid uint32) error
-	MoveToFolder(ctx context.Context, sourceMailbox, dstFolder string, uid uint32) error
+	// MoveToFolder reports whether the message actually moved; a message
+	// already in the destination is left where it is.
+	MoveToFolder(ctx context.Context, sourceMailbox, dstFolder string, uid uint32) (bool, error)
 	RemoveFromSpam(ctx context.Context, sourceMailbox, inboxName string, uid uint32) error
+	// FindUIDByMessageID relocates a warmup message whose UID went void when an
+	// earlier engagement leg moved it.
+	FindUIDByMessageID(ctx context.Context, mailboxName, rfcMessageID string) (uint32, error)
 }
 
 var _ ImapConn = (*imap.Client)(nil)
