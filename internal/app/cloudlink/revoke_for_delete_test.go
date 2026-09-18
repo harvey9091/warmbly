@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/warmbly/warmbly/internal/app/email"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/repository"
@@ -193,5 +194,74 @@ func TestRevokeForDeleteRefusesAForeignMailbox(t *testing.T) {
 	}
 	if len(*f.deletes) != 0 {
 		t.Errorf("called the cloud for a foreign mailbox: %v", *f.deletes)
+	}
+}
+
+// stubEmailDeletes records any call the revocation makes into the mailbox
+// service, which is what would make it recursive.
+type stubEmailDeletes struct {
+	email.EmailService
+
+	deletes  *[]string
+	onDelete func()
+}
+
+func (s stubEmailDeletes) Delete(context.Context, string, string) *errx.Error {
+	*s.deletes = append(*s.deletes, "delete")
+	if s.onDelete != nil {
+		s.onDelete()
+	}
+	return nil
+}
+
+// RevokeForDelete is the leaf that keeps the managed delete from recursing, so
+// it must not call back into the mailbox service at all.
+func TestRevokeForDeleteDoesNotCallIntoTheMailboxDelete(t *testing.T) {
+	f := newRevokeFixture(t, http.StatusNoContent)
+	calls := &[]string{}
+	f.svc.emailSvc = stubEmailDeletes{deletes: calls}
+
+	if xerr := f.svc.RevokeForDelete(context.Background(), f.org, f.account); xerr != nil {
+		t.Fatalf("RevokeForDelete: %v", xerr)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("the revocation called into the mailbox service: %v", *calls)
+	}
+}
+
+// Unenrolling a managed mirror releases the cloud link and then deletes the
+// mirror. The delete revokes too, so the cloud answers the repeat call with
+// pool_link_mailbox_not_found, which is tolerated: neither call loops.
+func TestUnenrollReleasesTheCloudBeforeDeletingAManagedMirror(t *testing.T) {
+	f := newRevokeFixture(t, http.StatusNoContent)
+	deletes := &[]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*deletes = append(*deletes, r.URL.Path)
+		if len(*deletes) == 1 {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"code":"pool_link_mailbox_not_found","message":"That mailbox is not enrolled."}`))
+	}))
+	t.Cleanup(srv.Close)
+	f.repo.link.CloudURL = srv.URL
+	f.deletes = deletes
+
+	calls := &[]string{}
+	f.svc.emailSvc = stubEmailDeletes{
+		deletes:  calls,
+		onDelete: func() { _ = f.svc.RevokeForDelete(context.Background(), f.org, f.account) },
+	}
+	f.repo.mailbox.Managed = true
+
+	if xerr := f.svc.Unenroll(context.Background(), f.org, f.account); xerr != nil {
+		t.Fatalf("Unenroll: %v", xerr)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("the mirror was deleted %d times, want 1", len(*calls))
+	}
+	if len(*deletes) != 2 || (*deletes)[0] != (*deletes)[1] {
+		t.Fatalf("cloud deletes = %v, want the mailbox path twice", *deletes)
 	}
 }

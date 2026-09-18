@@ -373,14 +373,16 @@ func (s *emailService) Delete(ctx context.Context, userID, emailAccountID string
 	return nil
 }
 
-// ErrCloudEnrollmentStuck keeps the local mailbox when its cloud credential cannot be revoked.
+// ErrCloudEnrollmentStuck keeps the local mailbox when its cloud link cannot be released.
 var ErrCloudEnrollmentStuck = errx.NewWithIdentifier(
 	errx.Conflict,
 	"mailbox_cloud_unenroll_failed",
-	"This mailbox is enrolled in Warmbly Cloud and its enrollment could not be removed, so deleting it would leave its password in the pool. The mailbox record remains. Worker restoration is retried automatically; try the delete again once this instance can reach Warmbly Cloud.",
+	"This mailbox is linked to Warmbly Cloud and its link could not be released, so deleting it would leave Warmbly Cloud holding its credential or its claim on it. The mailbox record remains. Worker restoration is retried automatically; try the delete again once this instance can reach Warmbly Cloud.",
 )
 
-// unenrollFromCloud removes the mailbox credential held by Warmbly Cloud.
+// unenrollFromCloud releases the mailbox on Warmbly Cloud before its local
+// record goes, so a managed mirror returns to the cloud workspace instead of
+// staying claimed by an instance that no longer holds it.
 func (s *emailService) unenrollFromCloud(ctx context.Context, account *models.Email) *errx.Error {
 	if account.OrganizationID == nil {
 		return nil
@@ -394,8 +396,9 @@ func (s *emailService) unenrollFromCloud(ctx context.Context, account *models.Em
 		log.Warn().Err(err).Str("account_id", account.ID.String()).Msg("cloud enrollment unreadable; delete refused rather than leaving the credential in the pool")
 		return ErrCloudEnrollmentStuck
 	}
-	// Cloud-managed mirrors hold no local enrollment and would recurse here.
-	if link == nil || link.Managed {
+	// RevokeForDelete is a leaf: unlike removeManaged it never calls back into
+	// this delete, so the managed mirror can revoke here without recursing.
+	if link == nil {
 		return nil
 	}
 	if xerr := s.cloudUnenroll.RevokeForDelete(ctx, *account.OrganizationID, account.ID); xerr != nil {

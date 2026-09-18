@@ -138,16 +138,32 @@ func TestDeleteKeepsTheMailboxWhenCloudRevocationIsNotWired(t *testing.T) {
 	}
 }
 
-// Cloud-managed mirrors skip revocation to avoid recursive deletion.
-func TestDeleteDoesNotCallBackForAManagedMailbox(t *testing.T) {
+// A cloud-managed mirror's delete releases the cloud's claim, so the mailbox
+// goes back to the cloud workspace instead of staying linked to an instance
+// that no longer keeps a mirror of it.
+func TestDeleteReleasesTheCloudLinkForAManagedMailbox(t *testing.T) {
 	f := newRemovalFixture(t)
 	u := withCloudEnrollment(f, true)
 
 	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr != nil {
 		t.Fatalf("delete: %v", xerr)
 	}
-	if len(u.calls) != 0 {
-		t.Fatalf("a managed mailbox was unenrolled through its own delete path: %v", u.calls)
+	if len(u.calls) != 1 || u.calls[0] != f.mailbox {
+		t.Fatalf("revoked %v, want one call for %s", u.calls, f.mailbox)
+	}
+	if u.orgs[0] != f.org {
+		t.Errorf("revoked under org %s, want the mailbox's own %s", u.orgs[0], f.org)
+	}
+	// removeManaged removes the mirror by calling back into this delete, so the
+	// managed path must not reach it: one entry per step, no repeat.
+	want := []string{"remove", "unenroll", "delete"}
+	if len(f.trace) != len(want) {
+		t.Fatalf("delete re-entered itself: trace = %v, want %v", f.trace, want)
+	}
+	for i := range want {
+		if f.trace[i] != want[i] {
+			t.Fatalf("delete re-entered itself: trace = %v, want %v", f.trace, want)
+		}
 	}
 	if f.repo.deleteCalls != 1 {
 		t.Errorf("delete called %d times, want 1", f.repo.deleteCalls)
