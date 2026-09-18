@@ -103,7 +103,7 @@ describe("unibox scroll position", SUITE, () => {
 
         const search = screen.getByPlaceholderText(/^Search unread/i) as HTMLInputElement;
         await act(async () => {
-            fireEvent.change(search, { target: { value: "invoice" } });
+            fireEvent.change(search, { target: { value: "Subject 2" } });
         });
         await settle();
 
@@ -114,7 +114,7 @@ describe("unibox scroll position", SUITE, () => {
 
         expect(
             (screen.getByPlaceholderText(/^Search unread/i) as HTMLInputElement).value,
-        ).toBe("invoice");
+        ).toBe("Subject 2");
     });
 
     it("puts a remembered offset back after the pane is hidden and shown again", async () => {
