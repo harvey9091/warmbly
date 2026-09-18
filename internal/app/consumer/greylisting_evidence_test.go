@@ -88,7 +88,9 @@ func TestLiveGreylistedSendIsNotRecordedAsABounce(t *testing.T) {
 // evidence marks a valid contact undeliverable for a year on the strength of a
 // delay, so the code has to gate the classification.
 func TestRetryableFailuresAreNotEvidenceAboutTheAddress(t *testing.T) {
-	// evidence mirrors the condition in failCampaignSend.
+	// The live test below drives the real handler but needs a database, so it
+	// skips in CI. This one mirrors the condition to keep the marker phrases
+	// and the gate covered where there is no Postgres.
 	evidence := func(code, reason string) bool {
 		return code != string(errx.MailErrorCodeServerUnreachable) && emailverify.NamesRecipient(reason)
 	}
