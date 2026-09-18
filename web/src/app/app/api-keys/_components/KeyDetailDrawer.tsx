@@ -374,7 +374,7 @@ function Inner({ apiKey, onClose }: { apiKey: APIKey; onClose: () => void }) {
                 {/* Activity log */}
                 <section className="px-5 py-4">
                     <SectionLabel
-                        title={`Recent activity${logs.data ? ` · ${logs.data.data.length}` : ""}`}
+                        title={`Recent activity${logs.data?.data ? ` · ${logs.data.data.length}` : ""}`}
                         icon={<ClockIcon className="w-3 h-3" />}
                     />
                     {logs.isPending ? (

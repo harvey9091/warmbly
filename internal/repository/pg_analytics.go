@@ -2,9 +2,11 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
@@ -399,6 +401,13 @@ func (r *analyticsRepository) GetAccountDailyUsage(ctx context.Context, accountI
 		&usage.WarmupLimit,
 	)
 	if err != nil {
+		// Every row here hangs off email_accounts, so no row means the mailbox
+		// is gone rather than that anything failed. Reported as an incident it
+		// filed "no rows in result set" against a query that did exactly what
+		// it was asked, and answered the caller 500 for a 404.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errx.ErrNotFound
+		}
 		db.CaptureError(err, query, params, "queryrow")
 		return nil, errx.InternalError()
 	}

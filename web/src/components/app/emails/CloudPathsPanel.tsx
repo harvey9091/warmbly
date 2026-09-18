@@ -22,7 +22,9 @@ export default function CloudPathsPanel({ mailboxCount, onAdd }: { mailboxCount:
     const upgrade = useUpgradeDialog();
     const hosted = authConfig.data?.self_hosted === false;
     const instances = usePoolLinkInstances(hosted);
-    const linked = instances.data?.data.length ?? 0;
+    // Both hops are optional: a list endpoint whose rows come back as a nil
+    // slice serialises `data` as null, not [], so the inner one throws.
+    const linked = instances.data?.data?.length ?? 0;
     const plan = instances.data?.plan;
 
     if (!hosted || access.loading) return null;

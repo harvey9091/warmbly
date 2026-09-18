@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
 )
 
@@ -51,11 +52,14 @@ type DangerZoneRepository interface {
 	SetNotifBit(ctx context.Context, id uuid.UUID, bit int) error
 
 	// HardDeleteOrganization removes the organization row, relying on
-	// existing ON DELETE CASCADE FKs to clean up dependents.
-	HardDeleteOrganization(ctx context.Context, orgID uuid.UUID) error
+	// existing ON DELETE CASCADE FKs to clean up dependents. It returns the
+	// worker assignments of the mailboxes it destroyed, which the caller must
+	// evict; see CollectMailboxPlacements.
+	HardDeleteOrganization(ctx context.Context, orgID uuid.UUID) ([]MailboxPlacement, error)
 
-	// HardDeleteUser removes the user row.
-	HardDeleteUser(ctx context.Context, userID uuid.UUID) error
+	// HardDeleteUser removes the user row, returning the same placements to
+	// evict as HardDeleteOrganization.
+	HardDeleteUser(ctx context.Context, userID uuid.UUID) ([]MailboxPlacement, error)
 }
 
 // ErrPendingDeletionExists is returned when CreatePending is called for
@@ -334,18 +338,77 @@ func (r *dangerZoneRepository) SetNotifBit(ctx context.Context, id uuid.UUID, bi
 	return err
 }
 
-func (r *dangerZoneRepository) HardDeleteOrganization(ctx context.Context, orgID uuid.UUID) error {
+func (r *dangerZoneRepository) HardDeleteOrganization(ctx context.Context, orgID uuid.UUID) ([]MailboxPlacement, error) {
 	return r.hardDelete(ctx,
 		`a.organization_id = $1`,
 		`DELETE FROM organizations WHERE id = $1`,
 		orgID)
 }
 
-func (r *dangerZoneRepository) HardDeleteUser(ctx context.Context, userID uuid.UUID) error {
+func (r *dangerZoneRepository) HardDeleteUser(ctx context.Context, userID uuid.UUID) ([]MailboxPlacement, error) {
 	return r.hardDelete(ctx,
 		`a.user_id = $1`,
 		`DELETE FROM users WHERE id = $1`,
 		userID)
+}
+
+// MailboxPlacement is one mailbox and the worker that was executing it, read
+// before the row is deleted because nothing afterwards can say which worker
+// held it.
+type MailboxPlacement struct {
+	EmailID  uuid.UUID
+	UserID   uuid.UUID
+	WorkerID uuid.UUID
+}
+
+// CollectMailboxPlacements returns the worker assignments of the mailboxes in
+// scope, for the caller to evict once the delete has committed.
+//
+// A worker keeps its mailboxes in memory and only filters on status when it
+// starts, so a row disappearing underneath it changes nothing: it keeps
+// authenticating, failing and reporting, once every sync interval, forever.
+// Only a REMOVE_EMAIL stops it, and after the delete there is no assignment
+// left to address one to. Same reasoning as EnqueueMailboxErasures above.
+//
+// Two things here are not incidental. FOR UPDATE holds the rows until the
+// delete commits: worker_id is mutable and rotation moves mailboxes between
+// workers on its own schedule, so without the lock a rotation committing
+// between this read and the cascade leaves the new worker holding a mailbox
+// nobody evicts. And every mailbox in scope is locked, not just the assigned
+// ones, because an unassigned mailbox that gains a worker in that same window
+// is the same bug with an extra step. EnqueueMailboxErasures needs neither: it
+// reads only id and user_id, and those do not change.
+func CollectMailboxPlacements(ctx context.Context, tx pgx.Tx, scope string, args ...any) ([]MailboxPlacement, error) {
+	q := `SELECT a.id, a.user_id, a.worker_id FROM email_accounts a WHERE (` + scope + `) FOR UPDATE OF a`
+	rows, err := tx.Query(ctx, q, args...)
+	if err != nil {
+		db.CaptureError(err, q, args, "query")
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []MailboxPlacement
+	for rows.Next() {
+		var (
+			p        MailboxPlacement
+			workerID *uuid.UUID
+		)
+		if err := rows.Scan(&p.EmailID, &p.UserID, &workerID); err != nil {
+			db.CaptureError(err, q, args, "scan")
+			return nil, err
+		}
+		// Locked above so it cannot gain one; nothing to evict it from.
+		if workerID == nil {
+			continue
+		}
+		p.WorkerID = *workerID
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		db.CaptureError(err, q, args, "rows")
+		return nil, err
+	}
+	return out, nil
 }
 
 // hardDelete removes a workspace or a person and everything the cascades take
@@ -359,15 +422,23 @@ func (r *dangerZoneRepository) HardDeleteUser(ctx context.Context, userID uuid.U
 //
 // mailboxScope selects those mailboxes as a WHERE clause over email_accounts
 // aliased `a`; it is written here, never by a caller.
-func (r *dangerZoneRepository) hardDelete(ctx context.Context, mailboxScope, deleteStmt string, id uuid.UUID) error {
+func (r *dangerZoneRepository) hardDelete(ctx context.Context, mailboxScope, deleteStmt string, id uuid.UUID) ([]MailboxPlacement, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer tx.Rollback(ctx)
 
 	if _, err := EnqueueMailboxErasures(ctx, tx, mailboxScope, id); err != nil {
-		return err
+		return nil, err
+	}
+
+	// Read while the assignments still exist; returned to the caller to act on
+	// only once the delete has committed, because evicting a mailbox from its
+	// worker on a transaction that then rolls back would stop a live one.
+	placements, err := CollectMailboxPlacements(ctx, tx, mailboxScope, id)
+	if err != nil {
+		return nil, err
 	}
 
 	// The threads those mailboxes hold, read before the rows go. Deleting a
@@ -376,17 +447,20 @@ func (r *dangerZoneRepository) hardDelete(ctx context.Context, mailboxScope, del
 	// with them and this finds nothing to do.
 	threads, err := CollectMailboxThreadState(ctx, tx, mailboxScope, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if _, err := tx.Exec(ctx, deleteStmt, id); err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := DeleteOrphanedThreadState(ctx, tx, threads); err != nil {
-		return err
+		return nil, err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return placements, nil
 }
 
 // isForeignKeyViolation detects Postgres SQLSTATE 23503 (foreign_key_violation),
@@ -397,6 +471,17 @@ func isForeignKeyViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		return pgErr.Code == "23503"
+	}
+	return false
+}
+
+// isDeadlock detects Postgres SQLSTATE 40P01 (deadlock_detected). The whole
+// transaction is aborted when this happens, so the caller has to redo it from
+// the beginning rather than retry the one statement.
+func isDeadlock(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "40P01"
 	}
 	return false
 }

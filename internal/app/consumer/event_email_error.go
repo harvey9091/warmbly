@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -315,25 +316,39 @@ func (s *JobsService) deactivateAccount(ctx context.Context, userID, emailAccoun
 	if s.EmailRepository == nil {
 		return
 	}
+
+	// The assignment is read on its own rather than off the row Update
+	// returns, because that row is the mailbox as the dashboard sees it and
+	// carries no assignment; and before the write rather than after, because
+	// that is what separates a mailbox that no longer exists from one whose
+	// update merely failed. Update cannot tell those apart, and treating the
+	// first as the second is what left workers syncing deleted mailboxes.
+	// Only worth doing when there is a publisher to act on the answer.
+	var workerID *uuid.UUID
+	if s.Publisher != nil {
+		id, xerr := s.EmailRepository.GetWorkerID(ctx, emailAccountID)
+		switch {
+		case xerr == nil:
+			workerID = id
+		case errors.Is(xerr, errx.ErrNotFound):
+			// The mailbox is gone, so there is no status left to write and
+			// nothing holds its assignment. All that remains is to stop
+			// whichever worker is still executing it.
+			s.evictDeletedMailbox(ctx, userID, emailAccountID)
+			return
+		default:
+			log.Warn().
+				Str("error", xerr.Message).
+				Str("email_account_id", emailAccountID.String()).
+				Msg("Cannot tell the worker to drop the deactivated mailbox: assignment lookup failed")
+		}
+	}
+
 	inactive := "inactive"
 	if _, xerr := s.EmailRepository.Update(ctx, userID.String(), emailAccountID.String(), &models.UpdateEmail{
 		Status: &inactive,
 	}); xerr != nil {
 		log.Error().Str("error", xerr.Message).Msg("Failed to update email account status")
-		return
-	}
-	if s.Publisher == nil {
-		return
-	}
-
-	// Asked for on its own rather than read off the row Update returned: that
-	// row is the mailbox as the dashboard sees it and carries no assignment.
-	workerID, xerr := s.EmailRepository.GetWorkerID(ctx, emailAccountID)
-	if xerr != nil {
-		log.Warn().
-			Str("error", xerr.Message).
-			Str("email_account_id", emailAccountID.String()).
-			Msg("Cannot tell the worker to drop the deactivated mailbox: assignment lookup failed")
 		return
 	}
 	if workerID == nil {
@@ -347,5 +362,45 @@ func (s *JobsService) deactivateAccount(ctx context.Context, userID, emailAccoun
 			Str("email_account_id", emailAccountID.String()).
 			Str("worker_id", workerID.String()).
 			Msg("Failed to tell the worker to drop the deactivated mailbox")
+	}
+}
+
+// evictDeletedMailbox stops a worker still executing a mailbox whose row is
+// gone. It is addressed to every live worker because the assignment died with
+// the row, so there is nothing left that says which one holds it; the worker
+// handler is idempotent and a worker that does not hold the id does nothing.
+//
+// This is the backstop, not the mechanism. Deleting a mailbox publishes the
+// removal while the assignment still exists (emailService.Delete and the
+// scheduled-deletion path both do). It exists because a removal that is
+// published exactly once can be missed — a worker restarting, a bus hiccup —
+// and the cost of missing it is unbounded: the worker authenticates against a
+// provider on behalf of an account that no longer exists, once per sync
+// interval, forever, and every failure is reported.
+func (s *JobsService) evictDeletedMailbox(ctx context.Context, userID, emailAccountID uuid.UUID) {
+	if s.Publisher == nil || s.WorkerRepo == nil {
+		return
+	}
+	workers, err := s.WorkerRepo.ListPlaceableWorkers(ctx)
+	if err != nil {
+		log.Warn().Err(err).
+			Str("email_account_id", emailAccountID.String()).
+			Msg("Cannot evict a deleted mailbox: worker list unavailable")
+		return
+	}
+	log.Info().
+		Str("email_account_id", emailAccountID.String()).
+		Int("workers", len(workers)).
+		Msg("Mailbox no longer exists; telling every live worker to drop it")
+	for _, w := range workers {
+		if err := s.Publisher.PublishRemoveEmail(ctx, w.ID, &models.RemoveWorkerEmail{
+			UserID:  userID.String(),
+			EmailID: emailAccountID.String(),
+		}); err != nil {
+			log.Warn().Err(err).
+				Str("email_account_id", emailAccountID.String()).
+				Str("worker_id", w.ID.String()).
+				Msg("Failed to tell a worker to drop a deleted mailbox")
+		}
 	}
 }

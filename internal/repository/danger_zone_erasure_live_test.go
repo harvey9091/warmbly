@@ -26,6 +26,7 @@ type dangerLiveFixture struct {
 	user    uuid.UUID
 	org     uuid.UUID
 	mailbox uuid.UUID
+	worker  uuid.UUID
 }
 
 func newDangerLiveFixture(t *testing.T) *dangerLiveFixture {
@@ -46,6 +47,7 @@ func newDangerLiveFixture(t *testing.T) *dangerLiveFixture {
 		user:    uuid.New(),
 		org:     uuid.New(),
 		mailbox: uuid.New(),
+		worker:  uuid.New(),
 	}
 	ctx := context.Background()
 	exec := func(sql string, args ...any) {
@@ -58,10 +60,14 @@ func newDangerLiveFixture(t *testing.T) *dangerLiveFixture {
 		f.user, "danger-"+f.user.String()[:8]+"@test.local")
 	exec(`INSERT INTO organizations (id, name, slug, owner_user_id) VALUES ($1, 'Danger Test', $2, $3)`,
 		f.org, "danger-"+f.org.String()[:8], f.user)
+	// The mailbox is placed on a worker, because that is the state the delete
+	// has to report back: an unassigned one exercises none of it.
+	exec(`INSERT INTO fleet_nodes (id, role, active, last_seen_at) VALUES ($1, 'worker', true, now())`, f.worker)
+	exec(`INSERT INTO workers (id) VALUES ($1)`, f.worker)
 	exec(`INSERT INTO email_accounts (id, user_id, organization_id, email, name,
-	          signature_plain, signature_html, provider, status, campaign_limit, min_wait_time)
-	      VALUES ($1, $2, $3, $4, 'Danger', '', '', 'gmail', 'active', 50, 600)`,
-		f.mailbox, f.user, f.org, "danger-"+f.mailbox.String()[:8]+"@test.local")
+	          signature_plain, signature_html, provider, status, campaign_limit, min_wait_time, worker_id)
+	      VALUES ($1, $2, $3, $4, 'Danger', '', '', 'gmail', 'active', 50, 600, $5)`,
+		f.mailbox, f.user, f.org, "danger-"+f.mailbox.String()[:8]+"@test.local", f.worker)
 	exec(`INSERT INTO email_accounts_oauth (email_account_id, access_token, refresh_token, expires_at)
 	      VALUES ($1, 'sealed-access', 'sealed-refresh', now() + interval '1 hour')`, f.mailbox)
 
@@ -75,6 +81,9 @@ func newDangerLiveFixture(t *testing.T) *dangerLiveFixture {
 			{`DELETE FROM email_accounts WHERE id = $1`, f.mailbox},
 			{`DELETE FROM organizations WHERE id = $1`, f.org},
 			{`DELETE FROM users WHERE id = $1`, f.user},
+			// workers.id is a foreign key onto fleet_nodes.id, so in this order.
+			{`DELETE FROM workers WHERE id = $1`, f.worker},
+			{`DELETE FROM fleet_nodes WHERE id = $1`, f.worker},
 		} {
 			if _, err := handle.Pool.Exec(c, step.sql, step.arg); err != nil {
 				t.Errorf("cleanup %q: %v", step.sql, err)
@@ -101,8 +110,15 @@ func (f *dangerLiveFixture) count(t *testing.T, sql string, arg any) int {
 func TestLiveDeletingAWorkspaceSucceeds(t *testing.T) {
 	f := newDangerLiveFixture(t)
 
-	if err := f.repo.HardDeleteOrganization(context.Background(), f.org); err != nil {
+	placements, err := f.repo.HardDeleteOrganization(context.Background(), f.org)
+	if err != nil {
 		t.Fatalf("a workspace with one mailbox could not be deleted: %v", err)
+	}
+	// The assignment dies with the row, so it has to come back out of the
+	// delete: without it nothing can tell the worker to stop executing a
+	// mailbox that no longer exists.
+	if len(placements) != 1 || placements[0].EmailID != f.mailbox || placements[0].WorkerID != f.worker {
+		t.Errorf("returned %+v, want the mailbox on worker %s so it can be evicted from it", placements, f.worker)
 	}
 	if n := f.count(t, `SELECT count(*) FROM organizations WHERE id = $1`, f.org); n != 0 {
 		t.Error("the workspace is still there")
@@ -118,7 +134,7 @@ func TestLiveDeletingAWorkspaceSucceeds(t *testing.T) {
 func TestLiveDeletingAWorkspaceQueuesItsMailboxesForErasure(t *testing.T) {
 	f := newDangerLiveFixture(t)
 
-	if err := f.repo.HardDeleteOrganization(context.Background(), f.org); err != nil {
+	if _, err := f.repo.HardDeleteOrganization(context.Background(), f.org); err != nil {
 		t.Fatalf("delete workspace: %v", err)
 	}
 
@@ -171,7 +187,7 @@ func TestLiveDeletingAWorkspaceWithWarmupStandingSucceeds(t *testing.T) {
 		t.Fatalf("the reputation mirror wrote %d rows, want 1: this test is not exercising the trigger", mirrored)
 	}
 
-	if err := f.repo.HardDeleteOrganization(ctx, f.org); err != nil {
+	if _, err := f.repo.HardDeleteOrganization(ctx, f.org); err != nil {
 		t.Fatalf("a workspace with a penalised mailbox could not be deleted: %v", err)
 	}
 	if n := f.count(t, `SELECT count(*) FROM organizations WHERE id = $1`, f.org); n != 0 {
@@ -214,7 +230,7 @@ func TestLiveAFailedAccountDeletionQueuesNoErasure(t *testing.T) {
 		}
 	})
 
-	if err := f.repo.HardDeleteUser(ctx, f.user); err == nil {
+	if _, err := f.repo.HardDeleteUser(ctx, f.user); err == nil {
 		t.Fatal("the account deletion reported success; if it now works, this test should assert the erasure instead")
 	}
 	if n := f.count(t, `SELECT count(*) FROM users WHERE id = $1`, f.user); n != 1 {
