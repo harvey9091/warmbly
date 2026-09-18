@@ -98,9 +98,10 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 
 	// Get campaign progress for task progress events
 	campaignProgress, _ := s.campaignProgressRepo.GetCampaignProgress(ctx, *campaignTask.CampaignID)
-	var totalContacts, processedCount int
+	var totalContacts, totalEmails, processedCount int
 	if campaignProgress != nil {
 		totalContacts = campaignProgress.TotalContacts
+		totalEmails = campaignProgress.TotalContacts * campaignProgress.TotalSequences
 		processedCount = campaignProgress.EmailsSent
 	}
 
@@ -124,22 +125,13 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 		return nil // Don't create next task
 	}
 
-	// Publish task started progress event
+	// The chain woke up. Most wake-ups send nothing (the slot is not due, the
+	// pool is spent, the window is closed), so this is "scheduled", never
+	// "active": the dashboard read the old contact-less "active" as a send in
+	// flight and showed "Sending... Unknown contact" for as long as the
+	// campaign was running.
 	if s.streamingPublisher != nil {
-		progress := 0
-		if totalContacts > 0 {
-			progress = (processedCount * 100) / totalContacts
-		}
-		s.streamingPublisher.PublishTaskProgress(ctx, &pubsub.TaskProgressEvent{
-			BaseEvent:      pubsub.BaseEvent{UserID: campaign.UserID},
-			OrgID:          campaignOrgID(campaign),
-			CampaignID:     campaign.ID.String(),
-			TaskID:         taskID.String(),
-			Status:         "active",
-			Progress:       progress,
-			TotalContacts:  totalContacts,
-			ProcessedCount: processedCount,
-		})
+		s.streamingPublisher.PublishTaskProgress(ctx, s.sendProgress(ctx, campaign, taskID, nil, nil, "scheduled", processedCount, totalEmails, totalContacts))
 	}
 
 	// STEP 5.4: Tenancy gate. organization_id is what scopes the entitlement
@@ -847,6 +839,12 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 		}
 	}
 
+	// Now there is a send in flight, and the live panel may say so: this is
+	// the one event that carries "active", and it always names the contact.
+	if s.streamingPublisher != nil {
+		s.streamingPublisher.PublishTaskProgress(ctx, s.sendProgress(ctx, campaign, taskID, contact, sequence, "active", processedCount, totalEmails, totalContacts))
+	}
+
 	if err := s.emailSender.Send(ctx, taskID, emailMsg, *account); err != nil {
 		// The send never reached a worker (none assigned, worker offline, bus
 		// or storage down). Nothing is stamped sent; the task is dead-lettered
@@ -888,30 +886,7 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 				"error":       err.Error(),
 			})
 
-			// Publish detailed task progress event for failure
-			progress := 0
-			if totalContacts > 0 {
-				progress = (processedCount * 100) / totalContacts
-			}
-			contactName := contact.FirstName
-			if contact.LastName != "" {
-				contactName = contactName + " " + contact.LastName
-			}
-			s.streamingPublisher.PublishTaskProgress(ctx, &pubsub.TaskProgressEvent{
-				BaseEvent:      pubsub.BaseEvent{UserID: campaign.UserID},
-				OrgID:          campaignOrgID(campaign),
-				CampaignID:     campaign.ID.String(),
-				TaskID:         taskID.String(),
-				Status:         "failed",
-				ContactID:      contact.ID.String(),
-				ContactEmail:   contact.Email,
-				ContactName:    contactName,
-				SequenceID:     sequence.ID.String(),
-				SequenceName:   sequence.Name,
-				Progress:       progress,
-				TotalContacts:  totalContacts,
-				ProcessedCount: processedCount,
-			})
+			s.streamingPublisher.PublishTaskProgress(ctx, s.sendProgress(ctx, campaign, taskID, contact, sequence, "failed", processedCount, totalEmails, totalContacts))
 		}
 		if s.advanced != nil {
 			_ = s.advanced.CaptureTaskDeadLetter(ctx, taskID, "campaign", map[string]interface{}{
@@ -1021,43 +996,10 @@ func (s *tasksService) HandleCampaignTask(task *proto.ProcessTask) *errx.Error {
 			"contact_id":  contact.ID.String(),
 		})
 
-		// Publish detailed task progress event
-		newProcessedCount := processedCount + 1
-		progress := 0
-		if totalContacts > 0 {
-			progress = (newProcessedCount * 100) / totalContacts
-		}
-		contactName := contact.FirstName
-		if contact.LastName != "" {
-			contactName = contactName + " " + contact.LastName
-		}
-		// Get sequence index
-		sequences, _ := s.campaignRepo.GetSequencesByCampaignID(ctx, campaign.ID)
-		seqIndex := 0
-		for i, seq := range sequences {
-			if seq.ID == sequence.ID {
-				seqIndex = i + 1
-				break
-			}
-		}
 		// EMAIL_SENT (org-scoped): the whole team sees the send + which
-		// lead/step fired, live in the campaign view.
-		s.streamingPublisher.PublishEmailSent(ctx, &pubsub.TaskProgressEvent{
-			BaseEvent:      pubsub.BaseEvent{UserID: campaign.UserID},
-			OrgID:          campaignOrgID(campaign),
-			CampaignID:     campaign.ID.String(),
-			TaskID:         taskID.String(),
-			Status:         "completed",
-			ContactID:      contact.ID.String(),
-			ContactEmail:   contact.Email,
-			ContactName:    contactName,
-			SequenceID:     sequence.ID.String(),
-			SequenceName:   sequence.Name,
-			SequenceIndex:  seqIndex,
-			Progress:       progress,
-			TotalContacts:  totalContacts,
-			ProcessedCount: newProcessedCount,
-		})
+		// lead/step fired, live in the campaign view. It is also what ends
+		// the "Sending..." card the active event above opened.
+		s.streamingPublisher.PublishEmailSent(ctx, s.sendProgress(ctx, campaign, taskID, contact, sequence, "completed", processedCount+1, totalEmails, totalContacts))
 	}
 
 	// STEP 19: Publish events to Kafka
@@ -1624,6 +1566,48 @@ func (s *tasksService) createCampaignTask(ctx context.Context, campaignID, accou
 	}
 
 	return nil
+}
+
+// sendProgress is one live-activity event: the campaign's overall progress,
+// and, when a contact is given, who this send goes to and from which step.
+// status is "scheduled" for a wake-up that may send nothing, "active" for a
+// send in flight, and "completed" or "failed" for its outcome.
+//
+// processed counts sent steps, so the percentage is over totalEmails
+// (contacts x steps), not over contacts: a six-step campaign used to read
+// 100% once every contact had its first email.
+func (s *tasksService) sendProgress(ctx context.Context, campaign *models.Campaign, taskID uuid.UUID, contact *models.Contact, sequence *Sequence, status string, processed, totalEmails, totalContacts int) *pubsub.TaskProgressEvent {
+	ev := &pubsub.TaskProgressEvent{
+		BaseEvent:      pubsub.BaseEvent{UserID: campaign.UserID},
+		OrgID:          campaignOrgID(campaign),
+		CampaignID:     campaign.ID.String(),
+		TaskID:         taskID.String(),
+		Status:         status,
+		TotalContacts:  totalContacts,
+		TotalEmails:    totalEmails,
+		ProcessedCount: processed,
+	}
+	if totalEmails > 0 {
+		ev.Progress = min((processed*100)/totalEmails, 100)
+	}
+	if contact != nil {
+		ev.ContactID = contact.ID.String()
+		ev.ContactEmail = contact.Email
+		ev.ContactName = strings.TrimSpace(contact.FirstName + " " + contact.LastName)
+	}
+	if sequence != nil {
+		ev.SequenceID = sequence.ID.String()
+		ev.SequenceName = sequence.Name
+		if sequences, err := s.campaignRepo.GetSequencesByCampaignID(ctx, campaign.ID); err == nil {
+			for i, seq := range sequences {
+				if seq.ID == sequence.ID {
+					ev.SequenceIndex = i + 1
+					break
+				}
+			}
+		}
+	}
+	return ev
 }
 
 // publishEmailSentEvent publishes email sent event to Kafka

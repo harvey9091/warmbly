@@ -93,13 +93,23 @@ export default function TaskPreview({ campaignId, campaignStatus: initialStatus,
           ? "Connecting…"
           : "Disconnected";
 
-    const showNowSending = !!taskProgress && isActive && taskProgress.status === "active";
+    // Only a send in flight, for a named contact. The chain's wake-ups arrive
+    // as "scheduled" and carry no contact; showing those as "Sending…" is how
+    // this card read "Unknown contact" for a whole day on a campaign that had
+    // sent one email.
+    const showNowSending =
+        !!taskProgress &&
+        isActive &&
+        taskProgress.status === "active" &&
+        !!(taskProgress.contact_email || taskProgress.contact_name);
 
     const progress = Math.min(100, Math.max(0, taskProgress?.progress ?? 0));
     const processed = taskProgress?.processed_count ?? 0;
-    const total = taskProgress?.total_contacts ?? 0;
+    // Sent steps over contacts × steps: a six-step campaign is not done when
+    // every contact has had its first email.
+    const total = taskProgress?.total_emails ?? 0;
 
-    // Conservative estimate: remaining contacts paced roughly one per minute.
+    // Conservative estimate: remaining emails paced roughly one per minute.
     const remainingHint = useMemo(() => {
         if (!taskProgress || total <= 0) return null;
         const remaining = total - processed;
@@ -197,7 +207,7 @@ export default function TaskPreview({ campaignId, campaignStatus: initialStatus,
                     <DitherMeter frac={progress / 100} height={6} />
                     <div className="flex items-center justify-between mt-1.5">
                         <span className="font-mono text-[10.5px] text-slate-400 tabular-nums">
-                            {processed.toLocaleString()} of {total.toLocaleString()} contacts
+                            {processed.toLocaleString()} of {total.toLocaleString()} emails
                         </span>
                         {remainingHint && (
                             <span className="text-[10.5px] text-slate-400">{remainingHint}</span>
