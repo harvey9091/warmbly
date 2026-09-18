@@ -98,7 +98,8 @@ type Service interface {
 	ListMailboxes(ctx context.Context, orgID uuid.UUID) ([]models.CloudLinkMailboxRow, *errx.Error)
 	Enroll(ctx context.Context, orgID, accountID uuid.UUID) (*models.CloudLinkMailboxRow, *errx.Error)
 	Unenroll(ctx context.Context, orgID, accountID uuid.UUID) *errx.Error
-	// RevokeForDelete confirms the cloud no longer holds the mailbox credential.
+	// RevokeForDelete releases the mailbox on the cloud, credential and link
+	// alike, without ever calling back into the email service.
 	RevokeForDelete(ctx context.Context, orgID, accountID uuid.UUID) *errx.Error
 	SetLifecycle(ctx context.Context, orgID, accountID uuid.UUID, action string) (*models.CloudLinkMailboxRow, *errx.Error)
 
@@ -510,7 +511,9 @@ func (s *service) Unenroll(ctx context.Context, orgID, accountID uuid.UUID) *err
 	return nil
 }
 
-// RevokeForDelete removes the remote credential before local deletion makes retries impossible.
+// RevokeForDelete releases the mailbox on the cloud before local deletion makes
+// retries impossible. It is a leaf, so the email service can call it for a
+// managed mirror without recursing through removeManaged.
 func (s *service) RevokeForDelete(ctx context.Context, orgID, accountID uuid.UUID) *errx.Error {
 	if _, xerr := s.ownedAccount(ctx, orgID, accountID); xerr != nil {
 		return xerr
