@@ -2,9 +2,11 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/notify/templates"
@@ -19,23 +21,56 @@ func (s *authService) ResetPasswordStart(ctx context.Context, data *ResetPasswor
 		return err
 	}
 
+	// Before the budget as well as the lookup, so the same address typed two
+	// ways spends one budget rather than two.
+	data.Email = normalizeEmail(data.Email)
+
 	// Spend the budget before the lookup, and key it on the submitted address,
 	// so an unknown address costs the attacker the same as a known one.
 	if err := s.passwordResetLimit(ctx, data.Email); err != nil {
 		return err
 	}
 
+	xerr := s.startPasswordReset(ctx, data)
+	// A failure here produced no mail, so it does not spend the address's
+	// allowance. The budget is two requests per four hours: charging our own
+	// faults to it meant one bad afternoon locked a real person out of the
+	// only self-service way back into their account, and the second attempt
+	// failed for a different reason than the first. An unknown address
+	// deliberately still pays, because it returns nil rather than an error.
+	if xerr != nil {
+		s.refundPasswordResetLimit(ctx, data.Email)
+	}
+	return xerr
+}
+
+func (s *authService) startPasswordReset(ctx context.Context, data *ResetPasswordStart) *errx.Error {
 	user, uerr := s.userRepository.GetUserByEmail(ctx, data.Email)
 	if uerr != nil {
-		// Unknown address answers 200 like every other. Returning ErrUser here
-		// was an enumeration oracle, and because *errx.Error has no Unwrap the
-		// errors.Is check never matched, so it answered 500 instead.
+		// Only "no such account" is answered 200. Returning ErrUser here was an
+		// enumeration oracle, but swallowing EVERY error into one was worse: a
+		// cache or database fault answered "Email successfully sent." and sent
+		// nothing, which is indistinguishable to the person from a mail that
+		// was delivered to a folder they cannot find. Anything that is not the
+		// address being unknown is ours, and says so.
+		if !errors.Is(uerr, errx.ErrUser) {
+			errs.CaptureException(uerr)
+			return errx.InternalError()
+		}
+		// Logged because this one really does answer 200: without a line here
+		// a reset that reached nobody left no trace anywhere, so a mistyped
+		// address and a broken transport looked identical from support.
+		log.Info().Str("email", data.Email).Msg("password reset requested for an address with no account")
 		return nil
 	}
 
 	u, xerr := s.userService.GetUser(ctx, user.ID)
 	if xerr != nil {
-		return nil
+		// Same reasoning: the account exists, so this is a cache or database
+		// failure and never an unknown address. Reported rather than hidden
+		// behind a success — this is the path a Redis quota outage took.
+		errs.CaptureException(xerr)
+		return errx.InternalError()
 	}
 
 	sessionID := uuid.New()
@@ -60,18 +95,42 @@ func (s *authService) ResetPasswordStart(ctx context.Context, data *ResetPasswor
 
 	url := config.GetPasswordResetURL(token)
 
-	text, err := templates.GenerateResetPasswordHTML(u.FirstName, url)
+	text, err := templates.GenerateResetPasswordHTML(u.FirstName, url, PasswordResetTTL)
 	if err != nil {
 		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
 	// Reported by the transport; see LoginStart.
-	if err := s.sendAuthEmail(ctx, u.Email, "Password Reset Confirmation", text); err != nil {
+	if err := s.sendResetEmailWithRetry(ctx, u.Email, "Password Reset Confirmation", text); err != nil {
 		return errx.ErrMailUndeliverable
 	}
 
 	return nil
+}
+
+// sendResetEmailWithRetry makes one transient failure survivable rather than
+// final. The reset mail is the only self-service way back into an account, so
+// a single refused connection or throttled SES call should cost a second of
+// latency, not the whole attempt. Bounded to one retry and a short pause: the
+// caller is a person holding an HTTP request open, and a rejection that is
+// going to be permanent (an unverified identity, a suppressed address) repeats
+// identically, so there is nothing to gain from trying harder.
+func (s *authService) sendResetEmailWithRetry(ctx context.Context, to, subject, message string) error {
+	err := s.sendAuthEmail(ctx, to, subject, message)
+	if err == nil {
+		return nil
+	}
+	// Nothing left to retry into: the caller gave up or the deadline passed.
+	if ctx.Err() != nil {
+		return err
+	}
+	select {
+	case <-time.After(authEmailRetryDelay):
+	case <-ctx.Done():
+		return err
+	}
+	return s.sendAuthEmail(ctx, to, subject, message)
 }
 
 func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPasswordConfirm, session, ipaddr string) *errx.Error {

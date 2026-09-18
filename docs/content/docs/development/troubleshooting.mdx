@@ -54,6 +54,7 @@ Newer builds return the invite-only refusal with its own machine code, `registra
 | No login code arrives | Self-host does not send one (`AUTH_LOGIN_CODE=off`). Registration and reset codes go wherever `MAIL_TRANSPORT` points; under compose that is the backend log |
 | No invitation email arrives | Same cause. Copy the link from **Pending invitations** and send it yourself. See [without a mail relay](/development/accounts-and-access/#without-a-mail-relay) |
 | "Too many attempts" on password reset | Password reset is capped at 2 requests per address per 4 hours. Use `warmblyctl user reset-password` instead of waiting |
+| The reset form says the mail was sent and nothing arrives | The address has no account on this instance (the form says the same thing either way, on purpose). The backend logs `password reset requested for an address with no account` with the address it was given. If that line is absent, the mail was really attempted and the transport is the place to look |
 | The passkey button is missing | Passkeys need a secure context, so `APP_URL` must be HTTPS or a `localhost` address. A LAN IP over plain HTTP cannot be a relying party |
 | Google, Apple or passkey buttons appear but never work | The sign-in screen follows `GET /auth/config`. If they still appear, that request is failing and the screen says which API URL it tried |
 | Locked out of the only admin account | `warmblyctl user create --email you@example.com --admin`. Every recovery command is on [recovering access](/development/accounts-and-access/#recovering-access) |

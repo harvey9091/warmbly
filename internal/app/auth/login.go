@@ -27,6 +27,10 @@ func (s *authService) LoginStart(ctx context.Context, data *AuthData, ipaddr, us
 		return nil, xerr
 	}
 
+	// The credential lookup, the send budget and the emailed code all key on
+	// this string, so it is folded once here rather than at each of them.
+	data.Email = normalizeEmail(data.Email)
+
 	uid, err := s.authRepository.IsValidCredentials(ctx, data.Email, data.Password)
 	if err != nil {
 		return nil, err
