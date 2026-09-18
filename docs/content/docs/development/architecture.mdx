@@ -142,6 +142,8 @@ Rotation (`internal/app/worker/rotation.go`) is deliberately reluctant. Mailbox 
 
 The externally managed health labels describe machine or operator state. Mailbox delivery outcomes do not set them.
 
+A worker that stops answering is a separate path (`internal/app/consumer/dead_worker.go`), and it waits before acting. The heartbeat key lives three minutes, which a version rollout can outlast while the container is replaced, so a missing key alone is not death: the worker also has to have been absent from the registry for `MailboxEvacuationGrace` (10 minutes) before its mailboxes are moved. Both signals are required, because during a cache outage every heartbeat key disappears at once while the registry stays current, and moving a mailbox is a real cost rather than a neutral rebalance: it changes the address the mailbox's provider sees and can earn a sign-in challenge.
+
 ### Isolated egress
 
 Plans that reserve egress bind an organization to a worker (`dedicated_worker_assignments`). It is a strong placement preference, not a pin: the worker carries no marking, so if it dies the organization's mailboxes place normally instead of stranding, and the rotation loop pulls them onto a replacement once one exists. Mailboxes belonging to other tenants drift off a reserved worker on the same loop.

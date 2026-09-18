@@ -14,7 +14,8 @@ import (
 // ListWarmupReviewCandidates pages existing messages without loading bodies or changing provider mail.
 func (r *uniboxRepository) ListWarmupReviewCandidates(ctx context.Context, afterID uuid.UUID, limit int) ([]models.JobEventNewEmail, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT u.user_id, u.id, u.email_id, u.message_id, u.thread_id, u.flags, u.from_addr, u.subject
+		SELECT u.user_id, u.id, u.email_id, u.message_id, u.thread_id, u.flags, u.from_addr, u.subject,
+		       u.gmail_id, u.uid, u.mailbox, u.folder_path
 		FROM unibox_emails u
 		WHERE u.id > $1 AND (
 		    EXISTS (SELECT 1 FROM cloud_link_mailboxes c WHERE c.email_account_id = u.email_id)
@@ -30,7 +31,11 @@ func (r *uniboxRepository) ListWarmupReviewCandidates(ctx context.Context, after
 	for rows.Next() {
 		e := models.JobEventNewEmail{Message: &models.EmailMessageStoreData{}}
 		m := e.Message
-		if err := rows.Scan(&e.UserID, &m.ID, &m.EmailID, &m.MessageID, &m.ThreadID, &m.Flags, &m.FromAddr, &m.Subject); err != nil {
+		// The provider locators come back too: a historical leak is filed by
+		// the same worker action as a fresh arrival, and the Gmail path acts on
+		// gmail_id rather than the RFC id.
+		if err := rows.Scan(&e.UserID, &m.ID, &m.EmailID, &m.MessageID, &m.ThreadID, &m.Flags, &m.FromAddr, &m.Subject,
+			&m.GmailID, &m.UID, &m.Mailbox, &m.FolderPath); err != nil {
 			return nil, err
 		}
 		events = append(events, e)

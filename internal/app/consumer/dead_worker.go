@@ -173,6 +173,16 @@ func (s *JobsService) detectDeadWorkers(ctx context.Context) {
 		// Worker heartbeat expired - mark as stale and reassign emails
 		log.Warn().Str("worker_id", w.ID.String()).Msg("dead worker detected - heartbeat expired")
 
+		// A restart is not a death. The heartbeat key lives 3 minutes and an
+		// auto-update replaces the container inside that, so evacuating on the
+		// key alone moved 92 mailboxes off a worker that was back seconds
+		// later (#583). Moving a mailbox changes the address its provider sees
+		// and buys a sign-in challenge, so the bar is the same one
+		// deactivateIfLongDead already applies to merely retiring the row.
+		if !s.unreachableLongEnoughToEvacuate(ctx, w) {
+			continue
+		}
+
 		// Get all email accounts assigned to this worker
 		accountIDs, err := s.WorkerRepo.GetEmailAccountsByWorkerID(ctx, w.ID)
 		if err != nil {
@@ -316,6 +326,42 @@ func (s *JobsService) detectDeadWorkers(ctx context.Context) {
 			s.deactivateIfLongDead(ctx, w)
 		}
 	}
+}
+
+// MailboxEvacuationGrace is how long a worker has to be unreachable before its
+// mailboxes are moved. It spans a container replacement (pull, stop, start,
+// boot) with room to spare, so a version rollout costs no migrations.
+const MailboxEvacuationGrace = 10 * time.Minute
+
+// unreachableLongEnoughToEvacuate reports whether a worker with no heartbeat
+// key has also been absent from the registry long enough to be worth moving
+// mailboxes off.
+//
+// Both signals are required for the same reason deactivateIfLongDead needs
+// both: during a Redis outage every heartbeat key vanishes at once while
+// POSTed beats keep last_seen_at fresh, and evacuating on the key alone would
+// migrate every mailbox in the fleet at once.
+//
+// The worker is re-read because the caller's copy is a snapshot from the top of
+// a scan that walks the whole fleet.
+func (s *JobsService) unreachableLongEnoughToEvacuate(ctx context.Context, w models.Worker) bool {
+	current, err := s.WorkerRepo.GetByID(ctx, w.ID)
+	if err != nil || current == nil {
+		return false
+	}
+	// Never seen at all means the age is unknown, not old: a worker that has
+	// only just registered has no mailboxes worth moving anyway.
+	if current.LastSeenAt == nil {
+		return false
+	}
+	if time.Since(*current.LastSeenAt) < MailboxEvacuationGrace {
+		log.Info().
+			Str("worker_id", w.ID.String()).
+			Time("last_seen_at", *current.LastSeenAt).
+			Msg("worker is unreachable but within the evacuation grace; leaving its mailboxes in place")
+		return false
+	}
+	return true
 }
 
 // deactivateIfLongDead retires a heartbeat-expired worker row, but only when

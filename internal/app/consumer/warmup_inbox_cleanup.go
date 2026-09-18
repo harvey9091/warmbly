@@ -33,6 +33,46 @@ func (s *JobsService) StartWarmupInboxCleanup(ctx context.Context) {
 	})
 }
 
+// fileHistoricalWarmupLeak moves one already-delivered warmup message out of
+// the customer's own mailbox.
+//
+// Only the filing action is sent. The engagement legs (read, important, star)
+// are how fresh warmup mail earns its reputation signal, and replaying them on
+// months-old mail would be a burst of activity no real reader produces.
+//
+// Best effort throughout: the sweep's job is the Unibox row, and a mailbox that
+// has since been disconnected or reassigned must not stall it.
+func (s *JobsService) fileHistoricalWarmupLeak(ctx context.Context, e *models.JobEventNewEmail) {
+	if s.Publisher == nil || s.EmailRepository == nil || e.Message == nil {
+		return
+	}
+	account, xerr := s.EmailRepository.GetByID(ctx, e.Message.EmailID)
+	if xerr != nil || account == nil || account.WorkerID == nil {
+		return
+	}
+	placement, folder := account.WarmupFiling()
+	// The owner asked for warmup to stay in the inbox, so this is not a leak.
+	if placement == models.WarmupPlacementInbox {
+		return
+	}
+	// Marked before publishing, like the live path: the move can land and be
+	// observed before a marker written afterwards would exist, and a mailbox
+	// must not be struck for foldering we asked it to do.
+	s.markSelfMove(ctx, e.Message.EmailID, e.Message.MessageID)
+	s.Publisher.PublishWarmupAction(ctx, *account.WorkerID, &models.WarmupEmailAction{
+		UserID:             e.UserID,
+		EmailID:            e.Message.EmailID,
+		GmailID:            e.Message.GmailID,
+		UID:                e.Message.UID,
+		MailboxUIDValidity: e.Message.Mailbox,
+		MailboxFolder:      e.Message.FolderPath,
+		RFCMessageID:       e.Message.MessageID,
+		Actions:            []string{models.WarmupActionFile},
+		Placement:          placement,
+		TargetFolder:       folder,
+	})
+}
+
 // StartPendingWarmupVerification drains arrivals held during verification outages.
 func (s *JobsService) StartPendingWarmupVerification(ctx context.Context) {
 	jobrun.Loop(ctx, "pending_warmup_verification", time.Minute, true, func(ctx context.Context) error {
@@ -74,6 +114,10 @@ func (s *JobsService) cleanWarmupInboxBatch(ctx context.Context, afterID uuid.UU
 			return afterID, false, err
 		}
 		if warmup {
+			// Deleting the Unibox row only takes it out of OUR inbox. The copy
+			// in the customer's own mailbox is what they are looking at, and
+			// nothing else ever goes back for it, so file it here too (#583).
+			s.fileHistoricalWarmupLeak(ctx, &candidate)
 			if err := s.UniboxRepository.Delete(ctx, e.UserID, e.Message.ID); err != nil {
 				return afterID, false, err
 			}

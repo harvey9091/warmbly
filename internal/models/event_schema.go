@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -212,7 +213,15 @@ func recordSchema(t reflect.Type, name string, seen map[reflect.Type]avro.Schema
 		if err != nil {
 			return nil, fmt.Errorf("%s.%s: %w", t.Name(), f.Name, err)
 		}
-		field, err := avro.NewField(fieldName, s)
+		// Every field carries its zero as an Avro default, so a field added
+		// later is readable against the schema registered before it. Without
+		// one the registry refuses the new schema outright under BACKWARD and
+		// the publisher cannot serialize at all (#583).
+		opts := []avro.SchemaOption{}
+		if def, ok := zeroDefault(s, 0); ok {
+			opts = append(opts, avro.WithDefault(def))
+		}
+		field, err := avro.NewField(fieldName, s, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("%s.%s: %w", t.Name(), f.Name, err)
 		}
@@ -228,6 +237,72 @@ func recordSchema(t reflect.Type, name string, seen map[reflect.Type]avro.Schema
 	}
 	seen[t] = record
 	return record, nil
+}
+
+// maxDefaultDepth bounds the walk below. A Go type that reaches itself would
+// otherwise recurse forever through its own reference, and a field we cannot
+// describe a default for is left without one rather than failing the schema.
+const maxDefaultDepth = 12
+
+// zeroDefault is the Avro default matching a schema's zero value, and whether
+// one could be derived at all. It mirrors what the Go zero value encodes to,
+// so a reader falling back to the default sees what a writer that never set
+// the field would have sent.
+func zeroDefault(s avro.Schema, depth int) (any, bool) {
+	if depth > maxDefaultDepth {
+		return nil, false
+	}
+	switch s.Type() {
+	case avro.Null:
+		return nil, true
+	case avro.Boolean:
+		return false, true
+	case avro.Int:
+		return 0, true
+	case avro.Long:
+		return int64(0), true
+	case avro.Float:
+		return float32(0), true
+	case avro.Double:
+		return float64(0), true
+	case avro.String, avro.Bytes:
+		return "", true
+	case avro.Array:
+		return []any{}, true
+	case avro.Map:
+		return map[string]any{}, true
+	case avro.Fixed:
+		// Spec: a fixed default is a string whose code points 0-255 are the
+		// byte values, so the zero is that many NUL code points.
+		return strings.Repeat("\x00", s.(*avro.FixedSchema).Size()), true
+	case avro.Enum:
+		symbols := s.(*avro.EnumSchema).Symbols()
+		if len(symbols) == 0 {
+			return nil, false
+		}
+		return symbols[0], true
+	case avro.Union:
+		// A union default is written against its first branch, which for our
+		// optional fields is null.
+		types := s.(*avro.UnionSchema).Types()
+		if len(types) == 0 {
+			return nil, false
+		}
+		return zeroDefault(types[0], depth+1)
+	case avro.Ref:
+		return zeroDefault(s.(*avro.RefSchema).Schema(), depth+1)
+	case avro.Record:
+		m := map[string]any{}
+		for _, f := range s.(*avro.RecordSchema).Fields() {
+			v, ok := zeroDefault(f.Type(), depth+1)
+			if !ok {
+				return nil, false
+			}
+			m[f.Name()] = v
+		}
+		return m, true
+	}
+	return nil, false
 }
 
 // named defines a schema the first time its Go type is seen and refers to it
