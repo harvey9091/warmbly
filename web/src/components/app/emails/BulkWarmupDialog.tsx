@@ -3,7 +3,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import { FlameIcon, XIcon } from "lucide-react";
 import toast from "react-hot-toast";
 import { useQueryClient } from "@tanstack/react-query";
-import { Label, NumberInput } from "@/components/ui/field";
+import { Label, NumberInput, TextInput } from "@/components/ui/field";
+import { OptionSelect } from "@/components/app/campaigns/preferences/components/CampaignPreferenceBoolBox";
 import TimeSelect from "@/components/ui/TimeSelect";
 import WeekdayBitmask from "@/components/app/campaigns/schedule/WeekdayBitmask";
 import { Loading } from "@/components/loader";
@@ -38,6 +39,8 @@ export default function BulkWarmupDialog({
     const [startTime, setStartTime] = useState("08:00");
     const [endTime, setEndTime] = useState("20:00");
     const [days, setDays] = useState(0);
+    const [placement, setPlacement] = useState<"folder" | "inbox" | "archive">("folder");
+    const [folder, setFolder] = useState("");
 
     const n = ids.length;
     const baseOverMax = base > max;
@@ -57,6 +60,8 @@ export default function BulkWarmupDialog({
             warmup_start_time: startTime,
             warmup_end_time: endTime,
             warmup_days: days,
+            warmup_placement: placement,
+            warmup_folder: folder.trim(),
         };
         // Apply settings (if customizing) then start, per mailbox. allSettled so
         // one failure doesn't abort the rest.
@@ -167,6 +172,31 @@ export default function BulkWarmupDialog({
                                             Leave all unselected to send every day.
                                         </p>
                                     </div>
+                                    <div>
+                                        <Label>Warmup mail in the mailbox</Label>
+                                        <OptionSelect<"folder" | "inbox" | "archive">
+                                            aria-label="Warmup filing"
+                                            value={placement}
+                                            onChange={setPlacement}
+                                            options={[
+                                                { value: "folder", label: "Its own folder", hint: "Received and sent warmup mail both land there." },
+                                                { value: "inbox", label: "Leave it in the inbox" },
+                                                { value: "archive", label: "Archive it" },
+                                            ]}
+                                        />
+                                    </div>
+                                    {placement === "folder" && (
+                                        <div>
+                                            <Label>Folder name</Label>
+                                            <TextInput
+                                                value={folder}
+                                                placeholder="Warmbly"
+                                                maxLength={64}
+                                                onChange={(v) => setFolder(v.replace(/[/\\.%*"]/g, ""))}
+                                                className="w-full h-9 max-w-[320px]"
+                                            />
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 

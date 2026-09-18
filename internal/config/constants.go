@@ -330,6 +330,15 @@ const (
 	// cluster on the header name to fingerprint warmup traffic.
 	WarmupVerifyHeader = "X-Mailtrace-Verify"
 
+	// WarmupFolderDefault is the folder (a label on Gmail) warmup mail is
+	// filed into when a mailbox has not named its own. Both directions land
+	// there — the copy a mailbox received and the copy of what it sent — so
+	// the folder is what identifies warmup traffic in a real mail client.
+	WarmupFolderDefault = "Warmbly"
+	// WarmupFolderMaxLen bounds a customer-supplied folder name. It becomes a
+	// mailbox name on the provider, so it is short and single-level.
+	WarmupFolderMaxLen = 64
+
 	// Product-level hard caps. These are the backstop for plans that
 	// advertise "unlimited" on campaigns, seats, contacts and daily sends.
 	// Each cap is the floor that GetEffectiveLimits falls back to when both

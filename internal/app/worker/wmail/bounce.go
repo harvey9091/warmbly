@@ -20,15 +20,19 @@ import (
 // Best-effort and permanent-only: a message that doesn't parse to a permanent
 // failure with a resolvable original id is silently ignored, so a transient
 // (4.x.x) bounce never suppresses a valid recipient.
-func (w *WMail) maybeEmitBounce(msg *models.EmailMessageData) {
+// It returns the send the NDR is about, so the arrival event can carry it: the
+// report's own body is the only place that id appears and the consumer cannot
+// read a body, but it is what decides whether the report is about a campaign
+// send the customer should see or a warmup send they never made.
+func (w *WMail) maybeEmitBounce(msg *models.EmailMessageData) string {
 	from := strings.Join(msg.From, " ")
 	if !dsn.Detect(from, msg.Subject, headerFlagValue(msg.Flags, "Content-Type")) {
-		return
+		return ""
 	}
 
 	report := dsn.Parse(msg.BodyPlain + "\n" + msg.BodyHTML)
 	if !report.Permanent {
-		return
+		return ""
 	}
 
 	// Resolve the original outbound Message-ID: the DSN body's returned headers
@@ -38,16 +42,18 @@ func (w *WMail) maybeEmitBounce(msg *models.EmailMessageData) {
 		originalID = strings.Trim(msg.InReplyTo[len(msg.InReplyTo)-1], "<>")
 	}
 	if originalID == "" {
-		return // nothing to resolve the campaign send against
+		return "" // nothing to resolve the campaign send against
 	}
 
+	originalID = strings.Trim(originalID, "<>")
 	_ = w.onEvent(models.JobEventTypeInboundBounce, &models.JobEventInboundBounce{
 		UserID:            w.UserID,
 		EmailID:           w.ID,
-		OriginalMessageID: strings.Trim(originalID, "<>"),
+		OriginalMessageID: originalID,
 		FailedRecipient:   report.FailedRecipient,
 		Reason:            msg.Subject,
 	})
+	return originalID
 }
 
 // headerFlagValue reads a "Header:value" pseudo-flag out of the flag slice (the
@@ -70,22 +76,26 @@ func headerFlagValue(flags []string, name string) string {
 // Microsoft Graph returns one rendered body and no parts, so a report synced
 // through Graph carries only its human notice and is not detected; reading
 // those needs a separate MIME fetch, which is not built.
-func (w *WMail) maybeEmitComplaint(msg *models.EmailMessageData) {
+// Like maybeEmitBounce, it returns the send the report is about so the arrival
+// event can carry it.
+func (w *WMail) maybeEmitComplaint(msg *models.EmailMessageData) string {
 	from := strings.Join(msg.From, " ")
 	if !arf.Detect(from, msg.Subject, headerFlagValue(msg.Flags, "Content-Type")) {
-		return
+		return ""
 	}
 
 	report := arf.Parse(msg.BodyPlain + "\n" + msg.BodyHTML)
 	if !report.IsComplaint || report.OriginalMessageID == "" {
-		return
+		return ""
 	}
 
+	originalID := strings.Trim(report.OriginalMessageID, "<>")
 	_ = w.onEvent(models.JobEventTypeInboundComplaint, &models.JobEventInboundComplaint{
 		UserID:              w.UserID,
 		EmailID:             w.ID,
-		OriginalMessageID:   strings.Trim(report.OriginalMessageID, "<>"),
+		OriginalMessageID:   originalID,
 		ComplainedRecipient: report.ComplainedRecipient,
 		Provider:            report.UserAgent,
 	})
+	return originalID
 }

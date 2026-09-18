@@ -21238,6 +21238,19 @@
           "warmup_days": {
             "type": "integer"
           },
+          "warmup_placement": {
+            "type": "string",
+            "enum": [
+              "folder",
+              "inbox",
+              "archive"
+            ],
+            "description": "Where warmup mail is filed in the mailbox itself: its own folder, left in the inbox, or the provider's archive."
+          },
+          "warmup_folder": {
+            "type": "string",
+            "description": "Folder (Gmail label) warmup mail is filed into when warmup_placement is \"folder\". Empty means the instance default, \"Warmbly\"."
+          },
           "timezone": {
             "type": "string"
           },
@@ -21367,6 +21380,19 @@
           },
           "warmup_days": {
             "type": "integer"
+          },
+          "warmup_placement": {
+            "type": "string",
+            "enum": [
+              "folder",
+              "inbox",
+              "archive"
+            ],
+            "description": "Where warmup mail is filed in the mailbox itself: its own folder, left in the inbox, or the provider's archive."
+          },
+          "warmup_folder": {
+            "type": "string",
+            "description": "Folder (Gmail label) warmup mail is filed into when warmup_placement is \"folder\". Send an empty string to fall back to the instance default. No folder separators or control characters; 64 characters max."
           },
           "tags": {
             "type": "array",

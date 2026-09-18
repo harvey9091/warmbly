@@ -100,6 +100,12 @@ type Email struct {
 	WarmupEndTime   string     `json:"warmup_end_time"`
 	WarmupDays      int        `json:"warmup_days"`
 
+	// WarmupPlacement and WarmupFolder decide where warmup mail ends up in the
+	// customer's real mail client: see WarmupFiling. An empty WarmupFolder
+	// means the instance default rather than "no folder".
+	WarmupPlacement string `json:"warmup_placement"`
+	WarmupFolder    string `json:"warmup_folder"`
+
 	Timezone string `json:"timezone"`
 
 	// SaveToSent applies to SMTP/IMAP mailboxes only: after a send, the worker
@@ -137,6 +143,46 @@ func (e *Email) DomainAuthBlocked(now time.Time, grace time.Duration) bool {
 // mailbox keeps its ramp progress (the anchor is shifted forward on resume).
 func (e *Email) IsWarmupPaused() bool {
 	return e.Warmup != nil && e.WarmupPausedAt != nil
+}
+
+// Where warmup mail is filed in the customer's own mail client. The platform
+// hides warmup from the unibox on its own; these decide what the mailbox owner
+// sees in Gmail, Outlook or their IMAP client.
+const (
+	// WarmupPlacementFolder moves warmup mail out of the inbox (and out of
+	// Sent, where the provider filed our own copy) into one named folder.
+	WarmupPlacementFolder = "folder"
+	// WarmupPlacementInbox leaves warmup mail where the provider put it. Mail
+	// that landed in spam is still rescued into the inbox.
+	WarmupPlacementInbox = "inbox"
+	// WarmupPlacementArchive takes warmup mail out of the inbox without giving
+	// it a folder of its own: the provider's archive.
+	WarmupPlacementArchive = "archive"
+)
+
+// ValidWarmupPlacement reports whether p is one of the placement modes.
+func ValidWarmupPlacement(p string) bool {
+	switch p {
+	case WarmupPlacementFolder, WarmupPlacementInbox, WarmupPlacementArchive:
+		return true
+	}
+	return false
+}
+
+// WarmupFiling resolves where this mailbox's warmup mail belongs: the placement
+// mode, and the folder name to use when that mode is "folder". A row written
+// before the columns existed carries neither, and filing into the default
+// folder is the behaviour every mailbox already had.
+func (e *Email) WarmupFiling() (placement, folder string) {
+	placement = e.WarmupPlacement
+	if !ValidWarmupPlacement(placement) {
+		placement = WarmupPlacementFolder
+	}
+	folder = strings.TrimSpace(e.WarmupFolder)
+	if folder == "" {
+		folder = config.WarmupFolderDefault
+	}
+	return placement, folder
 }
 
 // SendFrom is the address this mailbox's mail is actually From. A verified
@@ -511,6 +557,12 @@ type UpdateEmail struct {
 	WarmupStartTime *string `json:"warmup_start_time"`
 	WarmupEndTime   *string `json:"warmup_end_time"`
 	WarmupDays      *int    `json:"warmup_days"`
+
+	// WarmupPlacement is "folder", "inbox" or "archive"; WarmupFolder names the
+	// destination for "folder" and is cleared back to the instance default by
+	// an empty string.
+	WarmupPlacement *string `json:"warmup_placement"`
+	WarmupFolder    *string `json:"warmup_folder"`
 
 	// Timezone is the mailbox's own IANA zone, which its sending behaviour and
 	// business-hours window are evaluated in. Empty means not configured, so
