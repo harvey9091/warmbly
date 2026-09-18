@@ -24,6 +24,7 @@ import (
 	warmupapp "github.com/warmbly/warmbly/internal/app/warmup"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/mailhdr"
 	"github.com/warmbly/warmbly/internal/pkg/mailhtml"
 	"github.com/warmbly/warmbly/internal/pkg/warmlint"
 	"github.com/warmbly/warmbly/internal/repository"
@@ -866,6 +867,8 @@ func (s *service) SelectVariant(ctx context.Context, organizationID, campaignID,
 	}, nil
 }
 
+// parseSenderEmail is the bare, lowercased address of the first From value,
+// whichever form the sync stored it in ("Name <addr>", "Name (addr)", "addr").
 func parseSenderEmail(addrs []string) string {
 	if len(addrs) == 0 {
 		return ""
@@ -874,10 +877,7 @@ func parseSenderEmail(addrs []string) string {
 	if primary == "" {
 		return ""
 	}
-	if parsed, err := mail.ParseAddress(primary); err == nil {
-		return strings.ToLower(strings.TrimSpace(parsed.Address))
-	}
-	return strings.ToLower(strings.Trim(primary, "<>"))
+	return strings.ToLower(strings.Trim(mailhdr.Bare(primary), "<>"))
 }
 
 func messageAddressesMailbox(msg *models.EmailMessageStoreData, account *models.Email) bool {
@@ -894,6 +894,8 @@ func messageAddressesMailbox(msg *models.EmailMessageStoreData, account *models.
 		for _, raw := range fields {
 			addresses, err := mail.ParseAddressList(raw)
 			if err != nil {
+				// One entry per recipient in a form net/mail refuses: the
+				// IMAP sync's "Name (addr)".
 				if address := parseSenderEmail([]string{raw}); address != "" {
 					if _, ok := targets[address]; ok {
 						return true

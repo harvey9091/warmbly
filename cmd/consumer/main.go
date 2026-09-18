@@ -492,6 +492,9 @@ func main() {
 	go jobsService.StartWarmupEngagementPoller(ctx, 30*time.Second)
 	go jobsService.StartWarmupInboxCleanup(ctx)
 	go jobsService.StartPendingWarmupVerification(ctx)
+	// Re-offers inbound mail that reply processing never claimed, so a
+	// reply refused by a since-fixed check is still attributed to its lead.
+	go jobsService.StartIncomingReplyRepair(ctx)
 
 	// Start dead worker detection (every 5 minutes)
 	go jobsService.StartDeadWorkerDetection(ctx, 5*time.Minute)

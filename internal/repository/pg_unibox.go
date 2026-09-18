@@ -59,6 +59,10 @@ type UniboxRepository interface {
 	SeenRelayTargets(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) ([]models.SeenRelayTarget, error)
 	Delete(ctx context.Context, userID, id uuid.UUID) error
 	ListWarmupReviewCandidates(ctx context.Context, afterID uuid.UUID, limit int) ([]models.JobEventNewEmail, error)
+	// ListUnprocessedCampaignReplies pages inbound messages that reply
+	// processing never claimed and that look like campaign replies: they
+	// answer a campaign send, or come from one of the workspace's contacts.
+	ListUnprocessedCampaignReplies(ctx context.Context, since time.Time, afterID uuid.UUID, limit int) ([]models.JobEventNewEmail, error)
 	DeferWarmupVerification(ctx context.Context, e *models.JobEventNewEmail) error
 	ClaimPendingWarmupVerification(ctx context.Context, limit int) ([]models.JobEventNewEmail, error)
 	ProcessPendingWarmupVerification(ctx context.Context, id uuid.UUID, process func(*models.JobEventNewEmail) error) error

@@ -186,6 +186,8 @@ func TestMessageAddressesMailbox(t *testing.T) {
 		{name: "send alias in cc", message: &models.EmailMessageStoreData{CC: []string{"alias@example.test"}}, want: true},
 		{name: "reply address in bcc", message: &models.EmailMessageStoreData{BCC: []string{"replies@example.test"}}, want: true},
 		{name: "different recipient", message: &models.EmailMessageStoreData{ToAddr: []string{"other@example.test"}}},
+		{name: "IMAP sync form in to", message: &models.EmailMessageStoreData{ToAddr: []string{"M Kannan (mailbox@example.test)"}}, want: true},
+		{name: "IMAP sync form, other recipient", message: &models.EmailMessageStoreData{ToAddr: []string{"Other (other@example.test)"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := messageAddressesMailbox(tc.message, account); got != tc.want {
@@ -254,6 +256,52 @@ func TestProcessIncomingReplyStampsRepliedWithIntentAutomationOff(t *testing.T) 
 	}
 	if progress.advanced.intents != 0 {
 		t.Fatalf("CreateReplyIntent calls = %d, want 0 with intent automation off", progress.advanced.intents)
+	}
+}
+
+func TestParseSenderEmailReadsEveryStoredForm(t *testing.T) {
+	for _, tc := range []struct {
+		in   []string
+		want string
+	}{
+		{[]string{"M K <MKMSC74@gmail.com>"}, "mkmsc74@gmail.com"},
+		{[]string{"mkmsc74@gmail.com"}, "mkmsc74@gmail.com"},
+		{[]string{"M K (mkmsc74@gmail.com)"}, "mkmsc74@gmail.com"},
+		{[]string{"", "x@y.test"}, ""},
+		{nil, ""},
+	} {
+		if got := parseSenderEmail(tc.in); got != tc.want {
+			t.Errorf("parseSenderEmail(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// The self-hoster's exact case: an IONOS mailbox over IMAP, whose sync stored
+// every address as "Name (addr)". The From matched the contact and the To
+// named the mailbox, and both checks still failed because neither could read
+// that form, so no reply into an IMAP mailbox counted for a week.
+func TestProcessIncomingReplyCountsARepliedStoredInTheIMAPForm(t *testing.T) {
+	orgID, accountID, contactID := uuid.New(), uuid.New(), uuid.New()
+	account := &models.Email{ID: accountID, OrganizationID: &orgID, Email: "kannan@eml.example.test"}
+	service, progress := newIncomingReplyService(account, &models.Contact{
+		ID: contactID, Email: "mkmsc74@gmail.com",
+	}, contactID)
+
+	xerr := service.ProcessIncomingReply(context.Background(), accountID, &models.EmailMessageStoreData{
+		ID:        uuid.New(),
+		EmailID:   accountID,
+		Folder:    models.FolderInbox,
+		FromAddr:  []string{"M K (mkmsc74@gmail.com)"},
+		ToAddr:    []string{"M Kannan (kannan@eml.example.test)"},
+		InReplyTo: []string{"<opener@example.test>"},
+		Subject:   "Re: Hello",
+		Snippet:   "Recd it thank you..",
+	})
+	if xerr != nil {
+		t.Fatal(xerr)
+	}
+	if progress.replied != 1 {
+		t.Fatalf("RecordEmailReplied calls = %d, want 1 for a reply the IMAP sync stored", progress.replied)
 	}
 }
 
