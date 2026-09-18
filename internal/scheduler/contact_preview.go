@@ -115,7 +115,7 @@ func (s *schedulerService) PreviewContactSend(ctx context.Context, campaignID, c
 
 	pair := &repository.ContactSequencePair{
 		ContactID: contactID, SequenceID: *route.Target, IsNewLead: route.IsNewLead,
-		NotBefore: route.DueAt, AssignedSender: route.AssignedSender,
+		Instant: route.Instant, NotBefore: route.DueAt, AssignedSender: route.AssignedSender,
 	}
 	at, sendable, _, perr := s.placeCampaignSend(ctx, campaign, accounts, meta, pair, nil, true)
 	switch {

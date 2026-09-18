@@ -299,8 +299,11 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 			return time.Time{}, nil, uuid.Nil, err
 		}
 
-		// Add wait_after days to last sent time
-		waitDuration := time.Hour * 24 * time.Duration(sequence.WaitAfter)
+		// Add wait_after days to last sent time. A pair an instant branch chose
+		// carries no wait: routing already resolved the branch's flag against
+		// the target step's own wait_after, and re-adding it here would put the
+		// delay straight back (issue #583).
+		waitDuration := time.Hour * 24 * time.Duration(repository.BranchWaitAfter(sequence.WaitAfter, nextPair.Instant))
 		baseTime = lastSentTime.Add(waitDuration)
 	}
 
