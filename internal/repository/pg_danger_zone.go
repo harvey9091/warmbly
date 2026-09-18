@@ -369,8 +369,17 @@ type MailboxPlacement struct {
 // authenticating, failing and reporting, once every sync interval, forever.
 // Only a REMOVE_EMAIL stops it, and after the delete there is no assignment
 // left to address one to. Same reasoning as EnqueueMailboxErasures above.
+//
+// Two things here are not incidental. FOR UPDATE holds the rows until the
+// delete commits: worker_id is mutable and rotation moves mailboxes between
+// workers on its own schedule, so without the lock a rotation committing
+// between this read and the cascade leaves the new worker holding a mailbox
+// nobody evicts. And every mailbox in scope is locked, not just the assigned
+// ones, because an unassigned mailbox that gains a worker in that same window
+// is the same bug with an extra step. EnqueueMailboxErasures needs neither: it
+// reads only id and user_id, and those do not change.
 func CollectMailboxPlacements(ctx context.Context, tx pgx.Tx, scope string, args ...any) ([]MailboxPlacement, error) {
-	q := `SELECT a.id, a.user_id, a.worker_id FROM email_accounts a WHERE a.worker_id IS NOT NULL AND (` + scope + `)`
+	q := `SELECT a.id, a.user_id, a.worker_id FROM email_accounts a WHERE (` + scope + `) FOR UPDATE OF a`
 	rows, err := tx.Query(ctx, q, args...)
 	if err != nil {
 		db.CaptureError(err, q, args, "query")
@@ -380,11 +389,19 @@ func CollectMailboxPlacements(ctx context.Context, tx pgx.Tx, scope string, args
 
 	var out []MailboxPlacement
 	for rows.Next() {
-		var p MailboxPlacement
-		if err := rows.Scan(&p.EmailID, &p.UserID, &p.WorkerID); err != nil {
+		var (
+			p        MailboxPlacement
+			workerID *uuid.UUID
+		)
+		if err := rows.Scan(&p.EmailID, &p.UserID, &workerID); err != nil {
 			db.CaptureError(err, q, args, "scan")
 			return nil, err
 		}
+		// Locked above so it cannot gain one; nothing to evict it from.
+		if workerID == nil {
+			continue
+		}
+		p.WorkerID = *workerID
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
