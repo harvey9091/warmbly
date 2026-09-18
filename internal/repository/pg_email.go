@@ -1372,11 +1372,33 @@ func (r *emailRepository) UpdateDomainAuthState(ctx context.Context, domain, sta
 // deleted mailbox's load forever. workerLoadRefund is the mailbox's placement
 // weight, computed by the caller from the same provider and warmup flag
 // assignment charged it with.
+// deleteDeadlockAttempts bounds the retry below. Two is almost always enough:
+// the transaction we lost to has committed by the time we come back.
+const deleteDeadlockAttempts = 3
+
+// Delete removes a mailbox, retrying a deadlock.
+//
+// The delete cascades into two dozen child tables (tasks, unibox_emails,
+// email_sync_state, warmup_statistics and the rest) and takes a lock on each,
+// while the consumer is still writing to several of them for the same mailbox.
+// Postgres resolves the cycle by aborting one side, and roughly half the time
+// that side is this one. Nothing is wrong when it happens and the work is
+// entirely redoable, so surfacing it meant someone clicking Disconnect got an
+// error for an operation that would have succeeded a moment later.
 func (r *emailRepository) Delete(ctx context.Context, userID, emailAccountID string, workerLoadRefund float64) *errx.Error {
+	for attempt := 1; ; attempt++ {
+		xerr, deadlocked := r.deleteOnce(ctx, userID, emailAccountID, workerLoadRefund)
+		if !deadlocked || attempt >= deleteDeadlockAttempts {
+			return xerr
+		}
+	}
+}
+
+func (r *emailRepository) deleteOnce(ctx context.Context, userID, emailAccountID string, workerLoadRefund float64) (*errx.Error, bool) {
 	tx, err := r.DB.Begin(ctx)
 	if err != nil {
 		db.CaptureError(err, "", nil, "begin")
-		return errx.InternalError()
+		return errx.InternalError(), false
 	}
 	defer tx.Rollback(ctx)
 
@@ -1394,8 +1416,11 @@ func (r *emailRepository) Delete(ctx context.Context, userID, emailAccountID str
 	`
 	bumpParams := []any{userID, emailAccountID}
 	if _, err := tx.Exec(ctx, bump, bumpParams...); err != nil {
+		if isDeadlock(err) {
+			return errx.InternalError(), true
+		}
 		db.CaptureError(err, bump, bumpParams, "exec")
-		return errx.InternalError()
+		return errx.InternalError(), false
 	}
 
 	// Before the row goes: what the mailbox leaves outside Postgres. The
@@ -1404,13 +1429,13 @@ func (r *emailRepository) Delete(ctx context.Context, userID, emailAccountID str
 	// would stay live at the provider forever.
 	const scope = `a.user_id = $1 AND a.id = $2`
 	if _, err := EnqueueMailboxErasures(ctx, tx, scope, userID, emailAccountID); err != nil {
-		return errx.InternalError()
+		return errx.InternalError(), isDeadlock(err)
 	}
 
 	// The threads this mailbox holds messages in, read while they still exist.
 	threads, err := CollectMailboxThreadState(ctx, tx, scope, userID, emailAccountID)
 	if err != nil {
-		return errx.InternalError()
+		return errx.InternalError(), isDeadlock(err)
 	}
 
 	query := `
@@ -1423,17 +1448,22 @@ func (r *emailRepository) Delete(ctx context.Context, userID, emailAccountID str
 	var workerID *uuid.UUID
 	if err := tx.QueryRow(ctx, query, params...).Scan(&workerID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return errx.ErrNotFound
+			return errx.ErrNotFound, false
+		}
+		// The cascade is what deadlocks, so this is the statement that loses
+		// most often. Not captured: a retried deadlock is not an incident.
+		if isDeadlock(err) {
+			return errx.InternalError(), true
 		}
 		db.CaptureError(err, query, params, "queryrow")
-		return errx.InternalError()
+		return errx.InternalError(), false
 	}
 
 	// After the row goes: the labels and snoozes whose threads the cascade just
 	// emptied. Nothing references the mailbox from those rows, so without this
 	// the workspace keeps labels on threads with no messages left in them.
 	if err := DeleteOrphanedThreadState(ctx, tx, threads); err != nil {
-		return errx.InternalError()
+		return errx.InternalError(), isDeadlock(err)
 	}
 
 	if workerID != nil {
@@ -1445,16 +1475,22 @@ func (r *emailRepository) Delete(ctx context.Context, userID, emailAccountID str
 			 WHERE id = $1
 		`
 		if _, err := tx.Exec(ctx, refund, *workerID, workerLoadRefund); err != nil {
+			if isDeadlock(err) {
+				return errx.InternalError(), true
+			}
 			db.CaptureError(err, refund, []any{*workerID, workerLoadRefund}, "exec")
-			return errx.InternalError()
+			return errx.InternalError(), false
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
+		if isDeadlock(err) {
+			return errx.InternalError(), true
+		}
 		db.CaptureError(err, "", nil, "commit")
-		return errx.InternalError()
+		return errx.InternalError(), false
 	}
-	return nil
+	return nil, false
 }
 
 // GetByID retrieves an email account by ID without requiring userID (for internal service use)

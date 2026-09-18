@@ -362,7 +362,7 @@ export default function BillingSettingsPage() {
                                 >
                                     {redemptions.isPending ? (
                                         <div className="h-16 rounded bg-slate-100 animate-pulse" />
-                                    ) : (redemptions.data?.data.length ?? 0) === 0 ? (
+                                    ) : (redemptions.data?.data?.length ?? 0) === 0 ? (
                                         <p className="text-[12px] text-slate-500 leading-relaxed">
                                             No codes redeemed yet. Apply a code above to see it here.
                                         </p>

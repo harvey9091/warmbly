@@ -95,6 +95,18 @@ func TestDeactivateAccountTellsTheWorkerToDropTheMailbox(t *testing.T) {
 	}
 }
 
+// stubWorkerRepo answers only the live-worker listing the eviction needs;
+// anything else panics, which is the point.
+type stubWorkerRepo struct {
+	repository.WorkerRepository
+	workers []models.Worker
+	err     error
+}
+
+func (r *stubWorkerRepo) ListPlaceableWorkers(context.Context) ([]models.Worker, error) {
+	return r.workers, r.err
+}
+
 func TestDeactivateAccountSkipsAnUnassignedMailbox(t *testing.T) {
 	s, repo, pub := newDeactivationFixture(nil)
 
@@ -121,19 +133,66 @@ func TestDeactivateAccountDoesNotRemoveWhenTheStatusWriteFails(t *testing.T) {
 	if len(pub.removed) != 0 {
 		t.Errorf("published %d removals after a failed status write, want 0", len(pub.removed))
 	}
-	if repo.workerCalls != 0 {
-		t.Errorf("looked up the assignment %d times after a failed status write, want 0", repo.workerCalls)
+	// The assignment IS read first now, because reading it after the write
+	// cannot tell a mailbox that was deleted from one whose write failed.
+	// What must not happen is the removal, and that is asserted above.
+	if repo.workerCalls != 1 {
+		t.Errorf("looked up the assignment %d times, want 1", repo.workerCalls)
 	}
 }
 
 func TestDeactivateAccountSurvivesAnAssignmentLookupFailure(t *testing.T) {
 	s, repo, pub := newDeactivationFixture(nil)
-	repo.workerErr = errx.ErrNotFound
+	repo.workerErr = errx.InternalError()
 
 	s.deactivateAccount(context.Background(), uuid.New(), uuid.New())
 
 	if len(pub.removed) != 0 {
 		t.Errorf("published %d removals on a failed lookup, want 0", len(pub.removed))
+	}
+	if repo.updateCalls != 1 {
+		t.Errorf("update called %d times, want 1: a lookup that failed is not a reason to leave the mailbox active", repo.updateCalls)
+	}
+}
+
+// ErrNotFound from the assignment lookup is not a lookup failure: it is the
+// mailbox having been deleted. The worker executing it holds it in memory and
+// will never be told otherwise, so it authenticates against the provider on
+// behalf of an account that no longer exists once per sync interval forever.
+// One deleted mailbox produced 444 reports this way before this existed.
+func TestDeactivateAccountEvictsAMailboxThatNoLongerExists(t *testing.T) {
+	s, repo, pub := newDeactivationFixture(nil)
+	repo.workerErr = errx.ErrNotFound
+	live := []models.Worker{{ID: uuid.New()}, {ID: uuid.New()}}
+	s.WorkerRepo = &stubWorkerRepo{workers: live}
+
+	userID, emailID := uuid.New(), uuid.New()
+	s.deactivateAccount(context.Background(), userID, emailID)
+
+	if repo.updateCalls != 0 {
+		t.Errorf("update called %d times on a mailbox with no row, want 0", repo.updateCalls)
+	}
+	if len(pub.removed) != len(live) {
+		t.Fatalf("published %d removals, want %d: the assignment died with the row, so every live worker has to be told", len(pub.removed), len(live))
+	}
+	for i, got := range pub.removed {
+		if got.emailID != emailID.String() || got.userID != userID.String() {
+			t.Errorf("removal %d carried user=%s email=%s, want user=%s email=%s", i, got.userID, got.emailID, userID, emailID)
+		}
+	}
+}
+
+// With no worker list there is nobody to address the eviction to. It must not
+// panic or take the consumer down over a mailbox that is already gone.
+func TestDeactivateAccountEvictionSurvivesAnUnavailableWorkerList(t *testing.T) {
+	s, repo, pub := newDeactivationFixture(nil)
+	repo.workerErr = errx.ErrNotFound
+	s.WorkerRepo = &stubWorkerRepo{err: errors.New("db down")}
+
+	s.deactivateAccount(context.Background(), uuid.New(), uuid.New())
+
+	if len(pub.removed) != 0 {
+		t.Errorf("published %d removals with no worker list, want 0", len(pub.removed))
 	}
 }
 
