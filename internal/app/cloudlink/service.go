@@ -118,6 +118,9 @@ type Service interface {
 	VerifyWarmupToken(ctx context.Context, accountID uuid.UUID, token string) (bool, error)
 	// IsCloudWarmupDelivery is the same check for warmup mail whose verify header did not survive.
 	IsCloudWarmupDelivery(ctx context.Context, accountID uuid.UUID, sender, messageID, subject string) (bool, error)
+	// IsCloudWarmupThreadReply asks by ancestry: whether what a tokenless
+	// message answers is a turn of one of the cloud's warmup conversations.
+	IsCloudWarmupThreadReply(ctx context.Context, accountID uuid.UUID, messageID string, inReplyTo []string) (bool, error)
 }
 
 type service struct {

@@ -252,3 +252,28 @@ func (s *service) IsCloudWarmupDelivery(ctx context.Context, accountID uuid.UUID
 	}
 	return out.Valid, nil
 }
+
+// IsCloudWarmupThreadReply asks the cloud whether a tokenless message answers
+// a turn of one of its warmup conversations. The cloud records a yes itself,
+// so the turn answering this one is recognised on the next ask.
+func (s *service) IsCloudWarmupThreadReply(ctx context.Context, accountID uuid.UUID, messageID string, inReplyTo []string) (bool, error) {
+	if len(inReplyTo) == 0 {
+		return false, nil
+	}
+	m, err := s.repo.GetByAccount(ctx, accountID)
+	if err != nil || m == nil {
+		return false, err
+	}
+	l, xerr := s.link(ctx)
+	if xerr != nil {
+		return false, xerr
+	}
+	var out struct {
+		Valid bool `json:"valid"`
+	}
+	q := models.PoolLinkWarmupDeliveryQuery{MessageID: messageID, InReplyTo: inReplyTo}
+	if xerr := s.clientFor(l).do(ctx, http.MethodPost, "/instance/mailboxes/"+m.RemoteID.String()+"/warmup-deliveries", q, &out); xerr != nil {
+		return false, xerr
+	}
+	return out.Valid, nil
+}

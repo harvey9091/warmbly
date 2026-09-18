@@ -198,6 +198,52 @@ func TestLivePoolLinkWarmupDeliveryRecognizesSentAndOldCopies(t *testing.T) {
 	}
 }
 
+// A reply typed by hand in a warmup thread names the send it answers and
+// nothing else; the turn after it names that reply. Both have to resolve, from
+// either mailbox in the pair.
+func TestLivePoolLinkWarmupThreadReplyByAncestry(t *testing.T) {
+	f := newPoolLinkFixture(t)
+	requireSchemaVersion(t, f.pool, 180)
+	ctx := context.Background()
+	const sent = "<warm-thread@test.local>"
+	f.token(t, sent, "Quick question", true)
+
+	for _, tc := range []struct {
+		name    string
+		account uuid.UUID
+		parents []string
+		want    bool
+	}{
+		{"the recipient's copy of the reply", f.recipient, []string{sent}, true},
+		{"the sender's copy of the reply", f.sender, []string{sent}, true},
+		{"bare id, several parents", f.recipient, []string{"unrelated@test.local", "warm-thread@test.local"}, true},
+		{"a mailbox outside the pair", uuid.New(), []string{sent}, false},
+		{"a reply to ordinary mail", f.recipient, []string{"<real@prospect.test>"}, false},
+		{"nothing to answer", f.recipient, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := f.warmup.IsWarmupThreadReply(ctx, tc.account, tc.parents)
+			if err != nil || got != tc.want {
+				t.Fatalf("thread reply = %v, error = %v; want %v", got, err, tc.want)
+			}
+		})
+	}
+
+	// The next turn answers the reply, and is asked about from the other
+	// mailbox in the pair, whose own record of the reply is its Sent copy that
+	// may never have synced.
+	if err := f.warmup.RecordWarmupThreadMessage(ctx, f.recipient, "<reply-1@gmail.test>"); err != nil {
+		t.Fatalf("RecordWarmupThreadMessage: %v", err)
+	}
+	if err := f.warmup.RecordWarmupThreadMessage(ctx, f.recipient, "<reply-1@gmail.test>"); err != nil {
+		t.Fatalf("a re-synced turn must record idempotently: %v", err)
+	}
+	got, err := f.warmup.IsWarmupThreadReply(ctx, f.sender, []string{"<reply-1@gmail.test>"})
+	if err != nil || !got {
+		t.Fatalf("second turn = %v, error = %v; want it recognised through the recorded reply", got, err)
+	}
+}
+
 // An approved code the instance never came back for must not keep a usable
 // bearer token in plaintext once it expires.
 func TestLivePoolLinkExpiredCodeLosesItsToken(t *testing.T) {

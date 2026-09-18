@@ -26,6 +26,7 @@ type CloudLinkVerifier interface {
 	CheckEnrollment(ctx context.Context, accountID uuid.UUID) (bool, error)
 	VerifyWarmupToken(ctx context.Context, accountID uuid.UUID, token string) (bool, error)
 	IsCloudWarmupDelivery(ctx context.Context, accountID uuid.UUID, sender, messageID, subject string) (bool, error)
+	IsCloudWarmupThreadReply(ctx context.Context, accountID uuid.UUID, messageID string, inReplyTo []string) (bool, error)
 }
 
 type JobsService struct {
