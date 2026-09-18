@@ -349,6 +349,35 @@ func MatchInstantBranchTarget(bc *models.BranchConditions, prog *CampaignContact
 	return false, nil, false
 }
 
+// branchIsInstant reports whether a matched branch is one the instant path
+// owns: it carries a field the instant matcher handles for some event kind
+// (reply intent, opened, clicked) and has not opted out. The nil default
+// matches MatchInstantBranchTarget and the builder's own isInstantBranch, so
+// the badge the canvas shows and the runtime agree.
+func branchIsInstant(b *models.Branch) bool {
+	if b.Instant != nil && !*b.Instant {
+		return false
+	}
+	for i := range b.Conditions {
+		f := b.Conditions[i].Field
+		if fieldBelongsToEvent(f, "reply") || fieldBelongsToEvent(f, "open") || fieldBelongsToEvent(f, "click") {
+			return true
+		}
+	}
+	return false
+}
+
+// BranchWaitAfter is the delay that gates a branch's target step. An instant
+// branch matched because its signal already happened, so the branch's flag
+// wins over the target step's own wait_after: the target is due now rather
+// than a step wait after the last send (issue #583).
+func BranchWaitAfter(targetWaitAfter int, instant bool) int {
+	if instant {
+		return 0
+	}
+	return targetWaitAfter
+}
+
 // randomHolds deterministically routes Value% of contacts down a random-split
 // branch. Stable per (contact, branch): the same contact always takes the same
 // path for this branch, so re-evaluation at each schedule pass is consistent.

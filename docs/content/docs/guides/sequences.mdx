@@ -157,7 +157,7 @@ Because the wait belongs to the target, every path into that step uses the same 
 Waits are per contact. A contact waiting three days for a follow-up does not hold up anyone else: other contacts' first emails and due follow-ups keep sending in the meantime, and the campaign only pauses when nothing is due for anyone.
 
 <Callout type="info" title="Instant branches skip the wait">
-A path that runs instantly fires the moment the event happens, so the target's wait does not apply and the control is hidden.
+A path that runs instantly fires the moment the event happens, so the target's wait does not apply and the control is hidden. Action steps run right away. An email step is due immediately and goes out on the campaign's next scheduling pass, usually within 15 minutes, still inside your sending hours and the mailbox's spacing between sends. A path that is not instant, including one you toggled off, keeps the target's wait.
 </Callout>
 
 ## Follow-ups and threading

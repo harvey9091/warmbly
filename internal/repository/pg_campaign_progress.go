@@ -72,6 +72,10 @@ type ContactSequencePair struct {
 	// "due now". The placer floors its base time with it, so a wait routing
 	// honours can never be dropped by the placement pass.
 	NotBefore *time.Time
+	// Instant is true when the branch that chose SequenceID is an instant one.
+	// Its signal already happened, so the target step's own wait_after does not
+	// gate it and the placer must not re-add that delay (issue #583).
+	Instant bool
 	// AssignedSender is the mailbox this lead's sequence is bound to, set when
 	// its first email was reserved. The placer sends from it rather than
 	// rotating, so every step of one conversation comes from one address.
@@ -1454,7 +1458,7 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 			noteDue(back, true)
 			continue
 		}
-		pairs = append(pairs, ContactSequencePair{ContactID: contactID, SequenceID: *res.Target, IsNewLead: res.IsNewLead, NotBefore: res.DueAt, AssignedSender: in.sender})
+		pairs = append(pairs, ContactSequencePair{ContactID: contactID, SequenceID: *res.Target, IsNewLead: res.IsNewLead, Instant: res.Instant, NotBefore: res.DueAt, AssignedSender: in.sender})
 		if len(pairs) >= limit {
 			break
 		}
@@ -1479,6 +1483,9 @@ type ContactRoute struct {
 	// condition window is still open (WaitUntil set).
 	Target    *uuid.UUID
 	IsNewLead bool
+	// Instant is true when the branch that chose Target is an instant one, so
+	// Target is due without applying its own wait_after.
+	Instant bool
 	// DueAt is when the target's wait elapses: the campaign's entry delay after
 	// the contact entered for a first step, otherwise the step's wait_after plus
 	// a preceding wait node. Nil means due now.
@@ -1578,7 +1585,7 @@ func (r *campaignProgressRepository) RouteContact(ctx context.Context, campaignI
 		return out, nil
 	}
 	res := router.route(campaignID, contactID, in)
-	out.Target, out.IsNewLead, out.DueAt, out.WaitUntil = res.Target, res.IsNewLead, res.DueAt, res.WaitUntil
+	out.Target, out.IsNewLead, out.Instant, out.DueAt, out.WaitUntil = res.Target, res.IsNewLead, res.Instant, res.DueAt, res.WaitUntil
 	out.Hold = res.Hold
 	return out, nil
 }
@@ -1694,6 +1701,9 @@ type routeResult struct {
 	target *uuid.UUID
 	stop   bool
 	wait   *time.Time
+	// instant is true when the branch that produced `target` is an instant
+	// one, so the target's own wait_after does not gate it.
+	instant bool
 }
 
 // loadRouter reads the steps (position + branch tree + wait) once, ordered by
@@ -1841,7 +1851,7 @@ func (cr *campaignRouter) routeNext(fromID uuid.UUID, prog *CampaignContactProgr
 			return routeResult{stop: true}
 		}
 		t := *b.TargetSequenceID
-		return routeResult{target: &t}
+		return routeResult{target: &t, instant: branchIsInstant(b)}
 	}
 	// Nothing matched -> the flow ends with STOP.
 	return routeResult{stop: true}
@@ -1873,7 +1883,7 @@ func (cr *campaignRouter) routeReplyOnly(fromID uuid.UUID, prog *CampaignContact
 			continue
 		}
 		t := *b.TargetSequenceID
-		return routeResult{target: &t}
+		return routeResult{target: &t, instant: branchIsInstant(b)}
 	}
 	return routeResult{stop: true}
 }
@@ -1938,6 +1948,7 @@ func (cr *campaignRouter) route(campaignID, contactID uuid.UUID, in routeInput) 
 		}
 	}
 	out.Target = res.target
+	out.Instant = res.instant
 	switch {
 	case out.IsNewLead:
 		// The entry delay: a contact's first email waits this long after they
@@ -1949,7 +1960,8 @@ func (cr *campaignRouter) route(campaignID, contactID uuid.UUID, in routeInput) 
 			out.DueAt = &due
 		}
 	case in.sentAt != nil:
-		due := in.sentAt.Add(24 * time.Hour * time.Duration(cr.steps[cr.idxByID[*res.target]].waitAfter))
+		wait := BranchWaitAfter(cr.steps[cr.idxByID[*res.target]].waitAfter, res.instant)
+		due := in.sentAt.Add(24 * time.Hour * time.Duration(wait))
 		if last, ok := cr.idxByID[*in.lastSeq]; ok && cr.steps[last].waitMinutes > 0 {
 			due = due.Add(time.Duration(cr.steps[last].waitMinutes) * time.Minute)
 		}
