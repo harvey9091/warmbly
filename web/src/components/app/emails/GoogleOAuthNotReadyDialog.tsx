@@ -134,7 +134,9 @@ export default function GoogleOAuthNotReadyDialog({
                                             <ExtLink href="https://myaccount.google.com/security">
                                                 Google Account, Security
                                             </ExtLink>
-                                            . Google only offers app passwords once it is on.
+                                            . Google only offers app passwords once it is on, and only
+                                            alongside a method other than a security key. An account on
+                                            Advanced Protection cannot have one at all.
                                         </Step>
                                         <Step n={2}>
                                             Create an app password at{" "}
@@ -145,9 +147,10 @@ export default function GoogleOAuthNotReadyDialog({
                                             only time it is shown.
                                         </Step>
                                         <Step n={3}>
-                                            Turn IMAP on in Gmail: Settings, See all settings, Forwarding and
-                                            POP/IMAP, Enable IMAP. On Google Workspace an admin may have to
-                                            allow IMAP and app passwords for the organization first.
+                                            Nothing to turn on for a personal Gmail account: Google removed
+                                            the IMAP setting in January 2025 and IMAP is always on. On Google
+                                            Workspace an administrator decides, and can switch off IMAP or app
+                                            passwords for the organization.
                                         </Step>
                                         <Step n={4}>
                                             Come back here, choose Other (SMTP / IMAP), and use the app password
@@ -181,6 +184,12 @@ export default function GoogleOAuthNotReadyDialog({
                                         password.
                                     </div>
                                 </div>
+
+                                <p className="text-[11.5px] text-slate-500">
+                                    No app password available, because of Advanced Protection or an
+                                    administrator's policy? Ask the administrator to allow them, or connect
+                                    with Google sign-in knowing the limits above.
+                                </p>
                             </div>
                         </div>
 
