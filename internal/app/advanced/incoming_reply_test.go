@@ -13,12 +13,14 @@ import (
 
 type incomingReplyAdvancedRepo struct {
 	repository.AdvancedOutreachRepository
-	marked  int
-	intents int
+	marked    int
+	intents   int
+	intentOff bool
 }
 
-func (incomingReplyAdvancedRepo) GetOutreachSettings(context.Context, uuid.UUID) (*models.AdvancedOutreachSettings, error) {
+func (r *incomingReplyAdvancedRepo) GetOutreachSettings(context.Context, uuid.UUID) (*models.AdvancedOutreachSettings, error) {
 	settings := models.DefaultAdvancedOutreachSettings()
+	settings.ReplyIntent.Enabled = !r.intentOff
 	return &settings, nil
 }
 
@@ -193,6 +195,68 @@ func TestMessageAddressesMailbox(t *testing.T) {
 	}
 }
 
+// A person answers from whatever address their client picks: a Gmail "send
+// as" alias, a forward, a colleague's desk. The thread names the send, and
+// that is the evidence; the From address is not a second condition. This is
+// the self-hoster's report: every reply arrived, none was ever counted.
+func TestProcessIncomingReplyCountsAThreadReplyFromAnotherAddress(t *testing.T) {
+	orgID, accountID, contactID := uuid.New(), uuid.New(), uuid.New()
+	account := &models.Email{ID: accountID, OrganizationID: &orgID, Email: "sender@example.test"}
+	// The alias is nobody in the contact list; only the thread can attribute it.
+	service, progress := newIncomingReplyService(account, nil, contactID)
+
+	xerr := service.ProcessIncomingReply(context.Background(), accountID, &models.EmailMessageStoreData{
+		ID:        uuid.New(),
+		EmailID:   accountID,
+		Folder:    models.FolderInbox,
+		FromAddr:  []string{"M K <alias@gmail.test>"},
+		ToAddr:    []string{"sender@example.test"},
+		InReplyTo: []string{"<opener@example.test>"},
+		Subject:   "Re: Hello",
+		Snippet:   "Received it, thank you.",
+	})
+	if xerr != nil {
+		t.Fatal(xerr)
+	}
+	if progress.replied != 1 {
+		t.Fatalf("RecordEmailReplied calls = %d, want 1 for a reply in the lead's own thread", progress.replied)
+	}
+	if progress.advanced.marked != 1 {
+		t.Fatalf("MarkVariantEvent calls = %d, want the reply counted for the variant", progress.advanced.marked)
+	}
+}
+
+// Turning reply-intent automation off must not turn reply detection off:
+// replied_at, stop-on-reply and the analytics all hang on it.
+func TestProcessIncomingReplyStampsRepliedWithIntentAutomationOff(t *testing.T) {
+	orgID, accountID, contactID := uuid.New(), uuid.New(), uuid.New()
+	account := &models.Email{ID: accountID, OrganizationID: &orgID, Email: "sender@example.test"}
+	service, progress := newIncomingReplyService(account, &models.Contact{
+		ID: contactID, Email: "recipient@example.test",
+	}, contactID)
+	progress.advanced.intentOff = true
+
+	xerr := service.ProcessIncomingReply(context.Background(), accountID, &models.EmailMessageStoreData{
+		ID:        uuid.New(),
+		EmailID:   accountID,
+		Folder:    models.FolderInbox,
+		FromAddr:  []string{"Recipient <recipient@example.test>"},
+		ToAddr:    []string{"sender@example.test"},
+		InReplyTo: []string{"<opener@example.test>"},
+		Subject:   "Re: Hello",
+		Snippet:   "Sounds good, let's talk.",
+	})
+	if xerr != nil {
+		t.Fatal(xerr)
+	}
+	if progress.replied != 1 {
+		t.Fatalf("RecordEmailReplied calls = %d, want 1 with intent automation off", progress.replied)
+	}
+	if progress.advanced.intents != 0 {
+		t.Fatalf("CreateReplyIntent calls = %d, want 0 with intent automation off", progress.advanced.intents)
+	}
+}
+
 func TestProcessIncomingReplyRejectsMailboxOwnSentCopy(t *testing.T) {
 	orgID, accountID, contactID := uuid.New(), uuid.New(), uuid.New()
 	account := &models.Email{ID: accountID, OrganizationID: &orgID, Email: "sender@example.test"}
@@ -345,7 +409,12 @@ func TestProcessIncomingReplyClaimsBeforePersistingAutomatedState(t *testing.T) 
 	}
 }
 
-func TestProcessIncomingReplyRequiresThreadSenderToMatchContact(t *testing.T) {
+// Someone else answering in the lead's thread (a colleague, an assistant,
+// another contact on the same list) is still an answer to the email we sent
+// that lead; it is attributed to the thread, not to the sender's own latest
+// campaign. #549 was the mailbox's OWN outbound copy, which the folder and
+// sender checks above still refuse.
+func TestProcessIncomingReplyCountsAThreadReplyFromAnotherContact(t *testing.T) {
 	orgID, accountID := uuid.New(), uuid.New()
 	taskContactID, senderContactID := uuid.New(), uuid.New()
 	account := &models.Email{ID: accountID, OrganizationID: &orgID, Email: "sender@example.test"}
@@ -366,8 +435,8 @@ func TestProcessIncomingReplyRequiresThreadSenderToMatchContact(t *testing.T) {
 	if xerr != nil {
 		t.Fatal(xerr)
 	}
-	if progress.replied != 0 {
-		t.Fatalf("RecordEmailReplied calls = %d, want 0 when the threaded sender is a different contact", progress.replied)
+	if progress.replied != 1 {
+		t.Fatalf("RecordEmailReplied calls = %d, want the thread's lead marked replied", progress.replied)
 	}
 }
 

@@ -1088,9 +1088,6 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 	if err != nil {
 		return toErrx(err)
 	}
-	if !settings.ReplyIntent.Enabled {
-		return nil
-	}
 
 	sender := parseSenderEmail(msg.FromAddr)
 	if sender == "" {
@@ -1120,6 +1117,9 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 	var contactID *uuid.UUID
 	var taskID *uuid.UUID
 	var referencesCampaignThread bool
+	// contactEmail is the address we mailed, which is not always the one
+	// that answered; an opt-out has to reach both.
+	var contactEmail string
 
 	// First, try exact message threading via In-Reply-To.
 	for _, mid := range msg.InReplyTo {
@@ -1152,13 +1152,20 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 				continue
 			}
 		}
+		// The thread is the evidence; the From address does not have to be
+		// the contact's. People answer from a "send as" alias, a forward or
+		// a colleague's desk, and each of those is a reply to the email we
+		// sent this lead. Requiring the addresses to match threw every one
+		// of them away, and the fallback below refused them too because the
+		// thread was ours (a Gmail replying as its alias never counted).
 		contact, contactErr := s.contactRepo.GetByID(ctx, *ct.ContactID)
 		if contactErr != nil {
 			return contactErr
 		}
-		if contact == nil || !strings.EqualFold(strings.TrimSpace(contact.Email), sender) {
+		if contact == nil {
 			continue
 		}
+		contactEmail = strings.TrimSpace(contact.Email)
 		taskID = &task.ID
 		campaignID = ct.CampaignID
 		contactID = ct.ContactID
@@ -1173,6 +1180,7 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 		}
 		if contact != nil {
 			contactID = &contact.ID
+			contactEmail = strings.TrimSpace(contact.Email)
 		}
 	}
 
@@ -1302,6 +1310,13 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 		s.fireInstantActions(ctx, cID, ctID, sID, "reply")
 	}
 
+	// Everything above is detection, and a reply is a reply whatever the
+	// workspace automates on it. The switch governs only what follows:
+	// intents, holds, pauses, opt-outs, CRM tasks and the fan-out.
+	if !settings.ReplyIntent.Enabled {
+		return nil
+	}
+
 	// A reply with no campaign behind it was never classified above, and a
 	// machine announces itself in the headers (RFC 3834, Precedence, a null
 	// Return-Path, a delivery-status report) whether or not we ever mailed the
@@ -1368,6 +1383,24 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 		})
 		if err := s.contactRepo.SetSubscribedByEmail(ctx, *account.OrganizationID, sender, false); err != nil {
 			log.Warn().Err(err).Msg("reply opt-out: could not clear the contact's subscription flag")
+		}
+		// Answered from another address: the one we mailed asked to stop too.
+		if contactEmail != "" && !strings.EqualFold(contactEmail, sender) {
+			_ = s.repo.UpsertSuppressedRecipient(ctx, &models.SuppressedRecipient{
+				OrganizationID: *account.OrganizationID,
+				Email:          strings.ToLower(contactEmail),
+				Kind:           models.SuppressionKindEmail,
+				Reason:         "asked to stop in a reply sent from " + sender,
+				Source:         models.DeliverabilityEventUnsubscribe,
+				CampaignID:     campaignID,
+				Metadata: map[string]interface{}{
+					"via":        "reply",
+					"replied_as": sender,
+				},
+			})
+			if err := s.contactRepo.SetSubscribedByEmail(ctx, *account.OrganizationID, strings.ToLower(contactEmail), false); err != nil {
+				log.Warn().Err(err).Msg("reply opt-out: could not clear the mailed contact's subscription flag")
+			}
 		}
 		s.emit(ctx, *account.OrganizationID, models.WebhookEventCampaignUnsubscribed, map[string]any{
 			"campaign_id":   uuidString(campaignID),
