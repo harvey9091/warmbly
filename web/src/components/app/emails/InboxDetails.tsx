@@ -1228,7 +1228,7 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
                     )}
                     {wh.partner_mailboxes_7d > 1 && wh.partner_organizations_7d === 1 && (
                         <p className="mt-1.5 text-[11px] text-amber-700">
-                            Every partner this week was in one workspace. Warmup builds the most reputation against mailboxes outside your own.
+                            Every partner this week was in a single workspace. Warmup builds the most reputation across many workspaces and domains.
                         </p>
                     )}
                 </div>

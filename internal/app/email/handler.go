@@ -339,17 +339,20 @@ func (s *emailService) Delete(ctx context.Context, userID, emailAccountID string
 		return errx.ErrNotFound
 	}
 
-	// Revoked before anything local goes: a mailbox the cloud pool warms is
-	// enrolled there with its own SMTP/IMAP password, and deleting the row only
-	// cascaded the link away, so the pool went on holding the credential and
-	// warming a mailbox this instance no longer knew was enrolled. Afterwards
-	// there is no row left to retry from, which is why a revocation that cannot
-	// be made fails the delete rather than being logged (#574).
-	if xerr := s.unenrollFromCloud(ctx, account); xerr != nil {
+	if xerr := s.dropFromWorker(ctx, userID, accountID); xerr != nil {
 		return xerr
 	}
 
-	if xerr := s.dropFromWorker(ctx, userID, accountID); xerr != nil {
+	// Revoked before the row goes: a mailbox the cloud pool warms is enrolled
+	// there with its own SMTP/IMAP password, and deleting the row only cascaded
+	// the link away, so the pool went on holding the credential and warming a
+	// mailbox this instance no longer knew was enrolled. Afterwards there is no
+	// row left to retry from, which is why a revocation that cannot be made
+	// fails the delete rather than being logged (#574). The mailbox goes back on
+	// its worker on that path, so a refused delete really does leave it as it
+	// was, which is what its error says.
+	if xerr := s.unenrollFromCloud(ctx, account); xerr != nil {
+		s.loadAccountBestEffort(ctx, accountID)
 		return xerr
 	}
 
@@ -378,11 +381,13 @@ func (s *emailService) Delete(ctx context.Context, userID, emailAccountID string
 }
 
 // ErrCloudEnrollmentStuck refuses a delete whose Warmbly Cloud enrollment
-// could not be revoked. Retryable: nothing local has changed yet.
+// could not be revoked. Retryable, and only retryable: unenrolling under
+// Settings makes the same call, so there is no local way around it and saying
+// otherwise would send the owner somewhere that cannot work either.
 var ErrCloudEnrollmentStuck = errx.NewWithIdentifier(
 	errx.Conflict,
 	"mailbox_cloud_unenroll_failed",
-	"This mailbox is enrolled in Warmbly Cloud and its enrollment could not be removed, so deleting it would leave its password in the pool. Try again in a moment, or unenroll it under Settings first.",
+	"This mailbox is enrolled in Warmbly Cloud and its enrollment could not be removed, so deleting it would leave its password in the pool. Nothing was removed. Try again once this instance can reach Warmbly Cloud.",
 )
 
 // unenrollFromCloud revokes the mailbox's Warmbly Cloud enrollment, which is

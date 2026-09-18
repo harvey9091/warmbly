@@ -57,7 +57,7 @@ func withCloudEnrollment(f *removalFixture, managed bool) *stubUnenroller {
 // only cascaded the local link row away, so the cloud went on holding the
 // credential and warming a mailbox this instance no longer knew was enrolled,
 // and could no longer verify the warmup tokens of (#574).
-func TestDeleteRevokesTheCloudEnrollmentFirst(t *testing.T) {
+func TestDeleteRevokesTheCloudEnrollmentBeforeTheRowGoes(t *testing.T) {
 	f := newRemovalFixture(t)
 	u := withCloudEnrollment(f, false)
 
@@ -70,9 +70,9 @@ func TestDeleteRevokesTheCloudEnrollmentFirst(t *testing.T) {
 	if u.orgs[0] != f.org {
 		t.Errorf("unenrolled under org %s, want the mailbox's own %s", u.orgs[0], f.org)
 	}
-	// Before anything local moves: afterwards there is no row left to retry
-	// the revocation from.
-	want := []string{"unenroll", "remove", "delete"}
+	// Before the row goes: afterwards there is no row left to retry the
+	// revocation from.
+	want := []string{"remove", "unenroll", "delete"}
 	if len(f.trace) != len(want) {
 		t.Fatalf("order was %v, want %v", f.trace, want)
 	}
@@ -100,8 +100,11 @@ func TestDeleteKeepsTheMailboxWhenTheCloudRefusesTheRevocation(t *testing.T) {
 	if f.repo.deleteCalls != 0 {
 		t.Errorf("the row was deleted %d times, want 0", f.repo.deleteCalls)
 	}
-	if len(f.pub.removed) != 0 {
-		t.Errorf("the worker was told about a mailbox that still exists: %v", f.pub.removed)
+	// The mailbox was already taken off its worker by then, so a refused
+	// delete has to put it back, or the error's "nothing was removed" would be
+	// a lie and the mailbox would sit dark until the reconciler's next pass.
+	if len(f.pub.added) != 1 || f.pub.added[0] != f.mailbox {
+		t.Errorf("shipped %v back to the worker, want one %s", f.pub.added, f.mailbox)
 	}
 }
 

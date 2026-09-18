@@ -242,7 +242,7 @@ One conflict carries its own `code`. A contact's email address has to be free, s
 | `contact_email_taken` | 409 | The address given to [update a contact](/api/reference/contacts/#update-a-contact) already belongs to another contact |
 | `mailbox_cloud_unenroll_failed` | 409 | The mailbox is enrolled in [Warmbly Cloud](/guides/warmbly-cloud/) and its enrollment could not be revoked, so `DELETE /emails/{id}` would leave its password in the pool. Nothing was removed |
 
-`mailbox_cloud_unenroll_failed` is a self-hosted instance losing contact with Warmbly Cloud mid-delete. Deleting an enrolled mailbox has to revoke its enrollment first, because the pool holds the mailbox's own SMTP/IMAP credentials and the local record is the only thing that knows the enrollment exists. Retry the delete once the instance can reach the cloud again, or unenroll the mailbox under **Settings > Warmbly Cloud** and then delete it.
+`mailbox_cloud_unenroll_failed` is a self-hosted instance losing contact with Warmbly Cloud mid-delete. Deleting an enrolled mailbox has to revoke its enrollment before the record goes, because the pool holds the mailbox's own SMTP/IMAP credentials and that record is the only thing that knows the enrollment exists. The mailbox is left exactly as it was, so retry the delete once the instance can reach the cloud again. Unenrolling under **Settings > Warmbly Cloud** first does not help: it makes the same call.
 
 ### 422 Unprocessable
 

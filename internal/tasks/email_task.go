@@ -601,7 +601,7 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 	// foreign partner is used up, so warmup never stops for want of an
 	// external partner.
 	var buckets [8][]uuid.UUID
-	foreign := 0
+	foreign, own := 0, 0
 	for _, c := range candidates {
 		if _, usedToday := todayPartnerSet[c.ID]; usedToday {
 			continue
@@ -609,6 +609,7 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 		rank := 0
 		if sameOrganization(account.OrganizationID, c.OrganizationID) {
 			rank += 4
+			own++
 		} else {
 			foreign++
 		}
@@ -620,12 +621,14 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 		}
 		buckets[rank] = append(buckets[rank], c.ID)
 	}
-	if foreign == 0 && len(candidates) > 0 {
-		// Every partner left is one of the sender's own mailboxes. Said out
-		// loud because the mail still goes out and nothing else in the logs
-		// reports that the pool had no outside partner for this mailbox. Info,
-		// not a warning: on a self-hosted instance that is not linked to
-		// Warmbly Cloud it is the only thing that can happen, every tick.
+	if foreign == 0 && own > 0 {
+		// The draw is about to pair the sender with one of its own mailboxes.
+		// Said out loud because the mail still goes out and nothing else in the
+		// logs reports that the pool had no outside partner for it. Info, not a
+		// warning: on a self-hosted instance that is not linked to Warmbly
+		// Cloud it is the only thing that can happen, every tick. Conditional
+		// on there being a sibling to draw, so a tick with nothing left at all
+		// is not reported as a pairing that never happens.
 		log.Info().
 			Int("participants", len(candidates)).
 			Str("pool", poolType).

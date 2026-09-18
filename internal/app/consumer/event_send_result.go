@@ -236,7 +236,14 @@ func (s *JobsService) failCampaignSend(ctx context.Context, task *repository.Tas
 	// A server that rejected the RECIPIENT at send time is a bounce in all but
 	// delivery route; a rejection of the sender, the session or the content
 	// says nothing about the address.
-	if s.Evidence != nil && ct.ContactID != nil && ct.SequenceID != nil && emailverify.NamesRecipient(reason) {
+	//
+	// Read off a PERMANENT failure only. A deferral names the recipient as
+	// readily as a refusal does ("450 4.7.1 <box@example.com>: Recipient
+	// address rejected: Greylisted" is the standard Postfix greylisting reply),
+	// so classifying the retryable class by its text would file a valid
+	// contact as undeliverable on the strength of a delay.
+	if s.Evidence != nil && ct.ContactID != nil && ct.SequenceID != nil &&
+		code != string(errx.MailErrorCodeServerUnreachable) && emailverify.NamesRecipient(reason) {
 		s.Evidence.RecordEvidence(ctx, *ct.ContactID, models.Step(&campaignID, ct.SequenceID), "bounced_recipient", "send:"+ct.SequenceID.String(), reason)
 	}
 
