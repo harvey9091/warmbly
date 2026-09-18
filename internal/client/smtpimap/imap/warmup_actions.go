@@ -2,6 +2,7 @@ package imap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -66,8 +67,12 @@ func (c *Client) MarkAsRead(ctx context.Context, mailboxName string, uid uint32)
 	c.lifecycle.RLock()
 	defer c.lifecycle.RUnlock()
 	defer c.begin()()
-	if _, err := c.selectMailbox(mailboxName, nil); err != nil {
-		return fmt.Errorf("select %q: %w", mailboxName, err)
+	// Qualified like every other folder this file touches: the worker hands
+	// over the bare destination it filed into, and on a Dovecot that keeps
+	// user folders under "INBOX." selecting the bare name is a NO.
+	name := c.qualifyMailboxLocked(mailboxName)
+	if _, err := c.selectMailbox(name, nil); err != nil {
+		return fmt.Errorf("select %q: %w", name, err)
 	}
 
 	cmd := c.client.Store(imap.UIDSetNum(imap.UID(uid)), &imap.StoreFlags{
@@ -93,8 +98,9 @@ func (c *Client) MarkImportant(ctx context.Context, mailboxName string, uid uint
 	c.lifecycle.RLock()
 	defer c.lifecycle.RUnlock()
 	defer c.begin()()
-	if _, err := c.selectMailbox(mailboxName, nil); err != nil {
-		return fmt.Errorf("select %q: %w", mailboxName, err)
+	name := c.qualifyMailboxLocked(mailboxName)
+	if _, err := c.selectMailbox(name, nil); err != nil {
+		return fmt.Errorf("select %q: %w", name, err)
 	}
 
 	cmd := c.client.Store(imap.UIDSetNum(imap.UID(uid)), &imap.StoreFlags{
@@ -175,13 +181,24 @@ func (c *Client) personalPrefixLocked() string {
 }
 
 // qualifyMailboxLocked puts a bare folder name inside the personal namespace,
-// leaving a name that already carries the prefix untouched. mu must be held.
+// leaving a name that already carries the prefix untouched. INBOX is never
+// prefixed: it is the one name RFC 3501 defines outside any namespace, and
+// "INBOX.INBOX" is a folder no server has. mu must be held.
 func (c *Client) qualifyMailboxLocked(name string) string {
 	prefix := c.personalPrefixLocked()
-	if prefix == "" || strings.HasPrefix(name, prefix) {
+	if prefix == "" || strings.HasPrefix(name, prefix) || strings.EqualFold(strings.TrimSpace(name), "INBOX") {
 		return name
 	}
 	return prefix + name
+}
+
+// sameMailbox compares two spellings of a folder name the way a server does:
+// case-insensitively, and ignoring a leading delimiter. One host lists the
+// folder it created for us as "/Warmbly" and refuses to create "Warmbly"
+// because it exists; a strict compare between those two sends the CREATE.
+func sameMailbox(a, b string) bool {
+	trim := func(s string) string { return strings.ToLower(strings.TrimLeft(strings.TrimSpace(s), "/.")) }
+	return trim(a) == trim(b)
 }
 
 func (c *Client) moveUID(ctx context.Context, src, dst string, uid uint32) error {
@@ -197,6 +214,10 @@ func (c *Client) moveUID(ctx context.Context, src, dst string, uid uint32) error
 }
 
 func (c *Client) moveUIDLocked(src, dst string, uid uint32) error {
+	// Both ends qualified here rather than by each caller, so a source the
+	// worker names bare (the folder a previous leg filed into) and an inbox
+	// it names as "INBOX" both resolve on a prefixed server.
+	src, dst = c.qualifyMailboxLocked(src), c.qualifyMailboxLocked(dst)
 	if _, err := c.selectMailbox(src, nil); err != nil {
 		return fmt.Errorf("select %q: %w", src, err)
 	}
@@ -231,7 +252,7 @@ func (c *Client) ensureMailboxExists(name string) error {
 	list := c.client.List("", name, nil)
 	found := false
 	for f := list.Next(); f != nil; f = list.Next() {
-		if f.Mailbox == name {
+		if sameMailbox(f.Mailbox, name) {
 			found = true
 		}
 	}
@@ -241,10 +262,24 @@ func (c *Client) ensureMailboxExists(name string) error {
 	if found {
 		return nil
 	}
-	if err := c.client.Create(name, nil).Wait(); err != nil {
-		return fmt.Errorf("create mailbox %q: %w", name, err)
+	return c.createMailboxLocked(name)
+}
+
+// createMailboxLocked creates a folder, and treats "it already exists" as
+// having done so. The only reason to create it is to move mail into it, and
+// a server answering ALREADYEXISTS is saying that is possible; failing here
+// instead left every warmup arrival on ten mailboxes sitting in the inbox
+// because LIST spelled the folder differently from the name we asked for.
+func (c *Client) createMailboxLocked(name string) error {
+	err := c.client.Create(name, nil).Wait()
+	if err == nil {
+		return nil
 	}
-	return nil
+	var imapErr *imap.Error
+	if errors.As(err, &imapErr) && imapErr.Code == imap.ResponseCodeAlreadyExists {
+		return nil
+	}
+	return fmt.Errorf("create mailbox %q: %w", name, err)
 }
 
 // IsSpamMailboxName returns true if the mailbox name is a Junk/Spam folder.
