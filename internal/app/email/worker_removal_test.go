@@ -146,7 +146,13 @@ func newRemovalFixture(t *testing.T) *removalFixture {
 	}
 	f.pub = &stubEventPublisher{trace: &f.trace}
 	f.assign = &stubAssignment{live: true}
-	f.svc = &emailService{emailRepository: f.repo, publisher: f.pub, workerAssignment: f.assign}
+	f.svc = &emailService{
+		emailRepository:  f.repo,
+		publisher:        f.pub,
+		workerAssignment: f.assign,
+		cloudLink:        &stubCloudLinkRepo{},
+		cloudUnenroll:    &stubUnenroller{},
+	}
 	return f
 }
 

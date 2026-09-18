@@ -527,10 +527,12 @@ func (s *service) RevokeForDelete(ctx context.Context, orgID, accountID uuid.UUI
 		log.Error().Err(err).Str("account_id", accountID.String()).Msg("cloud link: link unreadable, so the mailbox's enrollment cannot be revoked")
 		return errx.InternalError()
 	}
-	if l != nil {
-		if xerr := s.clientFor(l).do(ctx, http.MethodDelete, "/instance/mailboxes/"+m.RemoteID.String(), nil, nil); xerr != nil && xerr.Identifier != "pool_link_mailbox_not_found" {
-			return xerr
-		}
+	if l == nil {
+		log.Error().Str("account_id", accountID.String()).Msg("cloud link: enrollment exists without a link, so remote revocation cannot be confirmed")
+		return errx.InternalError()
+	}
+	if xerr := s.clientFor(l).do(ctx, http.MethodDelete, "/instance/mailboxes/"+m.RemoteID.String(), nil, nil); xerr != nil && xerr.Identifier != "pool_link_mailbox_not_found" {
+		return xerr
 	}
 	s.forgetToken(accountID)
 	// The mailbox delete also removes any stale local enrollment by cascade.

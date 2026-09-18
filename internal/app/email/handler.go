@@ -377,13 +377,17 @@ func (s *emailService) Delete(ctx context.Context, userID, emailAccountID string
 var ErrCloudEnrollmentStuck = errx.NewWithIdentifier(
 	errx.Conflict,
 	"mailbox_cloud_unenroll_failed",
-	"This mailbox is enrolled in Warmbly Cloud and its enrollment could not be removed, so deleting it would leave its password in the pool. Nothing was removed. Try again once this instance can reach Warmbly Cloud.",
+	"This mailbox is enrolled in Warmbly Cloud and its enrollment could not be removed, so deleting it would leave its password in the pool. The mailbox record remains. Worker restoration is retried automatically; try the delete again once this instance can reach Warmbly Cloud.",
 )
 
 // unenrollFromCloud removes the mailbox credential held by Warmbly Cloud.
 func (s *emailService) unenrollFromCloud(ctx context.Context, account *models.Email) *errx.Error {
-	if s.cloudUnenroll == nil || s.cloudLink == nil || account.OrganizationID == nil {
+	if account.OrganizationID == nil {
 		return nil
+	}
+	if s.cloudUnenroll == nil || s.cloudLink == nil {
+		log.Error().Str("account_id", account.ID.String()).Msg("cloud enrollment dependencies missing; delete refused")
+		return ErrCloudEnrollmentStuck
 	}
 	link, err := s.cloudLink.GetByAccount(ctx, account.ID)
 	if err != nil {

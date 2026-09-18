@@ -114,6 +114,30 @@ func TestDeleteKeepsTheMailboxWhenTheEnrollmentCannotBeRead(t *testing.T) {
 	}
 }
 
+// Missing cloud dependencies cannot prove that a credential was revoked.
+func TestDeleteKeepsTheMailboxWhenCloudRevocationIsNotWired(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*emailService)
+	}{
+		{"repository missing", func(s *emailService) { s.cloudLink = nil }},
+		{"revoker missing", func(s *emailService) { s.cloudUnenroll = nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRemovalFixture(t)
+			tc.setup(f.svc)
+
+			xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String())
+			if xerr == nil || xerr.Identifier != ErrCloudEnrollmentStuck.Identifier {
+				t.Fatalf("error = %v, want %q", xerr, ErrCloudEnrollmentStuck.Identifier)
+			}
+			if f.repo.deleteCalls != 0 {
+				t.Errorf("the row was deleted %d times, want 0", f.repo.deleteCalls)
+			}
+		})
+	}
+}
+
 // Cloud-managed mirrors skip revocation to avoid recursive deletion.
 func TestDeleteDoesNotCallBackForAManagedMailbox(t *testing.T) {
 	f := newRemovalFixture(t)

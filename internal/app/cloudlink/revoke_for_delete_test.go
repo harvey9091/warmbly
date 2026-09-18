@@ -143,23 +143,29 @@ func TestRevokeForDeleteToleratesAMailboxTheCloudHasAlreadyDropped(t *testing.T)
 	}
 }
 
-// Nothing enrolled or linked requires no remote call.
+// A mailbox that was never enrolled requires no remote call.
 func TestRevokeForDeleteIsANoopWithNothingToRevoke(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		setup func(*revokeFixture)
-	}{
-		{"never enrolled", func(f *revokeFixture) { f.repo.mailbox = nil }},
-		{"instance not linked", func(f *revokeFixture) { f.repo.link = nil }},
-	} {
-		f := newRevokeFixture(t, http.StatusNoContent)
-		tc.setup(f)
-		if xerr := f.svc.RevokeForDelete(context.Background(), f.org, f.account); xerr != nil {
-			t.Fatalf("%s: %v", tc.name, xerr)
-		}
-		if len(*f.deletes) != 0 {
-			t.Errorf("%s: called the cloud anyway: %v", tc.name, *f.deletes)
-		}
+	f := newRevokeFixture(t, http.StatusNoContent)
+	f.repo.mailbox = nil
+
+	if xerr := f.svc.RevokeForDelete(context.Background(), f.org, f.account); xerr != nil {
+		t.Fatalf("RevokeForDelete: %v", xerr)
+	}
+	if len(*f.deletes) != 0 {
+		t.Errorf("called the cloud anyway: %v", *f.deletes)
+	}
+}
+
+// An enrollment without its link cannot prove that the cloud credential is gone.
+func TestRevokeForDeleteRefusesAnEnrollmentWithoutALink(t *testing.T) {
+	f := newRevokeFixture(t, http.StatusNoContent)
+	f.repo.link = nil
+
+	if xerr := f.svc.RevokeForDelete(context.Background(), f.org, f.account); xerr == nil {
+		t.Fatal("an enrollment without a link was reported as revoked")
+	}
+	if len(*f.deletes) != 0 || len(f.repo.unenrolled) != 0 {
+		t.Errorf("acted without a link: deletes=%v unenrolled=%v", *f.deletes, f.repo.unenrolled)
 	}
 }
 
