@@ -151,6 +151,9 @@ func (s *JobsService) HandleEmailFailed(ctx context.Context, result models.SendE
 	}
 
 	reason, code := sendFailureReason(result)
+	if task.TaskType == "warmup" {
+		return s.failWarmupSend(ctx, task, reason)
+	}
 	if err := s.TaskRepo.RecordTaskFailure(ctx, task.ID, "Send failed", reason); err != nil {
 		return err
 	}
@@ -162,6 +165,18 @@ func (s *JobsService) HandleEmailFailed(ctx context.Context, result models.SendE
 		s.notifyUserSendFailed(ctx, task, reason)
 	}
 	return nil
+}
+
+// failWarmupSend leaves redelivery possible unless the task and refund both persist.
+func (s *JobsService) failWarmupSend(ctx context.Context, task *repository.Task, reason string) error {
+	if s.WarmupRepo == nil {
+		return s.TaskRepo.RecordTaskFailure(ctx, task.ID, "Send failed", reason)
+	}
+	day := time.Now()
+	if task.CompletedAt != nil {
+		day = *task.CompletedAt
+	}
+	return s.WarmupRepo.FailWarmupSend(ctx, task.EmailAccountID, task.ID, day, "Send failed", reason)
 }
 
 // failCampaignSend is the campaign half of HandleEmailFailed. countedOn is the
@@ -207,10 +222,9 @@ func (s *JobsService) failCampaignSend(ctx context.Context, task *repository.Tas
 		return nil
 	}
 
-	// A server that rejected the RECIPIENT at send time is a bounce in all but
-	// delivery route; a rejection of the sender, the session or the content
-	// says nothing about the address.
-	if s.Evidence != nil && ct.ContactID != nil && ct.SequenceID != nil && emailverify.NamesRecipient(reason) {
+	// Only permanent recipient refusals are bounce evidence; deferrals may use the same wording.
+	if s.Evidence != nil && ct.ContactID != nil && ct.SequenceID != nil &&
+		code != string(errx.MailErrorCodeServerUnreachable) && emailverify.NamesRecipient(reason) {
 		s.Evidence.RecordEvidence(ctx, *ct.ContactID, models.Step(&campaignID, ct.SequenceID), "bounced_recipient", "send:"+ct.SequenceID.String(), reason)
 	}
 

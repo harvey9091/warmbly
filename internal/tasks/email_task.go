@@ -589,14 +589,20 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 		partnerCounts = nil
 	}
 
-	// Own tier first, fresh before recently used: a premium mailbox reaches for
-	// a borrowed one only when its own tier has nothing fresh.
-	var buckets [4][]uuid.UUID
+	// Rank outside workspaces first while retaining siblings as a self-host fallback.
+	var buckets [8][]uuid.UUID
+	foreign, own := 0, 0
 	for _, c := range candidates {
 		if _, usedToday := todayPartnerSet[c.ID]; usedToday {
 			continue
 		}
 		rank := 0
+		if sameOrganization(account.OrganizationID, c.OrganizationID) {
+			rank += 4
+			own++
+		} else {
+			foreign++
+		}
 		if _, recentlyUsed := recentPartnerSet[c.ID]; recentlyUsed || partnerCounts[c.ID] >= partnerMaxSharedWindow {
 			rank += 2
 		}
@@ -604,6 +610,14 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 			rank++
 		}
 		buckets[rank] = append(buckets[rank], c.ID)
+	}
+	if foreign == 0 && own > 0 {
+		// Surface intentional sibling fallback without warning on local-only pools.
+		log.Info().
+			Int("participants", len(candidates)).
+			Str("pool", poolType).
+			Str("email_account_id", account.ID.String()).
+			Msg("warmup: no partner outside this workspace is available; pairing within the organization")
 	}
 
 	sig := partnerSignals{
@@ -653,6 +667,11 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 	}
 
 	return nil, errNoEligibleWarmupPartners
+}
+
+// sameOrganization treats unknown ownership as outside rather than guessing.
+func sameOrganization(a, b *uuid.UUID) bool {
+	return a != nil && b != nil && *a == *b
 }
 
 // removePartnerID returns ids without the first occurrence of target. Used to

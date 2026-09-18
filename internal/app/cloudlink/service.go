@@ -98,6 +98,8 @@ type Service interface {
 	ListMailboxes(ctx context.Context, orgID uuid.UUID) ([]models.CloudLinkMailboxRow, *errx.Error)
 	Enroll(ctx context.Context, orgID, accountID uuid.UUID) (*models.CloudLinkMailboxRow, *errx.Error)
 	Unenroll(ctx context.Context, orgID, accountID uuid.UUID) *errx.Error
+	// RevokeForDelete confirms the cloud no longer holds the mailbox credential.
+	RevokeForDelete(ctx context.Context, orgID, accountID uuid.UUID) *errx.Error
 	SetLifecycle(ctx context.Context, orgID, accountID uuid.UUID, action string) (*models.CloudLinkMailboxRow, *errx.Error)
 
 	// Cloud-managed mailboxes: consent through the cloud, tokens brokered from it (managed.go).
@@ -505,6 +507,38 @@ func (s *service) Unenroll(ctx context.Context, orgID, accountID uuid.UUID) *err
 		}
 	}
 	s.syncLocalPool(ctx, accountID)
+	return nil
+}
+
+// RevokeForDelete removes the remote credential before local deletion makes retries impossible.
+func (s *service) RevokeForDelete(ctx context.Context, orgID, accountID uuid.UUID) *errx.Error {
+	if _, xerr := s.ownedAccount(ctx, orgID, accountID); xerr != nil {
+		return xerr
+	}
+	m, err := s.repo.GetByAccount(ctx, accountID)
+	if err != nil {
+		return errx.InternalError()
+	}
+	if m == nil {
+		return nil
+	}
+	l, err := s.repo.Get(ctx)
+	if err != nil {
+		log.Error().Err(err).Str("account_id", accountID.String()).Msg("cloud link: link unreadable, so the mailbox's enrollment cannot be revoked")
+		return errx.InternalError()
+	}
+	if l == nil {
+		log.Error().Str("account_id", accountID.String()).Msg("cloud link: enrollment exists without a link, so remote revocation cannot be confirmed")
+		return errx.InternalError()
+	}
+	if xerr := s.clientFor(l).do(ctx, http.MethodDelete, "/instance/mailboxes/"+m.RemoteID.String(), nil, nil); xerr != nil && xerr.Identifier != "pool_link_mailbox_not_found" {
+		return xerr
+	}
+	s.forgetToken(accountID)
+	// The mailbox delete also removes any stale local enrollment by cascade.
+	if err := s.repo.Unenroll(ctx, accountID); err != nil {
+		log.Warn().Err(err).Str("account_id", accountID.String()).Msg("cloud link: enrollment revoked but the local row could not be dropped; the mailbox delete removes it")
+	}
 	return nil
 }
 

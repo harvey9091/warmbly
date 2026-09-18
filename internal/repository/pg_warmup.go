@@ -152,6 +152,8 @@ type WarmupRepository interface {
 	// Statistics
 	IncrementDailyCount(ctx context.Context, accountID uuid.UUID, date time.Time) error
 	IncrementReplyCount(ctx context.Context, accountID uuid.UUID, date time.Time) error
+	// FailWarmupSend atomically records the failure and refunds its daily counters.
+	FailWarmupSend(ctx context.Context, accountID, taskID uuid.UUID, date time.Time, title, message string) error
 	GetWarmupStatistics(ctx context.Context, accountID uuid.UUID, from, to time.Time) ([]WarmupStatistic, error)
 	GetOrCreateDailyStats(ctx context.Context, accountID uuid.UUID, date time.Time, targetVolume int) (*WarmupStatistic, error)
 
@@ -192,6 +194,8 @@ type WarmupRepository interface {
 	// scheduler caps volume on the same set the selector draws from.
 	WarmupPartnerCandidates(ctx context.Context, poolType string, senderID uuid.UUID) ([]models.WarmupPartnerCandidate, error)
 	GetRecentPartnerDomainCounts(ctx context.Context, accountID uuid.UUID, since time.Time) (map[string]int, error)
+	// GetPartnerDiversity counts confirmed partners reached in the window.
+	GetPartnerDiversity(ctx context.Context, accountID uuid.UUID, since time.Time) (WarmupPartnerDiversity, error)
 
 	// Tampering protection: track delivered warmup mail so a later deletion or
 	// spam-flag can be attributed, and count "harm" events per mailbox.
@@ -821,6 +825,60 @@ func (r *warmupRepository) IncrementReplyCount(ctx context.Context, accountID uu
 	return err
 }
 
+// FailWarmupSend makes the task transition and counter refund one retryable write.
+func (r *warmupRepository) FailWarmupSend(ctx context.Context, accountID, taskID uuid.UUID, date time.Time, title, message string) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var status string
+	err = tx.QueryRow(ctx, `
+		SELECT status::text
+		FROM tasks
+		WHERE id = $1 AND email_account_id = $2 AND task_type = 'warmup'
+		FOR UPDATE
+	`, taskID, accountID).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if status != "completed" {
+		return tx.Commit(ctx)
+	}
+
+	if _, err = tx.Exec(ctx, `
+		UPDATE warmup_statistics ws
+		SET emails_sent = GREATEST(ws.emails_sent - 1, 0),
+		    emails_replied = CASE
+		      WHEN EXISTS (
+		        SELECT 1 FROM warmup_tokens wt
+		        WHERE wt.task_id = $2 AND wt.conversation_turn > 0
+		      ) THEN GREATEST(ws.emails_replied - 1, 0)
+		      ELSE ws.emails_replied
+		    END
+		WHERE ws.email_account_id = $1
+		  AND ws.date = DATE($3)
+	`, accountID, taskID, date); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE tasks SET status = 'failed', updated_at = NOW() WHERE id = $1`, taskID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO task_failures (task_id, title, message)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (task_id) DO UPDATE
+		SET title = EXCLUDED.title, message = EXCLUDED.message
+	`, taskID, title, message); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // PoolSpamPlacementRate returns the pool-wide warmup spam-placement rate (%)
 // over the window: spam_placement events divided by total warmup sends. This is
 // the number surfaced as avg_spam_placement_rate in the admin health summary.
@@ -947,13 +1005,11 @@ func (r *warmupRepository) SenderPlacementByProvider(ctx context.Context, sender
 	return out, placementRows.Err()
 }
 
-// WarmupPartnerCandidates returns the sender's own tier minus itself and, when
-// a premium tier is below the floor, up to the floor of proven free mailboxes.
-// The direction, the floor and what "proven" means live only here.
+// WarmupPartnerCandidates returns eligible own-tier and fallback recipients with their owners.
 func (r *warmupRepository) WarmupPartnerCandidates(ctx context.Context, poolType string, senderID uuid.UUID) ([]models.WarmupPartnerCandidate, error) {
 	// An expired quarantine or block is offered again; the gate re-evaluates it.
 	own, err := r.queryPartnerCandidates(ctx, `
-		SELECT wpp.email_account_id, ea.email
+		SELECT wpp.email_account_id, ea.email, ea.organization_id
 		FROM warmup_pool_participants wpp
 		JOIN warmup_pools wp ON wpp.pool_id = wp.id
 		JOIN email_accounts ea ON ea.id = wpp.email_account_id
@@ -985,7 +1041,7 @@ func (r *warmupRepository) WarmupPartnerCandidates(ctx context.Context, poolType
 	// a workspace in good standing. A pool move keeps joined_at, so the risk
 	// check is what keeps a demoted mailbox out. A random sample bounds the cost.
 	borrowed, err := r.queryPartnerCandidates(ctx, `
-		SELECT wpp.email_account_id, ea.email
+		SELECT wpp.email_account_id, ea.email, ea.organization_id
 		FROM warmup_pool_participants wpp
 		JOIN warmup_pools wp ON wpp.pool_id = wp.id
 		JOIN email_accounts ea ON ea.id = wpp.email_account_id
@@ -1015,7 +1071,7 @@ func (r *warmupRepository) queryPartnerCandidates(ctx context.Context, query str
 	var out []models.WarmupPartnerCandidate
 	for rows.Next() {
 		c := models.WarmupPartnerCandidate{Borrowed: borrowed}
-		if err := rows.Scan(&c.ID, &c.Email); err != nil {
+		if err := rows.Scan(&c.ID, &c.Email, &c.OrganizationID); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -1467,6 +1523,33 @@ func (r *warmupRepository) GetRecentPartnerDomainCounts(ctx context.Context, acc
 		out[domain] = count
 	}
 	return out, rows.Err()
+}
+
+// WarmupPartnerDiversity is the distinct confirmed reach across three dimensions.
+type WarmupPartnerDiversity struct {
+	Mailboxes     int
+	Domains       int
+	Organizations int
+}
+
+// GetPartnerDiversity returns zeros when no confirmed send falls in the window.
+func (r *warmupRepository) GetPartnerDiversity(ctx context.Context, accountID uuid.UUID, since time.Time) (WarmupPartnerDiversity, error) {
+	query := `
+		SELECT
+			COUNT(DISTINCT wt.recipient_account_id),
+			COUNT(DISTINCT lower(split_part(ea.email, '@', 2))),
+			COUNT(DISTINCT ea.organization_id)
+		FROM warmup_tokens wt
+		JOIN tasks t ON t.id = wt.task_id
+		JOIN email_accounts ea ON ea.id = wt.recipient_account_id
+		WHERE wt.sender_account_id = $1
+		  AND wt.created_at >= $2
+		  AND t.status = 'completed'
+		  AND wt.sent_message_id <> ''
+	`
+	var out WarmupPartnerDiversity
+	err := r.db.QueryRow(ctx, query, accountID, since).Scan(&out.Mailboxes, &out.Domains, &out.Organizations)
+	return out, err
 }
 
 // GetLatestReplyCandidate finds the latest completed warmup email from sender to recipient.

@@ -178,6 +178,10 @@ type WarmupHealthInfo struct {
 	SpamScore    int        `json:"spam_score"`
 	BlockedUntil *time.Time `json:"blocked_until,omitempty"`
 	EvaluatedAt  *time.Time `json:"evaluated_at,omitempty"`
+	// Partner diversity counts confirmed warmup deliveries over seven days.
+	PartnerMailboxes7d     int `json:"partner_mailboxes_7d"`
+	PartnerDomains7d       int `json:"partner_domains_7d"`
+	PartnerOrganizations7d int `json:"partner_organizations_7d"`
 }
 
 type AccountHealth struct {

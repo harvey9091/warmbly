@@ -31,6 +31,18 @@ import (
 // stops answering cannot hold a send goroutine forever.
 const sendTimeout = 90 * time.Second
 
+// errNoSTARTTLS distinguishes a missing upgrade from a network failure.
+var errNoSTARTTLS = errors.New("the server does not offer STARTTLS")
+
+// dialCause removes local and duplicated remote addresses from a dial error.
+func dialCause(err error) error {
+	var op *net.OpError
+	if errors.As(err, &op) && op.Err != nil {
+		return op.Err
+	}
+	return err
+}
+
 // ehloName is the domain to announce in EHLO, taken from the sender's own
 // address. Empty leaves net/smtp's default in place.
 func ehloName(address string) string {
@@ -290,7 +302,7 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 		conn, err = netbind.Dialer(c.BindIP).DialContext(ctx, "tcp", addr)
 	}
 	if err != nil {
-		return errx.ErrMailServerUnreachable
+		return errx.ErrMailServerUnreachableAt("dial "+addr, dialCause(err))
 	}
 	defer conn.Close()
 	if resolved == models.MailSecurityNone && !netbind.LoopbackPeer(conn) {
@@ -303,7 +315,7 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 	// Use the resolved host: c.Credentials is nil for OAuth2-configured clients.
 	client, err := smtp.NewClient(conn, host)
 	if err != nil {
-		return errx.ErrMailServerUnreachable
+		return errx.ErrMailServerUnreachableAt("greeting", err)
 	}
 	defer client.Quit()
 
@@ -311,7 +323,7 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 	// alone, which relays read as a spam signal.
 	if name := ehloName(c.Email); name != "" {
 		if err := client.Hello(name); err != nil {
-			return errx.ErrMailServerUnreachable
+			return errx.ErrMailServerUnreachableAt("ehlo", err)
 		}
 	}
 
@@ -324,10 +336,10 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 	if !implicitTLS && resolved != models.MailSecurityNone {
 		if ok, _ := client.Extension("STARTTLS"); ok {
 			if err := client.StartTLS(tlsConf); err != nil {
-				return errx.ErrMailServerUnreachable
+				return errx.ErrMailServerUnreachableAt("starttls", err)
 			}
 		} else if !netbind.InsecureTLS() && !c.plaintext {
-			return errx.ErrMailServerUnreachable
+			return errx.ErrMailServerUnreachableAt("starttls", errNoSTARTTLS)
 		}
 	}
 
@@ -360,7 +372,7 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 				// backend it cannot reach); only a 5xx means the credentials
 				// themselves are refused.
 				if !permanentReply(err) {
-					return errx.ErrMailServerUnreachable
+					return errx.ErrMailServerUnreachableAt("auth", err)
 				}
 				return errx.ErrMailInvalidCredentials
 			}
@@ -371,7 +383,7 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 			var rErr *oauth2.RetrieveError
 			if errors.As(err, &rErr) {
 				if rErr.Response.StatusCode >= 500 {
-					return errx.ErrMailServerUnreachable
+					return errx.ErrMailServerUnreachableAt("oauth2 token", err)
 				}
 			}
 			return errx.ErrMailAuthenticationFailed
@@ -393,7 +405,7 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 			}
 			return errx.ErrMailSendRejected(err.Error())
 		}
-		return errx.ErrMailServerUnreachable
+		return errx.ErrMailServerUnreachableAt("mail from", err)
 	}
 	for _, r := range to {
 		if err := client.Rcpt(r); err != nil {
@@ -407,17 +419,17 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 			// hid rejections from bounce accounting. A 4xx is greylisting or
 			// a busy server, which is worth another attempt.
 			if !permanentReply(err) {
-				return errx.ErrMailServerUnreachable
+				return errx.ErrMailServerUnreachableAt("rcpt to", err)
 			}
 			return errx.ErrMailRecipientRejected(err.Error())
 		}
 	}
 	w, err := client.Data()
 	if err != nil {
-		return errx.ErrMailServerUnreachable
+		return errx.ErrMailServerUnreachableAt("data", err)
 	}
 	if _, err := w.Write(data); err != nil {
-		return errx.ErrMailServerUnreachable
+		return errx.ErrMailServerUnreachableAt("message body", err)
 	}
 	if err := w.Close(); err != nil {
 		// The server's verdict on the whole message lands here, which is where
@@ -428,7 +440,7 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 		if permanentReply(err) {
 			return errx.ErrMailSendRejected(err.Error())
 		}
-		return errx.ErrMailServerUnreachable
+		return errx.ErrMailServerUnreachableAt("message accept", err)
 	}
 
 	return nil

@@ -131,9 +131,11 @@ func WarmupPoolBorrowsFrom(poolType string) (string, bool) {
 // WarmupPartnerCandidate is a recipient the partner selector may draw: a
 // member of the sender's tier, or one borrowed from the tier it may draw on.
 type WarmupPartnerCandidate struct {
-	ID       uuid.UUID
-	Email    string
-	Borrowed bool
+	ID    uuid.UUID
+	Email string
+	// OrganizationID lets selection rank outside partners ahead of siblings.
+	OrganizationID *uuid.UUID
+	Borrowed       bool
 }
 
 type WarmupHealthState string

@@ -343,6 +343,12 @@ func (s *emailService) Delete(ctx context.Context, userID, emailAccountID string
 		return xerr
 	}
 
+	// Revoke the cloud credential while the local enrollment is still retryable.
+	if xerr := s.unenrollFromCloud(ctx, account); xerr != nil {
+		s.loadAccountBestEffort(ctx, accountID)
+		return xerr
+	}
+
 	// The refund travels inside the delete's transaction: the foreign key only
 	// nulls worker_id, so a worker not credited here stays charged for a
 	// mailbox that no longer exists, unrepairably.
@@ -363,6 +369,38 @@ func (s *emailService) Delete(ctx context.Context, userID, emailAccountID string
 			"email":            account.Email,
 			"provider":         account.Provider,
 		})
+	}
+	return nil
+}
+
+// ErrCloudEnrollmentStuck keeps the local mailbox when its cloud credential cannot be revoked.
+var ErrCloudEnrollmentStuck = errx.NewWithIdentifier(
+	errx.Conflict,
+	"mailbox_cloud_unenroll_failed",
+	"This mailbox is enrolled in Warmbly Cloud and its enrollment could not be removed, so deleting it would leave its password in the pool. The mailbox record remains. Worker restoration is retried automatically; try the delete again once this instance can reach Warmbly Cloud.",
+)
+
+// unenrollFromCloud removes the mailbox credential held by Warmbly Cloud.
+func (s *emailService) unenrollFromCloud(ctx context.Context, account *models.Email) *errx.Error {
+	if account.OrganizationID == nil {
+		return nil
+	}
+	if s.cloudUnenroll == nil || s.cloudLink == nil {
+		log.Error().Str("account_id", account.ID.String()).Msg("cloud enrollment dependencies missing; delete refused")
+		return ErrCloudEnrollmentStuck
+	}
+	link, err := s.cloudLink.GetByAccount(ctx, account.ID)
+	if err != nil {
+		log.Warn().Err(err).Str("account_id", account.ID.String()).Msg("cloud enrollment unreadable; delete refused rather than leaving the credential in the pool")
+		return ErrCloudEnrollmentStuck
+	}
+	// Cloud-managed mirrors hold no local enrollment and would recurse here.
+	if link == nil || link.Managed {
+		return nil
+	}
+	if xerr := s.cloudUnenroll.RevokeForDelete(ctx, *account.OrganizationID, account.ID); xerr != nil {
+		log.Warn().Str("account_id", account.ID.String()).Str("error", xerr.Message).Msg("cloud unenroll failed; mailbox delete refused")
+		return ErrCloudEnrollmentStuck
 	}
 	return nil
 }

@@ -74,6 +74,7 @@ import EmailEditor from "../EmailEditor";
 import SendingBehaviorTab from "./SendingBehaviorTab";
 import SyncStatusCard from "./SyncStatusCard";
 import CloudWarmupCard from "./CloudWarmupCard";
+import WarmupPartnerDiversity from "./WarmupPartnerDiversity";
 import useCloudPool from "@/hooks/useCloudPool";
 import { Toggle } from "@/components/app/campaigns/preferences/components/CampaignPreferenceBoolBox";
 import setDirectTracking from "@/lib/api/client/app/emails/setDirectTracking";
@@ -1214,6 +1215,7 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
                     {wh.blocked_until && (
                         <p className="mt-1 text-[11px] text-rose-600">Paused from the pool until {new Date(wh.blocked_until).toLocaleDateString()}.</p>
                     )}
+                    <WarmupPartnerDiversity health={wh} />
                 </div>
             )}
 

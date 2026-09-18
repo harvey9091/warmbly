@@ -644,6 +644,8 @@ Auth: **Scope** `WRITE_EMAILS` · **Org permission** `manage_emails`
 
 Disconnects and deletes a mailbox. It is removed from all warmup pools and an account-disconnected event fans out.
 
+Nothing is removed unless the two steps that cannot be repaired afterwards succeed first: the machine syncing the mailbox is told to drop it, and a mailbox enrolled in [Warmbly Cloud](/guides/warmbly-cloud/) has its enrollment revoked, which is what takes its stored credentials out of the pool. A failure at either point puts the mailbox back as it was and is safe to retry. If the record itself then fails to delete, the mailbox remains but its enrollment is already revoked, so its warmup moves back to this instance until the delete is retried.
+
 Auth: **Scope** `WRITE_EMAILS` · **Org permission** `manage_emails`
 
 | Parameter | In | Type | Description |
@@ -653,6 +655,11 @@ Auth: **Scope** `WRITE_EMAILS` · **Org permission** `manage_emails`
 ### Response
 
 `204 No Content` with an empty body.
+
+| Status | `code` | Meaning |
+|--------|--------|---------|
+| `409` | `mailbox_cloud_unenroll_failed` | The mailbox is enrolled in Warmbly Cloud and the enrollment could not be revoked. See [error codes](/api/error-codes/#409-conflict) |
+| `503` | `mailbox_worker_unreachable` | The machine syncing the mailbox could not be told to drop it. See [error codes](/api/error-codes/#mailbox_worker_unreachable) |
 
 ## Send from a mailbox
 

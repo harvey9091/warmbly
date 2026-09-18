@@ -94,6 +94,8 @@ func newRemovalLiveFixture(t *testing.T) *removalLiveFixture {
 		emailRepository:  repository.NewEmailRepostory(handle, nil),
 		publisher:        f.pub,
 		workerAssignment: worker.NewAssignmentService(repository.NewWorkerRepository(f.pool), nil, nil),
+		cloudLink:        &stubCloudLinkRepo{},
+		cloudUnenroll:    &stubUnenroller{},
 	}
 	return f
 }

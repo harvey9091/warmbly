@@ -60,6 +60,10 @@ export interface WarmupHealthInfo {
     reason?: string;
     blocked_until?: string | null;
     evaluated_at?: string | null;
+    /** Distinct warmup partners over the last 7 days: mailboxes, their domains, and the workspaces behind them. */
+    partner_mailboxes_7d: number;
+    partner_domains_7d: number;
+    partner_organizations_7d: number;
 }
 
 export default interface AccountStatus {

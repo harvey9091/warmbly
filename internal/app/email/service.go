@@ -110,6 +110,8 @@ type EmailService interface {
 	WirePoolLink(repo repository.PoolLinkRepository)
 	// WireCloudLink marks managed mailboxes, which ship to the worker without a credential.
 	WireCloudLink(repo repository.CloudLinkRepository)
+	// WireCloudUnenroll attaches cloud credential revocation to mailbox deletion.
+	WireCloudUnenroll(u CloudUnenroller)
 	// WireAccountErrors lets a successful reconnect resolve the credential
 	// errors it just fixed, which is what clears the mailbox's error banner.
 	WireAccountErrors(repo repository.EmailAccountErrorRepository)
@@ -155,6 +157,8 @@ type emailService struct {
 	poolLink repository.PoolLinkRepository
 	// cloudLink marks managed mailboxes whose credential the cloud holds.
 	cloudLink repository.CloudLinkRepository
+	// cloudUnenroll revokes a Warmbly Cloud enrollment on delete.
+	cloudUnenroll CloudUnenroller
 	// webhookService is optional. When non-nil, account lifecycle events
 	// (email_account.connected, email_account.removed) are dispatched to
 	// subscribed customer webhooks.
@@ -225,6 +229,16 @@ func (s *emailService) WireSyncBudget(src SyncBudgetSource) {
 // warmup-only sync policy.
 func (s *emailService) WireCloudLink(repo repository.CloudLinkRepository) {
 	s.cloudLink = repo
+}
+
+// CloudUnenroller confirms remote revocation before a mailbox is deleted locally.
+type CloudUnenroller interface {
+	RevokeForDelete(ctx context.Context, orgID, accountID uuid.UUID) *errx.Error
+}
+
+// WireCloudUnenroll attaches remote revocation after service construction.
+func (s *emailService) WireCloudUnenroll(u CloudUnenroller) {
+	s.cloudUnenroll = u
 }
 
 func (s *emailService) WirePoolLink(repo repository.PoolLinkRepository) {

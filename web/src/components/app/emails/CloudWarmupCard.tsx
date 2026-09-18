@@ -12,6 +12,7 @@ import { useConfirm } from "@/hooks/context/confirm";
 import useCloudPool from "@/hooks/useCloudPool";
 import { useCloudLinkMailboxLifecycle, useEnrollCloudLinkMailbox, useUnenrollCloudLinkMailbox } from "@/lib/api/hooks/app/cloudlink/useCloudLink";
 import { providerSupported } from "@/app/app/settings/warmbly-cloud/providers";
+import WarmupPartnerDiversity from "./WarmupPartnerDiversity";
 
 export default function CloudWarmupCard({ mailboxId, email, provider }: { mailboxId: string; email: string; provider: string }) {
     const pool = useCloudPool();
@@ -120,6 +121,7 @@ export default function CloudWarmupCard({ mailboxId, email, provider }: { mailbo
                         </button>
                     </div>
                 </div>
+                {cloud?.health && <WarmupPartnerDiversity health={cloud.health} className="pl-10" />}
             </div>
         </div>
     );
