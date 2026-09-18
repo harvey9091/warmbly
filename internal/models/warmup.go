@@ -109,9 +109,10 @@ type WarmupPartnerCandidate struct {
 	ID    uuid.UUID
 	Email string
 	// OrganizationID is who owns the candidate, so the selector can prefer a
-	// partner outside the sender's own workspace. Nil where the mailbox has no
-	// organization, which is never treated as a match: warming against an
-	// unattributable mailbox is not provably a closed loop.
+	// partner outside the sender's own workspace. A pointer to match
+	// models.Email, whose own field is one; the column has been NOT NULL since
+	// migration 000092, and an unset owner is never treated as a match either
+	// way, since it cannot be shown to be the same workspace.
 	OrganizationID *uuid.UUID
 	Borrowed       bool
 }

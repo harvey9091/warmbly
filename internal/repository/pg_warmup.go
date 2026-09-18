@@ -1518,6 +1518,9 @@ type WarmupPartnerDiversity struct {
 }
 
 // GetPartnerDiversity counts them. Nothing sent means three zeros, not an error.
+//
+// COUNT DISTINCT over the owner needs no NULL arm: email_accounts.organization_id
+// is NOT NULL as of migration 000092, so every partner has exactly one.
 func (r *warmupRepository) GetPartnerDiversity(ctx context.Context, accountID uuid.UUID, since time.Time) (WarmupPartnerDiversity, error) {
 	query := `
 		SELECT

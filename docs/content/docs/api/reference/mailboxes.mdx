@@ -644,7 +644,7 @@ Auth: **Scope** `WRITE_EMAILS` · **Org permission** `manage_emails`
 
 Disconnects and deletes a mailbox. It is removed from all warmup pools and an account-disconnected event fans out.
 
-Nothing is removed unless every step that cannot be repaired afterwards succeeds first: a mailbox enrolled in [Warmbly Cloud](/guides/warmbly-cloud/) has its enrollment revoked, which is what takes its stored credentials out of the pool, and the machine syncing it is told to drop it. A failure at either point leaves the mailbox exactly as it was and is safe to retry.
+Nothing is removed unless the two steps that cannot be repaired afterwards succeed first: the machine syncing the mailbox is told to drop it, and a mailbox enrolled in [Warmbly Cloud](/guides/warmbly-cloud/) has its enrollment revoked, which is what takes its stored credentials out of the pool. A failure at either point puts the mailbox back as it was and is safe to retry. If the record itself then fails to delete, the mailbox remains but its enrollment is already revoked, so its warmup moves back to this instance until the delete is retried.
 
 Auth: **Scope** `WRITE_EMAILS` · **Org permission** `manage_emails`
 

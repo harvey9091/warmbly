@@ -108,9 +108,10 @@ func TestSelectWarmupPartnerStillWarmsWhenEveryPartnerIsASibling(t *testing.T) {
 	}
 }
 
-// An unattributable mailbox (no workspace) is never read as the sender's own:
-// it cannot be shown to be a closed loop, and demoting it would push a
-// legitimate partner behind the sender's own siblings.
+// An unattributable mailbox is never read as the sender's own. The column has
+// been NOT NULL since migration 000092, so this guards the Go-level pointer
+// rather than a row: a nil owner cannot be shown to be the same workspace, and
+// guessing would push a legitimate partner behind the sender's own siblings.
 func TestSelectWarmupPartnerTreatsAnOwnerlessMailboxAsOutside(t *testing.T) {
 	gate := &rejectingGate{poolOf: map[uuid.UUID]string{}}
 	orphan := models.WarmupPartnerCandidate{ID: uuid.New(), Email: "orphan@nowhere.test"}

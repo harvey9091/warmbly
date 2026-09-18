@@ -407,7 +407,7 @@ func (s *emailService) unenrollFromCloud(ctx context.Context, account *models.Em
 	if link == nil || link.Managed {
 		return nil
 	}
-	if xerr := s.cloudUnenroll.Unenroll(ctx, *account.OrganizationID, account.ID); xerr != nil {
+	if xerr := s.cloudUnenroll.RevokeForDelete(ctx, *account.OrganizationID, account.ID); xerr != nil {
 		log.Warn().Str("account_id", account.ID.String()).Str("error", xerr.Message).Msg("cloud unenroll failed; mailbox delete refused")
 		return ErrCloudEnrollmentStuck
 	}

@@ -235,8 +235,13 @@ func (s *emailService) WireCloudLink(repo repository.CloudLinkRepository) {
 // CloudUnenroller is the Warmbly Cloud enrollment, satisfied by
 // cloudlink.Service. Injected post-construction because cloudlink is built on
 // top of this service.
+//
+// RevokeForDelete rather than Unenroll: a delete needs an answer that means
+// the pool has let go of the credential, and Unenroll drops the local row
+// first, so its nil can also mean "the row is gone and the cloud was never
+// asked".
 type CloudUnenroller interface {
-	Unenroll(ctx context.Context, orgID, accountID uuid.UUID) *errx.Error
+	RevokeForDelete(ctx context.Context, orgID, accountID uuid.UUID) *errx.Error
 }
 
 // WireCloudUnenroll attaches it. Without it a delete cannot revoke a cloud

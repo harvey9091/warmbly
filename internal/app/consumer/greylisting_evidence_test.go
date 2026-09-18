@@ -10,7 +10,6 @@ import (
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
-	"github.com/warmbly/warmbly/internal/pkg/emailverify"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -87,12 +86,67 @@ func TestLiveGreylistedSendIsNotRecordedAsABounce(t *testing.T) {
 // rejected", and that phrase is a recipient marker. Filing it as bounce
 // evidence marks a valid contact undeliverable for a year on the strength of a
 // delay, so the code has to gate the classification.
+// evidenceTaskRepo answers the two task reads the failure path makes for a
+// campaign send that the control plane had already stamped.
+type evidenceTaskRepo struct {
+	repository.TaskRepository
+
+	task *repository.Task
+	ct   *repository.CampaignTask
+}
+
+func (r *evidenceTaskRepo) GetTask(context.Context, uuid.UUID) (*repository.Task, error) {
+	return r.task, nil
+}
+
+func (r *evidenceTaskRepo) RecordTaskFailure(context.Context, uuid.UUID, string, string) error {
+	return nil
+}
+
+func (r *evidenceTaskRepo) GetCampaignTask(context.Context, uuid.UUID) (*repository.CampaignTask, error) {
+	return r.ct, nil
+}
+
+// evidenceProgressRepo walks the step back and reports it rolled back, which
+// is the state the evidence decision is made in.
+type evidenceProgressRepo struct {
+	repository.CampaignProgressRepository
+}
+
+func (evidenceProgressRepo) RecordSendFailure(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string) (int, bool, bool, error) {
+	return 1, false, false, nil
+}
+
+// runFailedSend drives the real handler, which is the only thing that proves
+// the gate is where the decision is made.
+func runFailedSend(t *testing.T, code, reason string) []string {
+	t.Helper()
+	campaign, contact, step := uuid.New(), uuid.New(), uuid.New()
+	taskID := uuid.New()
+	ev := &recordingEvidence{}
+	s := &JobsService{
+		TaskRepo: &evidenceTaskRepo{
+			task: &repository.Task{ID: taskID, TaskType: "campaign", EmailAccountID: uuid.New(), Status: "completed"},
+			ct:   &repository.CampaignTask{TaskID: taskID, CampaignID: &campaign, ContactID: &contact, SequenceID: &step},
+		},
+		CampaignProgressRepo: evidenceProgressRepo{},
+		Evidence:             ev,
+	}
+	if err := s.HandleEmailFailed(context.Background(), models.SendEmailResult{
+		TaskID: taskID, Success: false,
+		Error: &models.EmailSendError{Code: code, Message: reason},
+	}); err != nil {
+		t.Fatalf("handle failed: %v", err)
+	}
+	return ev.kinds
+}
+
 func TestRetryableFailuresAreNotEvidenceAboutTheAddress(t *testing.T) {
-	// The live test below drives the real handler but needs a database, so it
-	// skips in CI. This one mirrors the condition to keep the marker phrases
-	// and the gate covered where there is no Postgres.
+	// Driven through HandleEmailFailed with stubbed repositories, because the
+	// live version of this needs a database and skips in CI, where removing
+	// the gate would otherwise leave the suite green.
 	evidence := func(code, reason string) bool {
-		return code != string(errx.MailErrorCodeServerUnreachable) && emailverify.NamesRecipient(reason)
+		return len(runFailedSend(t, code, reason)) > 0
 	}
 
 	for _, tc := range []struct {

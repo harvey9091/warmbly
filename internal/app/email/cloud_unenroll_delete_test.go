@@ -33,7 +33,7 @@ type stubUnenroller struct {
 	err   *errx.Error
 }
 
-func (s *stubUnenroller) Unenroll(_ context.Context, orgID, accountID uuid.UUID) *errx.Error {
+func (s *stubUnenroller) RevokeForDelete(_ context.Context, orgID, accountID uuid.UUID) *errx.Error {
 	if s.trace != nil {
 		*s.trace = append(*s.trace, "unenroll")
 	}
