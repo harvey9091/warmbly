@@ -13,8 +13,8 @@ import (
 // default for them, and the registry refused the whole envelope under BACKWARD
 // so nothing could be published in either direction for three hours.
 //
-// A field with a default is readable against the schema registered before it
-// existed, which is the only thing that makes adding one safe.
+// A field with a default lets a reader on the new schema decode data written
+// before the field existed, which is the only thing that makes adding one safe.
 func TestEveryBodyFieldHasADefault(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -64,11 +64,14 @@ func TestEveryBodyFieldHasADefault(t *testing.T) {
 	}
 }
 
-// TestMarshalledSchemaCarriesDefaults guards the second half of #583. The Avro
-// library's Schema.String() emits only a field's name and type, so registering
-// that text throws every default away and the defaults above buy nothing. The
-// codec has to register the marshalled document instead.
-func TestMarshalledSchemaCarriesDefaults(t *testing.T) {
+// TestSchemaDocumentCarriesDefaultsAndParses guards the second half of #583
+// and the fixed-default bug found in review of #586. The library's
+// Schema.String() emits only a field's name and type, so registering that
+// text throws every default away; its MarshalJSON keeps them but writes a
+// fixed field's default as a byte array, which the spec forbids and no parser
+// accepts. The registered document has to be one that carries defaults AND
+// parses back.
+func TestSchemaDocumentCarriesDefaultsAndParses(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		schema avro.Schema
@@ -77,17 +80,74 @@ func TestMarshalledSchemaCarriesDefaults(t *testing.T) {
 		{"JobEvent", JobEvent{}.Schema()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			doc, err := json.Marshal(tc.schema)
+			doc, err := SchemaDocument(tc.schema)
 			if err != nil {
-				t.Fatalf("marshal: %v", err)
+				t.Fatalf("document: %v", err)
 			}
 			if !strings.Contains(string(doc), `"default"`) {
-				t.Fatal("the marshalled schema carries no defaults; the registry would refuse the next added field")
+				t.Fatal("the document carries no defaults; the registry would refuse the next added field")
+			}
+			if _, err := avro.Parse(string(doc)); err != nil {
+				t.Fatalf("the document we would register does not parse: %v", err)
 			}
 			if strings.Contains(tc.schema.String(), `"default"`) {
-				t.Fatal("String() unexpectedly carries defaults now; the codec may be able to use it again, so recheck internal/infrastructure/codec/avro.go")
+				t.Fatal("String() unexpectedly carries defaults now; recheck internal/infrastructure/codec/avro.go")
 			}
 		})
+	}
+}
+
+// The uint64 sync cursor is the one fixed-typed field on the bus, so its
+// default is the one that has to be the spec's string form rather than the
+// byte array the library marshals.
+func TestSchemaDocumentWritesFixedDefaultAsString(t *testing.T) {
+	doc, err := SchemaDocument(JobEvent{}.Schema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed any
+	if err := json.Unmarshal(doc, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	var walk func(any)
+	walk = func(n any) {
+		switch v := n.(type) {
+		case []any:
+			for _, b := range v {
+				walk(b)
+			}
+		case map[string]any:
+			if v["type"] == "record" {
+				for _, f := range v["fields"].([]any) {
+					field := f.(map[string]any)
+					if field["name"] == "mod_seq" {
+						found = true
+						s, ok := field["default"].(string)
+						if !ok {
+							t.Fatalf("mod_seq default is %T (%v), want a string of code points", field["default"], field["default"])
+						}
+						if s != strings.Repeat("\x00", 8) {
+							t.Fatalf("mod_seq default = %q, want eight NUL code points", s)
+						}
+					}
+					walk(field["type"])
+				}
+			} else {
+				walk(v["type"])
+			}
+		}
+	}
+	walk(parsed)
+	if !found {
+		t.Fatal("mod_seq not found in the JobEvent document; the test no longer covers a fixed field")
+	}
+
+	// The raw marshal is what this exists to correct. If the library ever
+	// fixes it, this stops failing and SchemaDocument can shrink.
+	raw, _ := json.Marshal(JobEvent{}.Schema())
+	if _, err := avro.Parse(string(raw)); err == nil {
+		t.Log("note: json.Marshal(schema) now parses back on its own; the fixed-default rewrite may be removable")
 	}
 }
 

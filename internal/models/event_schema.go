@@ -213,10 +213,10 @@ func recordSchema(t reflect.Type, name string, seen map[reflect.Type]avro.Schema
 		if err != nil {
 			return nil, fmt.Errorf("%s.%s: %w", t.Name(), f.Name, err)
 		}
-		// Every field carries its zero as an Avro default, so a field added
-		// later is readable against the schema registered before it. Without
-		// one the registry refuses the new schema outright under BACKWARD and
-		// the publisher cannot serialize at all (#583).
+		// Every field carries its zero as an Avro default, so a reader on a
+		// schema that gained a field can still decode data written before the
+		// field existed. Without one the registry refuses the new schema
+		// outright under BACKWARD and the publisher cannot serialize (#583).
 		opts := []avro.SchemaOption{}
 		if def, ok := zeroDefault(s, 0); ok {
 			opts = append(opts, avro.WithDefault(def))

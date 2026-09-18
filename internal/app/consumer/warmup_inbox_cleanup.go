@@ -3,9 +3,11 @@ package jobs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/jobrun"
 	"github.com/warmbly/warmbly/internal/models"
 )
@@ -40,26 +42,34 @@ func (s *JobsService) StartWarmupInboxCleanup(ctx context.Context) {
 // are how fresh warmup mail earns its reputation signal, and replaying them on
 // months-old mail would be a burst of activity no real reader produces.
 //
-// Best effort throughout: the sweep's job is the Unibox row, and a mailbox that
-// has since been disconnected or reassigned must not stall it.
-func (s *JobsService) fileHistoricalWarmupLeak(ctx context.Context, e *models.JobEventNewEmail) {
+// A mailbox that is gone, disconnected or unassigned is skipped, because there
+// is nothing to file into; the sweep's job is the Unibox row. A failure to
+// look the mailbox up or to publish is returned instead, so the row survives
+// for the next pass rather than being deleted with the leak still in place.
+func (s *JobsService) fileHistoricalWarmupLeak(ctx context.Context, e *models.JobEventNewEmail) error {
 	if s.Publisher == nil || s.EmailRepository == nil || e.Message == nil {
-		return
+		return nil
 	}
 	account, xerr := s.EmailRepository.GetByID(ctx, e.Message.EmailID)
-	if xerr != nil || account == nil || account.WorkerID == nil {
-		return
+	if xerr != nil {
+		if xerr.Code == errx.NotFound {
+			return nil
+		}
+		return fmt.Errorf("historical warmup leak: mailbox lookup: %w", xerr)
+	}
+	if account == nil || account.WorkerID == nil {
+		return nil
 	}
 	placement, folder := account.WarmupFiling()
 	// The owner asked for warmup to stay in the inbox, so this is not a leak.
 	if placement == models.WarmupPlacementInbox {
-		return
+		return nil
 	}
 	// Marked before publishing, like the live path: the move can land and be
 	// observed before a marker written afterwards would exist, and a mailbox
 	// must not be struck for foldering we asked it to do.
 	s.markSelfMove(ctx, e.Message.EmailID, e.Message.MessageID)
-	s.Publisher.PublishWarmupAction(ctx, *account.WorkerID, &models.WarmupEmailAction{
+	return s.Publisher.PublishWarmupAction(ctx, *account.WorkerID, &models.WarmupEmailAction{
 		UserID:             e.UserID,
 		EmailID:            e.Message.EmailID,
 		GmailID:            e.Message.GmailID,
@@ -117,7 +127,12 @@ func (s *JobsService) cleanWarmupInboxBatch(ctx context.Context, afterID uuid.UU
 			// Deleting the Unibox row only takes it out of OUR inbox. The copy
 			// in the customer's own mailbox is what they are looking at, and
 			// nothing else ever goes back for it, so file it here too (#583).
-			s.fileHistoricalWarmupLeak(ctx, &candidate)
+			// The Unibox row is the retry record: it stays until the filing
+			// action is on the bus, so a publish or lookup failure is
+			// re-offered next pass instead of hiding the leak for good.
+			if err := s.fileHistoricalWarmupLeak(ctx, &candidate); err != nil {
+				return afterID, false, err
+			}
 			if err := s.UniboxRepository.Delete(ctx, e.UserID, e.Message.ID); err != nil {
 				return afterID, false, err
 			}

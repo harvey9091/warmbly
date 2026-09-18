@@ -103,6 +103,11 @@ func TestQualifyNeverPrefixesInbox(t *testing.T) {
 	if got := c.qualifyMailboxLocked("INBOX.Warmbly"); got != "INBOX.Warmbly" {
 		t.Errorf("an already-qualified name was prefixed again: %q", got)
 	}
+	// Case is the server's to choose for everything but INBOX, so a name it
+	// listed as "inbox.Warmbly" already carries the prefix.
+	if got := c.qualifyMailboxLocked("inbox.Warmbly"); got != "inbox.Warmbly" {
+		t.Errorf("a name carrying the prefix in another case was prefixed again: %q", got)
+	}
 }
 
 // A move names its source bare too, so the whole move has to resolve on a

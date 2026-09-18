@@ -361,6 +361,15 @@ func (s *JobsService) unreachableLongEnoughToEvacuate(ctx context.Context, w mod
 			Msg("worker is unreachable but within the evacuation grace; leaving its mailboxes in place")
 		return false
 	}
+	// One last heartbeat check against the freshly-read row, as
+	// deactivateIfLongDead does: the key was read at the top of the scan, and
+	// a worker that came back in between must not lose its mailboxes to a
+	// stale last_seen_at.
+	if s.Cache != nil {
+		if n, herr := s.Cache.Exists(ctx, "worker:heartbeat:"+w.ID.String()).Result(); herr != nil || n > 0 {
+			return false
+		}
+	}
 	return true
 }
 

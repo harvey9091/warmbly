@@ -181,15 +181,22 @@ func (c *Client) personalPrefixLocked() string {
 }
 
 // qualifyMailboxLocked puts a bare folder name inside the personal namespace,
-// leaving a name that already carries the prefix untouched. INBOX is never
-// prefixed: it is the one name RFC 3501 defines outside any namespace, and
-// "INBOX.INBOX" is a folder no server has. mu must be held.
+// leaving a name that already carries the prefix untouched. The prefix is
+// matched case-insensitively, because case is the server's business for
+// every name but INBOX and one that lists "inbox.Warmbly" under an "INBOX."
+// namespace would otherwise be handed "INBOX.inbox.Warmbly". INBOX itself
+// is never prefixed: it is the one name RFC 3501 defines outside any
+// namespace, and "INBOX.INBOX" is a folder no server has. mu must be held.
 func (c *Client) qualifyMailboxLocked(name string) string {
 	prefix := c.personalPrefixLocked()
-	if prefix == "" || strings.HasPrefix(name, prefix) || strings.EqualFold(strings.TrimSpace(name), "INBOX") {
+	if prefix == "" || hasPrefixFold(name, prefix) || strings.EqualFold(strings.TrimSpace(name), "INBOX") {
 		return name
 	}
 	return prefix + name
+}
+
+func hasPrefixFold(s, prefix string) bool {
+	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
 }
 
 // sameMailbox compares two spellings of a folder name the way a server does:
