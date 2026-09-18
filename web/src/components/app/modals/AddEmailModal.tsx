@@ -844,8 +844,9 @@ function OAuthPanel({
                             </p>
                             <p className="text-[12.5px] text-rose-800/90 mt-1">
                                 Our {label} app is still in review for the access Warmbly needs, so a
-                                mailbox connected this way can stop sending without warning. Connect the
-                                same mailbox over SMTP and IMAP with an app password instead.
+                                mailbox connected this way can stop sending without warning, and may be
+                                disconnected later if the app runs out of capacity. Connect the same
+                                mailbox over SMTP and IMAP with an app password instead.
                             </p>
                             <div className="mt-2 flex items-center gap-2">
                                 {onUseSmtp && (

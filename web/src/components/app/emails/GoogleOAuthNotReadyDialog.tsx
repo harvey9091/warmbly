@@ -115,9 +115,12 @@ export default function GoogleOAuthNotReadyDialog({
                                     <p className="text-[12.5px] text-rose-800/90 mt-1.5">
                                         Our Google app is still going through review for the Gmail access
                                         Warmbly needs. Until that is finished, a mailbox connected this way can
-                                        fail to send or lose its authorization without warning. Connect it over
-                                        SMTP and IMAP instead: it is the same mailbox, it sends today, and
-                                        nothing has to change once Google sign-in is ready.
+                                        fail to send or lose its authorization without warning. Google also caps
+                                        how many accounts an app in review may hold, so a mailbox connected now
+                                        may be disconnected later if there is no capacity left, and you would
+                                        have to connect it again. Connect it over SMTP and IMAP instead: it is
+                                        the same mailbox, it sends today, and nothing has to change once Google
+                                        sign-in is ready.
                                     </p>
                                 </div>
 
