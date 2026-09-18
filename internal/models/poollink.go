@@ -188,6 +188,10 @@ type PoolLinkWarmupDeliveryQuery struct {
 	Sender    string `json:"sender"`
 	MessageID string `json:"message_id"`
 	Subject   string `json:"subject"`
+	// InReplyTo asks by ancestry instead: a reply typed by hand in a warmup
+	// thread names no token and no known id of its own, only the turn it
+	// answers. A cloud predating the field ignores it and answers no.
+	InReplyTo []string `json:"in_reply_to,omitempty"`
 }
 
 // PoolLinkMailboxState is the per-mailbox view shown in both dashboards.

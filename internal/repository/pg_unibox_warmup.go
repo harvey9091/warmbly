@@ -15,7 +15,7 @@ import (
 func (r *uniboxRepository) ListWarmupReviewCandidates(ctx context.Context, afterID uuid.UUID, limit int) ([]models.JobEventNewEmail, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT u.user_id, u.id, u.email_id, u.message_id, u.thread_id, u.flags, u.from_addr, u.subject,
-		       u.gmail_id, u.uid, u.mailbox, u.folder_path
+		       u.gmail_id, u.uid, u.mailbox, u.folder_path, u.in_reply_to
 		FROM unibox_emails u
 		WHERE u.id > $1 AND (
 		    EXISTS (SELECT 1 FROM cloud_link_mailboxes c WHERE c.email_account_id = u.email_id)
@@ -35,7 +35,7 @@ func (r *uniboxRepository) ListWarmupReviewCandidates(ctx context.Context, after
 		// the same worker action as a fresh arrival, and the Gmail path acts on
 		// gmail_id rather than the RFC id.
 		if err := rows.Scan(&e.UserID, &m.ID, &m.EmailID, &m.MessageID, &m.ThreadID, &m.Flags, &m.FromAddr, &m.Subject,
-			&m.GmailID, &m.UID, &m.Mailbox, &m.FolderPath); err != nil {
+			&m.GmailID, &m.UID, &m.Mailbox, &m.FolderPath, &m.InReplyTo); err != nil {
 			return nil, err
 		}
 		events = append(events, e)
