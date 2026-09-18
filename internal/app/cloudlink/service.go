@@ -534,7 +534,8 @@ func (s *service) RevokeForDelete(ctx context.Context, orgID, accountID uuid.UUI
 		log.Error().Str("account_id", accountID.String()).Msg("cloud link: enrollment exists without a link, so remote revocation cannot be confirmed")
 		return errx.InternalError()
 	}
-	if xerr := s.clientFor(l).do(ctx, http.MethodDelete, "/instance/mailboxes/"+m.RemoteID.String(), nil, nil); xerr != nil && xerr.Identifier != "pool_link_mailbox_not_found" {
+	// A revoked link already released every mailbox on the cloud side (RevokeInstance), so Disconnect's mirror deletes succeed.
+	if xerr := s.clientFor(l).do(ctx, http.MethodDelete, "/instance/mailboxes/"+m.RemoteID.String(), nil, nil); xerr != nil && xerr.Identifier != "pool_link_mailbox_not_found" && !linkAlreadyGone(xerr) {
 		return xerr
 	}
 	s.forgetToken(accountID)
