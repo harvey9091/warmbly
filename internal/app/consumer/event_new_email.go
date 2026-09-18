@@ -62,6 +62,17 @@ func (s *JobsService) ingestNewEmail(ctx context.Context, e *models.JobEventNewE
 		s.fileWarmupSentCopy(ctx, e)
 		return nil
 	}
+	if reply, err := s.isWarmupThreadReply(ctx, e); err != nil {
+		return fmt.Errorf("%w: %w", errWarmupVerification, err)
+	} else if reply {
+		// Filed wherever it landed: a reply arrives in the inbox, and the
+		// copy of one typed here sits in Sent. Best effort, like the sent copy
+		// above; the unibox never sees it either way.
+		if ferr := s.fileWarmupOutOfMailbox(ctx, e); ferr != nil {
+			log.Warn().Err(ferr).Str("email_id", e.Message.EmailID.String()).Msg("warmup thread reply left in place")
+		}
+		return nil
+	}
 	if report, err := s.isWarmupReport(ctx, e); err != nil {
 		return fmt.Errorf("%w: %w", errWarmupVerification, err)
 	} else if report {
@@ -332,6 +343,70 @@ func (s *JobsService) isKnownWarmupEmail(ctx context.Context, e *models.JobEvent
 		return false, fmt.Errorf("cloud warmup delivery verification: %w", err)
 	}
 	return known, nil
+}
+
+// isWarmupThreadReply recognises a message by what it answers.
+//
+// Everything above matches a token, a known Message-ID or a recent send's
+// subject, and a reply typed by hand at a partner mailbox carries none of
+// those: Gmail and Outlook compose a fresh id, prepend "Re:" and copy no
+// custom header. What it does carry is In-Reply-To naming the warmup send,
+// and that is enough. A pool partner is another Warmbly mailbox (on a
+// self-hosted instance, usually the owner's own), so whoever typed it, the
+// thread is warmup traffic and stays out of the unibox.
+//
+// A yes is recorded so the turn answering this one is recognised the same
+// way. Nothing is consumed and nothing is engaged with: engagement is earned
+// by verified deliveries only.
+func (s *JobsService) isWarmupThreadReply(ctx context.Context, e *models.JobEventNewEmail) (bool, error) {
+	parents := parentMessageIDs(e.Message.InReplyTo)
+	if len(parents) == 0 {
+		return false, nil
+	}
+	if s.WarmupRepo != nil {
+		known, err := s.WarmupRepo.IsWarmupThreadReply(ctx, e.Message.EmailID, parents)
+		if err != nil {
+			return false, fmt.Errorf("warmup thread lookup: %w", err)
+		}
+		if known {
+			if err := s.WarmupRepo.RecordWarmupThreadMessage(ctx, e.Message.EmailID, e.Message.MessageID); err != nil {
+				log.Warn().Err(err).Str("email_id", e.Message.EmailID.String()).Msg("warmup thread turn not recorded; its reply will be matched on ancestry only")
+			}
+			return true, nil
+		}
+	}
+	if s.CloudLink == nil {
+		return false, nil
+	}
+	enrolled, err := s.CloudLink.CheckEnrollment(ctx, e.Message.EmailID)
+	if err != nil {
+		return false, fmt.Errorf("cloud warmup enrollment lookup: %w", err)
+	}
+	if !enrolled {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, cloudWarmupCheckTimeout)
+	defer cancel()
+	known, err := s.CloudLink.IsCloudWarmupThreadReply(ctx, e.Message.EmailID, e.Message.MessageID, parents)
+	if err != nil {
+		return false, fmt.Errorf("cloud warmup thread verification: %w", err)
+	}
+	return known, nil
+}
+
+// parentMessageIDs is In-Reply-To with the brackets and blanks gone. IMAP
+// envelopes hand the header over as one string per id; Gmail and Graph
+// already split it.
+func parentMessageIDs(inReplyTo []string) []string {
+	var out []string
+	for _, raw := range inReplyTo {
+		for _, id := range strings.Fields(raw) {
+			if id = strings.Trim(id, "<>"); id != "" {
+				out = append(out, id)
+			}
+		}
+	}
+	return out
 }
 
 // firstSenderAddress pulls the bare address out of the first From value, in

@@ -180,6 +180,13 @@ type WarmupRepository interface {
 	// IsWarmupDelivery answers the same question for a second reader of the
 	// same mailbox, which must not depend on who consumed the token first.
 	IsWarmupDelivery(ctx context.Context, accountID uuid.UUID, senderAddress, messageID, subject string) (bool, error)
+	// IsWarmupThreadReply recognises a message by what it answers: any of the
+	// ids in its In-Reply-To naming a warmup send or receipt of this mailbox,
+	// or an earlier turn already recognised this way.
+	IsWarmupThreadReply(ctx context.Context, accountID uuid.UUID, parentIDs []string) (bool, error)
+	// RecordWarmupThreadMessage remembers a recognised turn so the turn
+	// answering it is recognised too.
+	RecordWarmupThreadMessage(ctx context.Context, accountID uuid.UUID, messageID string) error
 
 	// Warmup conversation support
 	GetRecentlyUsedPartners(ctx context.Context, accountID uuid.UUID, since time.Time) ([]uuid.UUID, error)
@@ -1359,6 +1366,65 @@ func (r *warmupRepository) IsWarmupDelivery(ctx context.Context, accountID uuid.
 		return false, ErrWarmupDeliveryPending
 	}
 	return known, nil
+}
+
+// IsWarmupThreadReply answers for mail that carries no token and no known id
+// of its own: a reply typed by hand at a partner mailbox. It is warmup when
+// what it answers is a warmup send or receipt of this mailbox, or a turn
+// recognised the same way before (the record is keyed by Message-ID alone,
+// because whichever mailbox syncs a copy of the next turn asks about it).
+func (r *warmupRepository) IsWarmupThreadReply(ctx context.Context, accountID uuid.UUID, parentIDs []string) (bool, error) {
+	parents := normalizeMessageIDs(parentIDs)
+	if len(parents) == 0 {
+		return false, nil
+	}
+	query := `
+		SELECT EXISTS (
+		    SELECT 1 FROM warmup_received wr
+		    WHERE (wr.email_account_id = $1 OR wr.sender_account_id = $1)
+		      AND btrim(wr.message_id, '<>') = ANY($2)
+		  ) OR EXISTS (
+		    SELECT 1 FROM warmup_tokens wt
+		    WHERE (wt.recipient_account_id = $1 OR wt.sender_account_id = $1)
+		      AND wt.sent_message_id <> '' AND btrim(wt.sent_message_id, '<>') = ANY($2)
+		  ) OR EXISTS (
+		    SELECT 1 FROM warmup_tokens wt
+		    JOIN tasks t ON t.id = wt.task_id
+		    WHERE (wt.recipient_account_id = $1 OR wt.sender_account_id = $1)
+		      AND btrim(t.message_id, '<>') = ANY($2)
+		  ) OR EXISTS (
+		    SELECT 1 FROM warmup_thread_messages m WHERE m.message_id = ANY($2)
+		  )`
+	var known bool
+	if err := r.db.QueryRow(ctx, query, accountID, parents).Scan(&known); err != nil {
+		return false, err
+	}
+	return known, nil
+}
+
+// RecordWarmupThreadMessage is idempotent on a re-sync of the same turn.
+func (r *warmupRepository) RecordWarmupThreadMessage(ctx context.Context, accountID uuid.UUID, messageID string) error {
+	ids := normalizeMessageIDs([]string{messageID})
+	if len(ids) == 0 || accountID == uuid.Nil {
+		return nil
+	}
+	_, err := r.db.Exec(ctx,
+		`INSERT INTO warmup_thread_messages (message_id, email_account_id) VALUES ($1, $2)
+		 ON CONFLICT DO NOTHING`,
+		ids[0], accountID)
+	return err
+}
+
+// normalizeMessageIDs trims each id to the bare form every lookup compares on
+// and drops blanks.
+func normalizeMessageIDs(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id = strings.Trim(strings.TrimSpace(id), "<>"); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // GetRecentlyUsedPartners returns partner account IDs the sender has targeted since the provided timestamp.

@@ -319,6 +319,21 @@ func (s *service) VerifyWarmupDelivery(ctx context.Context, inst *models.PoolLin
 	if s.warmup == nil {
 		return false, nil
 	}
+	// A reply typed by hand in a warmup thread has no token and no known id of
+	// its own; it is warmup by what it answers. Recorded so the turn answering
+	// it is recognised too, exactly as the cloud's own consumer would.
+	if len(q.InReplyTo) > 0 {
+		reply, err := s.warmup.IsWarmupThreadReply(ctx, m.EmailAccountID, q.InReplyTo)
+		if err != nil {
+			return false, errx.InternalError()
+		}
+		if reply {
+			if err := s.warmup.RecordWarmupThreadMessage(ctx, m.EmailAccountID, q.MessageID); err != nil {
+				return false, errx.InternalError()
+			}
+			return true, nil
+		}
+	}
 	ok, err := s.warmup.IsWarmupDelivery(ctx, m.EmailAccountID, q.Sender, q.MessageID, q.Subject)
 	if errors.Is(err, repository.ErrWarmupDeliveryPending) {
 		return false, errx.ErrServiceDown

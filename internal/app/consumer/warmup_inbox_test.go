@@ -56,10 +56,10 @@ func TestHandleNewEmailKeepsLocalWarmupSentCopyOutOfInbox(t *testing.T) {
 }
 
 type warmupInboxCloud struct {
-	tokenOK, deliveryOK       bool
-	tokenErr, deliveryErr     error
-	enrollmentErr             error
-	tokenCalls, deliveryCalls int
+	tokenOK, deliveryOK, threadOK          bool
+	tokenErr, deliveryErr, threadErr       error
+	enrollmentErr                          error
+	tokenCalls, deliveryCalls, threadCalls int
 }
 
 func (c *warmupInboxCloud) CheckEnrollment(context.Context, uuid.UUID) (bool, error) {
@@ -80,6 +80,14 @@ func (c *warmupInboxCloud) IsCloudWarmupDelivery(ctx context.Context, _ uuid.UUI
 	}
 	c.deliveryCalls++
 	return c.deliveryOK, c.deliveryErr
+}
+
+func (c *warmupInboxCloud) IsCloudWarmupThreadReply(ctx context.Context, _ uuid.UUID, _ string, _ []string) (bool, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		panic("cloud verification needs a deadline")
+	}
+	c.threadCalls++
+	return c.threadOK, c.threadErr
 }
 
 func TestHandleNewEmailCloudWarmupVisibility(t *testing.T) {

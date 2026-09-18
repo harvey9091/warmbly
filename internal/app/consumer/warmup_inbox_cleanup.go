@@ -35,18 +35,20 @@ func (s *JobsService) StartWarmupInboxCleanup(ctx context.Context) {
 	})
 }
 
-// fileHistoricalWarmupLeak moves one already-delivered warmup message out of
-// the customer's own mailbox.
+// fileWarmupOutOfMailbox moves one warmup message the live path did not
+// engage with out of the customer's own mailbox: a leak the sweep found, or a
+// reply typed by hand in a warmup thread.
 //
 // Only the filing action is sent. The engagement legs (read, important, star)
 // are how fresh warmup mail earns its reputation signal, and replaying them on
-// months-old mail would be a burst of activity no real reader produces.
+// months-old mail, or spending them on a reply nobody verified, would be
+// activity no real reader produces.
 //
 // A mailbox that is gone, disconnected or unassigned is skipped, because there
 // is nothing to file into; the sweep's job is the Unibox row. A failure to
 // look the mailbox up or to publish is returned instead, so the row survives
 // for the next pass rather than being deleted with the leak still in place.
-func (s *JobsService) fileHistoricalWarmupLeak(ctx context.Context, e *models.JobEventNewEmail) error {
+func (s *JobsService) fileWarmupOutOfMailbox(ctx context.Context, e *models.JobEventNewEmail) error {
 	if s.Publisher == nil || s.EmailRepository == nil || e.Message == nil {
 		return nil
 	}
@@ -123,6 +125,13 @@ func (s *JobsService) cleanWarmupInboxBatch(ctx context.Context, afterID uuid.UU
 		if err != nil {
 			return afterID, false, err
 		}
+		if !warmup {
+			// A reply in a warmup thread that got in before ancestry was
+			// checked, or while the turn it answers was still unknown.
+			if warmup, err = s.isWarmupThreadReply(ctx, &candidate); err != nil {
+				return afterID, false, err
+			}
+		}
 		if warmup {
 			// Deleting the Unibox row only takes it out of OUR inbox. The copy
 			// in the customer's own mailbox is what they are looking at, and
@@ -130,7 +139,7 @@ func (s *JobsService) cleanWarmupInboxBatch(ctx context.Context, afterID uuid.UU
 			// The Unibox row is the retry record: it stays until the filing
 			// action is on the bus, so a publish or lookup failure is
 			// re-offered next pass instead of hiding the leak for good.
-			if err := s.fileHistoricalWarmupLeak(ctx, &candidate); err != nil {
+			if err := s.fileWarmupOutOfMailbox(ctx, &candidate); err != nil {
 				return afterID, false, err
 			}
 			if err := s.UniboxRepository.Delete(ctx, e.UserID, e.Message.ID); err != nil {
