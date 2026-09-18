@@ -98,8 +98,7 @@ type Service interface {
 	ListMailboxes(ctx context.Context, orgID uuid.UUID) ([]models.CloudLinkMailboxRow, *errx.Error)
 	Enroll(ctx context.Context, orgID, accountID uuid.UUID) (*models.CloudLinkMailboxRow, *errx.Error)
 	Unenroll(ctx context.Context, orgID, accountID uuid.UUID) *errx.Error
-	// RevokeForDelete is Unenroll for a mailbox that is about to be deleted:
-	// a nil answer is proof the cloud no longer holds the credential.
+	// RevokeForDelete confirms the cloud no longer holds the mailbox credential.
 	RevokeForDelete(ctx context.Context, orgID, accountID uuid.UUID) *errx.Error
 	SetLifecycle(ctx context.Context, orgID, accountID uuid.UUID, action string) (*models.CloudLinkMailboxRow, *errx.Error)
 
@@ -511,17 +510,7 @@ func (s *service) Unenroll(ctx context.Context, orgID, accountID uuid.UUID) *err
 	return nil
 }
 
-// RevokeForDelete takes the mailbox off the cloud and only then drops the
-// local row, which is the opposite order to Unenroll and deliberately so. The
-// caller is deleting the mailbox, and once the record is gone nothing is left
-// to retry a revocation from, so the answer has to mean "the pool no longer
-// holds this credential" rather than "the local row is gone". Unenroll orders
-// it the other way because there the mailbox survives, and a failed cloud call
-// should leave it warming here rather than nowhere.
-//
-// An unreadable link is a refusal, not an absence: it may well still hold the
-// mailbox, and reading it as "not linked" would delete the mailbox and leave
-// its password in the pool for good.
+// RevokeForDelete removes the remote credential before local deletion makes retries impossible.
 func (s *service) RevokeForDelete(ctx context.Context, orgID, accountID uuid.UUID) *errx.Error {
 	if _, xerr := s.ownedAccount(ctx, orgID, accountID); xerr != nil {
 		return xerr
@@ -544,9 +533,7 @@ func (s *service) RevokeForDelete(ctx context.Context, orgID, accountID uuid.UUI
 		}
 	}
 	s.forgetToken(accountID)
-	// The cloud has let go, so the local row is only bookkeeping: the mailbox
-	// row takes it with it by cascade, and a stale one costs nothing because
-	// the next attempt is answered with pool_link_mailbox_not_found.
+	// The mailbox delete also removes any stale local enrollment by cascade.
 	if err := s.repo.Unenroll(ctx, accountID); err != nil {
 		log.Warn().Err(err).Str("account_id", accountID.String()).Msg("cloud link: enrollment revoked but the local row could not be dropped; the mailbox delete removes it")
 	}

@@ -74,6 +74,7 @@ import EmailEditor from "../EmailEditor";
 import SendingBehaviorTab from "./SendingBehaviorTab";
 import SyncStatusCard from "./SyncStatusCard";
 import CloudWarmupCard from "./CloudWarmupCard";
+import WarmupPartnerDiversity from "./WarmupPartnerDiversity";
 import useCloudPool from "@/hooks/useCloudPool";
 import { Toggle } from "@/components/app/campaigns/preferences/components/CampaignPreferenceBoolBox";
 import setDirectTracking from "@/lib/api/client/app/emails/setDirectTracking";
@@ -1214,25 +1215,7 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
                     {wh.blocked_until && (
                         <p className="mt-1 text-[11px] text-rose-600">Paused from the pool until {new Date(wh.blocked_until).toLocaleDateString()}.</p>
                     )}
-                    {wh.partner_mailboxes_7d > 0 && (
-                        <div className="mt-2.5 flex items-center gap-4 text-[11.5px] text-slate-500">
-                            <span>
-                                <b className="text-slate-900 tabular-nums">{wh.partner_mailboxes_7d}</b> partner{wh.partner_mailboxes_7d === 1 ? "" : "s"}
-                            </span>
-                            <span>
-                                <b className="text-slate-900 tabular-nums">{wh.partner_domains_7d}</b> domain{wh.partner_domains_7d === 1 ? "" : "s"}
-                            </span>
-                            <span>
-                                <b className="text-slate-900 tabular-nums">{wh.partner_organizations_7d}</b> workspace{wh.partner_organizations_7d === 1 ? "" : "s"}
-                            </span>
-                            <span className="text-slate-400">last 7 days</span>
-                        </div>
-                    )}
-                    {wh.partner_mailboxes_7d > 1 && wh.partner_organizations_7d === 1 && (
-                        <p className="mt-1.5 text-[11px] text-amber-700">
-                            Every partner this week was in a single workspace. Warmup builds the most reputation across many workspaces and domains.
-                        </p>
-                    )}
+                    <WarmupPartnerDiversity health={wh} />
                 </div>
             )}
 

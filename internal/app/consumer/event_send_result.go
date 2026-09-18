@@ -151,6 +151,9 @@ func (s *JobsService) HandleEmailFailed(ctx context.Context, result models.SendE
 	}
 
 	reason, code := sendFailureReason(result)
+	if task.TaskType == "warmup" {
+		return s.failWarmupSend(ctx, task, reason)
+	}
 	if err := s.TaskRepo.RecordTaskFailure(ctx, task.ID, "Send failed", reason); err != nil {
 		return err
 	}
@@ -158,36 +161,22 @@ func (s *JobsService) HandleEmailFailed(ctx context.Context, result models.SendE
 	switch task.TaskType {
 	case "campaign":
 		return s.failCampaignSend(ctx, task, reason, code, nil)
-	case "warmup":
-		s.failWarmupSend(ctx, task)
 	case "email":
 		s.notifyUserSendFailed(ctx, task, reason)
 	}
 	return nil
 }
 
-// failWarmupSend gives the day back for a warmup send the worker refused. The
-// counters are taken at dispatch and the scheduler's cap counts completed
-// tasks, so a failure that is not given back here is counted by the reported
-// number forever while the cap immediately frees the slot: the mailbox sends
-// one extra message past its target per failure, which is what a mailbox whose
-// provider refused every connection looked like (#574).
-func (s *JobsService) failWarmupSend(ctx context.Context, task *repository.Task) {
+// failWarmupSend leaves redelivery possible unless the task and refund both persist.
+func (s *JobsService) failWarmupSend(ctx context.Context, task *repository.Task, reason string) error {
 	if s.WarmupRepo == nil {
-		return
+		return s.TaskRepo.RecordTaskFailure(ctx, task.ID, "Send failed", reason)
 	}
-	// The day the send was counted on, which is the day the control plane
-	// stamped it, not the day its failure came back.
 	day := time.Now()
 	if task.CompletedAt != nil {
 		day = *task.CompletedAt
 	}
-	if err := s.WarmupRepo.GiveBackDailySend(ctx, task.EmailAccountID, task.ID, day); err != nil {
-		log.Warn().Err(err).
-			Str("task_id", task.ID.String()).
-			Str("email_account_id", task.EmailAccountID.String()).
-			Msg("could not give back the failed warmup send's daily count")
-	}
+	return s.WarmupRepo.FailWarmupSend(ctx, task.EmailAccountID, task.ID, day, "Send failed", reason)
 }
 
 // failCampaignSend is the campaign half of HandleEmailFailed. countedOn is the
@@ -233,15 +222,7 @@ func (s *JobsService) failCampaignSend(ctx context.Context, task *repository.Tas
 		return nil
 	}
 
-	// A server that rejected the RECIPIENT at send time is a bounce in all but
-	// delivery route; a rejection of the sender, the session or the content
-	// says nothing about the address.
-	//
-	// Read off a PERMANENT failure only. A deferral names the recipient as
-	// readily as a refusal does ("450 4.7.1 <box@example.com>: Recipient
-	// address rejected: Greylisted" is the standard Postfix greylisting reply),
-	// so classifying the retryable class by its text would file a valid
-	// contact as undeliverable on the strength of a delay.
+	// Only permanent recipient refusals are bounce evidence; deferrals may use the same wording.
 	if s.Evidence != nil && ct.ContactID != nil && ct.SequenceID != nil &&
 		code != string(errx.MailErrorCodeServerUnreachable) && emailverify.NamesRecipient(reason) {
 		s.Evidence.RecordEvidence(ctx, *ct.ContactID, models.Step(&campaignID, ct.SequenceID), "bounced_recipient", "send:"+ct.SequenceID.String(), reason)

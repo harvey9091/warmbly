@@ -589,17 +589,7 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 		partnerCounts = nil
 	}
 
-	// Foreign workspaces first, then own tier before borrowed, then fresh
-	// before recently used. Warming against the sender's own sibling mailboxes
-	// teaches the providers that will receive the cold mail nothing, costs the
-	// mailbox its daily ramp, and is the closed loop a spam filter reads as
-	// one; a customer who brings twenty mailboxes used to make up most of its
-	// own candidate set (#575).
-	//
-	// A preference, not an exclusion, because a self-hosted instance's pool IS
-	// one organization: the same-org buckets are only reached once every
-	// foreign partner is used up, so warmup never stops for want of an
-	// external partner.
+	// Rank outside workspaces first while retaining siblings as a self-host fallback.
 	var buckets [8][]uuid.UUID
 	foreign, own := 0, 0
 	for _, c := range candidates {
@@ -622,13 +612,7 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 		buckets[rank] = append(buckets[rank], c.ID)
 	}
 	if foreign == 0 && own > 0 {
-		// The draw is about to pair the sender with one of its own mailboxes.
-		// Said out loud because the mail still goes out and nothing else in the
-		// logs reports that the pool had no outside partner for it. Info, not a
-		// warning: on a self-hosted instance that is not linked to Warmbly
-		// Cloud it is the only thing that can happen, every tick. Conditional
-		// on there being a sibling to draw, so a tick with nothing left at all
-		// is not reported as a pairing that never happens.
+		// Surface intentional sibling fallback without warning on local-only pools.
 		log.Info().
 			Int("participants", len(candidates)).
 			Str("pool", poolType).
@@ -685,9 +669,7 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 	return nil, errNoEligibleWarmupPartners
 }
 
-// sameOrganization reports whether two mailboxes provably belong to one
-// workspace. An unset owner on either side is not a match: it cannot be shown
-// to be the same workspace, and guessing would demote a legitimate partner.
+// sameOrganization treats unknown ownership as outside rather than guessing.
 func sameOrganization(a, b *uuid.UUID) bool {
 	return a != nil && b != nil && *a == *b
 }

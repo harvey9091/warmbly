@@ -93,6 +93,9 @@ export interface PoolLinkWarmupHealth {
     spam_score: number;
     blocked_until?: Date | null;
     evaluated_at?: Date | null;
+    partner_mailboxes_7d?: number;
+    partner_domains_7d?: number;
+    partner_organizations_7d?: number;
 }
 
 export interface PoolLinkMailboxError {

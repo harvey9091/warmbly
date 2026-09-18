@@ -31,16 +31,10 @@ import (
 // stops answering cannot hold a send goroutine forever.
 const sendTimeout = 90 * time.Second
 
-// errNoSTARTTLS is the server offering no encrypted upgrade, which is our own
-// refusal rather than a failure on the wire, so it needs a cause of its own.
+// errNoSTARTTLS distinguishes a missing upgrade from a network failure.
 var errNoSTARTTLS = errors.New("the server does not offer STARTTLS")
 
-// dialCause is the syscall or handshake failure inside a dial error, without
-// the addresses net.OpError prints around it: the stage already names the one
-// being dialled, and the other is our own egress IP (netbind), which is not
-// the diagnosis and not the mailbox owner's to read. A refused connect, a
-// failed name lookup, an unassigned bind address and a TLS handshake all read
-// as themselves.
+// dialCause removes local and duplicated remote addresses from a dial error.
 func dialCause(err error) error {
 	var op *net.OpError
 	if errors.As(err, &op) && op.Err != nil {

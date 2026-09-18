@@ -9,8 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// warmupUsageFixture is one mailbox in one workspace, plus a helper that
-// writes rows directly so each test states exactly the ledger it is testing.
+// warmupUsageFixture owns the isolated mailbox ledger used by each test.
 type warmupUsageFixture struct {
 	user    uuid.UUID
 	org     uuid.UUID
@@ -53,18 +52,14 @@ func newWarmupUsageFixture(t *testing.T, pool *pgxpool.Pool) warmupUsageFixture 
 	return f
 }
 
-// The reported number and the cap the scheduler enforces have to count the
-// same thing. Reading warmup_statistics for it let a send the worker refused
-// be reported forever while the cap (completed warmup tasks) had already freed
-// the slot, which is how sent_today reached 21 against a target of 10 (#574).
+// Reported usage must match the scheduler's completed-task cap.
 func TestLiveAccountDailyUsageCountsWarmupTasksNotTheStatisticsRow(t *testing.T) {
 	handle, pool := liveContactDB(t)
 	ctx := context.Background()
 	f := newWarmupUsageFixture(t, pool)
 	day := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
 
-	// Two dispatches: one the worker delivered, one it refused. The statistics
-	// row was stamped at dispatch for both, before the worker had answered.
+	// Dispatch counted both sends before one failed.
 	f.exec(`INSERT INTO tasks (id, task_type, email_account_id, status, message_id, completed_at)
 	        VALUES ($1, 'warmup', $2, 'completed', '', $3)`, uuid.New(), f.account, day)
 	f.exec(`INSERT INTO tasks (id, task_type, email_account_id, status, message_id, completed_at)
@@ -85,8 +80,7 @@ func TestLiveAccountDailyUsageCountsWarmupTasksNotTheStatisticsRow(t *testing.T)
 	}
 }
 
-// A campaign task must not be mistaken for a warmup one, and a send on another
-// day must not leak into today.
+// Daily warmup usage is scoped by task type and date.
 func TestLiveAccountDailyUsageScopesWarmupToTypeAndDay(t *testing.T) {
 	handle, pool := liveContactDB(t)
 	ctx := context.Background()
@@ -111,10 +105,7 @@ func TestLiveAccountDailyUsageScopesWarmupToTypeAndDay(t *testing.T) {
 	}
 }
 
-// The counters are taken at dispatch, so a send the worker could not deliver
-// has to be given back, or the mailbox is reported as having sent it forever
-// and its 7-day totals (the ramp's own denominator) drift up with every
-// failure (#574).
+// Failed sends refund both sent and reply counters taken at dispatch.
 func TestLiveGiveBackDailySendReversesADispatchedWarmupSend(t *testing.T) {
 	_, pool := liveContactDB(t)
 	ctx := context.Background()
@@ -127,14 +118,13 @@ func TestLiveGiveBackDailySendReversesADispatchedWarmupSend(t *testing.T) {
 		f.exec(`INSERT INTO tasks (id, task_type, email_account_id, status, message_id, completed_at)
 		        VALUES ($1, 'warmup', $2, 'completed', '', $3)`, id, f.account, day)
 	}
-	// conversation_turn is what the send itself recorded: 0 opened a thread,
-	// above 0 answered one, and only the second took the reply counter.
+	// Only a nonzero conversation turn consumed the reply counter.
 	f.exec(`INSERT INTO warmup_tokens (token, task_id, sender_account_id, recipient_account_id, conversation_turn)
 	        VALUES ($1, $2, $3, $3, 0)`, uuid.New(), newThread, f.account)
 	f.exec(`INSERT INTO warmup_tokens (token, task_id, sender_account_id, recipient_account_id, conversation_turn)
 	        VALUES ($1, $2, $3, $3, 2)`, uuid.New(), reply, f.account)
 	f.exec(`INSERT INTO warmup_statistics (email_account_id, date, emails_sent, emails_replied, target_volume)
-	        VALUES ($1, DATE($2), 2, 1, 10)`, f.account, day)
+	        VALUES ($1, DATE($2), 3, 1, 10)`, f.account, day)
 
 	read := func() (sent, replied int) {
 		t.Helper()
@@ -146,33 +136,31 @@ func TestLiveGiveBackDailySendReversesADispatchedWarmupSend(t *testing.T) {
 	}
 
 	// The new thread: the send comes back, the reply count is untouched.
-	if err := repo.GiveBackDailySend(ctx, f.account, newThread, day); err != nil {
-		t.Fatalf("GiveBackDailySend: %v", err)
+	if err := repo.FailWarmupSend(ctx, f.account, newThread, day, "Send failed", "refused"); err != nil {
+		t.Fatalf("FailWarmupSend: %v", err)
 	}
-	if sent, replied := read(); sent != 1 || replied != 1 {
-		t.Fatalf("after giving back a new thread: sent=%d replied=%d, want 1/1", sent, replied)
+	if sent, replied := read(); sent != 2 || replied != 1 {
+		t.Fatalf("after giving back a new thread: sent=%d replied=%d, want 2/1", sent, replied)
 	}
 
 	// The reply: both come back, because both were taken at dispatch.
-	if err := repo.GiveBackDailySend(ctx, f.account, reply, day); err != nil {
-		t.Fatalf("GiveBackDailySend: %v", err)
+	if err := repo.FailWarmupSend(ctx, f.account, reply, day, "Send failed", "refused"); err != nil {
+		t.Fatalf("FailWarmupSend: %v", err)
 	}
-	if sent, replied := read(); sent != 0 || replied != 0 {
-		t.Fatalf("after giving back a reply: sent=%d replied=%d, want 0/0", sent, replied)
+	if sent, replied := read(); sent != 1 || replied != 0 {
+		t.Fatalf("after giving back a reply: sent=%d replied=%d, want 1/0", sent, replied)
 	}
 
-	// Floored: a duplicate result, or a give-back for a day whose row was
-	// never incremented, must not drive the day negative.
-	if err := repo.GiveBackDailySend(ctx, f.account, reply, day); err != nil {
-		t.Fatalf("GiveBackDailySend (repeat): %v", err)
+	// Duplicate failure delivery must not refund another send.
+	if err := repo.FailWarmupSend(ctx, f.account, reply, day, "Send failed", "refused"); err != nil {
+		t.Fatalf("FailWarmupSend (repeat): %v", err)
 	}
-	if sent, replied := read(); sent != 0 || replied != 0 {
-		t.Fatalf("a repeated give-back went below zero: sent=%d replied=%d", sent, replied)
+	if sent, replied := read(); sent != 1 || replied != 0 {
+		t.Fatalf("a repeated give-back changed the counters: sent=%d replied=%d", sent, replied)
 	}
 }
 
-// The give-back is scoped to the day the send was counted on, so a failure
-// that arrives after midnight cannot take a send off the wrong day.
+// A late failure refunds the original dispatch day only.
 func TestLiveGiveBackDailySendLeavesOtherDaysAlone(t *testing.T) {
 	_, pool := liveContactDB(t)
 	ctx := context.Background()
@@ -189,8 +177,8 @@ func TestLiveGiveBackDailySendLeavesOtherDaysAlone(t *testing.T) {
 	f.exec(`INSERT INTO warmup_statistics (email_account_id, date, emails_sent, target_volume)
 	        VALUES ($1, DATE($2), 3, 10)`, f.account, next)
 
-	if err := repo.GiveBackDailySend(ctx, f.account, taskID, counted); err != nil {
-		t.Fatalf("GiveBackDailySend: %v", err)
+	if err := repo.FailWarmupSend(ctx, f.account, taskID, counted, "Send failed", "refused"); err != nil {
+		t.Fatalf("FailWarmupSend: %v", err)
 	}
 	for _, tc := range []struct {
 		day  time.Time

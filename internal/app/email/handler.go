@@ -343,14 +343,7 @@ func (s *emailService) Delete(ctx context.Context, userID, emailAccountID string
 		return xerr
 	}
 
-	// Revoked before the row goes: a mailbox the cloud pool warms is enrolled
-	// there with its own SMTP/IMAP password, and deleting the row only cascaded
-	// the link away, so the pool went on holding the credential and warming a
-	// mailbox this instance no longer knew was enrolled. Afterwards there is no
-	// row left to retry from, which is why a revocation that cannot be made
-	// fails the delete rather than being logged (#574). The mailbox goes back on
-	// its worker on that path, so a refused delete really does leave it as it
-	// was, which is what its error says.
+	// Revoke the cloud credential while the local enrollment is still retryable.
 	if xerr := s.unenrollFromCloud(ctx, account); xerr != nil {
 		s.loadAccountBestEffort(ctx, accountID)
 		return xerr
@@ -380,18 +373,14 @@ func (s *emailService) Delete(ctx context.Context, userID, emailAccountID string
 	return nil
 }
 
-// ErrCloudEnrollmentStuck refuses a delete whose Warmbly Cloud enrollment
-// could not be revoked. Retryable, and only retryable: unenrolling under
-// Settings makes the same call, so there is no local way around it and saying
-// otherwise would send the owner somewhere that cannot work either.
+// ErrCloudEnrollmentStuck keeps the local mailbox when its cloud credential cannot be revoked.
 var ErrCloudEnrollmentStuck = errx.NewWithIdentifier(
 	errx.Conflict,
 	"mailbox_cloud_unenroll_failed",
 	"This mailbox is enrolled in Warmbly Cloud and its enrollment could not be removed, so deleting it would leave its password in the pool. Nothing was removed. Try again once this instance can reach Warmbly Cloud.",
 )
 
-// unenrollFromCloud revokes the mailbox's Warmbly Cloud enrollment, which is
-// what takes its stored credential out of the pool.
+// unenrollFromCloud removes the mailbox credential held by Warmbly Cloud.
 func (s *emailService) unenrollFromCloud(ctx context.Context, account *models.Email) *errx.Error {
 	if s.cloudUnenroll == nil || s.cloudLink == nil || account.OrganizationID == nil {
 		return nil
@@ -401,9 +390,7 @@ func (s *emailService) unenrollFromCloud(ctx context.Context, account *models.Em
 		log.Warn().Err(err).Str("account_id", account.ID.String()).Msg("cloud enrollment unreadable; delete refused rather than leaving the credential in the pool")
 		return ErrCloudEnrollmentStuck
 	}
-	// A managed mailbox is the cloud's own and its mirror here holds no
-	// credential. cloudlink deletes that mirror through this very path, so
-	// calling back into it would recurse.
+	// Cloud-managed mirrors hold no local enrollment and would recurse here.
 	if link == nil || link.Managed {
 		return nil
 	}

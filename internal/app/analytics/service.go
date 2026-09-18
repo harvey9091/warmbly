@@ -256,8 +256,7 @@ func warmupHealthState(h *models.WarmupHealthInfo) models.WarmupHealthState {
 	return models.WarmupHealthState(h.State)
 }
 
-// warmupDiversityWindow is the lookback for the partner-diversity counts, the
-// same week the selector's own domain histogram uses.
+// warmupDiversityWindow matches the selector's domain-history window.
 const warmupDiversityWindow = 7 * 24 * time.Hour
 
 // buildWarmupHealth looks up the mailbox's warmup-pool health (premium pool

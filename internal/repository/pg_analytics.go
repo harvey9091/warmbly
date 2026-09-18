@@ -351,13 +351,7 @@ func (r *analyticsRepository) GetAccountsWithErrors(ctx context.Context, userID 
 	return accountIDs, nil
 }
 
-// GetAccountDailyUsage is the day's sending for one mailbox. Both halves count
-// completed tasks, which is what the two caps count
-// (CountCampaignEmailsSentToday, CountWarmupEmailsSentToday), so the number
-// reported to a user cannot exceed the target the scheduler is enforcing.
-// Reading warmup_statistics here instead let a failed send be reported forever
-// while the cap had already freed the slot, which showed as sent_today past
-// target_volume (#574).
+// GetAccountDailyUsage uses the same completed-task ledger as the sending caps.
 func (r *analyticsRepository) GetAccountDailyUsage(ctx context.Context, accountID uuid.UUID, date time.Time) (*models.AccountDailyUsage, *errx.Error) {
 	query := `
 		SELECT

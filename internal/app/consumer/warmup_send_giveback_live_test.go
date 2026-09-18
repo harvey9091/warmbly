@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -13,14 +14,42 @@ import (
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
-// A warmup send is counted at dispatch, before the worker has done anything,
-// and the scheduler's cap counts completed warmup tasks. HandleEmailFailed had
-// no warmup branch, so a refused send stopped counting against the cap while
-// the reported number kept it forever: the mailbox sent one extra message past
-// its target per failure, which is how a day's target of 10 reached 21 with
-// nothing delivered at all (#574).
-//
-//	WARMBLY_TEST_DB=postgres://... go test ./internal/app/consumer/ -run LiveWarmupSend -v
+type warmupFailureTaskRepo struct {
+	repository.TaskRepository
+	task *repository.Task
+}
+
+func (r warmupFailureTaskRepo) GetTask(context.Context, uuid.UUID) (*repository.Task, error) {
+	return r.task, nil
+}
+
+type warmupFailureRepo struct {
+	repository.WarmupRepository
+	err      error
+	attempts int
+}
+
+func (r *warmupFailureRepo) FailWarmupSend(context.Context, uuid.UUID, uuid.UUID, time.Time, string, string) error {
+	r.attempts++
+	return r.err
+}
+
+func TestWarmupSendFailureIsRetriedWhenTheRefundFails(t *testing.T) {
+	want := errors.New("database unavailable")
+	task := &repository.Task{ID: uuid.New(), TaskType: "warmup", EmailAccountID: uuid.New(), Status: "completed"}
+	warmup := &warmupFailureRepo{err: want}
+	s := &JobsService{TaskRepo: warmupFailureTaskRepo{task: task}, WarmupRepo: warmup}
+
+	err := s.HandleEmailFailed(context.Background(), models.SendEmailResult{TaskID: task.ID, LegacyErrorMsg: "refused"})
+	if !errors.Is(err, want) {
+		t.Fatalf("HandleEmailFailed error = %v, want %v", err, want)
+	}
+	if warmup.attempts != 1 {
+		t.Fatalf("refund attempts = %d, want 1", warmup.attempts)
+	}
+}
+
+// A refused warmup send atomically gives its daily counts back.
 func TestLiveWarmupSendFailureGivesTheDayBack(t *testing.T) {
 	dsn := os.Getenv("WARMBLY_TEST_DB")
 	if dsn == "" {
@@ -51,8 +80,7 @@ func TestLiveWarmupSendFailureGivesTheDayBack(t *testing.T) {
 		}
 	})
 
-	// One tick as the control plane runs it: the task is stamped completed and
-	// the day's two counters are taken, then the worker refuses the send.
+	// The control plane counts the send before the worker refuses it.
 	day := time.Now()
 	taskID := uuid.New()
 	exec(`INSERT INTO tasks (id, task_type, email_account_id, status, message_id, completed_at)
@@ -96,8 +124,7 @@ func TestLiveWarmupSendFailureGivesTheDayBack(t *testing.T) {
 		t.Fatalf("after the worker refused the send: sent=%d replied=%d, want 0/0", sent, replied)
 	}
 
-	// The cap the scheduler enforces reads completed warmup tasks, so the two
-	// numbers now agree instead of drifting apart by one per failure.
+	// Reported usage and the cap must read the same delivered-send count.
 	capCount, err := s.TaskRepo.CountWarmupEmailsSentToday(ctx, f.mailbox)
 	if err != nil {
 		t.Fatalf("count: %v", err)

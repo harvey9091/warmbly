@@ -28718,7 +28718,7 @@
           },
           "partner_mailboxes_7d": {
             "type": "integer",
-            "description": "Distinct warmup partner mailboxes this mailbox reached over the last seven days."
+            "description": "Distinct warmup partner mailboxes reached by confirmed sends over the last seven days. Failed and pending attempts do not count."
           },
           "partner_domains_7d": {
             "type": "integer",

@@ -22,10 +22,7 @@ func (r *recordingEvidence) RecordEvidence(_ context.Context, _ uuid.UUID, _ mod
 	r.kinds = append(r.kinds, kind)
 }
 
-// The same thing through the real handler: a greylisted RCPT must walk the
-// step back for a retry and teach verification nothing about the address.
-//
-//	WARMBLY_TEST_DB=postgres://... go test ./internal/app/consumer/ -run LiveGreylisted -v
+// A greylisted recipient is retryable and supplies no address evidence.
 func TestLiveGreylistedSendIsNotRecordedAsABounce(t *testing.T) {
 	dsn := os.Getenv("WARMBLY_TEST_DB")
 	if dsn == "" {
@@ -80,14 +77,7 @@ func TestLiveGreylistedSendIsNotRecordedAsABounce(t *testing.T) {
 	}
 }
 
-// The send path now carries the server's own reply inside SERVER_UNREACHABLE,
-// which made the retryable class look like a bounce to the text classifier:
-// Postfix greylisting answers a perfectly good address with "Recipient address
-// rejected", and that phrase is a recipient marker. Filing it as bounce
-// evidence marks a valid contact undeliverable for a year on the strength of a
-// delay, so the code has to gate the classification.
-// evidenceTaskRepo answers the two task reads the failure path makes for a
-// campaign send that the control plane had already stamped.
+// evidenceTaskRepo supplies a stamped campaign task to the real failure handler.
 type evidenceTaskRepo struct {
 	repository.TaskRepository
 
@@ -107,8 +97,7 @@ func (r *evidenceTaskRepo) GetCampaignTask(context.Context, uuid.UUID) (*reposit
 	return r.ct, nil
 }
 
-// evidenceProgressRepo walks the step back and reports it rolled back, which
-// is the state the evidence decision is made in.
+// evidenceProgressRepo reports that the campaign step was rolled back.
 type evidenceProgressRepo struct {
 	repository.CampaignProgressRepository
 }
@@ -117,8 +106,7 @@ func (evidenceProgressRepo) RecordSendFailure(context.Context, uuid.UUID, uuid.U
 	return 1, false, false, nil
 }
 
-// runFailedSend drives the real handler, which is the only thing that proves
-// the gate is where the decision is made.
+// runFailedSend returns address evidence produced by the real failure handler.
 func runFailedSend(t *testing.T, code, reason string) []string {
 	t.Helper()
 	campaign, contact, step := uuid.New(), uuid.New(), uuid.New()
@@ -142,9 +130,7 @@ func runFailedSend(t *testing.T, code, reason string) []string {
 }
 
 func TestRetryableFailuresAreNotEvidenceAboutTheAddress(t *testing.T) {
-	// Driven through HandleEmailFailed with stubbed repositories, because the
-	// live version of this needs a database and skips in CI, where removing
-	// the gate would otherwise leave the suite green.
+	// Keep the evidence gate covered in CI without a live database.
 	evidence := func(code, reason string) bool {
 		return len(runFailedSend(t, code, reason)) > 0
 	}
@@ -167,8 +153,7 @@ func TestRetryableFailuresAreNotEvidenceAboutTheAddress(t *testing.T) {
 			`The connection to the mail server could not be established (rcpt to: 452 "4.2.2 Mailbox unavailable, over quota"). The server may be offline or blocking the connection.`,
 			false,
 		},
-		// The permanent refusal is still evidence: that is the whole point of
-		// reading the server's wording.
+		// Permanent refusal remains address evidence.
 		{
 			"address does not exist",
 			string(errx.MailErrorCodeRecipientRejected),

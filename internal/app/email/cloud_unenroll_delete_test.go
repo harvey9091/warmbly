@@ -11,8 +11,7 @@ import (
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
-// stubCloudLinkRepo is the local half of the cloud enrollment: the row that
-// says this mailbox is warmed by the pool, and whether the pool owns it.
+// stubCloudLinkRepo supplies the mailbox's local cloud-enrollment row.
 type stubCloudLinkRepo struct {
 	repository.CloudLinkRepository
 
@@ -53,10 +52,7 @@ func withCloudEnrollment(f *removalFixture, managed bool) *stubUnenroller {
 	return u
 }
 
-// The pool holds the mailbox's own SMTP/IMAP password. Deleting the mailbox
-// only cascaded the local link row away, so the cloud went on holding the
-// credential and warming a mailbox this instance no longer knew was enrolled,
-// and could no longer verify the warmup tokens of (#574).
+// Cloud credential revocation must precede local mailbox deletion.
 func TestDeleteRevokesTheCloudEnrollmentBeforeTheRowGoes(t *testing.T) {
 	f := newRemovalFixture(t)
 	u := withCloudEnrollment(f, false)
@@ -70,8 +66,7 @@ func TestDeleteRevokesTheCloudEnrollmentBeforeTheRowGoes(t *testing.T) {
 	if u.orgs[0] != f.org {
 		t.Errorf("unenrolled under org %s, want the mailbox's own %s", u.orgs[0], f.org)
 	}
-	// Before the row goes: afterwards there is no row left to retry the
-	// revocation from.
+	// The enrollment row must remain until remote revocation succeeds.
 	want := []string{"remove", "unenroll", "delete"}
 	if len(f.trace) != len(want) {
 		t.Fatalf("order was %v, want %v", f.trace, want)
@@ -83,8 +78,7 @@ func TestDeleteRevokesTheCloudEnrollmentBeforeTheRowGoes(t *testing.T) {
 	}
 }
 
-// Reliable, not best-effort, the same way the worker removal is: a credential
-// that cannot be revoked keeps the mailbox, so the owner can try again.
+// Failed revocation preserves the mailbox for retry.
 func TestDeleteKeepsTheMailboxWhenTheCloudRefusesTheRevocation(t *testing.T) {
 	f := newRemovalFixture(t)
 	u := withCloudEnrollment(f, false)
@@ -100,16 +94,13 @@ func TestDeleteKeepsTheMailboxWhenTheCloudRefusesTheRevocation(t *testing.T) {
 	if f.repo.deleteCalls != 0 {
 		t.Errorf("the row was deleted %d times, want 0", f.repo.deleteCalls)
 	}
-	// The mailbox was already taken off its worker by then, so a refused
-	// delete has to put it back, or the error's "nothing was removed" would be
-	// a lie and the mailbox would sit dark until the reconciler's next pass.
+	// A refused delete restores the mailbox to its worker.
 	if len(f.pub.added) != 1 || f.pub.added[0] != f.mailbox {
 		t.Errorf("shipped %v back to the worker, want one %s", f.pub.added, f.mailbox)
 	}
 }
 
-// An unreadable enrollment is the same situation: we cannot tell whether the
-// pool holds a credential, and guessing wrong leaks it for good.
+// An unreadable enrollment cannot prove the remote credential is gone.
 func TestDeleteKeepsTheMailboxWhenTheEnrollmentCannotBeRead(t *testing.T) {
 	f := newRemovalFixture(t)
 	withCloudEnrollment(f, false)
@@ -123,9 +114,7 @@ func TestDeleteKeepsTheMailboxWhenTheEnrollmentCannotBeRead(t *testing.T) {
 	}
 }
 
-// A managed mailbox is the cloud's own and its mirror here holds no
-// credential. cloudlink deletes that mirror through this very path, so calling
-// back into it would recurse until the stack ran out.
+// Cloud-managed mirrors skip revocation to avoid recursive deletion.
 func TestDeleteDoesNotCallBackForAManagedMailbox(t *testing.T) {
 	f := newRemovalFixture(t)
 	u := withCloudEnrollment(f, true)

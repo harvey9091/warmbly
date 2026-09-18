@@ -146,10 +146,7 @@ var (
 		return MError(MailErrorWarning, MailErrorCodeGoogleUnknown(code), message, MailErrorResolveMethodRetry)
 	}
 	ErrMailServerUnreachable = MError(MailErrorWarning, MailErrorCodeServerUnreachable, "The connection to the mail server could not be established. The server may be offline or blocking the connection.", MailErrorResolveMethodRetry)
-	// ErrMailServerUnreachableAt is the same code with the step that failed and
-	// the cause behind it. One bare sentinel returned from a dozen points in
-	// the SMTP send made a refused dial, a timeout, an EHLO rejection and a
-	// TLS handshake failure indistinguishable from the outside (#574).
+	// ErrMailServerUnreachableAt preserves the stable code while exposing the failed stage.
 	ErrMailServerUnreachableAt = func(stage string, cause error) *MailError {
 		if stage == "" || cause == nil {
 			return ErrMailServerUnreachable

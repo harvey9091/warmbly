@@ -14,8 +14,7 @@ import (
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
-// stubLinkRepo is the local half of the link. Embedding the interface keeps it
-// to the calls the revocation makes; anything else panics loudly.
+// stubLinkRepo implements only the local calls used by revocation.
 type stubLinkRepo struct {
 	repository.CloudLinkRepository
 
@@ -58,12 +57,11 @@ type revokeFixture struct {
 	repo    *stubLinkRepo
 	org     uuid.UUID
 	account uuid.UUID
-	// deletes records the paths the cloud was asked to delete.
+	// deletes records remote deletion paths.
 	deletes *[]string
 }
 
-// newRevokeFixture stands up the service against a fake cloud that answers
-// whatever status the test asks for.
+// newRevokeFixture serves the requested cloud response.
 func newRevokeFixture(t *testing.T, cloudStatus int) *revokeFixture {
 	t.Helper()
 	org, account := uuid.New(), uuid.New()
@@ -75,9 +73,7 @@ func newRevokeFixture(t *testing.T, cloudStatus int) *revokeFixture {
 		w.WriteHeader(cloudStatus)
 		switch {
 		case cloudStatus == http.StatusNotFound:
-			// What the cloud's own handler answers for a mailbox it does not
-			// hold (poollink.ErrMailboxNotFound), which is the one refusal the
-			// revocation is allowed to read as success.
+			// A missing remote mailbox means revocation already succeeded.
 			_, _ = w.Write([]byte(`{"code":"pool_link_mailbox_not_found","message":"That mailbox is not enrolled."}`))
 		case cloudStatus >= 400:
 			_, _ = w.Write([]byte(`{"code":"internal_error","message":"nope"}`))
@@ -98,8 +94,7 @@ func newRevokeFixture(t *testing.T, cloudStatus int) *revokeFixture {
 	return &revokeFixture{svc: svc, repo: repo, org: org, account: account, deletes: deletes}
 }
 
-// The nil answer is the whole contract: the caller deletes the mailbox on the
-// strength of it, and afterwards there is no record left to retry from.
+// A successful answer guarantees remote deletion preceded local deletion.
 func TestRevokeForDeleteTakesTheMailboxOffTheCloudBeforeTheLocalRow(t *testing.T) {
 	f := newRevokeFixture(t, http.StatusNoContent)
 
@@ -114,8 +109,7 @@ func TestRevokeForDeleteTakesTheMailboxOffTheCloudBeforeTheLocalRow(t *testing.T
 	}
 }
 
-// A cloud that refuses must not be reported as a revocation, or the mailbox is
-// deleted and its password stays in the pool for good.
+// Remote refusal must preserve the local enrollment for retry.
 func TestRevokeForDeleteRefusesWhenTheCloudDoes(t *testing.T) {
 	f := newRevokeFixture(t, http.StatusInternalServerError)
 
@@ -127,9 +121,7 @@ func TestRevokeForDeleteRefusesWhenTheCloudDoes(t *testing.T) {
 	}
 }
 
-// An unreadable link is not an absent one. Get errors when the stored token
-// cannot be decrypted, and treating that as "not linked" would skip the cloud
-// entirely and answer nil.
+// An unreadable link may still own a remote credential.
 func TestRevokeForDeleteRefusesAnUnreadableLink(t *testing.T) {
 	f := newRevokeFixture(t, http.StatusNoContent)
 	f.repo.link, f.repo.linkErr = nil, errors.New("cannot decrypt the instance token")
@@ -142,8 +134,7 @@ func TestRevokeForDeleteRefusesAnUnreadableLink(t *testing.T) {
 	}
 }
 
-// A mailbox the cloud already let go of is a success, not a failure: the
-// delete has to be able to finish after a half-completed earlier attempt.
+// A missing remote mailbox makes a repeated revocation idempotent.
 func TestRevokeForDeleteToleratesAMailboxTheCloudHasAlreadyDropped(t *testing.T) {
 	f := newRevokeFixture(t, http.StatusNotFound)
 
@@ -152,8 +143,7 @@ func TestRevokeForDeleteToleratesAMailboxTheCloudHasAlreadyDropped(t *testing.T)
 	}
 }
 
-// An instance with no link at all holds nothing in any pool, and a mailbox
-// that was never enrolled needs no round trip.
+// Nothing enrolled or linked requires no remote call.
 func TestRevokeForDeleteIsANoopWithNothingToRevoke(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -173,8 +163,7 @@ func TestRevokeForDeleteIsANoopWithNothingToRevoke(t *testing.T) {
 	}
 }
 
-// The local row failing to go is not a refusal: the cloud has already let go,
-// and the mailbox row takes its link with it by cascade.
+// Local cleanup failure does not undo confirmed remote revocation.
 func TestRevokeForDeleteSucceedsEvenIfTheLocalRowCannotBeDropped(t *testing.T) {
 	f := newRevokeFixture(t, http.StatusNoContent)
 	f.repo.unenrollErr = errors.New("db down")

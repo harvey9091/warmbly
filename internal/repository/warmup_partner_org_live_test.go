@@ -9,18 +9,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Issue #575: an organization with twenty mailboxes warmed overwhelmingly
-// against itself, because partner selection could not tell a sibling mailbox
-// from an outside partner. The owner now travels with every candidate, and the
-// diversity a mailbox is actually getting is readable.
+// partnerOrgFixture supplies sibling and outside partner ownership.
 type partnerOrgFixture struct {
 	pool   *pgxpool.Pool
 	user   uuid.UUID
 	org    uuid.UUID
 	other  uuid.UUID
 	sender uuid.UUID
-	// sibling is the sender's own second mailbox; outside belongs to another
-	// workspace entirely.
+	// sibling and outside distinguish the two ownership tiers.
 	sibling uuid.UUID
 	outside uuid.UUID
 	exec    func(sql string, args ...any)
@@ -89,17 +85,20 @@ func newPartnerOrgFixture(t *testing.T) *partnerOrgFixture {
 // warmed records one warmup send from the sender to a recipient.
 func (f *partnerOrgFixture) warmed(t *testing.T, recipient uuid.UUID) {
 	t.Helper()
-	taskID := uuid.New()
-	f.exec(`INSERT INTO tasks (id, task_type, email_account_id, status, message_id)
-	        VALUES ($1, 'warmup', $2, 'completed', '')`, taskID, f.sender)
-	f.exec(`INSERT INTO warmup_tokens (token, task_id, sender_account_id, recipient_account_id, created_at)
-	        VALUES (gen_random_uuid(), $1, $2, $3, NOW())`, taskID, f.sender, recipient)
+	f.attempted(t, recipient, "completed")
 }
 
-// The candidate set still contains the sender's own siblings, because on a
-// self-hosted instance the pool IS one workspace and excluding them in SQL
-// would leave warmup with no partner at all. What it must carry is the owner,
-// so the selector can prefer somebody else.
+// attempted records a token and its task outcome.
+func (f *partnerOrgFixture) attempted(t *testing.T, recipient uuid.UUID, status string) {
+	t.Helper()
+	taskID := uuid.New()
+	f.exec(`INSERT INTO tasks (id, task_type, email_account_id, status, message_id)
+	        VALUES ($1, 'warmup', $2, $3, '')`, taskID, f.sender, status)
+	f.exec(`INSERT INTO warmup_tokens (token, task_id, sender_account_id, recipient_account_id, sent_message_id, created_at)
+	        VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW())`, taskID, f.sender, recipient, "<"+taskID.String()+"@test.local>")
+}
+
+// Candidates retain siblings while carrying ownership for later ranking.
 func TestLiveWarmupPartnerCandidatesCarryTheirOwner(t *testing.T) {
 	f := newPartnerOrgFixture(t)
 	repo := &warmupRepository{db: f.pool}
@@ -133,8 +132,7 @@ func TestLiveWarmupPartnerCandidatesCarryTheirOwner(t *testing.T) {
 	}
 }
 
-// Nothing in the product reported that a mailbox was warming in a closed loop.
-// One workspace over the week is exactly that shape.
+// Diversity counts distinct confirmed partner reach.
 func TestLiveGetPartnerDiversityCountsDistinctPartners(t *testing.T) {
 	f := newPartnerOrgFixture(t)
 	ctx := context.Background()
@@ -147,8 +145,20 @@ func TestLiveGetPartnerDiversityCountsDistinctPartners(t *testing.T) {
 		t.Fatalf("a mailbox that sent nothing reads %+v, want zeros", d)
 	}
 
-	// Three sends, all to the sender's own second mailbox: one partner, one
-	// domain, one workspace, however many messages went out.
+	for _, status := range []string{"completed", "failed"} {
+		taskID := uuid.New()
+		f.exec(`INSERT INTO tasks (id, task_type, email_account_id, status, message_id)
+		        VALUES ($1, 'warmup', $2, $3, '')`, taskID, f.sender, status)
+		f.exec(`INSERT INTO warmup_tokens (token, task_id, sender_account_id, recipient_account_id)
+		        VALUES (gen_random_uuid(), $1, $2, $3)`, taskID, f.sender, f.sibling)
+	}
+	if d, err := repo.GetPartnerDiversity(ctx, f.sender, since); err != nil {
+		t.Fatalf("GetPartnerDiversity on unconfirmed sends: %v", err)
+	} else if d.Mailboxes != 0 || d.Domains != 0 || d.Organizations != 0 {
+		t.Fatalf("unconfirmed sends read %+v, want zeros", d)
+	}
+
+	// Repeated sends to one sibling remain one distinct partner.
 	for i := 0; i < 3; i++ {
 		f.warmed(t, f.sibling)
 	}
@@ -167,6 +177,21 @@ func TestLiveGetPartnerDiversityCountsDistinctPartners(t *testing.T) {
 	}
 	if d.Mailboxes != 2 || d.Domains != 2 || d.Organizations != 2 {
 		t.Fatalf("after an outside partner: %+v, want 2/2/2", d)
+	}
+
+	// A failed token cannot credit a partner that received no mail.
+	third := uuid.New()
+	f.exec(`INSERT INTO email_accounts (id, user_id, organization_id, email, name, signature_plain,
+	            signature_html, provider, status, campaign_limit, min_wait_time, timezone)
+	        VALUES ($1, $2, $3, $4, 'Third', '', '', 'smtp_imap', 'active', 50, 600, 'UTC')`,
+		third, f.user, f.other, "third-"+third.String()[:8]+"@elsewhere-two.test")
+	f.attempted(t, third, "failed")
+	d, err = repo.GetPartnerDiversity(ctx, f.sender, since)
+	if err != nil {
+		t.Fatalf("GetPartnerDiversity: %v", err)
+	}
+	if d.Mailboxes != 2 || d.Domains != 2 || d.Organizations != 2 {
+		t.Fatalf("a refused send counted as diversity: %+v, want 2/2/2", d)
 	}
 
 	// Outside the window nothing counts, so the number is about this week.

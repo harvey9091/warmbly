@@ -9,11 +9,7 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 )
 
-// SERVER_UNREACHABLE was returned as one bare sentinel from a dozen points in
-// the send, so a refused dial, a timeout, a rejected EHLO and a failed TLS
-// handshake were indistinguishable from the outside. The code is what every
-// caller switches on and must not move; the message is what makes the failure
-// diagnosable (#574).
+// Every retryable SMTP stage keeps the stable code and its diagnostic detail.
 func TestUnreachableNamesTheStepThatFailed(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -48,8 +44,7 @@ func TestUnreachableNamesTheStepThatFailed(t *testing.T) {
 	}
 }
 
-// A closed port is the failure the reporter of #574 spent an evening on: the
-// message has to say the dial itself never connected, and to which address.
+// A refused connection identifies the dial and remote port.
 func TestUnreachableNamesARefusedDial(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -78,9 +73,7 @@ func TestUnreachableNamesARefusedDial(t *testing.T) {
 	}
 }
 
-// The other half of the same complaint: a server that offers no encrypted
-// upgrade is refused by us, not by the network, and the message has to say so
-// instead of reading as an outage at an address that is answering fine.
+// Missing STARTTLS is distinguished from an unreachable server.
 func TestUnreachableSaysWhenTheServerOffersNoSTARTTLS(t *testing.T) {
 	srv := newFakeServer(t, "LOGIN")
 	host, port := srv.addr()
@@ -99,8 +92,7 @@ func TestUnreachableSaysWhenTheServerOffersNoSTARTTLS(t *testing.T) {
 	}
 }
 
-// The stored security mode decides the dial, so an implicit-TLS mailbox (465)
-// reports its handshake, not a plaintext greeting nobody attempted.
+// Implicit TLS reports its handshake failure at the dial stage.
 func TestUnreachableNamesTheDialForImplicitTLS(t *testing.T) {
 	srv := newFakeServer(t, "LOGIN")
 	host, port := srv.addr()
@@ -116,10 +108,7 @@ func TestUnreachableNamesTheDialForImplicitTLS(t *testing.T) {
 	}
 }
 
-// dialCause keeps the syscall failure and drops the addresses around it. The
-// local one is our own egress IP (WORKER_BIND_IP), which the mailbox's owner
-// has no use for and no business reading; the remote one is already in the
-// stage, so repeating it only made the message harder to read.
+// dialCause preserves the failure without exposing network addresses.
 func TestDialCauseKeepsTheFailureAndDropsTheAddresses(t *testing.T) {
 	op := &net.OpError{
 		Op:     "dial",

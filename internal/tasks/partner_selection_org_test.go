@@ -10,8 +10,7 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 )
 
-// recentPartnerRepo reports the listed partners as recently used, which is
-// what demotes them within their workspace tier.
+// recentPartnerRepo reports partners used in the wider history window.
 type recentPartnerRepo struct {
 	candidateRepo
 
@@ -19,9 +18,7 @@ type recentPartnerRepo struct {
 }
 
 func (r recentPartnerRepo) GetRecentlyUsedPartners(_ context.Context, _ uuid.UUID, since time.Time) ([]uuid.UUID, error) {
-	// The selector asks twice: once over the 72h window and once for today.
-	// Only the wider question is answered, so the partner is "recently used"
-	// without being "used today", which would skip it altogether.
+	// Keep the partner eligible today while marking it recently used.
 	if time.Since(since) < 24*time.Hour {
 		return nil, nil
 	}
@@ -43,15 +40,12 @@ func foreignPartner(gate *rejectingGate) models.WarmupPartnerCandidate {
 	return c
 }
 
-// A customer who brings twenty mailboxes used to become most of its own
-// candidate set, so most of its warmup mail went to its own domains: traffic
-// that teaches the providers it will cold-mail nothing (#575).
+// Outside partners must beat a candidate set dominated by siblings.
 func TestSelectWarmupPartnerPrefersAPartnerOutsideTheSendersWorkspace(t *testing.T) {
 	gate := &rejectingGate{poolOf: map[uuid.UUID]string{}}
 	outside := foreignPartner(gate)
 	cands := []models.WarmupPartnerCandidate{outside}
-	// Nineteen siblings against one outsider: losing the preference is a
-	// near-certain failure over twenty draws, not a coin flip.
+	// Repeated draws make loss of the preference deterministic enough to catch.
 	s, sender := premiumSelector(gate)
 	for i := 0; i < 19; i++ {
 		cands = append(cands, sibling(*sender.OrganizationID, gate))
@@ -69,8 +63,7 @@ func TestSelectWarmupPartnerPrefersAPartnerOutsideTheSendersWorkspace(t *testing
 	}
 }
 
-// A recently used outside partner still beats a fresh sibling: freshness is a
-// tie-break within a workspace tier, not a reason to close the loop.
+// Workspace diversity outranks freshness.
 func TestSelectWarmupPartnerPrefersARecentOutsiderOverAFreshSibling(t *testing.T) {
 	gate := &rejectingGate{poolOf: map[uuid.UUID]string{}}
 	outside := foreignPartner(gate)
@@ -90,9 +83,7 @@ func TestSelectWarmupPartnerPrefersARecentOutsiderOverAFreshSibling(t *testing.T
 	}
 }
 
-// The preference is not an exclusion: on a self-hosted instance the pool IS
-// one workspace, so refusing a sibling would leave warmup with no partner at
-// all and stop it dead.
+// Siblings remain eligible for a single-workspace self-hosted pool.
 func TestSelectWarmupPartnerStillWarmsWhenEveryPartnerIsASibling(t *testing.T) {
 	gate := &rejectingGate{poolOf: map[uuid.UUID]string{}}
 	s, sender := premiumSelector(gate)
@@ -108,10 +99,7 @@ func TestSelectWarmupPartnerStillWarmsWhenEveryPartnerIsASibling(t *testing.T) {
 	}
 }
 
-// An unattributable mailbox is never read as the sender's own. The column has
-// been NOT NULL since migration 000092, so this guards the Go-level pointer
-// rather than a row: a nil owner cannot be shown to be the same workspace, and
-// guessing would push a legitimate partner behind the sender's own siblings.
+// Unknown ownership cannot prove that a candidate is a sibling.
 func TestSelectWarmupPartnerTreatsAnOwnerlessMailboxAsOutside(t *testing.T) {
 	gate := &rejectingGate{poolOf: map[uuid.UUID]string{}}
 	orphan := models.WarmupPartnerCandidate{ID: uuid.New(), Email: "orphan@nowhere.test"}
