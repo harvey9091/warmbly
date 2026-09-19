@@ -9,8 +9,9 @@
  *   web-app-manifest-192x192.png
  *   web-app-manifest-512x512.png
  *
- * The 1200x600 OG / Twitter card (public/og-image.jpg) is exported from the
- * Figma Branding file (the "Social" frame), not generated here.
+ * The 1920x1008 OG / Twitter card (public/og-image.jpg) is a top-left crop of
+ * the 1920x1080 Figma "Social" frame export, not generated here. The crop is
+ * to 1.91:1 (1200x630 x1.6), so the frame's top-left never gets cut.
  *
  * Run with: node scripts/gen-icons.mjs
  */
