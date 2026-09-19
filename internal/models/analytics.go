@@ -291,6 +291,10 @@ type DashboardAnalytics struct {
 	TopCampaigns   []TopCampaignStats    `json:"top_campaigns"`
 	AccountHealth  AccountHealthSummary  `json:"account_health"`
 	DailyTrend     []DashboardDailyStats `json:"daily_trend"`
+	// CapacityToday is what the workspace's mailboxes can send today under
+	// the scheduler's clamps; the sidebar meter's denominator. Absent when
+	// it could not be computed.
+	CapacityToday *WorkspaceSendCapacity `json:"capacity_today,omitempty"`
 }
 
 // DashboardOverallStats contains aggregate statistics for the dashboard

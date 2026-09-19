@@ -1096,20 +1096,38 @@ func (s *campaignService) Estimate(ctx context.Context, orgID uuid.UUID, in *mod
 		return nil, xerr
 	}
 	out.Mailboxes = len(accounts)
-	for _, acct := range accounts {
-		lim := min(acct.CampaignLimit, dailyLimit)
-		if lim < 0 {
-			lim = 0
-		}
-		out.DailyCapacity += lim
-		sent, err := s.taskRepo.CountCampaignEmailsSentToday(ctx, acct.ID)
+	// The pool's day under the same clamps the scheduler applies (the
+	// graduation ceiling, the workspace's risk band, a warmup health hold,
+	// domain authentication, cold rotation), so the wizard promises what the
+	// send path will honour rather than the caps added up.
+	if planner, ok := s.planner(); ok {
+		capacity, err := planner.PoolCapacityToday(ctx, &models.Campaign{OrganizationID: &orgID, DailyLimit: dailyLimit}, accounts)
 		if err != nil {
-			// A counter blip must not blank the whole estimate, but it must
-			// not flatter it either: a mailbox whose sends today are unknown
-			// contributes nothing to today and only counts from tomorrow.
-			continue
+			errs.CaptureException(err)
+			return nil, errx.InternalError()
 		}
-		out.RemainingToday += max(0, lim-sent)
+		out.DailyCapacity, out.RemainingToday = capacity.Capacity, capacity.Remaining
+	} else {
+		for _, acct := range accounts {
+			lim := max(0, min(acct.CampaignLimit, dailyLimit))
+			out.DailyCapacity += lim
+			sent, err := s.taskRepo.CountCampaignEmailsSentToday(ctx, acct.ID)
+			if err != nil {
+				// A counter blip must not blank the whole estimate, but it must
+				// not flatter it either: a mailbox whose sends today are unknown
+				// contributes nothing to today and only counts from tomorrow.
+				continue
+			}
+			out.RemainingToday += max(0, lim-sent)
+		}
+	}
+	if limit := s.orgDailyLimit(ctx, orgID); limit >= 0 {
+		out.DailyCapacity = min(out.DailyCapacity, limit)
+		if s.campaignProgressRepo != nil {
+			if sent, err := s.campaignProgressRepo.CountEmailsSentTodayByOrganization(ctx, orgID); err == nil {
+				out.RemainingToday = min(out.RemainingToday, max(0, limit-sent))
+			}
+		}
 	}
 	if out.Recipients == 0 || out.DailyCapacity == 0 {
 		return out, nil
@@ -1244,4 +1262,84 @@ func (s *campaignService) GetLeadHold(ctx context.Context, orgID, campaignID, co
 func (s *campaignService) ownedCampaign(ctx context.Context, orgID, campaignID uuid.UUID) *errx.Error {
 	_, _, xerr := s.campaignForOrg(ctx, orgID, campaignID.String())
 	return xerr
+}
+
+// planner is the scheduler's send-plan face, when the wired scheduler has one.
+func (s *campaignService) planner() (scheduler.CampaignSendPlanner, bool) {
+	p, ok := s.scheduler.(scheduler.CampaignSendPlanner)
+	return p, ok && p != nil
+}
+
+// orgDailyLimit is the workspace's plan-level daily campaign limit, negative
+// when unlimited or unknown. A gate that cannot be read clamps nothing here;
+// the send path asks again for itself.
+func (s *campaignService) orgDailyLimit(ctx context.Context, orgID uuid.UUID) int {
+	if s.featureGate == nil {
+		return -1
+	}
+	limit, xerr := s.featureGate.GetDailyEmailLimit(ctx, orgID)
+	if xerr != nil {
+		return -1
+	}
+	return limit
+}
+
+func (s *campaignService) SendPlan(ctx context.Context, orgID uuid.UUID, campaignID string) (*models.CampaignSendPlan, *errx.Error) {
+	campaign, xerr := s.Get(ctx, orgID.String(), campaignID)
+	if xerr != nil {
+		return nil, xerr
+	}
+	planner, ok := s.planner()
+	if !ok {
+		return nil, errx.New(errx.Internal, "send planning is not available")
+	}
+	// Keyed on the campaign's own version, so an edit or a start/stop is
+	// answered fresh while two viewers of an unchanged campaign share a read.
+	key := campaign.ID.String() + "|" + campaign.Status + "|" + campaign.UpdatedAt.UTC().Format(time.RFC3339Nano)
+	if s.planCache != nil {
+		if plan, ok := s.planCache.get(key); ok {
+			return plan, nil
+		}
+	}
+	plan, err := planner.PlanCampaignDay(ctx, campaign.ID, s.orgDailyLimit(ctx, orgID))
+	if err != nil {
+		errs.CaptureException(err)
+		return nil, errx.InternalError()
+	}
+	if s.planCache != nil {
+		s.planCache.put(key, plan)
+	}
+	return plan, nil
+}
+
+func (s *campaignService) WorkspaceCapacity(ctx context.Context, orgID uuid.UUID) (*models.WorkspaceSendCapacity, *errx.Error) {
+	planner, ok := s.planner()
+	if !ok {
+		return nil, errx.New(errx.Internal, "send planning is not available")
+	}
+	if s.capacityCache != nil {
+		if out, ok := s.capacityCache.get(orgID.String()); ok {
+			return out, nil
+		}
+	}
+	accounts, xerr := s.emailRepo.GetAllActiveInScope(ctx, repository.NewAccountScope(&orgID))
+	if xerr != nil {
+		return nil, xerr
+	}
+	out, err := planner.PoolCapacityToday(ctx, &models.Campaign{OrganizationID: &orgID}, accounts)
+	if err != nil {
+		errs.CaptureException(err)
+		return nil, errx.InternalError()
+	}
+	if limit := s.orgDailyLimit(ctx, orgID); limit >= 0 && s.campaignProgressRepo != nil {
+		// The plan's daily allowance caps the workspace as a whole.
+		if sent, err := s.campaignProgressRepo.CountEmailsSentTodayByOrganization(ctx, orgID); err == nil {
+			out.Capacity = min(out.Capacity, limit)
+			out.Remaining = min(out.Remaining, max(0, limit-sent))
+		}
+	}
+	if s.capacityCache != nil {
+		s.capacityCache.put(orgID.String(), out)
+	}
+	return out, nil
 }

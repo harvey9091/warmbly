@@ -5459,6 +5459,54 @@
         }
       }
     },
+    "/campaigns/{id}/send-plan": {
+      "get": {
+        "operationId": "campaigns_send_plan",
+        "summary": "Today's sending plan",
+        "description": "What the campaign sends today and every limit that decided it, worked out through the scheduler's own gates. Nothing is stored or written. Scope READ_CAMPAIGNS, org permission view_campaigns.",
+        "tags": [
+          "campaigns"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Today's plan.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignSendPlan"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Campaign not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/campaigns/{id}/senders": {
       "get": {
         "operationId": "campaigns_list_senders",
@@ -23024,6 +23072,362 @@
           }
         }
       },
+      "CampaignSendLimit": {
+        "type": "object",
+        "description": "One clamp in the waterfall and what it took off the ceiling.",
+        "required": [
+          "kind",
+          "emails"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "The clamp.",
+            "enum": [
+              "campaign_daily_limit",
+              "campaign_ramp",
+              "warmup_graduation",
+              "workspace_risk",
+              "domain_auth",
+              "resting",
+              "warmup_health_hold",
+              "other_campaigns",
+              "warmup_health_pace",
+              "mailbox_hours",
+              "sending_behavior",
+              "spacing",
+              "sending_window",
+              "not_running",
+              "org_daily_limit",
+              "new_lead_cap",
+              "leads"
+            ]
+          },
+          "emails": {
+            "type": "integer",
+            "description": "How many of today's sends this clamp removed."
+          },
+          "mailboxes": {
+            "type": "integer",
+            "description": "How many mailboxes it touched; absent for a campaign-level clamp."
+          }
+        }
+      },
+      "CampaignSendWindow": {
+        "type": "object",
+        "required": [
+          "sending_day",
+          "open_now",
+          "minutes_left"
+        ],
+        "properties": {
+          "sending_day": {
+            "type": "boolean",
+            "description": "False when the schedule has no window today."
+          },
+          "open_now": {
+            "type": "boolean"
+          },
+          "opens_at": {
+            "type": "string",
+            "description": "The next opening when closed now; may be on a later day.",
+            "format": "date-time"
+          },
+          "closes_at": {
+            "type": "string",
+            "description": "The end of the last window today.",
+            "format": "date-time"
+          },
+          "minutes_left": {
+            "type": "integer",
+            "description": "Sending time still ahead today."
+          },
+          "starts_at": {
+            "type": "string",
+            "description": "The campaign start date when still ahead.",
+            "format": "date-time"
+          },
+          "ends_at": {
+            "type": "string",
+            "description": "The campaign end date, when set.",
+            "format": "date-time"
+          }
+        }
+      },
+      "CampaignLeadSupply": {
+        "type": "object",
+        "required": [
+          "due_now",
+          "due_later_today",
+          "new_leads_due_today",
+          "waiting_on_step",
+          "waiting_on_condition",
+          "held",
+          "waiting_on_sender",
+          "new_leads_started_today",
+          "max_new_leads_per_day"
+        ],
+        "properties": {
+          "due_now": {
+            "type": "integer",
+            "description": "Email steps that could go this minute."
+          },
+          "due_later_today": {
+            "type": "integer",
+            "description": "Email steps whose wait elapses before the day ends."
+          },
+          "new_leads_due_today": {
+            "type": "integer",
+            "description": "How many of due_now plus due_later_today are first emails."
+          },
+          "waiting_on_step": {
+            "type": "integer",
+            "description": "Leads whose next step is due after today."
+          },
+          "waiting_on_condition": {
+            "type": "integer",
+            "description": "Leads inside an undecided branch window."
+          },
+          "held": {
+            "type": "integer",
+            "description": "Leads paused with no end."
+          },
+          "waiting_on_sender": {
+            "type": "integer",
+            "description": "Due steps whose own mailbox has nothing left today; each contact keeps the address they first heard from."
+          },
+          "new_leads_started_today": {
+            "type": "integer"
+          },
+          "max_new_leads_per_day": {
+            "type": "integer",
+            "description": "0 when unlimited."
+          },
+          "next_due_at": {
+            "type": "string",
+            "description": "The soonest a waiting lead becomes due.",
+            "format": "date-time"
+          }
+        }
+      },
+      "CampaignMailboxPlan": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "provider",
+          "configured_cap",
+          "cap_today",
+          "limited_by",
+          "sent_today",
+          "sent_by_other_campaigns",
+          "expected_remaining",
+          "state",
+          "min_gap_seconds"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "configured_cap": {
+            "type": "integer",
+            "description": "The mailbox's own daily cold cap."
+          },
+          "cap_today": {
+            "type": "integer",
+            "description": "The cap this campaign gives it today, after the cap clamps."
+          },
+          "limited_by": {
+            "type": "string",
+            "description": "The clamp that set cap_today.",
+            "enum": [
+              "mailbox_daily_cap",
+              "campaign_daily_limit",
+              "campaign_ramp",
+              "warmup_graduation",
+              "workspace_risk"
+            ]
+          },
+          "sent_today": {
+            "type": "integer",
+            "description": "This campaign's sends from the mailbox today."
+          },
+          "sent_by_other_campaigns": {
+            "type": "integer",
+            "description": "What other campaigns took from the same cap today."
+          },
+          "expected_remaining": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "sending",
+              "budget_spent",
+              "hours_closed",
+              "no_working_day",
+              "domain_auth",
+              "resting",
+              "health_hold",
+              "window_closed"
+            ]
+          },
+          "reopens_at": {
+            "type": "string",
+            "description": "When a mailbox outside its own hours is next open.",
+            "format": "date-time"
+          },
+          "health": {
+            "type": "string",
+            "description": "The warmup health band when not healthy."
+          },
+          "min_gap_seconds": {
+            "type": "integer"
+          },
+          "graduation": {
+            "$ref": "#/components/schemas/ColdRampInfo"
+          }
+        }
+      },
+      "CampaignOrgAllowance": {
+        "type": "object",
+        "description": "The workspace's plan-level daily campaign limit.",
+        "required": [
+          "daily_limit",
+          "sent_today",
+          "remaining"
+        ],
+        "properties": {
+          "daily_limit": {
+            "type": "integer"
+          },
+          "sent_today": {
+            "type": "integer"
+          },
+          "remaining": {
+            "type": "integer"
+          }
+        }
+      },
+      "CampaignSendPlan": {
+        "type": "object",
+        "description": "Today's sending plan for a campaign, derived through the scheduler's gates on every read.",
+        "required": [
+          "campaign_id",
+          "status",
+          "day",
+          "timezone",
+          "computed_at",
+          "configured_ceiling",
+          "projected_today",
+          "sent_today",
+          "expected_remaining",
+          "bottleneck",
+          "limits",
+          "window",
+          "leads",
+          "mailboxes"
+        ],
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string"
+          },
+          "day": {
+            "type": "string",
+            "description": "The budget day, YYYY-MM-DD in UTC: every daily counter resets at midnight UTC whatever the campaign's timezone. The window's times are in the campaign's timezone."
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "computed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "configured_ceiling": {
+            "type": "integer",
+            "description": "The attached mailboxes' own daily caps added up."
+          },
+          "projected_today": {
+            "type": "integer",
+            "description": "sent_today plus expected_remaining."
+          },
+          "sent_today": {
+            "type": "integer"
+          },
+          "expected_remaining": {
+            "type": "integer"
+          },
+          "bottleneck": {
+            "type": "string",
+            "description": "The limit that decides projected_today: a limits[].kind, budget_spent, or empty when nothing binds."
+          },
+          "limits": {
+            "type": "array",
+            "description": "Only the clamps that removed something, in the order the scheduler applies them. configured_ceiling minus their emails minus sent_today is expected_remaining.",
+            "items": {
+              "$ref": "#/components/schemas/CampaignSendLimit"
+            }
+          },
+          "window": {
+            "$ref": "#/components/schemas/CampaignSendWindow"
+          },
+          "leads": {
+            "$ref": "#/components/schemas/CampaignLeadSupply"
+          },
+          "mailboxes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CampaignMailboxPlan"
+            }
+          },
+          "organization": {
+            "$ref": "#/components/schemas/CampaignOrgAllowance"
+          },
+          "next_wake_at": {
+            "type": "string",
+            "description": "When the campaign's chain next runs.",
+            "format": "date-time"
+          }
+        }
+      },
+      "ColdRampInfo": {
+        "type": "object",
+        "required": [
+          "ceiling",
+          "mailbox_cap",
+          "days_to_full_cap",
+          "held"
+        ],
+        "properties": {
+          "ceiling": {
+            "type": "integer",
+            "description": "Today's allowance."
+          },
+          "mailbox_cap": {
+            "type": "integer",
+            "description": "What the owner configured."
+          },
+          "days_to_full_cap": {
+            "type": "integer",
+            "description": "Clean days until the ceiling reaches the cap."
+          },
+          "held": {
+            "type": "boolean",
+            "description": "A recent spam placement is pausing the climb."
+          }
+        }
+      },
       "CampaignAdvancedSettings": {
         "type": "object",
         "required": [
@@ -25459,7 +25863,14 @@
           },
           "folder": {
             "type": "string",
-            "enum": ["inbox", "sent", "drafts", "archive", "spam", "trash"],
+            "enum": [
+              "inbox",
+              "sent",
+              "drafts",
+              "archive",
+              "spam",
+              "trash"
+            ],
             "description": "Canonical folder the message sits in."
           },
           "parent_id": {

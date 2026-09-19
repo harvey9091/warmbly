@@ -123,31 +123,10 @@ const (
 // explainCap is effectiveCap with its working shown: the same clamps, each
 // recorded when it is the one that lowers the cap.
 func (p *campaignPass) explainCap(acct models.Email) capClamp {
-	c := p.campaign
-	out := capClamp{Cap: acct.CampaignLimit, LimitedBy: capByMailbox}
-	clamp := func(v int, why string) {
-		if v < out.Cap {
-			out.Cap, out.LimitedBy = v, why
-		}
-	}
-	clamp(c.DailyLimit, capByCampaign)
-	if c.RampEnabled {
-		clamp(campaignRampCeiling(true, c.RampStart, c.RampIncrement, c.RampCeiling, c.RampLevel), capByRamp)
-	}
-	// Graduation ceiling: a mailbox at its warmup ceiling must not reach the
-	// full cold cap the day it joins a campaign.
-	clamp(coldCeilingFor(p.coldRamp[acct.ID], out.Cap), capByGraduation)
-	if m := p.risk.CapMultiplier(); m < 1 {
-		risked := int(float64(out.Cap)*m + 0.5)
-		// A restricted organization still sends, just far less. Zeroing it here
-		// would stop the campaign without ever saying why; suspension is the
-		// band that stops sending, and it does so at the send gate.
-		if risked < 1 {
-			risked = 1
-		}
-		clamp(risked, capByRisk)
-	}
-	return out
+	// One chain: stagedCap (send_plan.go) applies the clamps and keeps each
+	// stage so the plan can show its working; this is its last stage.
+	stages, by := stagedCap(p, acct)
+	return capClamp{Cap: stages[4], LimitedBy: by}
 }
 
 // poolBudget is each mailbox's day as the activity feed reports it: the cap

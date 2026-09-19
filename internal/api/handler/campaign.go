@@ -459,6 +459,27 @@ func (h *Handler) GetCampaignLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+// GetCampaignSendPlan returns today's sending plan for a campaign: what will go
+// out today and every limit that decided it, read through the scheduler's own
+// gates. GET /campaigns/:id/send-plan
+func (h *Handler) GetCampaignSendPlan(c *gin.Context) {
+	orgID := middleware.GetOrganizationID(c)
+	if orgID == nil {
+		errx.JSON(c, errx.ErrNoOrganization)
+		return
+	}
+	if _, err := uuid.Parse(c.Param("id")); err != nil {
+		errx.JSON(c, errx.ErrNotFound)
+		return
+	}
+	plan, xerr := h.CampaignService.SendPlan(c.Request.Context(), *orgID, c.Param("id"))
+	if xerr != nil {
+		errx.JSON(c, xerr)
+		return
+	}
+	c.JSON(http.StatusOK, plan)
+}
+
 // ListCampaignSenders returns a campaign's explicit sender pool.
 // GET /campaigns/:id/senders
 func (h *Handler) ListCampaignSenders(c *gin.Context) {

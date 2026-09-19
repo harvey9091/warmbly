@@ -781,7 +781,12 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 			// metronomed sends are a pattern even with additive jitter.
 			varied := float64(remainingMinutes/remainingEmails) * (0.55 + rand.Float64()*0.9)
 			idealInterval := time.Duration(varied * float64(time.Minute))
-			minInterval := time.Second * time.Duration(gapSeconds)
+			// The floor is the POOL's spacing, not the chosen mailbox's. Each
+			// mailbox's own gap is enforced against its own last send at STEP
+			// 10; flooring the chain's next tick at one mailbox's whole gap
+			// held a three-mailbox campaign to one mailbox's rate however many
+			// of them were free.
+			minInterval := time.Second * time.Duration(gapSeconds) / time.Duration(max(1, len(pool)))
 			if idealInterval < minInterval {
 				idealInterval = minInterval
 			}

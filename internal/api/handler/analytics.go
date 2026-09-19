@@ -250,6 +250,14 @@ func (h *Handler) GetDashboardAnalytics(c *gin.Context) {
 		errx.Handle(c, xerr)
 		return
 	}
+	// The sidebar meter's denominator: the mailboxes' day under the
+	// scheduler's own clamps, not their caps added up. Best effort; the
+	// dashboard still renders without it.
+	if h.CampaignService != nil {
+		if capacity, cerr := h.CampaignService.WorkspaceCapacity(c.Request.Context(), *orgID); cerr == nil {
+			analytics.CapacityToday = capacity
+		}
+	}
 
 	c.JSON(http.StatusOK, analytics)
 }

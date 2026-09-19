@@ -111,6 +111,9 @@ type TaskRepository interface {
 	// Scheduling queries (CRITICAL for "next best time" calculation)
 	CountEmailsSentToday(ctx context.Context, accountID uuid.UUID) (int, error)
 	GetLastEmailTime(ctx context.Context, accountID uuid.UUID) (*time.Time, error)
+	// GetLastEmailTimes is GetLastEmailTime for a pool in one read (every
+	// dispatched task type, as the min-gap clock counts them).
+	GetLastEmailTimes(ctx context.Context, accountIDs []uuid.UUID) (map[uuid.UUID]time.Time, error)
 	// GetLastSendTimes is the batch form, for rotation across a campaign's
 	// whole sender pool. Accounts that have never sent are absent from the map.
 	GetLastSendTimes(ctx context.Context, accountIDs []uuid.UUID, taskType string) (map[uuid.UUID]time.Time, error)
@@ -135,6 +138,13 @@ type TaskRepository interface {
 
 	// Count only campaign tasks completed today (excludes warmup)
 	CountCampaignEmailsSentToday(ctx context.Context, accountID uuid.UUID) (int, error)
+	// CountCampaignSendsTodayBySender is one campaign's sends today, by the
+	// mailbox they went out from. A mailbox's daily budget is shared by every
+	// campaign it is on, so a plan has to know which campaign spent it.
+	CountCampaignSendsTodayBySender(ctx context.Context, campaignID uuid.UUID) (map[uuid.UUID]int, error)
+	// CountCampaignEmailsSentTodayByAccounts is CountCampaignEmailsSentToday
+	// for a whole pool in one read; an id with no sends is absent.
+	CountCampaignEmailsSentTodayByAccounts(ctx context.Context, accountIDs []uuid.UUID) (map[uuid.UUID]int, error)
 	CountWarmupEmailsSentToday(ctx context.Context, accountID uuid.UUID) (int, error)
 
 	// Create user-initiated email task (transactional)
@@ -444,6 +454,102 @@ func (r *taskRepository) CountCampaignEmailsSentToday(ctx context.Context, accou
 	var count int
 	err := r.db.QueryRow(ctx, query, accountID).Scan(&count)
 	return count, err
+}
+
+// GetLastEmailTimes is the min-gap clock for a whole pool in one query.
+func (r *taskRepository) GetLastEmailTimes(ctx context.Context, accountIDs []uuid.UUID) (map[uuid.UUID]time.Time, error) {
+	out := make(map[uuid.UUID]time.Time, len(accountIDs))
+	if len(accountIDs) == 0 {
+		return out, nil
+	}
+	query := `
+		SELECT t.email_account_id, MAX(t.completed_at)
+		FROM tasks t
+		WHERE t.email_account_id = ANY($1)
+		  AND t.status = 'completed'
+		  AND t.completed_at IS NOT NULL
+		  AND ` + taskDispatchedEmail + `
+		GROUP BY t.email_account_id
+	`
+	rows, err := r.db.Query(ctx, query, accountIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var at time.Time
+		if err := rows.Scan(&id, &at); err != nil {
+			return nil, err
+		}
+		out[id] = at
+	}
+	return out, rows.Err()
+}
+
+// CountCampaignEmailsSentTodayByAccounts is the per-mailbox ledger for a pool
+// in one query, so a plan over a large workspace does not ask once per mailbox.
+func (r *taskRepository) CountCampaignEmailsSentTodayByAccounts(ctx context.Context, accountIDs []uuid.UUID) (map[uuid.UUID]int, error) {
+	out := make(map[uuid.UUID]int, len(accountIDs))
+	if len(accountIDs) == 0 {
+		return out, nil
+	}
+	query := `
+		SELECT t.email_account_id, COUNT(*)
+		FROM tasks t
+		WHERE t.email_account_id = ANY($1)
+		  AND t.status = 'completed'
+		  AND t.task_type = 'campaign'
+		  AND DATE(t.completed_at) = CURRENT_DATE
+		  AND ` + taskDispatchedEmail + `
+		GROUP BY t.email_account_id
+	`
+	rows, err := r.db.Query(ctx, query, accountIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
+// CountCampaignSendsTodayBySender is CountCampaignEmailsSentToday for one
+// campaign, split by mailbox. Same ledger and the same day boundary, so the
+// two agree on what a mailbox has spent.
+func (r *taskRepository) CountCampaignSendsTodayBySender(ctx context.Context, campaignID uuid.UUID) (map[uuid.UUID]int, error) {
+	query := `
+		SELECT t.email_account_id, COUNT(*)
+		FROM tasks t
+		JOIN campaign_tasks ct ON ct.task_id = t.id
+		WHERE ct.campaign_id = $1
+		  AND t.status = 'completed'
+		  AND t.task_type = 'campaign'
+		  AND DATE(t.completed_at) = CURRENT_DATE
+		  AND ` + taskDispatchedEmail + `
+		GROUP BY t.email_account_id
+	`
+	rows, err := r.db.Query(ctx, query, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[uuid.UUID]int{}
+	for rows.Next() {
+		var id uuid.UUID
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
 }
 
 // CreateEmailTaskFull creates a task and email task entry in a single transaction

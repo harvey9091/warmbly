@@ -36,7 +36,7 @@ Run `warmblyctl <family> --help` for subcommands and `warmblyctl <family>
 | Family | Covers |
 |---|---|
 | `me` | Identity and granted scopes |
-| `campaign` | list, get, create, update, delete, steps, senders, preflight, start, stop, test-email, logs, pause-lead / resume-lead |
+| `campaign` | list, get, create, update, delete, steps, senders, preflight, start, stop, test-email, logs, plan, pause-lead / resume-lead |
 | `contact` | list (search), get, lookup, create, update, delete, notes, timeline, import, export |
 | `mailbox` | list, get, update, delete, auth-check, sync, identity, refresh-identity, behavior, verify, send, warmup-start/pause/resume/stop/status |
 | `inbox` | list, count, thread, seen, reply, compose, agent drafts, scheduled sends |
@@ -83,6 +83,9 @@ These commands put real mail on the wire: `campaign start`,
 - Run `campaign preflight --id <id>` before `campaign start` and act on what
   it reports. It costs nothing and catches missing senders, empty audiences
   and broken tracking.
+- When a campaign sends less than expected, `campaign plan --id <id>` is the
+  answer: today's projected sends and every limit that lowered them. Read it
+  before touching a cap.
 - Never raise a mailbox's daily cap casually. The platform default is 50
   campaign emails per mailbox per day with 600 seconds between sends; a fresh
   mailbox should start around 10-20. Do not set a cap above 50 unless the

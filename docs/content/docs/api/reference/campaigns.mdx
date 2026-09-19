@@ -114,7 +114,7 @@ Status-bucket counts plus per-folder totals for the organization, used to drive 
 
 `POST /campaigns-estimate`
 
-Project an audience against a sender pool before a campaign exists: how many contacts the segments resolve to, how many mailboxes would send, the pool's daily ceiling under the campaign limit, and the day the last send is expected to land. Nothing is written, so it needs no `Idempotency-Key`. The dashboard's one-time email wizard shows this on its last step. **Scope** `READ_CAMPAIGNS` · **Org permission** `view_campaigns`.
+Project an audience against a sender pool before a campaign exists: how many contacts the segments resolve to, how many mailboxes would send, the pool's daily ceiling under the campaign limit and the scheduler's own clamps (the easing-out-of-warmup ceiling, the workspace's risk band, a warmup health hold, domain authentication, cold rotation, the plan's daily allowance), and the day the last send is expected to land. Nothing is written, so it needs no `Idempotency-Key`. The dashboard's one-time email wizard shows this on its last step. **Scope** `READ_CAMPAIGNS` · **Org permission** `view_campaigns`.
 
 ### Request body
 
@@ -122,7 +122,7 @@ Project an audience against a sender pool before a campaign exists: how many con
 | --- | --- | --- | --- |
 | `segment_ids` | string[] | yes | Segments making up the audience (at most 20). A contact in several of them is counted once. |
 | `email_tag_ids` | string[] | no | Mailbox tags that resolve the pool. Omit or send `[]` for every active mailbox in the workspace. |
-| `daily_limit` | integer | no | Per-mailbox campaign cap to apply (defaults to `50`). Each mailbox counts the smaller of this and its own cap. |
+| `daily_limit` | integer | no | Per-mailbox campaign cap to apply (defaults to `50`). Each mailbox counts the smaller of this and its own cap, lowered further by any clamp the scheduler would apply today. |
 | `days` | integer (0-127) | no | Weekday bitmask of sending days, bit 0 = Monday. Defaults to weekdays. |
 | `timezone` | string | no | IANA timezone the days are counted in. Defaults to UTC. |
 | `start_date` | string (RFC 3339) | no | When sending begins. Omit for now. |
@@ -891,6 +891,74 @@ A `data` plus `pagination` envelope. Here `pagination` carries only `next_cursor
   }
 }
 ```
+
+## Today's sending plan
+
+`GET /campaigns/:id/send-plan`
+
+What the campaign sends today and every limit that decided it, worked out on the spot through the scheduler's own gates. Nothing is stored and nothing is written. **Scope** `READ_CAMPAIGNS` · **Org permission** `view_campaigns`.
+
+| Parameter | In | Type | Description |
+| --- | --- | --- | --- |
+| `id` | path | uuid | Campaign id. |
+
+### Response
+
+The arithmetic adds up: `configured_ceiling` minus every `limits[].emails` minus `sent_today` is `expected_remaining`, and `projected_today` is `sent_today` plus `expected_remaining`. `limits` lists only the clamps that removed something, in the order the scheduler applies them; `bottleneck` names the one that decides the number (`""` when nothing binds, `budget_spent` when every mailbox has used its day). `day` is the budget day in UTC (every daily counter resets at midnight UTC, whatever the campaign's timezone); the window's times are in the campaign's timezone. `leads.waiting_on_sender` counts due steps whose own mailbox has nothing left today, since each contact keeps the address they first heard from. `organization` is present only when the workspace's plan has a daily allowance.
+
+```json
+{
+  "campaign_id": "8f1d6b2e-2b7a-4c9e-9a1f-0e6d4c3b2a10",
+  "status": "active",
+  "day": "2026-09-16",
+  "timezone": "Europe/Paris",
+  "computed_at": "2026-09-16T12:30:00Z",
+  "configured_ceiling": 150,
+  "projected_today": 20,
+  "sent_today": 8,
+  "expected_remaining": 12,
+  "bottleneck": "warmup_graduation",
+  "limits": [
+    { "kind": "warmup_graduation", "emails": 130, "mailboxes": 3 }
+  ],
+  "window": {
+    "sending_day": true,
+    "open_now": true,
+    "closes_at": "2026-09-16T15:00:00Z",
+    "minutes_left": 150
+  },
+  "leads": {
+    "due_now": 340,
+    "due_later_today": 12,
+    "new_leads_due_today": 300,
+    "waiting_on_step": 200,
+    "waiting_on_condition": 0,
+    "held": 3,
+    "waiting_on_sender": 0,
+    "new_leads_started_today": 8,
+    "max_new_leads_per_day": 0
+  },
+  "mailboxes": [
+    {
+      "id": "1c2d...",
+      "email": "sam@acme.com",
+      "provider": "gmail",
+      "configured_cap": 50,
+      "cap_today": 10,
+      "limited_by": "warmup_graduation",
+      "sent_today": 4,
+      "sent_by_other_campaigns": 0,
+      "expected_remaining": 6,
+      "state": "sending",
+      "min_gap_seconds": 600,
+      "graduation": { "ceiling": 10, "mailbox_cap": 50, "days_to_full_cap": 8, "held": false }
+    }
+  ],
+  "next_wake_at": "2026-09-16T12:41:00Z"
+}
+```
+
+`limits[].kind` is one of `campaign_daily_limit`, `campaign_ramp`, `warmup_graduation`, `workspace_risk`, `domain_auth`, `resting`, `warmup_health_hold`, `other_campaigns`, `warmup_health_pace`, `mailbox_hours`, `sending_behavior`, `spacing`, `sending_window`, `not_running`, `org_daily_limit`, `new_lead_cap` or `leads`. `mailboxes[].state` is one of `sending`, `budget_spent`, `hours_closed`, `no_working_day`, `domain_auth`, `resting`, `health_hold` or `window_closed`; `mailboxes[].limited_by` names the clamp that set `cap_today`. See the [campaigns guide](/guides/campaigns/#todays-sending-plan) for what each limit means.
 
 ## List campaign senders
 
