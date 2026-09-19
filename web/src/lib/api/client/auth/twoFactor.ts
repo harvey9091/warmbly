@@ -1,13 +1,30 @@
 import type Token from "../../models/auth/Token";
 import Request from "../Request";
 
+export interface TwoFactorStatus {
+    enabled: boolean;
+    /** When the authenticator was confirmed. Absent while 2FA is off. */
+    confirmed_at?: string;
+    recovery_codes_remaining: number;
+    recovery_codes_total: number;
+}
+
 export interface TwoFactorEnrollStart {
     secret: string;
     otpauth_uri: string;
+    issuer: string;
+    account: string;
+    algorithm: string;
+    digits: number;
+    period: number;
 }
 
-export async function twoFactorStatus(): Promise<{ enabled: boolean }> {
-    return await Request<{ enabled: boolean }>({
+export interface TwoFactorRecoveryCodes {
+    recovery_codes: string[];
+}
+
+export async function twoFactorStatus(): Promise<TwoFactorStatus> {
+    return await Request<TwoFactorStatus>({
         method: "GET",
         url: "/auth/2fa/status",
         authorization: true,
@@ -22,10 +39,20 @@ export async function twoFactorEnrollStart(): Promise<TwoFactorEnrollStart> {
     });
 }
 
-export async function twoFactorEnrollConfirm(code: string): Promise<{ recovery_codes: string[] }> {
-    return await Request<{ recovery_codes: string[] }>({
+export async function twoFactorEnrollConfirm(code: string): Promise<TwoFactorRecoveryCodes> {
+    return await Request<TwoFactorRecoveryCodes>({
         method: "POST",
         url: "/auth/2fa/enroll/confirm",
+        data: { code },
+        authorization: true,
+    });
+}
+
+// Replaces every recovery code with a fresh set; the old ones stop working.
+export async function twoFactorRegenerateRecoveryCodes(code: string): Promise<TwoFactorRecoveryCodes> {
+    return await Request<TwoFactorRecoveryCodes>({
+        method: "POST",
+        url: "/auth/2fa/recovery-codes",
         data: { code },
         authorization: true,
     });

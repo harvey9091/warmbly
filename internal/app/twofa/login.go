@@ -68,7 +68,7 @@ func (s *service) VerifyLogin(ctx context.Context, pendingToken, code, ipaddr, u
 	if !s.validCode(ctx, claims.UserID, row, code) {
 		pend.Tries++
 		_ = s.savePending(ctx, claims.SessionID, pend, pendingTTL)
-		return nil, errx.New(errx.BadRequest, "Invalid code")
+		return nil, ErrInvalidCode()
 	}
 
 	// Single-use: delete the pending record BEFORE minting (delete-then-mint

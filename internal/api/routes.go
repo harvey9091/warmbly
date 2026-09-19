@@ -404,6 +404,7 @@ func Run(
 		protectedAuth.POST("/2fa/enroll/start", h.TwoFAEnrollStart)
 		protectedAuth.POST("/2fa/enroll/confirm", h.TwoFAEnrollConfirm)
 		protectedAuth.DELETE("/2fa", h.TwoFADisable)
+		protectedAuth.POST("/2fa/recovery-codes", h.TwoFARegenerateRecoveryCodes)
 
 		// Re-prove the account holder behind a live session. What the routes
 		// marked RequireFreshAuth below are waiting for.

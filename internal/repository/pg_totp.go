@@ -24,6 +24,9 @@ type TOTPRepository interface {
 	// whether it was still available. It is compare-and-swap so two requests
 	// racing with the same code cannot both win.
 	ConsumeTOTPStep(ctx context.Context, userID uuid.UUID, step uint64) (bool, error)
+	// CountRecoveryCodes reports how many recovery codes the user has left
+	// unused, and how many were issued with the current set.
+	CountRecoveryCodes(ctx context.Context, userID uuid.UUID) (unused, total int, err error)
 }
 
 type totpRepository struct {
@@ -37,8 +40,8 @@ func NewTOTPRepository(db *pgxpool.Pool) TOTPRepository {
 func (r *totpRepository) Get(ctx context.Context, userID uuid.UUID) (*models.UserTOTP, error) {
 	var t models.UserTOTP
 	err := r.db.QueryRow(ctx,
-		`SELECT user_id, totp_secret_sealed, totp_enabled FROM user_totp_settings WHERE user_id = $1`, userID).
-		Scan(&t.UserID, &t.SecretSealed, &t.Enabled)
+		`SELECT user_id, totp_secret_sealed, totp_enabled, confirmed_at FROM user_totp_settings WHERE user_id = $1`, userID).
+		Scan(&t.UserID, &t.SecretSealed, &t.Enabled, &t.ConfirmedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -118,6 +121,14 @@ func (r *totpRepository) ListUnusedRecoveryCodes(ctx context.Context, userID uui
 		out = append(out, rc)
 	}
 	return out, rows.Err()
+}
+
+func (r *totpRepository) CountRecoveryCodes(ctx context.Context, userID uuid.UUID) (int, int, error) {
+	var unused, total int
+	err := r.db.QueryRow(ctx,
+		`SELECT count(*) FILTER (WHERE used_at IS NULL), count(*) FROM user_totp_recovery_codes WHERE user_id = $1`,
+		userID).Scan(&unused, &total)
+	return unused, total, err
 }
 
 func (r *totpRepository) ConsumeRecoveryCode(ctx context.Context, codeID uuid.UUID) error {

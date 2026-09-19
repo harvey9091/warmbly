@@ -8,18 +8,41 @@ import (
 	"github.com/warmbly/warmbly/internal/errx"
 )
 
-// TwoFAStatus reports whether the caller has 2FA enabled.
+// TwoFAStatus reports whether the caller has 2FA enabled, since when, and how
+// many recovery codes are left.
 func (h *Handler) TwoFAStatus(c *gin.Context) {
 	uid, ok := notifActor(c)
 	if !ok {
 		return
 	}
-	enabled, err := h.TwoFAService.IsEnabled(c.Request.Context(), uid)
+	status, err := h.TwoFAService.Status(c.Request.Context(), uid)
 	if err != nil {
 		errx.JSON(c, errx.InternalError())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"enabled": enabled})
+	c.JSON(http.StatusOK, status)
+}
+
+// TwoFARegenerateRecoveryCodes replaces the caller's recovery codes (requires a
+// current TOTP or recovery code) and returns the new set once.
+func (h *Handler) TwoFARegenerateRecoveryCodes(c *gin.Context) {
+	uid, ok := notifActor(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		return
+	}
+	codes, xerr := h.TwoFAService.RegenerateRecoveryCodes(c.Request.Context(), uid, body.Code)
+	if xerr != nil {
+		errx.JSON(c, xerr)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"recovery_codes": codes})
 }
 
 // TwoFAEnrollStart begins enrollment, returning the secret + otpauth URI once.

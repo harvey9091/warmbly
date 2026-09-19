@@ -230,6 +230,7 @@ Signup and invitation refusals carry their own `code`, so a client can branch on
 | `reauth_required` | 403 | The action needs a proof of identity newer than the session. Confirm with `POST /v1/auth/reauth`, then retry |
 | `reauth_no_factor` | 400 | The account has neither a password nor two-factor authentication, so there is nothing to confirm with. Enrol one first |
 | `admin_mfa_required` | 403 | An admin route was reached by a session that did not present a second factor. Turn on 2FA or add a passkey, then sign in again |
+| `two_fa_invalid_code` | 400 | The authenticator or recovery code did not match. Wait for a fresh code and try again; the login challenge allows five attempts per pending session |
 
 `reauth_required` guards the changes that hand out a durable credential or cannot be undone: creating an API key, adding or removing a passkey, transferring a workspace, and scheduling a workspace or account for deletion. Confirm with a password or a current two-factor code:
 

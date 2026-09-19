@@ -1406,6 +1406,88 @@
         }
       }
     },
+    "/auth/2fa/recovery-codes": {
+      "post": {
+        "operationId": "auth_2fa_regenerate_recovery_codes",
+        "summary": "Regenerate recovery codes",
+        "description": "Replaces every recovery code with a fresh set, returned once. Requires a current TOTP or recovery code in the body; a mismatch answers 400 with code two_fa_invalid_code. Requires a user session token (not an API key).",
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TwoFACodeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The new recovery codes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwoFARecoveryCodes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body, 2FA not enabled, or the code did not match (two_fa_invalid_code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/2fa": {
       "delete": {
         "operationId": "auth_2fa_disable",
@@ -20737,22 +20819,42 @@
       },
       "TwoFAStatus": {
         "type": "object",
-        "description": "Whether 2FA is enabled for the user.",
+        "description": "Whether 2FA is enabled for the user, when it was confirmed, and how many recovery codes remain.",
         "required": [
-          "enabled"
+          "enabled",
+          "recovery_codes_remaining",
+          "recovery_codes_total"
         ],
         "properties": {
           "enabled": {
             "type": "boolean"
+          },
+          "confirmed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the authenticator was confirmed. Omitted while 2FA is off."
+          },
+          "recovery_codes_remaining": {
+            "type": "integer",
+            "description": "Unused recovery codes in the current set. 0 while 2FA is off."
+          },
+          "recovery_codes_total": {
+            "type": "integer",
+            "description": "Recovery codes issued with the current set. 0 while 2FA is off."
           }
         }
       },
       "TwoFAEnrollStart": {
         "type": "object",
-        "description": "The TOTP secret and otpauth provisioning URI, returned once at enrollment start.",
+        "description": "The TOTP secret and otpauth provisioning URI, returned once at enrollment start, with the parameters spelled out for manual entry.",
         "required": [
           "secret",
-          "otpauth_uri"
+          "otpauth_uri",
+          "issuer",
+          "account",
+          "algorithm",
+          "digits",
+          "period"
         ],
         "properties": {
           "secret": {
@@ -20762,6 +20864,26 @@
           "otpauth_uri": {
             "type": "string",
             "description": "otpauth://totp/... provisioning URI for authenticator apps."
+          },
+          "issuer": {
+            "type": "string",
+            "description": "Issuer shown in the authenticator (\"Warmbly\")."
+          },
+          "account": {
+            "type": "string",
+            "description": "Account label shown in the authenticator (the user's email)."
+          },
+          "algorithm": {
+            "type": "string",
+            "description": "HMAC algorithm (\"SHA1\")."
+          },
+          "digits": {
+            "type": "integer",
+            "description": "Code length (6)."
+          },
+          "period": {
+            "type": "integer",
+            "description": "Code interval in seconds (30)."
           }
         }
       },
