@@ -50,7 +50,8 @@ export function useContactView(view: ViewName) {
         savedSort: saved?.sort ?? null,
         // True once the server's copy is in hand (not the browser's cached one).
         loaded: prefs.isSuccess && !prefs.isPlaceholderData,
-        customized: (savedColumns?.length ?? 0) > 0,
+        // A saved sort alone is a customisation too: reset is what clears it.
+        customized: (savedColumns?.length ?? 0) > 0 || saved?.sort != null,
         setColumns,
         setSort,
         reset: resetView,

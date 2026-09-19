@@ -35,9 +35,20 @@ function ColumnLabel({ col }: { col: ContactColumn }) {
     );
 }
 
-// A shown column: drag by the grip, click the rest of the row to hide it. The
-// new order is committed when the drag ends, not on every position crossed.
-function ShownRow({ col, onHide, onDragEnd }: { col: ContactColumn; onHide: () => void; onDragEnd: () => void }) {
+// A shown column: drag by the grip (or focus it and press the arrow keys),
+// click the rest of the row to hide it. A drag commits its order once, on the
+// drop, not on every position crossed; a key press commits at once.
+function ShownRow({
+    col,
+    onHide,
+    onDragEnd,
+    onMove,
+}: {
+    col: ContactColumn;
+    onHide: () => void;
+    onDragEnd: () => void;
+    onMove: (delta: -1 | 1) => void;
+}) {
     const controls = useDragControls();
     return (
         <Reorder.Item
@@ -49,14 +60,19 @@ function ShownRow({ col, onHide, onDragEnd }: { col: ContactColumn; onHide: () =
             className="relative bg-white"
         >
             <div className="mx-1 h-7 pl-1 pr-2 flex items-center gap-1.5 rounded text-[12px] text-slate-700 hover:bg-slate-100 transition-colors">
-                <span
+                <button
+                    type="button"
                     onPointerDown={(e) => controls.start(e)}
-                    className="size-5 flex items-center justify-center cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 touch-none"
-                    aria-label={`Drag to move ${col.label}`}
-                    role="button"
+                    onKeyDown={(e) => {
+                        if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+                        e.preventDefault();
+                        onMove(e.key === "ArrowUp" ? -1 : 1);
+                    }}
+                    className="size-5 flex items-center justify-center rounded cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200 focus-visible:text-slate-600 touch-none"
+                    aria-label={`Move ${col.label}: drag, or press the up and down arrow keys`}
                 >
                     <GripVerticalIcon className="w-3 h-3" />
-                </span>
+                </button>
                 <button type="button" onClick={onHide} className="flex-1 min-w-0 h-full flex items-center gap-2 text-left">
                     <CheckSquare checked />
                     <ColumnLabel col={col} />
@@ -130,6 +146,17 @@ export function ColumnChooser({
         const next = layout(orderRef.current);
         if (next.join("|") !== layout(shown).join("|")) onChange(next);
     };
+    // The keyboard path: one step up or down, saved at once.
+    const moveBy = (id: string, delta: -1 | 1) => {
+        const cur = orderRef.current;
+        const from = cur.findIndex((c) => c.id === id);
+        const to = from + delta;
+        if (from < 0 || to < 0 || to >= cur.length) return;
+        const next = [...cur];
+        [next[from], next[to]] = [next[to], next[from]];
+        setOrder(next);
+        onChange(layout(next));
+    };
 
     const builtinAvail = available.filter((c) => !c.custom && matches(c));
     const customAvail = available.filter((c) => !!c.custom && matches(c));
@@ -183,7 +210,13 @@ export function ColumnChooser({
                     ) : (
                         <Reorder.Group as="div" axis="y" values={order} onReorder={setOrder}>
                             {order.map((col) => (
-                                <ShownRow key={col.id} col={col} onHide={() => hide(col.id)} onDragEnd={commitOrder} />
+                                <ShownRow
+                                    key={col.id}
+                                    col={col}
+                                    onHide={() => hide(col.id)}
+                                    onDragEnd={commitOrder}
+                                    onMove={(d) => moveBy(col.id, d)}
+                                />
                             ))}
                         </Reorder.Group>
                     )}
