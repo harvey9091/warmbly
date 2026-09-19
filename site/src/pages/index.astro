@@ -163,8 +163,8 @@ const softwareJsonLd = {
         The largest open-source cold email platform.
       </h1>
 
-      <p class="mt-6 text-[17px] md:text-[19px] text-white/80 max-w-2xl mx-auto leading-relaxed">
-        Warmbly warms your mailboxes, sends your campaigns, and triages every reply. Run it on our cloud or self-host the whole thing on yours.
+      <p class="mt-6 text-[17px] md:text-[19px] text-white/80 max-w-3xl mx-auto leading-relaxed">
+        Warmbly scales your B2B outreach so your business can grow bigger. You reach more of the right people, win more clients, and every month brings more conversations than the last.
       </p>
 
       <div class="mt-9 flex flex-wrap items-center justify-center gap-3">
@@ -192,10 +192,22 @@ const softwareJsonLd = {
            scaled, sitting straight on the sky. Below md the same desktop shot
            bleeds off the right edge instead of shrinking to a thumbnail. -->
       <div class="relative w-full rounded-[28px] ring-1 ring-white/20" style="box-shadow: var(--shadow-xl);">
-      <div class="hero-fit round-clip w-full">
+      <div class="hero-fit round-clip w-full aspect-video">
         <div class="hero-screen w-[1280px] absolute top-0 left-0 origin-top-left">
           <DashboardMock />
         </div>
+        <script is:inline>
+          // Scale the 1280px shell before first paint; a bundled module would leave it unscaled until it loads.
+          (function () {
+            var screen = document.currentScript.previousElementSibling;
+            var box = screen.parentElement;
+            var fit = function () {
+              screen.style.transform = 'scale(' + box.clientWidth / (window.innerWidth >= 768 ? 1280 : 720) + ')';
+            };
+            fit();
+            new ResizeObserver(fit).observe(box);
+          })();
+        </script>
 
         <!-- Floating live notification on top of the mock -->
         <div class="hidden md:block absolute bottom-5 right-5 w-[280px] rounded-[10px] bg-white shadow-[0_10px_30px_-10px_rgba(15,23,42,0.35)] ring-1 ring-slate-200 p-3 animate-toast-in" style="animation-delay: 1.2s; animation-fill-mode: backwards;">
@@ -946,38 +958,5 @@ const softwareJsonLd = {
       // Default selection — annual, no animation on initial paint
       requestAnimationFrame(() => apply('annual', false));
     }
-  </script>
-
-  <script>
-    // Hero dashboard mock: the 1280x800 shell, uniformly scaled to the plinth.
-    // At md+ the whole monitor is shown, so the hero viewport inherits its
-    // 16:10. Below md that same desktop shot is scaled up and bleeds off the
-    // right edge - the way Linear / Stripe / Vercel show a desktop app on a
-    // phone, instead of shrinking it to a microscopic thumbnail.
-    // HERO_MOBILE_VISIBLE = how many design px fill the phone width.
-    const HERO_MONITOR = 1280;
-    const HERO_MOBILE_VISIBLE = 720;
-    function fitHero(screen: HTMLElement) {
-      const box = screen.parentElement as HTMLElement | null;
-      if (!box) return;
-      const visible = window.innerWidth >= 768 ? HERO_MONITOR : HERO_MOBILE_VISIBLE;
-      const s = box.clientWidth / visible;
-      screen.style.transform = `scale(${s})`;
-      // The shell is 1280x900; the hero shows it as a 16:9 monitor and lets
-      // the bottom rows run off, so the visual does not tower over the copy.
-      box.style.height = `${Math.min(screen.offsetHeight * s, box.clientWidth * (9 / 16))}px`;
-    }
-    function runHero() {
-      document.querySelectorAll<HTMLElement>('.hero-screen').forEach((s) => fitHero(s));
-    }
-    document.querySelectorAll<HTMLElement>('.hero-screen').forEach((screen) => {
-      if (screen.parentElement) {
-        new ResizeObserver(() => requestAnimationFrame(() => fitHero(screen))).observe(screen.parentElement);
-      }
-    });
-    runHero();
-    requestAnimationFrame(runHero);
-    window.addEventListener('load', runHero);
-    window.addEventListener('resize', runHero);
   </script>
 </Layout>
