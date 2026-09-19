@@ -91,7 +91,6 @@ if config_env() == :prod do
     # without it keeps the old host-based behaviour for anyone relying on it.
     check_origin: check_origin
 
-
   # Postgrex verifies the server against the system CA store, which has no
   # Amazon RDS root in it, so an RDS database needs DATABASE_SSL_CA_FILE
   # pointing at a bundle. The image ships AWS's at
