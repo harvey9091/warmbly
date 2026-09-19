@@ -188,74 +188,20 @@ func (s *schedulerService) CalculateNextWarmupTime(ctx context.Context, accountI
 		}
 	}
 
-	// STEP 2: One shared resolve, so this target and the one the mailbox
-	// drawer reports cannot drift apart.
-	healthState := s.resolveHealthState(ctx, accountID)
-	rampAnchor := time.Now()
-	if account.Warmup != nil {
-		rampAnchor = *account.Warmup
+	// STEP 2: Today's budget. The send-time gate resolves it through the same
+	// code, so a send is never placed on one number and checked against another.
+	day, err := s.resolveWarmupBudget(ctx, account, activelyWarming, inCampaign)
+	if err != nil {
+		return time.Time{}, err
 	}
-	plan := warmupramp.Resolve(ctx, s.warmupRepo, warmupramp.Input{
-		AccountID:       accountID,
-		WarmupStart:     rampAnchor,
-		ActivelyWarming: activelyWarming,
-		Base:            account.WarmupBase,
-		Increase:        account.WarmupIncrease,
-		Max:             account.WarmupMax,
-		InCampaign:      inCampaign,
-		Health:          healthState,
-		Now:             time.Now(),
-	})
-	targetVolume := plan.Target
-	if plan.Cut() {
-		log.Info().
-			Str("email_account_id", accountID.String()).
-			Int("placements_48h", plan.Placements).
-			Int("sends_48h", plan.Sends).
-			Int("target", targetVolume).
-			Msg("warmup volume cut on an early placement signal; ramp held")
+	if day.NoPartners {
+		return recipientRecheckTime(), nil
 	}
-
-	// Vary the day's target so a mailbox doesn't send an identical count every
-	// day. Deterministic per (account, local day) so it's stable across the
-	// day's reschedules. Actively-warming mailboxes keep a floor of WarmupBase.
-	if activelyWarming && targetVolume > 0 {
-		factor := dailyVolumeFactor(accountID, time.Now().In(loadLocation(account.Timezone)))
-		varied := int(float64(targetVolume)*factor + 0.5)
-		if varied < account.WarmupBase {
-			varied = account.WarmupBase
-		}
-		if varied < 1 {
-			varied = 1
-		}
-		if varied < targetVolume {
-			targetVolume = varied
-		}
-	}
-
-	// STEP 2.1: Cap per-mailbox volume to actual recipient capacity. The
-	// sender should not send multiple warmup messages to the same recipient
-	// in a single day just to hit an arbitrary target; that creates obvious
-	// pool loops when membership is small. Recipient-only participants count
-	// here, so operators can add inbound capacity without making those
-	// mailboxes warmup senders.
-	if s.warmupRepo != nil {
-		poolType := s.warmupPoolTypeForAccount(ctx, account)
-		// The set the selector draws from, so the cap never exceeds what a send can reach.
-		candidates, err := s.warmupRepo.WarmupPartnerCandidates(ctx, poolType, accountID)
-		if err == nil {
-			eligibleRecipients := len(candidates)
-			if eligibleRecipients <= 0 {
-				return recipientRecheckTime(), nil
-			}
-			if targetVolume > eligibleRecipients {
-				targetVolume = eligibleRecipients
-			}
-		}
-	}
+	targetVolume := day.Target
+	emailsSentToday := day.Sent
 
 	// Resolve owns the band's volume half; only its spacing half applies here.
-	adj := adjustmentFor(healthState)
+	adj := adjustmentFor(day.health)
 
 	// Spacing: a drawn gap from the profile when one is enabled, otherwise the
 	// mailbox's fixed min gap. The health-state multiplier still applies on top,
@@ -265,14 +211,8 @@ func (s *schedulerService) CalculateNextWarmupTime(ctx context.Context, accountI
 		minWaitSeconds = int(float64(minWaitSeconds)*adj.minWaitMultiplier + 0.5)
 	}
 
-	// STEP 3: Count emails already sent today
-	emailsSentToday, err := s.taskRepo.CountWarmupEmailsSentToday(ctx, accountID)
-	if err != nil {
-		return time.Time{}, err
-	}
-
 	// STEP 4: Check if we've hit today's limit
-	if emailsSentToday >= targetVolume {
+	if day.Reached() {
 		// Move to tomorrow's first slot
 		return s.snapWarmupToBehavior(bhv, calculateFirstSlotTomorrowAt(account.Timezone, warmupStart)), nil
 	}
@@ -368,6 +308,138 @@ func (s *schedulerService) CalculateNextWarmupTime(ctx context.Context, accountI
 	// resolution and the day-of-week guard can all land a candidate inside the
 	// lunch break or on a non-working weekday.
 	return s.snapWarmupToBehavior(bhv, candidateTime), nil
+}
+
+// WarmupBudget is today's warmup volume for one mailbox and what has already
+// gone out against it, resolved by the scheduler when it places a send and
+// again when the send executes. The mailbox drawer does not read it: it shows
+// the plan before daily variation and the recipient cap.
+type WarmupBudget struct {
+	// Target is the day's volume after ramp, early cut, health band, daily
+	// variation and recipient capacity.
+	Target int
+	// Sent is the completed warmup sends counted against today.
+	Sent int
+	// NoPartners is set when the pool offers this mailbox nobody to write to.
+	// Target and Sent are not resolved then, and the partner draw rather than
+	// the cap is what stops the send, so Reached deliberately reports false.
+	NoPartners bool
+}
+
+// Reached reports whether today has no volume left.
+func (b WarmupBudget) Reached() bool {
+	return !b.NoPartners && b.Sent >= b.Target
+}
+
+// warmupDay is the budget plus the health band the scheduler still needs for
+// spacing.
+type warmupDay struct {
+	WarmupBudget
+	health models.WarmupHealthState
+}
+
+// WarmupDailyBudget resolves today's budget for the send-time check. The
+// scheduler counts today's sends only when it places the NEXT send, so a
+// signal that cuts the target between placing a send and executing it (an
+// early placement, a health band, a partner leaving the pool) used to leave
+// that send going out over the cut number. Reading the budget again at
+// execution closes that window.
+func (s *schedulerService) WarmupDailyBudget(ctx context.Context, accountID uuid.UUID) (WarmupBudget, error) {
+	account, xerr := s.emailRepo.GetByID(ctx, accountID)
+	if xerr != nil {
+		return WarmupBudget{}, xerr
+	}
+	activelyWarming := account.IsWarmingActive()
+	inCampaign := s.accountInActiveCampaign(ctx, accountID)
+	if !activelyWarming && !inCampaign {
+		return WarmupBudget{}, ErrWarmupNotEnabled
+	}
+	day, err := s.resolveWarmupBudget(ctx, account, activelyWarming, inCampaign)
+	if err != nil {
+		return WarmupBudget{}, err
+	}
+	return day.WarmupBudget, nil
+}
+
+// resolveWarmupBudget is the one place today's target is computed: the shared
+// ramp policy, the per-day variation, the recipient cap, then the count of
+// what has already been sent against it.
+func (s *schedulerService) resolveWarmupBudget(ctx context.Context, account *models.Email, activelyWarming, inCampaign bool) (warmupDay, error) {
+	accountID := account.ID
+	healthState := s.resolveHealthState(ctx, accountID)
+	rampAnchor := time.Now()
+	if account.Warmup != nil {
+		rampAnchor = *account.Warmup
+	}
+	plan := warmupramp.Resolve(ctx, s.warmupRepo, warmupramp.Input{
+		AccountID:       accountID,
+		WarmupStart:     rampAnchor,
+		ActivelyWarming: activelyWarming,
+		Base:            account.WarmupBase,
+		Increase:        account.WarmupIncrease,
+		Max:             account.WarmupMax,
+		InCampaign:      inCampaign,
+		Health:          healthState,
+		Now:             time.Now(),
+	})
+	targetVolume := plan.Target
+	if plan.Cut() {
+		log.Info().
+			Str("email_account_id", accountID.String()).
+			Int("placements_48h", plan.Placements).
+			Int("sends_48h", plan.Sends).
+			Int("target", targetVolume).
+			Msg("warmup volume cut on an early placement signal; ramp held")
+	}
+
+	// Vary the day's target so a mailbox doesn't send an identical count every
+	// day. Deterministic per (account, local day) so it's stable across the
+	// day's reschedules. Actively-warming mailboxes keep a floor of WarmupBase.
+	if activelyWarming && targetVolume > 0 {
+		factor := dailyVolumeFactor(accountID, time.Now().In(loadLocation(account.Timezone)))
+		varied := int(float64(targetVolume)*factor + 0.5)
+		if varied < account.WarmupBase {
+			varied = account.WarmupBase
+		}
+		if varied < 1 {
+			varied = 1
+		}
+		if varied < targetVolume {
+			targetVolume = varied
+		}
+	}
+
+	day := warmupDay{health: healthState}
+
+	// Cap per-mailbox volume to actual recipient capacity. The sender should
+	// not send multiple warmup messages to the same recipient in a single day
+	// just to hit an arbitrary target; that creates obvious pool loops when
+	// membership is small. Recipient-only participants count here, so
+	// operators can add inbound capacity without making those mailboxes
+	// warmup senders.
+	if s.warmupRepo != nil {
+		poolType := s.warmupPoolTypeForAccount(ctx, account)
+		// The set the selector draws from, so the cap never exceeds what a send can reach.
+		candidates, err := s.warmupRepo.WarmupPartnerCandidates(ctx, poolType, accountID)
+		if err == nil {
+			eligibleRecipients := len(candidates)
+			if eligibleRecipients <= 0 {
+				day.NoPartners = true
+				return day, nil
+			}
+			if targetVolume > eligibleRecipients {
+				targetVolume = eligibleRecipients
+			}
+		}
+	}
+	day.Target = targetVolume
+
+	sent, err := s.taskRepo.CountWarmupEmailsSentToday(ctx, accountID)
+	if err != nil {
+		return day, err
+	}
+	day.Sent = sent
+	return day, nil
 }
 
 // snapWarmupToBehavior moves a warmup candidate onto the mailbox's rolled

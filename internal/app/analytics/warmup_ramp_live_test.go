@@ -60,7 +60,12 @@ func newRampFixture(t *testing.T, daysWarming, base, increase, max int) *rampFix
 	      VALUES ($1, $2, $3, $4, 'Ramp', '', '', 'smtp_imap', 'active', 50, 600, 'UTC',
 	              $5, $6, $7, $8)`,
 		f.mailbox, f.user, f.org, "ramp-"+f.mailbox.String()[:8]+"@test.local",
-		time.Now().Add(-time.Duration(daysWarming)*24*time.Hour), base, increase, max)
+		// The column is timestamp without time zone and the app anchors it
+		// with the database's now(); pgx writes a local time's wall clock, so
+		// on a machine east of UTC the anchor lands hours late and the ramp
+		// reads a day short. A few hours into the day, not on its boundary,
+		// so a freeze shorter than a day cannot cross it either.
+		time.Now().UTC().Add(-time.Duration(daysWarming)*24*time.Hour-6*time.Hour), base, increase, max)
 
 	t.Cleanup(func() {
 		c := context.Background()
