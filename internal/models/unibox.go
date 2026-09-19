@@ -11,6 +11,11 @@ type EmailMessage struct { // used for sending to the user
 	GmailID string    `json:"gmail_id"` // Gmail
 	UID     uint32    `json:"uid"`      // IMAP
 
+	// EmailID is the connected mailbox the message belongs to.
+	EmailID uuid.UUID `json:"email_id"`
+	// Folder is the canonical folder (Folder* consts) the message sits in.
+	Folder string `json:"folder"`
+
 	ParentID string `json:"parent_id"`
 	ThreadID string `json:"thread_id"`
 

@@ -46,6 +46,8 @@ func (s *uniboxService) GetByID(
 		resp.ID = msg.ID
 		resp.GmailID = msg.GmailID
 		resp.UID = msg.UID
+		resp.EmailID = msg.EmailID
+		resp.Folder = models.NormalizeFolder(msg.Folder, msg.Flags)
 
 		resp.ParentID = msg.ParentID
 		resp.ThreadID = msg.ThreadID

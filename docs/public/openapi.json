@@ -25335,6 +25335,16 @@
           "uid": {
             "type": "integer"
           },
+          "email_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The connected mailbox the message belongs to."
+          },
+          "folder": {
+            "type": "string",
+            "enum": ["inbox", "sent", "drafts", "archive", "spam", "trash"],
+            "description": "Canonical folder the message sits in."
+          },
           "parent_id": {
             "type": "string"
           },
