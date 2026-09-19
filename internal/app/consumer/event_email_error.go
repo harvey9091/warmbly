@@ -358,11 +358,16 @@ func (s *JobsService) deactivateAccount(ctx context.Context, userID, emailAccoun
 		}
 	}
 
-	inactive := "inactive"
-	if _, xerr := s.EmailRepository.Update(ctx, userID.String(), emailAccountID.String(), &models.UpdateEmail{
-		Status: &inactive,
-	}); xerr != nil {
-		log.Error().Str("error", xerr.Message).Msg("Failed to update email account status")
+	// By id, not through the organization-scoped Update: this path was handed
+	// the owner's USER id for that tenant argument, so the write matched no
+	// row and every deactivation failed with "Resource not found" while the
+	// worker carried on. A mailbox with dead credentials retried its provider
+	// every few minutes, indefinitely, and filed a report each time.
+	if xerr := s.EmailRepository.SetStatus(ctx, emailAccountID, "inactive"); xerr != nil {
+		log.Error().
+			Str("error", xerr.Message).
+			Str("email_account_id", emailAccountID.String()).
+			Msg("Failed to deactivate email account; the worker will keep syncing it")
 		return
 	}
 	if workerID == nil {

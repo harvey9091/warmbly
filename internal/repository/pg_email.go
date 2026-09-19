@@ -90,6 +90,7 @@ type EmailRepository interface {
 	GetSMTPCredentials(ctx context.Context, emailAccountID uuid.UUID) (*SMTPCredentials, *errx.Error)
 	GetOAuthCredentials(ctx context.Context, emailAccountID uuid.UUID) (*OAuthCredentials, *errx.Error)
 	GetWorkerID(ctx context.Context, emailAccountID uuid.UUID) (*uuid.UUID, *errx.Error)
+	SetStatus(ctx context.Context, emailAccountID uuid.UUID, status string) *errx.Error
 	SetWorkerID(ctx context.Context, emailAccountID, workerID uuid.UUID) *errx.Error
 	Update(ctx context.Context, orgID, emailAccountID string, udata *models.UpdateEmail) (*models.Email, *errx.Error)
 	// GetSendIdentity reads the mailbox's stored sending identity: the
@@ -2035,6 +2036,28 @@ func (r *emailRepository) GetWorkerID(ctx context.Context, emailAccountID uuid.U
 	}
 
 	return workerID, nil
+}
+
+// SetStatus sets a mailbox's status by id alone.
+//
+// Update is scoped to an organization because it serves a person editing their
+// own mailbox. This serves the consumer reacting to a worker's report about a
+// specific mailbox, where the id is already the primary key and a tenant id
+// adds no safety: passing the wrong one cannot deny access, it can only turn
+// the write into a silent no-op. That is exactly what happened, for months, to
+// every mailbox that failed authentication.
+func (r *emailRepository) SetStatus(ctx context.Context, emailAccountID uuid.UUID, status string) *errx.Error {
+	query := `UPDATE email_accounts SET status = $1, updated_at = NOW() WHERE id = $2`
+
+	cmd, err := r.DB.Exec(ctx, query, status, emailAccountID)
+	if err != nil {
+		db.CaptureError(err, query, []any{status, emailAccountID}, "exec")
+		return errx.InternalError()
+	}
+	if cmd.RowsAffected() == 0 {
+		return errx.ErrNotFound
+	}
+	return nil
 }
 
 // SetWorkerID assigns a worker to an email account
