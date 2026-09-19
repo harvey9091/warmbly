@@ -82,6 +82,7 @@ function toUniboxEmail(m: UniboxThreadMessage): UniboxEmail {
     id: m.id,
     from: m.from_addr?.[0] ?? "",
     to: m.to_addr?.[0] ?? "",
+    recipients: m.to_addr ?? [],
     subject: m.subject,
     snippet: m.snippet,
     date: new Date(m.internal_date),

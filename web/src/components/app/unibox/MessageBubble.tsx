@@ -5,6 +5,8 @@
 // containing card: just hairlines between messages. Collapsed, the row is
 // one line of sender and preview, Gmail-style.
 //
+// The recipient line, the sender and the info icon open the envelope in place.
+//
 // Bodies are fetched per expanded message: the thread endpoint carries only a
 // preview line each, so rendering that as the message showed the first ~100
 // characters of a ten-line email as the whole thing. Collapsed messages keep
@@ -15,12 +17,20 @@
 // which specific message in the thread their reply targets.
 
 import React from "react";
-import { motion } from "framer-motion";
-import { AlertCircleIcon, CornerUpLeftIcon, ForwardIcon } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+    AlertCircleIcon,
+    ChevronDownIcon,
+    CornerUpLeftIcon,
+    ForwardIcon,
+    InfoIcon,
+} from "lucide-react";
 import EmailBody from "./EmailBody";
+import MessageDetails from "./MessageDetails";
 import useUniboxEmail from "@/lib/api/hooks/app/unibox/useUniboxEmail";
 import type UniboxEmail from "@/lib/api/models/app/unibox/UniboxEmail";
 import { nameFromAddr, wrappedEmail } from "@/lib/helper/emailAddress";
+import { recipientsOf, summarizeAddresses } from "@/lib/unibox/messageDetails";
 import { cn } from "@/lib/utils";
 
 interface MessageBubbleProps {
@@ -51,7 +61,24 @@ export function MessageBubble({
     onForward,
 }: MessageBubbleProps) {
     const [expanded, setExpanded] = React.useState(defaultExpanded);
+    const [detailsOpen, setDetailsOpen] = React.useState(false);
     const body = useUniboxEmail(email.id, expanded);
+
+    // Collapsing folds the details away too, so the next open is the message.
+    const toggleExpanded = () => {
+        setDetailsOpen(false);
+        setExpanded((v) => !v);
+    };
+    // Opens a collapsed message straight onto its envelope.
+    const toggleDetails = (e: React.SyntheticEvent) => {
+        e.stopPropagation();
+        if (!expanded) {
+            setExpanded(true);
+            setDetailsOpen(true);
+            return;
+        }
+        setDetailsOpen((v) => !v);
+    };
 
     const date = new Date(email.date);
     const dateStr = date.toLocaleString(undefined, {
@@ -64,6 +91,10 @@ export function MessageBubble({
     const name = fromName(email.from);
     const addr = fromAddr(email.from);
     const snippet = email.snippet ?? "";
+
+    const recipients = recipientsOf(email, body.data);
+    const toLine = summarizeAddresses(recipients) || "undisclosed recipients";
+    const ccLine = body.data?.cc?.length ? summarizeAddresses(body.data.cc, 1) : "";
 
     return (
         <article
@@ -79,11 +110,13 @@ export function MessageBubble({
                 tabIndex={0}
                 aria-expanded={expanded}
                 className={expanded ? "flex items-start gap-3 mb-3 cursor-pointer" : "flex items-start gap-3 cursor-pointer"}
-                onClick={() => setExpanded((v) => !v)}
+                onClick={toggleExpanded}
                 onKeyDown={(e) => {
+                    // Keys on an inner button belong to that button.
+                    if (e.target !== e.currentTarget) return;
                     if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        setExpanded((v) => !v);
+                        toggleExpanded();
                     }
                 }}
             >
@@ -97,23 +130,60 @@ export function MessageBubble({
                 </div>
                 <div className="min-w-0 flex-1">
                     <div className="flex items-baseline gap-2 min-w-0">
-                        <span className="text-[12.5px] font-semibold text-slate-900 truncate">
-                            {name}
-                        </span>
+                        {expanded ? (
+                            <button
+                                type="button"
+                                onClick={toggleDetails}
+                                aria-expanded={detailsOpen}
+                                aria-label={detailsOpen ? "Hide message details" : "Show message details"}
+                                title={detailsOpen ? "Hide details" : "Show details"}
+                                className="inline-flex items-baseline gap-2 min-w-0 max-w-full rounded px-1 -mx-1 hover:bg-slate-100 transition-colors text-left"
+                            >
+                                <span className="text-[12.5px] font-semibold text-slate-900 truncate">
+                                    {name}
+                                </span>
+                                {addr && (
+                                    <span className="text-[11px] text-slate-400 truncate">
+                                        {addr}
+                                    </span>
+                                )}
+                            </button>
+                        ) : (
+                            <span className="text-[12.5px] font-semibold text-slate-900 truncate">
+                                {name}
+                            </span>
+                        )}
                         {outbound && (
                             <span className="shrink-0 px-1 rounded bg-sky-100 text-sky-700 text-[9.5px] font-semibold uppercase tracking-wide">
                                 Outgoing
                             </span>
                         )}
-                        {addr && expanded && (
-                            <span className="text-[11px] text-slate-400 truncate">
-                                {addr}
-                            </span>
-                        )}
                     </div>
                     {expanded ? (
-                        <div className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-1.5">
-                            <span className="truncate min-w-0">to {email.to}</span>
+                        <div className="text-[11px] text-slate-400 mt-0.5 flex items-center min-w-0">
+                            <button
+                                type="button"
+                                onClick={toggleDetails}
+                                aria-expanded={detailsOpen}
+                                aria-label={detailsOpen ? "Hide message details" : "Show message details"}
+                                className={cn(
+                                    "inline-flex items-center gap-1 min-w-0 max-w-full h-5 rounded px-1 -mx-1 transition-colors",
+                                    detailsOpen
+                                        ? "bg-slate-100 text-slate-700"
+                                        : "hover:bg-slate-100 hover:text-slate-700",
+                                )}
+                            >
+                                <span className="truncate min-w-0">
+                                    to {toLine}
+                                    {ccLine && <span>, cc {ccLine}</span>}
+                                </span>
+                                <ChevronDownIcon
+                                    className={cn(
+                                        "w-3 h-3 shrink-0 transition-transform",
+                                        detailsOpen && "rotate-180",
+                                    )}
+                                />
+                            </button>
                         </div>
                     ) : (
                         <div className="text-[12px] text-slate-500 truncate">
@@ -123,6 +193,20 @@ export function MessageBubble({
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                     <div className="flex items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                        <button
+                            type="button"
+                            onClick={toggleDetails}
+                            aria-label={detailsOpen ? "Hide message details" : "Show message details"}
+                            title="Message details"
+                            className={cn(
+                                "size-6 rounded inline-flex items-center justify-center transition-colors",
+                                detailsOpen
+                                    ? "text-slate-900 bg-slate-100"
+                                    : "text-slate-500 hover:text-slate-900 hover:bg-slate-100",
+                            )}
+                        >
+                            <InfoIcon className="w-3 h-3" />
+                        </button>
                         {onReply && (
                             <button
                                 type="button"
@@ -157,6 +241,22 @@ export function MessageBubble({
                     </span>
                 </div>
             </header>
+
+            {expanded && (
+                <div className="sm:pl-10">
+                    <AnimatePresence initial={false}>
+                        {detailsOpen && (
+                            <MessageDetails
+                                key="details"
+                                email={email}
+                                detail={body.data}
+                                loading={body.isPending}
+                                error={body.isError}
+                            />
+                        )}
+                    </AnimatePresence>
+                </div>
+            )}
 
             {!expanded ? null : body.isPending ? (
                 <div className="sm:pl-10 space-y-2.5 py-0.5" aria-busy aria-label="Loading message">
