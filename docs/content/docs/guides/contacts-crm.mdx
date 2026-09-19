@@ -71,9 +71,21 @@ See [Personalization & expressions](/guides/expressions/) for the full templatin
 
 ## Filtering the list
 
-A filter bar sits above the contact list. **Category**, **Segment**, **Status** and **Campaign** are always there; open one, tick values, and the list updates immediately with the matching count next to the bar. **Add filter** adds a custom-field condition (field, contains/is/starts with/ends with, value), a date-added or last-updated range, a number-of-campaigns range, the address verification verdict and, on a campaign's Leads tab, lead status and engagement. Each active filter is a pill you can reopen to change or remove with its cross; **Clear** drops them all, and **Save as segment** turns the current set into a [segment](/guides/segments/). Free-text search and sort stay in the toolbar.
+A filter bar sits above the contact list. **Category**, **Segment**, **Status** and **Campaign** are always there; open one, tick values, and the list updates immediately with the matching count next to the bar. **Add filter** adds a custom-field condition (field, contains/is/starts with/ends with, value), a date-added or last-updated range, a number-of-campaigns range, the address verification verdict and, on a campaign's Leads tab, lead status and engagement. Each active filter is a pill you can reopen to change or remove with its cross; **Clear** drops them all, and **Save as segment** turns the current set into a [segment](/guides/segments/). Free-text search, sort and the column chooser stay in the toolbar.
 
 Free-text search matches first name, last name, email, company and phone. Every word you type has to match one of those, so `Test Demo` finds the contact whose first name is Test and last name is Demo, and `Demo Acme` finds everyone named Demo at Acme. Words can be in any order, and only the first six count.
+
+## Choosing columns
+
+**Columns** in the toolbar opens the column chooser. Tick a column to show it, untick it to hide it, and drag the grip beside a shown column to change the order. Name is always the first column. Under **Custom fields** every custom field in the workspace is offered as a column, so a list imported from Apollo or Clay can show the fields you triage on (industry, title, employee count) without opening each contact.
+
+The layout is yours: it is saved to your account for this workspace, so it follows you to another browser, and a teammate looking at the same list keeps their own columns. The campaign Leads tab has its own layout, separate from the contacts page. **Reset to default** at the bottom of the chooser puts the standard columns back.
+
+## Sorting
+
+Click a column header to sort by it, and click it again to flip the direction. Text columns (name, company, phone, custom fields) start ascending; dates and counts start with the newest or largest first. The **Sort** menu in the toolbar reaches the same orderings, including columns that are hidden or that a phone screen has no room for, and every custom field in the workspace.
+
+A sort on a custom field orders the values as text. Contacts that do not have the field, or have it blank, are grouped at the end when ascending and at the start when descending. The sort is saved with your layout, so the list opens the way you left it.
 
 ## Selecting rows
 

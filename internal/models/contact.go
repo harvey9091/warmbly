@@ -802,8 +802,8 @@ type SearchContacts struct {
 	CreatedBefore      *time.Time             `json:"created_before"`       // Contacts created before this date
 	UpdatedAfter       *time.Time             `json:"updated_after"`        // Contacts updated after this date
 	UpdatedBefore      *time.Time             `json:"updated_before"`       // Contacts updated before this date
-	SortBy             string                 `json:"sort_by"`              // e.g., "first_name ASC", "campaign_count DESC"
-	Reverse            bool                   `json:"reverse"`              // ASC or DESC
+	SortBy             string                 `json:"sort_by"`              // A column name (created_at, first_name, company, ...) or "custom:<key>" for a custom field
+	Reverse            bool                   `json:"reverse"`              // Ascending when true; the default is descending
 }
 
 type BulkEditContactsFieldType string

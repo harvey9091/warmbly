@@ -40,7 +40,7 @@ Every field is optional; an empty body matches all contacts in the organization.
 | `created_before` | string (RFC 3339) | No | Created on or before this time. |
 | `updated_after` | string (RFC 3339) | No | Updated on or after this time. |
 | `updated_before` | string (RFC 3339) | No | Updated on or before this time. |
-| `sort_by` | string | No | Sort column: `created_at` (the default), `updated_at`, `first_name`, `last_name`, `email`, or `campaign_count`. Any other value falls back to `created_at`. |
+| `sort_by` | string | No | Sort column: `created_at` (the default), `updated_at`, `first_name`, `last_name`, `email`, `company`, `phone`, or `campaign_count`. `custom:<key>` sorts on a custom field, as text, with contacts that lack the field (or have it blank) grouped last when ascending and first when descending. A custom-field name that could never exist is rejected with `invalid_sort_by`; any other unknown value falls back to `created_at`. |
 | `reverse` | boolean | No | Ascending when true. The default is descending. |
 
 ```json
