@@ -20,6 +20,10 @@ type Parsed = { raw: string; value: string; kind: "email" | "domain" | "invalid"
 // anything else must be a bare host. The server is still the authority.
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+// The server takes at most this many entries per request.
+const MAX_ENTRIES = 5000;
+// Enough chips to eyeball a paste without rendering thousands of nodes.
+const PREVIEW_CHIPS = 200;
 
 function parseSuppressionInput(raw: string): Parsed[] {
     const seen = new Set<string>();
@@ -48,6 +52,7 @@ export default function AddSuppressionsDialog({ open, onClose }: { open: boolean
     const domains = parsed.filter((p) => p.kind === "domain");
     const invalid = parsed.filter((p) => p.kind === "invalid");
     const valid = emails.length + domains.length;
+    const overLimit = valid > MAX_ENTRIES;
     const busy = add.isPending;
     const dirty = raw.trim() !== "" || reason.trim() !== "";
 
@@ -82,7 +87,7 @@ export default function AddSuppressionsDialog({ open, onClose }: { open: boolean
     }, [open, requestClose]);
 
     async function submit() {
-        if (valid === 0 || busy) return;
+        if (valid === 0 || overLimit || busy) return;
         try {
             const res = await add.mutateAsync({
                 entries: [...emails, ...domains].map((p) => ({ value: p.value })),
@@ -185,11 +190,22 @@ export default function AddSuppressionsDialog({ open, onClose }: { open: boolean
                                             )}
                                         </div>
                                         <div className="px-3 py-2 flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
-                                            {parsed.map((p) => (
+                                            {parsed.slice(0, PREVIEW_CHIPS).map((p) => (
                                                 <Chip key={p.value} parsed={p} />
                                             ))}
+                                            {parsed.length > PREVIEW_CHIPS && (
+                                                <span className="inline-flex items-center h-6 px-2 text-[11.5px] text-slate-500">
+                                                    +{(parsed.length - PREVIEW_CHIPS).toLocaleString()} more
+                                                </span>
+                                            )}
                                         </div>
                                     </div>
+                                )}
+
+                                {overLimit && (
+                                    <p className="text-[11px] text-rose-600">
+                                        At most {MAX_ENTRIES.toLocaleString()} entries at a time. Split the list and add it in parts.
+                                    </p>
                                 )}
 
                                 <div>
@@ -212,7 +228,7 @@ export default function AddSuppressionsDialog({ open, onClose }: { open: boolean
                                     </button>
                                     <button
                                         type="submit"
-                                        disabled={busy || valid === 0}
+                                        disabled={busy || valid === 0 || overLimit}
                                         className="h-8 px-3.5 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-colors disabled:opacity-60"
                                     >
                                         {busy && <Loading className="!w-3.5 h-3.5 text-white" />}
