@@ -43,7 +43,7 @@ export default function RegenerateDialog({
         <DialogShell
             title={locked ? "Your new recovery codes" : "Generate new recovery codes"}
             icon={<KeyRoundIcon className="w-3 h-3" />}
-            onClose={locked ? undefined : onClose}
+            onClose={locked || regenerate.isPending ? undefined : onClose}
             footer={
                 locked ? (
                     <PrimaryButton

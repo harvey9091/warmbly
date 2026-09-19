@@ -25,6 +25,40 @@ export default function DialogShell({
     footer?: React.ReactNode;
     label?: string;
 }) {
+    const cardRef = React.useRef<HTMLDivElement>(null);
+
+    // Move focus in on open (unless a field already took it), keep Tab inside
+    // the card, and hand focus back to whatever opened the dialog on close.
+    React.useEffect(() => {
+        const opener = document.activeElement as HTMLElement | null;
+        const card = cardRef.current;
+        if (card && !card.contains(document.activeElement)) card.focus();
+        const onTab = (e: KeyboardEvent) => {
+            if (e.key !== "Tab" || !cardRef.current) return;
+            const items = Array.from(
+                cardRef.current.querySelectorAll<HTMLElement>(
+                    'button:not([disabled]), input:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+                ),
+            );
+            if (items.length === 0) return;
+            const first = items[0];
+            const last = items[items.length - 1];
+            const active = document.activeElement;
+            if (e.shiftKey && (active === first || !cardRef.current.contains(active))) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && (active === last || !cardRef.current.contains(active))) {
+                e.preventDefault();
+                first.focus();
+            }
+        };
+        document.addEventListener("keydown", onTab);
+        return () => {
+            document.removeEventListener("keydown", onTab);
+            if (opener && document.contains(opener)) opener.focus();
+        };
+    }, []);
+
     React.useEffect(() => {
         if (!onClose) return;
         const onKey = (e: KeyboardEvent) => {
@@ -48,6 +82,8 @@ export default function DialogShell({
             onMouseDown={() => onClose?.()}
         >
             <motion.div
+                ref={cardRef}
+                tabIndex={-1}
                 role="dialog"
                 aria-modal="true"
                 aria-label={label ?? (typeof title === "string" ? title : undefined)}
@@ -57,7 +93,7 @@ export default function DialogShell({
                 transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
                 onMouseDown={(e) => e.stopPropagation()}
                 className={cn(
-                    "w-full max-h-[calc(100dvh-2rem)] flex flex-col rounded-lg bg-white border border-slate-200 overflow-hidden",
+                    "w-full max-h-[calc(100dvh-2rem)] flex flex-col rounded-lg outline-none bg-white border border-slate-200 overflow-hidden",
                     "shadow-[0_24px_48px_-12px_rgba(15,23,42,0.18),0_8px_16px_-8px_rgba(15,23,42,0.1)]",
                     width === "md" ? "max-w-[560px]" : "max-w-[400px]",
                 )}

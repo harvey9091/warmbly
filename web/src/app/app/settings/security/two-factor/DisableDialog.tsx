@@ -34,7 +34,7 @@ export default function DisableDialog({ onClose }: { onClose: () => void }) {
         <DialogShell
             title="Turn off two-factor authentication"
             icon={<ShieldOffIcon className="w-3 h-3" />}
-            onClose={onClose}
+            onClose={disable.isPending ? undefined : onClose}
             footer={
                 <>
                     <SecondaryButton onClick={onClose} disabled={disable.isPending}>

@@ -92,7 +92,7 @@ export default function EnrollDialog({ onClose, onDone }: { onClose: () => void;
     };
 
     // The recovery codes are shown once: no backdrop, Escape or X until the
-    // user says they are saved.
+    // user says they are saved, nor while the code is being checked.
     const locked = step === "codes";
     const stepIndex = STEPS.findIndex((s) => s.key === step);
 
@@ -100,7 +100,7 @@ export default function EnrollDialog({ onClose, onDone }: { onClose: () => void;
         <DialogShell
             title="Set up two-factor authentication"
             icon={<ShieldCheckIcon className="w-3 h-3" />}
-            onClose={locked ? undefined : onClose}
+            onClose={locked || confirm.isPending ? undefined : onClose}
             width="md"
             footer={
                 step === "scan" ? (

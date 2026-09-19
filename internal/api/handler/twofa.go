@@ -14,15 +14,16 @@ import (
 // so a session cannot guess its way to a valid code on these routes either.
 func (h *Handler) withCodeBudget(c *gin.Context, uid uuid.UUID, check func() *errx.Error) *errx.Error {
 	ctx := c.Request.Context()
-	if h.AuthService.ReauthFailureExceeded(ctx, uid) {
+	if !h.AuthService.ReserveReauthAttempt(ctx, uid) {
 		return errx.ErrAuthLimit
 	}
 	xerr := check()
 	switch {
 	case xerr == nil:
 		h.AuthService.ClearReauthFailures(ctx, uid)
-	case xerr.Identifier == twofa.InvalidCodeID:
-		h.AuthService.RecordReauthFailure(ctx, uid)
+	case xerr.Identifier != twofa.InvalidCodeID:
+		// No code was compared (2FA off, server error), so nothing was guessed.
+		h.AuthService.ReleaseReauthAttempt(ctx, uid)
 	}
 	return xerr
 }

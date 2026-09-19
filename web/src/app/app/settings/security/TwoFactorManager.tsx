@@ -23,7 +23,7 @@ const fmt = (d: string) =>
     new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 
 export default function TwoFactorManager() {
-    const { data: status, isLoading } = useTwoFactorStatus();
+    const { data: status, isLoading, isError, refetch, isFetching } = useTwoFactorStatus();
     const { user } = useUserProfile();
     const [dialog, setDialog] = React.useState<Dialog>(null);
     const close = React.useCallback(() => setDialog(null), []);
@@ -38,7 +38,22 @@ export default function TwoFactorManager() {
             eyebrow="Two-factor authentication"
             description="A rotating code from an authenticator app on every password sign-in, so a stolen password alone is not enough."
         >
-            {isLoading ? (
+            {isError && !status ? (
+                <Row
+                    label="Couldn't load your two-factor status"
+                    description="Nothing has changed on your account. Try again in a moment."
+                >
+                    <button
+                        type="button"
+                        onClick={() => void refetch()}
+                        disabled={isFetching}
+                        className="h-7 px-2.5 rounded-md border border-slate-200 text-[12px] text-slate-700 hover:border-slate-300 hover:text-slate-900 transition-colors inline-flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                        <RefreshCwIcon className={cn("w-3 h-3", isFetching && "animate-spin")} />
+                        Retry
+                    </button>
+                </Row>
+            ) : isLoading ? (
                 <div className="space-y-2" aria-busy="true">
                     <div className="h-4 w-48 rounded bg-slate-100 animate-pulse" />
                     <div className="h-3 w-72 rounded bg-slate-100 animate-pulse" />

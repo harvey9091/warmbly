@@ -1410,18 +1410,13 @@
       "post": {
         "operationId": "auth_2fa_regenerate_recovery_codes",
         "summary": "Regenerate recovery codes",
-        "description": "Replaces every recovery code with a fresh set, returned once. Requires a current TOTP or recovery code in the body; a mismatch answers 400 with code two_fa_invalid_code. Requires a user session token (not an API key).",
+        "description": "Replaces every recovery code with a fresh set, returned once. Requires a current TOTP or recovery code in the body; a mismatch answers 400 with code two_fa_invalid_code. Requires a user session token (not an API key). Idempotency-Key is not needed: the proof code is single-use, so a retried request is refused rather than rotating the set twice. Wrong codes share the per-account attempt budget with /auth/reauth.",
         "tags": [
           "auth"
         ],
         "security": [
           {
             "bearerAuth": []
-          }
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "requestBody": {
