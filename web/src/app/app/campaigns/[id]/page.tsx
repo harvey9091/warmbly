@@ -16,6 +16,7 @@ import { TONE_DOT } from "@/components/ui/tones";
 import type { DitherTone } from "@/components/ui/dither";
 import AnalyticsShareButton from "@/components/app/analytics/AnalyticsShareButton";
 import TaskPreview from "@/components/app/campaigns/TaskPreview";
+import SendPlanCard from "@/components/app/campaigns/SendPlanCard";
 import CampaignFormsPanel from "@/components/app/campaigns/CampaignFormsPanel";
 import AnimatedNumber from "@/components/ui/AnimatedNumber";
 import AdvisorStrip from "@/components/app/advisor/AdvisorStrip";
@@ -114,6 +115,11 @@ export default function CampaignOverview() {
             {/* What the Advisor has found about THIS campaign, above the numbers
                 that motivated it. Renders nothing when there is nothing wrong. */}
             <AdvisorStrip entityType="campaign" entityId={id} title="" limit={3} compact />
+
+            {/* What will actually go out today and every limit that decided
+                it, read through the scheduler's own gates. This is the number
+                the caps added up used to misstate (issue #606). */}
+            <SendPlanCard campaignId={id} />
 
             <div className="grid lg:grid-cols-[1fr_340px] gap-5 items-start">
                 {/* Main analytics column */}

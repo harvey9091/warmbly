@@ -72,7 +72,7 @@ gives the arguments and flags. Ids are positional, not flags.
 | Command | Covers |
 |---|---|
 | `status` | one call for "what is happening": mailboxes needing attention, what is sending, what is unread |
-| `campaign` | list, view, create, edit, delete, steps, senders, segments, preflight, test, start, stop, logs, pause-lead / resume-lead |
+| `campaign` | list, view, create, edit, delete, steps, senders, segments, preflight, test, start, stop, logs, plan, pause-lead / resume-lead |
 | `contact` | list, view, create, edit, delete, lookup, timeline, emails, notes, import, export, verify |
 | `mailbox` | list, view, edit, check, sync, identity, refresh-identity, behavior, warmup, hold, release, send |
 | `inbox` | list, view, thread, read, reply, compose, drafts, scheduled, snooze |
@@ -111,6 +111,10 @@ These put real mail on the wire and prompt before doing so:
 - Run `warmbly campaign preflight CAMPAIGN_ID` before `campaign start` and act
   on what it reports. It costs nothing and catches missing senders, empty
   audiences and broken tracking.
+- When a campaign sends less than expected, `warmbly campaign plan CAMPAIGN_ID`
+  is the answer: today's projected sends and every limit that lowered them
+  (easing out of warmup, the campaign limit, other campaigns on the same
+  mailboxes, the plan's allowance, leads due). Read it before touching a cap.
 - Never raise a mailbox's daily cap casually. The default is 50 campaign
   emails per mailbox per day with 600 seconds between sends; a fresh mailbox
   starts around 10-20. Do not go above 50 unless the user asked and the

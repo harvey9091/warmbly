@@ -277,6 +277,11 @@ type CampaignProgressRepository interface {
 	// their flow goes next, plus the pre-send gate that excludes them, so a
 	// per-contact preview reads the facts the send path reads.
 	RouteContact(ctx context.Context, campaignID, contactID uuid.UUID) (*ContactRoute, error)
+	// LeadSupply runs the same routing over every lead and counts where
+	// each one stands, so a day's plan knows how many sends the leads can
+	// take rather than only how many the mailboxes can give. until is the
+	// end of the day being planned.
+	LeadSupply(ctx context.Context, campaignID uuid.UUID, until time.Time) (*LeadSupply, error)
 
 	// CountUndeliverableLeads counts the leads FindRoutedPairs excludes
 	// because address verification refused them. Reported when a campaign
@@ -1343,56 +1348,7 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 		orderPrefix = "(lp.sequence_id IS NULL) DESC, "
 	}
 
-	query := `
-		SELECT cl.contact_id, cl.added_at, cl.email_account_id,
-		       lp.sequence_id, lp.sent_at, lp.opened_at, lp.clicked_at, lp.replied_at, COALESCE(lp.reply_class, ''), COALESCE(lp.ai_label, ''),
-		       COALESCE(ss.ids, '{}') AS sent_ids,
-		       EXISTS (
-		         SELECT 1 FROM campaign_contact_progress rp
-		         WHERE rp.campaign_id = $1 AND rp.contact_id = cl.contact_id AND rp.replied_at IS NOT NULL
-		       ) AS has_replied,
-		       ` + leadHoldColumns + `
-		FROM campaign_leads cl
-		JOIN contacts c ON c.id = cl.contact_id
-		LEFT JOIN LATERAL (
-			SELECT sequence_id, sent_at,
-			       CASE WHEN p.opened_machine THEN NULL ELSE p.opened_at END AS opened_at,
-			       clicked_at, replied_at, reply_class, ai_label
-			FROM campaign_contact_progress p
-			WHERE p.campaign_id = $1 AND p.contact_id = cl.contact_id AND p.sent_at IS NOT NULL
-			ORDER BY p.sent_at DESC LIMIT 1
-		) lp ON true
-		LEFT JOIN LATERAL (
-			SELECT array_agg(sequence_id) AS ids
-			FROM campaign_contact_progress p2
-			WHERE p2.campaign_id = $1 AND p2.contact_id = cl.contact_id
-			  AND (p2.sent_at IS NOT NULL OR p2.dispatched_at IS NOT NULL)
-		) ss ON true
-		WHERE cl.campaign_id = $1
-		  AND NOT EXISTS (
-		    SELECT 1 FROM campaign_contact_progress b
-		    WHERE b.contact_id = cl.contact_id AND b.bounced_at IS NOT NULL
-		  )
-		  AND NOT EXISTS (
-		    SELECT 1 FROM campaign_contact_progress f
-		    WHERE f.campaign_id = $1 AND f.contact_id = cl.contact_id
-		      AND f.sent_at IS NULL AND f.failed_at IS NOT NULL
-		      AND f.send_attempts >= $2
-		  )
-		  -- The workspace suppression list (addresses and domains) and the
-		  -- contact's own subscription flag are both send gates; the audience
-		  -- count applies the same two, so the number shown is the number sent.
-		  AND NOT recipient_suppressed((SELECT organization_id FROM campaigns WHERE id = $1), c.email)
-		  AND c.subscribed IS NOT FALSE
-		  -- Addresses the pre-send gates in the campaign task would refuse.
-		  -- Without this the finder keeps handing back the same undeliverable
-		  -- contact, the task skips it, and the campaign never reaches the
-		  -- healthy leads behind it (issue #200). Read from the contact's
-		  -- CURRENT verification state, so re-verifying an address puts it
-		  -- straight back into routing.
-		  AND NOT ` + undeliverableClause("$1") + `
-		ORDER BY ` + orderPrefix + contactOrder + ` ` + dir + `
-	`
+	query := routedLeadsQuery(orderPrefix + contactOrder + ` ` + dir)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -2303,4 +2259,142 @@ func (r *campaignProgressRepository) CountHeldLeads(ctx context.Context, campaig
 		WHERE cl.campaign_id = $1 AND `+liveHold("cl"),
 		campaignID).Scan(&n)
 	return n, err
+}
+
+// routedLeadsQuery is the lead scan FindRoutedPairs and LeadSupply share: the
+// campaign's leads with their last-sent step and engagement, minus every lead
+// a pre-send gate would refuse. Both walk it through the same router, so a
+// count can never include a lead the send path would not offer. order is the
+// ORDER BY expression; $1 is the campaign and $2 the send-attempt ceiling.
+func routedLeadsQuery(order string) string {
+	return `
+		SELECT cl.contact_id, cl.added_at, cl.email_account_id,
+		       lp.sequence_id, lp.sent_at, lp.opened_at, lp.clicked_at, lp.replied_at, COALESCE(lp.reply_class, ''), COALESCE(lp.ai_label, ''),
+		       COALESCE(ss.ids, '{}') AS sent_ids,
+		       EXISTS (
+		         SELECT 1 FROM campaign_contact_progress rp
+		         WHERE rp.campaign_id = $1 AND rp.contact_id = cl.contact_id AND rp.replied_at IS NOT NULL
+		       ) AS has_replied,
+		       ` + leadHoldColumns + `
+		FROM campaign_leads cl
+		JOIN contacts c ON c.id = cl.contact_id
+		LEFT JOIN LATERAL (
+			SELECT sequence_id, sent_at,
+			       CASE WHEN p.opened_machine THEN NULL ELSE p.opened_at END AS opened_at,
+			       clicked_at, replied_at, reply_class, ai_label
+			FROM campaign_contact_progress p
+			WHERE p.campaign_id = $1 AND p.contact_id = cl.contact_id AND p.sent_at IS NOT NULL
+			ORDER BY p.sent_at DESC LIMIT 1
+		) lp ON true
+		LEFT JOIN LATERAL (
+			SELECT array_agg(sequence_id) AS ids
+			FROM campaign_contact_progress p2
+			WHERE p2.campaign_id = $1 AND p2.contact_id = cl.contact_id
+			  AND (p2.sent_at IS NOT NULL OR p2.dispatched_at IS NOT NULL)
+		) ss ON true
+		WHERE cl.campaign_id = $1
+		  AND NOT EXISTS (
+		    SELECT 1 FROM campaign_contact_progress b
+		    WHERE b.contact_id = cl.contact_id AND b.bounced_at IS NOT NULL
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1 FROM campaign_contact_progress f
+		    WHERE f.campaign_id = $1 AND f.contact_id = cl.contact_id
+		      AND f.sent_at IS NULL AND f.failed_at IS NOT NULL
+		      AND f.send_attempts >= $2
+		  )
+		  -- The workspace suppression list (addresses and domains) and the
+		  -- contact's own subscription flag are both send gates; the audience
+		  -- count applies the same two, so the number shown is the number sent.
+		  AND NOT recipient_suppressed((SELECT organization_id FROM campaigns WHERE id = $1), c.email)
+		  AND c.subscribed IS NOT FALSE
+		  -- Addresses the pre-send gates in the campaign task would refuse.
+		  -- Without this the finder keeps handing back the same undeliverable
+		  -- contact, the task skips it, and the campaign never reaches the
+		  -- healthy leads behind it (issue #200). Read from the contact's
+		  -- CURRENT verification state, so re-verifying an address puts it
+		  -- straight back into routing.
+		  AND NOT ` + undeliverableClause("$1") + `
+		ORDER BY ` + order + `
+	`
+}
+
+// LeadSupply is where a campaign's routable leads stand, counted for a day's
+// plan. Only email steps count as sends; an action or wait node due now is
+// executed without a mailbox and is not counted anywhere here.
+type LeadSupply struct {
+	// DueNow is the email steps that could go this minute, and
+	// DueNowNewLeads how many of them are first emails.
+	DueNow         int
+	DueNowNewLeads int
+	// DueLaterToday is the email steps whose wait elapses before `until`,
+	// and DueLaterTodayNewLeads how many of those are first emails.
+	DueLaterTodayNewLeads int
+	DueLaterToday         int
+	// WaitingOnStep is the leads whose next step is due after `until`.
+	WaitingOnStep int
+	// WaitingOnCondition is the leads inside an undecided branch window.
+	WaitingOnCondition int
+	// Held is the leads under a live hold with no end.
+	Held int
+	// NextDueAt is the soonest moment a waiting lead becomes due.
+	NextDueAt *time.Time
+}
+
+// LeadSupply walks every routable lead through the campaign's routing and
+// tallies where each one stands relative to now and `until`.
+func (r *campaignProgressRepository) LeadSupply(ctx context.Context, campaignID uuid.UUID, until time.Time) (*LeadSupply, error) {
+	out := &LeadSupply{}
+	router, err := r.loadRouter(ctx, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	if router == nil {
+		return out, nil
+	}
+	rows, err := r.db.Query(ctx, routedLeadsQuery("c.created_at ASC"), campaignID, config.CampaignSendMaxAttempts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	noteDue := func(at time.Time) {
+		if out.NextDueAt == nil || at.Before(*out.NextDueAt) {
+			t := at
+			out.NextDueAt = &t
+		}
+	}
+	for rows.Next() {
+		var in routeInput
+		var contactID uuid.UUID
+		if serr := rows.Scan(&contactID, &in.addedAt, &in.sender, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.sentIDs, &in.hasReplied,
+			&in.pausedAt, &in.pausedUntil, &in.pauseReason, &in.pauseSource); serr != nil {
+			return nil, serr
+		}
+		res := router.route(campaignID, contactID, in)
+		switch {
+		case res.Hold != nil && res.Hold.Until == nil:
+			out.Held++
+		case res.WaitUntil != nil:
+			out.WaitingOnCondition++
+			noteDue(*res.WaitUntil)
+		case res.Target == nil || !router.isEmailStep(*res.Target):
+			// Finished, or a node that sends nothing.
+		case res.DueAt != nil && res.DueAt.After(router.dueBy):
+			noteDue(*res.DueAt)
+			if res.DueAt.After(until) {
+				out.WaitingOnStep++
+				continue
+			}
+			out.DueLaterToday++
+			if res.IsNewLead {
+				out.DueLaterTodayNewLeads++
+			}
+		default:
+			out.DueNow++
+			if res.IsNewLead {
+				out.DueNowNewLeads++
+			}
+		}
+	}
+	return out, rows.Err()
 }

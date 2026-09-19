@@ -28,6 +28,13 @@ type CampaignService interface {
 	// many sending days a mailbox pool needs under the per-mailbox caps.
 	// Read-only; the wizard shows it before a one-time email is created.
 	Estimate(ctx context.Context, orgID uuid.UUID, in *models.CampaignEstimate) (*models.CampaignEstimateResult, *errx.Error)
+	// SendPlan is today's sending plan for one of orgID's campaigns: what
+	// will go out today and every limit that decided it, derived through the
+	// scheduler's own gates. Read-only.
+	SendPlan(ctx context.Context, orgID uuid.UUID, campaignID string) (*models.CampaignSendPlan, *errx.Error)
+	// WorkspaceCapacity is what the workspace's active mailboxes can send
+	// today between them, under the same clamps. Read-only.
+	WorkspaceCapacity(ctx context.Context, orgID uuid.UUID) (*models.WorkspaceSendCapacity, *errx.Error)
 	Update(ctx context.Context, orgID, id string, data *models.UpdateCampaign) (*models.Campaign, *errx.Error)
 	// Delete removes an organization's campaign outright. A running campaign
 	// is stopped as part of it: its pending tasks are cancelled in the same

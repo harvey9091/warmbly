@@ -239,6 +239,14 @@ ask before they do it.`,
 				Args: []argSpec{{Name: "id", Help: "The campaign's id"}},
 			},
 			{
+				Name: "plan", Aliases: []string{"send-plan"}, Short: "Today's sending plan: what goes out and every limit that decided it",
+				Method: http.MethodGet, Path: "/campaigns/{id}/send-plan",
+				Args: []argSpec{{Name: "id", Help: "The campaign's id"}},
+				Long: `Work out how many emails the campaign sends today through the
+scheduler's own gates, and list every limit that took the number below what the
+mailbox caps add up to. Nothing is sent or written.`,
+			},
+			{
 				Name: "preflight", Short: "Run the pre-send checks without sending",
 				Method: http.MethodPost, Path: "/campaigns/{id}/preflight", Body: bodyOptional,
 				Args: []argSpec{{Name: "id", Help: "The campaign's id"}},

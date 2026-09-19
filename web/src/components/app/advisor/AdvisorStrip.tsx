@@ -8,13 +8,13 @@
 
 import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { SparklesIcon } from "lucide-react";
+import { ChevronDownIcon, SparklesIcon } from "lucide-react";
 import type {
     AdvisorCategory,
     AdvisorFinding,
     AdvisorSurface,
 } from "@/lib/api/models/app/advisor/Advisor";
-import { SEVERITY_RANK, groupFindings } from "@/lib/api/models/app/advisor/Advisor";
+import { SEVERITY_DOT, SEVERITY_RANK, groupFindings } from "@/lib/api/models/app/advisor/Advisor";
 import { SURFACE_FETCH_LIMIT, useAdvisorFindings } from "@/lib/api/hooks/app/advisor/useAdvisor";
 import AdvisorCard from "./AdvisorCard";
 import AdvisorFixDrawer from "./AdvisorFixDrawer";
@@ -46,6 +46,10 @@ export default function AdvisorStrip({
     title,
 }: Props) {
     const [fixing, setFixing] = useState<AdvisorFinding | null>(null);
+    // A compact strip folds to one line: the count and the worst finding.
+    // Above a page's own content, a list of suggestions is a hint, not the
+    // page, so it stays closed until asked.
+    const [expanded, setExpanded] = useState(false);
 
     // An entity-scoped strip must not fire before its id exists, or it renders
     // the whole org's findings for a beat while the page hydrates.
@@ -96,7 +100,42 @@ export default function AdvisorStrip({
                     </div>
                 ) : null}
 
-                <div className="space-y-1.5">
+                {/* Compact strips sit above a page's own content, so they are
+                    one bordered list of single lines rather than a stack of
+                    cards, folded to a summary line, and nothing opens on its
+                    own. */}
+                {compact ? (
+                    <button
+                        type="button"
+                        onClick={() => setExpanded((v) => !v)}
+                        aria-expanded={expanded}
+                        className={`w-full min-h-9 px-2.5 py-1 flex items-center gap-2 text-left rounded-md border border-slate-200 bg-white hover:bg-slate-50/60 transition-colors ${expanded ? "rounded-b-none border-b-0" : ""}`}
+                    >
+                        <SparklesIcon className="h-3 w-3 text-slate-400 shrink-0" />
+                        <span className="text-[12px] font-medium text-slate-900 shrink-0">
+                            {groups.length} {groups.length === 1 ? "suggestion" : "suggestions"}
+                        </span>
+                        {!expanded ? (
+                            <span className="flex items-center gap-1.5 min-w-0 text-[11.5px] text-slate-500">
+                                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${SEVERITY_DOT[groups[0].lead.severity]}`} aria-hidden />
+                                <span className="truncate">{groups[0].lead.title}</span>
+                                {groups.length > 1 ? <span className="shrink-0 text-slate-400">+{groups.length - 1} more</span> : null}
+                            </span>
+                        ) : null}
+                        <ChevronDownIcon className={`ml-auto size-3 text-slate-400 shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`} />
+                    </button>
+                ) : null}
+                <AnimatePresence initial={false}>
+                {!compact || expanded ? (
+                <motion.div
+                    key="list"
+                    initial={compact ? { height: 0, opacity: 0 } : false}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.18, ease: "easeOut" }}
+                    className={compact ? "overflow-hidden rounded-b-md border border-slate-200 bg-white" : ""}
+                >
+                <div className={compact ? "divide-y divide-slate-200/60 border-t border-slate-200/60" : "space-y-1.5"}>
                     <AnimatePresence initial={false} mode="popLayout">
                         {groups.map((group) => (
                             <motion.div
@@ -114,13 +153,16 @@ export default function AdvisorStrip({
                                         finding={group.lead}
                                         onFix={setFixing}
                                         compact={compact}
-                                        defaultOpen={groups.length === 1 && group.lead.severity === "critical"}
+                                        defaultOpen={!compact && groups.length === 1 && group.lead.severity === "critical"}
                                     />
                                 )}
                             </motion.div>
                         ))}
                     </AnimatePresence>
                 </div>
+                </motion.div>
+                ) : null}
+                </AnimatePresence>
             </section>
 
             <AnimatePresence>
