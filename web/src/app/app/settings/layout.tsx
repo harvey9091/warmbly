@@ -37,6 +37,7 @@ import { UnsavedProvider, useUnsavedRegistry } from "@/hooks/context/unsaved";
 import { usePermission, type PermissionKey } from "@/hooks/usePermission";
 import { Page, PageTopbar } from "@/components/layout/Page";
 import useFeatureAccess from "@/hooks/useFeatureAccess";
+import useAuthConfig from "@/lib/api/hooks/auth/useAuthConfig";
 
 interface SectionDef {
     path: string;
@@ -47,6 +48,9 @@ interface SectionDef {
     permission?: PermissionKey;
     /** Only meaningful when the deployment runs a billing provider. */
     billingOnly?: boolean;
+    /** What the entry is called on the hosted product, when that differs. */
+    hostedLabel?: string;
+    hostedDescription?: string;
 }
 
 interface SectionGroup {
@@ -90,7 +94,7 @@ const GROUPS: SectionGroup[] = [
     {
         label: "Advanced",
         items: [
-            { path: "warmbly-cloud", label: "Warmbly Cloud", icon: CloudIcon, description: "Warm your mailboxes in the Warmbly pool.", permission: "MANAGE_SETTINGS" },
+            { path: "warmbly-cloud", label: "Warmbly Cloud", icon: CloudIcon, description: "Warm your mailboxes in the Warmbly pool.", permission: "MANAGE_SETTINGS", hostedLabel: "Linked instances", hostedDescription: "Self-hosted instances warming in this workspace." },
             { path: "data", label: "Data", icon: DatabaseIcon, description: "Export this workspace, or import one from another instance.", ownerOnly: true },
             { path: "danger", label: "Danger zone", icon: AlertOctagonIcon, description: "Irreversible actions." },
         ],
@@ -108,6 +112,7 @@ export default function SettingsLayout() {
 function SettingsLayoutInner() {
     const location = useLocation();
     const access = useFeatureAccess();
+    const hosted = useAuthConfig().data?.self_hosted === false;
     const canManageApiKeys = usePermission("MANAGE_API_KEYS");
     const canManageSettings = usePermission("MANAGE_SETTINGS");
     const canViewAnalytics = usePermission("VIEW_ANALYTICS");
@@ -172,14 +177,20 @@ function SettingsLayoutInner() {
 
     const visibleGroups = GROUPS.map((g) => ({
         ...g,
-        items: g.items.filter(
-            (s) =>
-                (!s.ownerOnly || access.isOwner) &&
-                (!s.billingOnly || access.billing) &&
-                (s.permission !== "MANAGE_API_KEYS" || canManageApiKeys) &&
-                (s.permission !== "MANAGE_SETTINGS" || canManageSettings) &&
-                (s.permission !== "VIEW_ANALYTICS" || canViewAnalytics),
-        ),
+        items: g.items
+            .filter(
+                (s) =>
+                    (!s.ownerOnly || access.isOwner) &&
+                    (!s.billingOnly || access.billing) &&
+                    (s.permission !== "MANAGE_API_KEYS" || canManageApiKeys) &&
+                    (s.permission !== "MANAGE_SETTINGS" || canManageSettings) &&
+                    (s.permission !== "VIEW_ANALYTICS" || canViewAnalytics),
+            )
+            .map((s) =>
+                hosted && s.hostedLabel
+                    ? { ...s, label: s.hostedLabel, description: s.hostedDescription ?? s.description }
+                    : s,
+            ),
     })).filter((g) => g.items.length > 0);
 
     const currentPath = location.pathname.replace(/^\/app\/settings\//, "");

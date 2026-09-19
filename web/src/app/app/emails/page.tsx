@@ -335,25 +335,24 @@ export default function AddressesPage() {
             </SectionBar>
 
             <PageBody>
-                <AdvisorSummaryBar
-                    surface="emails"
-                    noun="mailbox"
-                    nounPlural="mailboxes"
-                    className="mx-5 my-3"
-                />
-                <CloudPoolBanner onConnect={() => setCloudDialog(true)} mailboxCount={stats.total} />
-                {!emailsData.isLoading && <CloudPathsPanel mailboxCount={stats.total} onAdd={() => p?.setAddEmail(true)} />}
-                {/* Hosted, the pool is thousands of mailboxes: the pool-size advice is self-host only. */}
-                {cloud.selfHosted && (
-                    <WarmupCoverageNotice
-                        warmupCount={warmupActive}
-                        totalCount={stats.total}
-                        canWarmup={canWarmup}
-                        onAdd={() => p?.setAddEmail(true)}
-                        onConnectCloud={!cloud.connected ? () => setCloudDialog(true) : undefined}
-                        cloudConnected={cloud.connected}
-                    />
-                )}
+                {/* One stack with one gap, so the bar and the strips below it
+                    sit evenly and the whole block collapses when all are empty. */}
+                <div className="px-5 py-3 flex flex-col gap-2 empty:hidden">
+                    <AdvisorSummaryBar surface="emails" noun="mailbox" nounPlural="mailboxes" />
+                    <CloudPoolBanner onConnect={() => setCloudDialog(true)} mailboxCount={stats.total} />
+                    {!emailsData.isLoading && <CloudPathsPanel mailboxCount={stats.total} onAdd={() => p?.setAddEmail(true)} />}
+                    {/* Hosted, the pool is thousands of mailboxes: the pool-size advice is self-host only. */}
+                    {cloud.selfHosted && (
+                        <WarmupCoverageNotice
+                            warmupCount={warmupActive}
+                            totalCount={stats.total}
+                            canWarmup={canWarmup}
+                            onAdd={() => p?.setAddEmail(true)}
+                            onConnectCloud={!cloud.connected ? () => setCloudDialog(true) : undefined}
+                            cloudConnected={cloud.connected}
+                        />
+                    )}
+                </div>
                 <CloudConnectDialog open={cloudDialog} onClose={() => setCloudDialog(false)} />
                 {emailsData.isLoading ? (
                     <div className="divide-y divide-slate-200/60">

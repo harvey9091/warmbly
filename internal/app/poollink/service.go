@@ -315,6 +315,7 @@ func (s *service) Plan(ctx context.Context, orgID uuid.UUID) (models.PoolLinkPla
 		plan.Tier = "paid"
 		return plan, nil
 	}
+	plan.ManageURL = config.AppBaseURL() + "/app/settings/billing"
 	paid, xerr := s.gate.IsPaidOrganization(ctx, orgID)
 	if xerr != nil {
 		return plan, xerr
