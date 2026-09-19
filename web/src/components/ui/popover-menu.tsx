@@ -359,7 +359,7 @@ export function PopoverMenuItem({
                 disabled && "opacity-50 cursor-not-allowed",
             )}
         >
-            {icon && <span className="shrink-0 text-slate-400 group-hover:text-slate-600">{icon}</span>}
+            {icon && <span className={cn("shrink-0", danger ? "text-red-500" : "text-slate-400")}>{icon}</span>}
             <span className="flex-1 truncate">{children}</span>
             {trailing !== undefined ? (
                 <span className="shrink-0">{trailing}</span>
