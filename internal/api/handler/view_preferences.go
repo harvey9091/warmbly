@@ -42,12 +42,15 @@ func (h *Handler) GetViewPreferences(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"preferences": prefs})
 }
 
+// A field left out keeps its saved value; "columns": [] is the default layout
+// and "sort": {"by": ""} the default sort.
 type updateViewPreferencesRequest struct {
-	Columns []string         `json:"columns"`
+	Columns *[]string        `json:"columns"`
 	Sort    *models.ViewSort `json:"sort"`
 }
 
-// UpdateViewPreferences replaces the caller's saved layout for one list.
+// UpdateViewPreferences writes the caller's saved layout for one list: the
+// columns, the sort, or both.
 // PUT /me/views/:view
 func (h *Handler) UpdateViewPreferences(c *gin.Context) {
 	uid, orgID, ok := viewActor(c)
@@ -59,8 +62,8 @@ func (h *Handler) UpdateViewPreferences(c *gin.Context) {
 		errx.Handle(c, errx.ErrInvalid)
 		return
 	}
-	prefs := &models.ViewPreferences{View: c.Param("view"), Columns: req.Columns, Sort: req.Sort}
-	saved, xerr := h.ViewPreferencesService.Put(c.Request.Context(), uid, orgID, prefs)
+	upd := models.ViewPreferencesUpdate{Columns: req.Columns, Sort: req.Sort}
+	saved, xerr := h.ViewPreferencesService.Put(c.Request.Context(), uid, orgID, c.Param("view"), upd)
 	if xerr != nil {
 		errx.Handle(c, xerr)
 		return

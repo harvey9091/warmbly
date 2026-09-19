@@ -392,17 +392,18 @@ export function builtinColumns(view: ViewName): ContactColumn[] {
     return [nameColumn, companyColumn(view), phoneColumn, statusColumn, campaignsColumn, addedColumn(view), updatedColumn];
 }
 
-// The layout a member sees before choosing anything, Name implied first.
+// The layout a member sees before choosing anything.
 export const DEFAULT_COLUMNS: Record<ViewName, string[]> = {
-    contacts: ["company", "phone", "status", "campaigns", "created_at"],
-    campaign_leads: ["company", "progress", "opened", "clicked", "replied", "current_step", "sender", "last_activity"],
+    contacts: ["name", "company", "phone", "status", "campaigns", "created_at"],
+    campaign_leads: ["name", "company", "progress", "opened", "clicked", "replied", "current_step", "sender", "last_activity"],
 };
 
 // The columns to render for a saved layout, and the ones the chooser can still
-// add. Unknown built-in ids (a column an older build offered) are dropped; a
-// custom field is kept even when no contact currently carries it, so the
-// column the member picked does not vanish because an import replaced the
-// field's name.
+// add. A saved layout always names "name", so a layout of Name alone is
+// `["name"]` and never the empty list, which means "the default". Unknown
+// built-in ids (a column an older build offered) are dropped; a custom field
+// is kept even when no contact currently carries it, so the column the member
+// picked does not vanish because an import replaced the field's name.
 export function resolveColumns(
     view: ViewName,
     saved: string[] | undefined,
@@ -428,17 +429,25 @@ export function resolveColumns(
     return { visible, available };
 }
 
+export interface SortOption {
+    key: SearchContactsSortBy;
+    label: string;
+    // Whether picking it starts ascending, as a header click on the same
+    // column would (text does, dates and counts do not).
+    asc: boolean;
+}
+
 // The sort choices the toolbar menu offers, beyond what a header click reaches.
-export function sortOptions(view: ViewName): { key: SearchContactsSortBy; label: string }[] {
-    const base: { key: SearchContactsSortBy; label: string }[] = [
-        { key: "created_at", label: "Date added" },
-        { key: "updated_at", label: "Last updated" },
-        { key: "first_name", label: "First name" },
-        { key: "last_name", label: "Last name" },
-        { key: "email", label: "Email" },
-        { key: "company", label: "Company" },
-        { key: "phone", label: "Phone" },
+export function sortOptions(view: ViewName): SortOption[] {
+    const base: SortOption[] = [
+        { key: "created_at", label: "Date added", asc: false },
+        { key: "updated_at", label: "Last updated", asc: false },
+        { key: "first_name", label: "First name", asc: true },
+        { key: "last_name", label: "Last name", asc: true },
+        { key: "email", label: "Email", asc: true },
+        { key: "company", label: "Company", asc: true },
+        { key: "phone", label: "Phone", asc: true },
     ];
-    if (view === "contacts") base.push({ key: "campaign_count", label: "Campaigns" });
+    if (view === "contacts") base.push({ key: "campaign_count", label: "Campaigns", asc: false });
     return base;
 }

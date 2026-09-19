@@ -3,22 +3,27 @@
 // chooser and the sort menu read the same view.
 
 import React from "react";
-import { useCurrentOrg } from "@/stores/useAppStore";
+import { useCurrentOrg, useUser } from "@/stores/useAppStore";
 import useCustomFieldKeys from "@/lib/api/hooks/app/contacts/useCustomFieldKeys";
 import {
     useResetViewPreferences,
     useUpdateViewPreferences,
     useViewPreferences,
+    type ViewScope,
 } from "@/lib/api/hooks/app/views/useViewPreferences";
 import type { ViewName, ViewSort } from "@/lib/api/models/app/views/ViewPreferences";
 import { resolveColumns } from "./columns";
 
 export function useContactView(view: ViewName) {
     const org = useCurrentOrg();
-    const orgId = org?.id ?? "";
-    const prefs = useViewPreferences(view, orgId);
-    const update = useUpdateViewPreferences(view, orgId);
-    const reset = useResetViewPreferences(view, orgId);
+    const user = useUser();
+    const scope = React.useMemo<ViewScope>(
+        () => ({ userId: user?.id ?? "", orgId: org?.id ?? "" }),
+        [user?.id, org?.id],
+    );
+    const prefs = useViewPreferences(view, scope);
+    const update = useUpdateViewPreferences(view, scope);
+    const reset = useResetViewPreferences(view, scope);
     const keys = useCustomFieldKeys();
 
     const saved = prefs.data;
@@ -29,17 +34,16 @@ export function useContactView(view: ViewName) {
         [view, savedColumns, customKeys],
     );
 
-    const setColumns = React.useCallback(
-        (ids: string[]) => update.mutate({ columns: ids, sort: saved?.sort ?? null }),
-        [update, saved?.sort],
-    );
-    const setSort = React.useCallback(
-        (sort: ViewSort) => update.mutate({ columns: saved?.columns ?? [], sort }),
-        [update, saved?.columns],
-    );
+    // Each write names only what changed, so the columns and the sort never
+    // overwrite each other, whatever has or has not loaded yet.
+    const { mutate } = update;
+    const setColumns = React.useCallback((ids: string[]) => mutate({ columns: ids }), [mutate]);
+    const setSort = React.useCallback((sort: ViewSort) => mutate({ sort }), [mutate]);
+    const { mutate: resetMutate } = reset;
+    const resetView = React.useCallback(() => resetMutate(), [resetMutate]);
 
     return {
-        orgId,
+        scope,
         columns: visible,
         available,
         customKeys,
@@ -49,6 +53,6 @@ export function useContactView(view: ViewName) {
         customized: (savedColumns?.length ?? 0) > 0,
         setColumns,
         setSort,
-        reset: () => reset.mutate(),
+        reset: resetView,
     };
 }

@@ -18,7 +18,9 @@ import (
 type ViewPreferencesRepository interface {
 	// Get returns nil, nil when the member has never saved this view.
 	Get(ctx context.Context, userID, orgID uuid.UUID, view string) (*models.ViewPreferences, error)
-	Upsert(ctx context.Context, userID, orgID uuid.UUID, prefs *models.ViewPreferences) error
+	// Upsert writes the fields the update carries, keeps the rest, and returns
+	// the row as saved.
+	Upsert(ctx context.Context, userID, orgID uuid.UUID, view string, upd models.ViewPreferencesUpdate) (*models.ViewPreferences, error)
 	Delete(ctx context.Context, userID, orgID uuid.UUID, view string) error
 }
 
@@ -30,22 +32,15 @@ func NewViewPreferencesRepository(db *pgxpool.Pool) ViewPreferencesRepository {
 	return &viewPreferencesRepository{db: db}
 }
 
-func (r *viewPreferencesRepository) Get(ctx context.Context, userID, orgID uuid.UUID, view string) (*models.ViewPreferences, error) {
+// scanPrefs reads one row's columns, sort and updated_at.
+func scanPrefs(view string, row pgx.Row) (*models.ViewPreferences, error) {
 	var (
 		raw       []byte
 		sortBy    string
 		reverse   bool
 		updatedAt time.Time
 	)
-	err := r.db.QueryRow(ctx, `
-		SELECT columns, sort_by, sort_reverse, updated_at
-		FROM user_view_preferences
-		WHERE user_id = $1 AND organization_id = $2 AND view = $3`,
-		userID, orgID, view).Scan(&raw, &sortBy, &reverse, &updatedAt)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
+	if err := row.Scan(&raw, &sortBy, &reverse, &updatedAt); err != nil {
 		return nil, err
 	}
 	prefs := &models.ViewPreferences{View: view, Columns: []string{}, UpdatedAt: &updatedAt}
@@ -60,29 +55,48 @@ func (r *viewPreferencesRepository) Get(ctx context.Context, userID, orgID uuid.
 	return prefs, nil
 }
 
-func (r *viewPreferencesRepository) Upsert(ctx context.Context, userID, orgID uuid.UUID, prefs *models.ViewPreferences) error {
-	cols := prefs.Columns
-	if cols == nil {
-		cols = []string{}
+func (r *viewPreferencesRepository) Get(ctx context.Context, userID, orgID uuid.UUID, view string) (*models.ViewPreferences, error) {
+	prefs, err := scanPrefs(view, r.db.QueryRow(ctx, `
+		SELECT columns, sort_by, sort_reverse, updated_at
+		FROM user_view_preferences
+		WHERE user_id = $1 AND organization_id = $2 AND view = $3`,
+		userID, orgID, view))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
 	}
-	raw, err := json.Marshal(cols)
-	if err != nil {
-		return err
+	return prefs, err
+}
+
+func (r *viewPreferencesRepository) Upsert(ctx context.Context, userID, orgID uuid.UUID, view string, upd models.ViewPreferencesUpdate) (*models.ViewPreferences, error) {
+	// A nil field binds NULL and COALESCE keeps the saved value, reading the
+	// bound parameter rather than EXCLUDED: the VALUES row has already turned
+	// that NULL into the default, so EXCLUDED would never be NULL.
+	var raw []byte
+	if upd.Columns != nil {
+		cols := *upd.Columns
+		if cols == nil {
+			cols = []string{}
+		}
+		var err error
+		if raw, err = json.Marshal(cols); err != nil {
+			return nil, err
+		}
 	}
-	sortBy, reverse := "", false
-	if prefs.Sort != nil {
-		sortBy, reverse = prefs.Sort.By, prefs.Sort.Reverse
+	var sortBy *string
+	var reverse *bool
+	if upd.Sort != nil {
+		sortBy, reverse = &upd.Sort.By, &upd.Sort.Reverse
 	}
-	_, err = r.db.Exec(ctx, `
+	return scanPrefs(view, r.db.QueryRow(ctx, `
 		INSERT INTO user_view_preferences (user_id, organization_id, view, columns, sort_by, sort_reverse, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, now())
+		VALUES ($1, $2, $3, COALESCE($4::jsonb, '[]'::jsonb), COALESCE($5::text, ''), COALESCE($6::boolean, false), now())
 		ON CONFLICT (user_id, organization_id, view) DO UPDATE
-		SET columns = EXCLUDED.columns,
-		    sort_by = EXCLUDED.sort_by,
-		    sort_reverse = EXCLUDED.sort_reverse,
-		    updated_at = now()`,
-		userID, orgID, prefs.View, raw, sortBy, reverse)
-	return err
+		SET columns = COALESCE($4::jsonb, user_view_preferences.columns),
+		    sort_by = COALESCE($5::text, user_view_preferences.sort_by),
+		    sort_reverse = COALESCE($6::boolean, user_view_preferences.sort_reverse),
+		    updated_at = now()
+		RETURNING columns, sort_by, sort_reverse, updated_at`,
+		userID, orgID, view, raw, sortBy, reverse))
 }
 
 func (r *viewPreferencesRepository) Delete(ctx context.Context, userID, orgID uuid.UUID, view string) error {

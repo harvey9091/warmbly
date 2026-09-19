@@ -6,7 +6,6 @@ package viewprefs
 
 import (
 	"context"
-	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
@@ -23,8 +22,9 @@ type Service interface {
 	// Get returns the saved layout, or the empty layout (default columns,
 	// default sort) when none is saved.
 	Get(ctx context.Context, userID, orgID uuid.UUID, view string) (*models.ViewPreferences, *errx.Error)
-	// Put replaces the saved layout.
-	Put(ctx context.Context, userID, orgID uuid.UUID, prefs *models.ViewPreferences) (*models.ViewPreferences, *errx.Error)
+	// Put writes the fields the update carries and keeps the rest, so the
+	// columns and the sort can be saved independently.
+	Put(ctx context.Context, userID, orgID uuid.UUID, view string, upd models.ViewPreferencesUpdate) (*models.ViewPreferences, *errx.Error)
 	// Reset forgets the saved layout, so the list shows its defaults again.
 	Reset(ctx context.Context, userID, orgID uuid.UUID, view string) *errx.Error
 }
@@ -37,12 +37,13 @@ func NewService(repo repository.ViewPreferencesRepository) Service {
 	return &service{repo: repo}
 }
 
-// A built-in column id is a snake_case name the dashboard defines.
-var builtinColumnPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+func unknownView() *errx.Error {
+	return errx.NewWithIdentifier(errx.NotFound, "unknown_view", "unknown view")
+}
 
 func (s *service) Get(ctx context.Context, userID, orgID uuid.UUID, view string) (*models.ViewPreferences, *errx.Error) {
 	if !models.KnownViews[view] {
-		return nil, errx.NewWithIdentifier(errx.NotFound, "unknown_view", "unknown view")
+		return nil, unknownView()
 	}
 	prefs, err := s.repo.Get(ctx, userID, orgID, view)
 	if err != nil {
@@ -55,23 +56,24 @@ func (s *service) Get(ctx context.Context, userID, orgID uuid.UUID, view string)
 	return prefs, nil
 }
 
-func (s *service) Put(ctx context.Context, userID, orgID uuid.UUID, prefs *models.ViewPreferences) (*models.ViewPreferences, *errx.Error) {
-	if !models.KnownViews[prefs.View] {
-		return nil, errx.NewWithIdentifier(errx.NotFound, "unknown_view", "unknown view")
+func (s *service) Put(ctx context.Context, userID, orgID uuid.UUID, view string, upd models.ViewPreferencesUpdate) (*models.ViewPreferences, *errx.Error) {
+	if !models.KnownViews[view] {
+		return nil, unknownView()
 	}
-	if xerr := validate(prefs); xerr != nil {
+	if xerr := validate(view, &upd); xerr != nil {
 		return nil, xerr
 	}
-	if err := s.repo.Upsert(ctx, userID, orgID, prefs); err != nil {
+	saved, err := s.repo.Upsert(ctx, userID, orgID, view, upd)
+	if err != nil {
 		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
-	return s.Get(ctx, userID, orgID, prefs.View)
+	return saved, nil
 }
 
 func (s *service) Reset(ctx context.Context, userID, orgID uuid.UUID, view string) *errx.Error {
 	if !models.KnownViews[view] {
-		return errx.NewWithIdentifier(errx.NotFound, "unknown_view", "unknown view")
+		return unknownView()
 	}
 	if err := s.repo.Delete(ctx, userID, orgID, view); err != nil {
 		errs.CaptureException(err)
@@ -80,43 +82,53 @@ func (s *service) Reset(ctx context.Context, userID, orgID uuid.UUID, view strin
 	return nil
 }
 
-// validate checks the layout the way the contacts search will read it: every
-// column id is one the dashboard can render, listed once, and the sort names a
-// built-in column or a well-formed custom field. Custom-field ids are
-// normalized in place so the same field saved with different spacing is one
-// column.
-func validate(prefs *models.ViewPreferences) *errx.Error {
-	if len(prefs.Columns) > models.ViewPreferencesMaxColumns {
-		return errx.NewWithIdentifier(errx.BadRequest, "too_many_columns", "too many columns")
-	}
-	seen := make(map[string]bool, len(prefs.Columns))
-	for i, id := range prefs.Columns {
-		norm, ok := normalizeColumnID(id)
-		if !ok {
-			return errx.NewWithIdentifier(errx.BadRequest, "invalid_column", "invalid column: "+id)
+// validate checks the update the way the dashboard will read it: every column
+// id is one this view can render or a well-formed custom field, listed once;
+// the sort names a column the contacts search knows or a well-formed custom
+// field. Custom-field ids are normalized in place so the same field saved with
+// different spacing is one column.
+func validate(view string, upd *models.ViewPreferencesUpdate) *errx.Error {
+	if upd.Columns != nil {
+		cols := *upd.Columns
+		if len(cols) > models.ViewPreferencesMaxColumns {
+			return errx.NewWithIdentifier(errx.BadRequest, "too_many_columns", "too many columns")
 		}
-		if seen[norm] {
-			return errx.NewWithIdentifier(errx.BadRequest, "duplicate_column", "column listed twice: "+norm)
+		known := make(map[string]bool, len(models.ViewBuiltinColumns[view]))
+		for _, id := range models.ViewBuiltinColumns[view] {
+			known[id] = true
 		}
-		seen[norm] = true
-		prefs.Columns[i] = norm
-	}
-	if prefs.Sort != nil {
-		by := strings.TrimSpace(prefs.Sort.By)
-		if by == "" {
-			prefs.Sort = nil
-		} else {
-			norm, ok := normalizeColumnID(by)
+		seen := make(map[string]bool, len(cols))
+		for i, id := range cols {
+			norm, ok := normalizeID(id, known)
 			if !ok {
-				return errx.NewWithIdentifier(errx.BadRequest, "invalid_sort", "invalid sort: "+by)
+				return errx.NewWithIdentifier(errx.BadRequest, "invalid_column", "invalid column: "+id)
 			}
-			prefs.Sort.By = norm
+			if seen[norm] {
+				return errx.NewWithIdentifier(errx.BadRequest, "duplicate_column", "column listed twice: "+norm)
+			}
+			seen[norm] = true
+			cols[i] = norm
 		}
+	}
+	if upd.Sort != nil {
+		by := strings.TrimSpace(upd.Sort.By)
+		if by == "" {
+			// The default sort is stored as no sort at all.
+			upd.Sort = &models.ViewSort{}
+			return nil
+		}
+		norm, ok := normalizeID(by, models.ContactBuiltinSorts)
+		if !ok {
+			return errx.NewWithIdentifier(errx.BadRequest, "invalid_sort", "invalid sort: "+by)
+		}
+		upd.Sort.By = norm
 	}
 	return nil
 }
 
-func normalizeColumnID(id string) (string, bool) {
+// normalizeID accepts a known built-in id as is, or a custom field with a
+// valid key, normalized.
+func normalizeID(id string, known map[string]bool) (string, bool) {
 	if len(id) > models.ViewColumnIDMaxLength {
 		return "", false
 	}
@@ -126,8 +138,5 @@ func normalizeColumnID(id string) (string, bool) {
 		}
 		return models.ContactSortCustomPrefix + key, true
 	}
-	if !builtinColumnPattern.MatchString(id) {
-		return "", false
-	}
-	return id, true
+	return id, known[id]
 }

@@ -5,7 +5,8 @@
 
 import React from "react";
 import { Reorder, useDragControls } from "framer-motion";
-import { ArrowDownIcon, ArrowUpIcon, CheckIcon, Columns3Icon, GripVerticalIcon, LockIcon, RotateCcwIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowUpIcon, Columns3Icon, GripVerticalIcon, LockIcon, RotateCcwIcon } from "lucide-react";
+import { CheckSquare } from "@/components/ui/check-square";
 import type { SearchContactsSortBy } from "@/lib/api/models/app/contacts/search-contacts.types";
 import {
     PopoverMenu,
@@ -16,23 +17,11 @@ import {
     PopoverMenuTrigger,
     SelectButton,
 } from "@/components/ui/popover-menu";
-import { customColumnId, type ContactColumn } from "./columns";
+import { customColumnId, type ContactColumn, type SortOption } from "./columns";
 
 export interface ViewSortState {
     by: SearchContactsSortBy;
     reverse: boolean;
-}
-
-function CheckSquare({ checked }: { checked: boolean }) {
-    return (
-        <span
-            className={`size-3.5 rounded border flex items-center justify-center transition-colors shrink-0 ${
-                checked ? "border-slate-900 bg-slate-900" : "border-slate-300 bg-white"
-            }`}
-        >
-            {checked && <CheckIcon className="w-2 h-2 text-white" />}
-        </span>
-    );
 }
 
 function ColumnLabel({ col }: { col: ContactColumn }) {
@@ -46,8 +35,9 @@ function ColumnLabel({ col }: { col: ContactColumn }) {
     );
 }
 
-// A shown column: drag by the grip, click the rest of the row to hide it.
-function ShownRow({ col, onHide }: { col: ContactColumn; onHide: () => void }) {
+// A shown column: drag by the grip, click the rest of the row to hide it. The
+// new order is committed when the drag ends, not on every position crossed.
+function ShownRow({ col, onHide, onDragEnd }: { col: ContactColumn; onHide: () => void; onDragEnd: () => void }) {
     const controls = useDragControls();
     return (
         <Reorder.Item
@@ -55,6 +45,7 @@ function ShownRow({ col, onHide }: { col: ContactColumn; onHide: () => void }) {
             value={col}
             dragListener={false}
             dragControls={controls}
+            onDragEnd={onDragEnd}
             className="relative bg-white"
         >
             <div className="mx-1 h-7 pl-1 pr-2 flex items-center gap-1.5 rounded text-[12px] text-slate-700 hover:bg-slate-100 transition-colors">
@@ -107,7 +98,7 @@ export function ColumnChooser({
     // Built-in columns not shown, then custom fields not shown.
     available: ContactColumn[];
     customized: boolean;
-    // The ids of the shown columns after Name, in order.
+    // The ids of every shown column in order, Name first.
     onChange: (ids: string[]) => void;
     onReset: () => void;
 }) {
@@ -118,9 +109,27 @@ export function ColumnChooser({
 
     const locked = visible.filter((c) => c.locked);
     const shown = visible.filter((c) => !c.locked);
-    const ids = () => shown.map((c) => c.id);
-    const hide = (id: string) => onChange(ids().filter((x) => x !== id));
-    const show = (id: string) => onChange([...ids(), id]);
+    // A saved layout names every shown column including Name, so hiding the
+    // last optional one saves ["name"] rather than [], which would mean the
+    // default layout and bring every column back.
+    const layout = (cols: ContactColumn[]) => [...locked.map((c) => c.id), ...cols.map((c) => c.id)];
+    const hide = (id: string) => onChange(layout(shown.filter((x) => x.id !== id)));
+    const show = (id: string) => onChange(layout([...shown, ...available.filter((c) => c.id === id)]));
+
+    // The order being dragged lives here until the drop, so one drag is one
+    // write. It follows the saved order whenever that changes from outside.
+    const [order, setOrder] = React.useState(shown);
+    const shownKey = shown.map((c) => c.id).join("|");
+    React.useEffect(() => {
+        setOrder(shown);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [shownKey]);
+    const orderRef = React.useRef(order);
+    orderRef.current = order;
+    const commitOrder = () => {
+        const next = layout(orderRef.current);
+        if (next.join("|") !== layout(shown).join("|")) onChange(next);
+    };
 
     const builtinAvail = available.filter((c) => !c.custom && matches(c));
     const customAvail = available.filter((c) => !!c.custom && matches(c));
@@ -172,14 +181,9 @@ export function ColumnChooser({
                             <PlainRow key={col.id} col={col} checked onClick={() => hide(col.id)} />
                         ))
                     ) : (
-                        <Reorder.Group
-                            as="div"
-                            axis="y"
-                            values={shown}
-                            onReorder={(next: ContactColumn[]) => onChange(next.map((c) => c.id))}
-                        >
-                            {shown.map((col) => (
-                                <ShownRow key={col.id} col={col} onHide={() => hide(col.id)} />
+                        <Reorder.Group as="div" axis="y" values={order} onReorder={setOrder}>
+                            {order.map((col) => (
+                                <ShownRow key={col.id} col={col} onHide={() => hide(col.id)} onDragEnd={commitOrder} />
                             ))}
                         </Reorder.Group>
                     )}
@@ -229,7 +233,7 @@ export function SortMenu({
     onChange,
 }: {
     sort: ViewSortState;
-    options: { key: SearchContactsSortBy; label: string }[];
+    options: SortOption[];
     customKeys: string[];
     onChange: (next: ViewSortState) => void;
 }) {
@@ -251,7 +255,7 @@ export function SortMenu({
                     <PopoverMenuItem
                         key={o.key}
                         selected={sort.by === o.key}
-                        onSelect={() => onChange({ by: o.key, reverse: sort.by === o.key ? sort.reverse : false })}
+                        onSelect={() => onChange({ by: o.key, reverse: sort.by === o.key ? sort.reverse : o.asc })}
                     >
                         {o.label}
                     </PopoverMenuItem>

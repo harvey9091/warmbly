@@ -22,7 +22,9 @@ export interface ViewPreferencesEnvelope {
     preferences: ViewPreferences;
 }
 
+// A partial write: a field left out keeps its saved value. `columns: []` is
+// the default layout; `sort: { by: "" }` the default sort.
 export interface UpdateViewPreferences {
-    columns: string[];
-    sort: ViewSort | null;
+    columns?: string[];
+    sort?: ViewSort;
 }

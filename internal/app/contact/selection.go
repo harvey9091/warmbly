@@ -25,6 +25,11 @@ func (s *contactService) ResolveSelection(ctx context.Context, orgID uuid.UUID, 
 	if sel.Filters == nil {
 		return nil, errx.New(errx.BadRequest, "a select-all request must carry the filters it applies to")
 	}
+	// The same contract as the list: a sort the list would have refused is
+	// refused here too, rather than quietly acting on a different order.
+	if xerr := validateSort(*sel.Filters); xerr != nil {
+		return nil, xerr
+	}
 
 	ids, xerr := s.contactRepository.SearchIDs(ctx, orgID.String(), *sel.Filters, models.MaxContactBulkSelection)
 	if xerr != nil {

@@ -168,7 +168,7 @@ export default function ContactsTable({
         const category = params.get("category");
         // The browser's copy of the saved sort seeds the first request, so the
         // list does not load in one order and then reload in another.
-        const cached = readCachedView(view.orgId, viewName)?.sort;
+        const cached = readCachedView(view.scope, viewName)?.sort;
         return {
             ...scopeSearch({ campaignId: current_campaign?.id, segmentId: segment?.id }),
             category_ids: category && !segment && !current_campaign ? [category] : undefined,

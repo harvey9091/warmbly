@@ -4,7 +4,7 @@ import { DEFAULT_COLUMNS, builtinColumns, customColumnId, resolveColumns } from 
 describe("resolveColumns", () => {
     it("shows the default layout with Name first when nothing is saved", () => {
         const { visible, available } = resolveColumns("contacts", undefined, ["Industry"]);
-        expect(visible.map((c) => c.id)).toEqual(["name", ...DEFAULT_COLUMNS.contacts]);
+        expect(visible.map((c) => c.id)).toEqual(DEFAULT_COLUMNS.contacts);
         // Everything the view knows and is not shown is offered, custom fields last.
         expect(available.map((c) => c.id)).toEqual(["updated_at", customColumnId("Industry")]);
     });
@@ -12,6 +12,12 @@ describe("resolveColumns", () => {
     it("follows the saved order and keeps Name pinned first", () => {
         const { visible } = resolveColumns("contacts", ["phone", "name", "company"], []);
         expect(visible.map((c) => c.id)).toEqual(["name", "phone", "company"]);
+    });
+
+    it("shows Name alone for a layout that names only Name", () => {
+        const { visible, available } = resolveColumns("contacts", ["name"], []);
+        expect(visible.map((c) => c.id)).toEqual(["name"]);
+        expect(available.map((c) => c.id)).toContain("company");
     });
 
     it("renders a saved custom field even when no contact carries it any more", () => {
