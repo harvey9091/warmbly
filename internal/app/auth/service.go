@@ -68,10 +68,12 @@ type AuthService interface {
 	// that has no password (passkey or SSO only). Used by the re-auth endpoint
 	// to confirm the account holder without starting a new login.
 	PasswordHashFor(ctx context.Context, userID uuid.UUID) (string, *errx.Error)
-	// The re-authentication endpoint's per-account budget. It checks a
-	// password, so it needs the same brake the login path has.
-	ReauthFailureExceeded(ctx context.Context, userID uuid.UUID) bool
-	RecordReauthFailure(ctx context.Context, userID uuid.UUID)
+	// The per-account budget for signed-in proofs (re-auth, 2FA disable and
+	// recovery-code regeneration). Reserve charges one attempt atomically and
+	// reports whether it was within budget; Release refunds an attempt that
+	// never checked a credential; Clear forgives the count on success.
+	ReserveReauthAttempt(ctx context.Context, userID uuid.UUID) bool
+	ReleaseReauthAttempt(ctx context.Context, userID uuid.UUID)
 	ClearReauthFailures(ctx context.Context, userID uuid.UUID)
 	LoginConfirm(ctx context.Context, data *ConfirmData, session, ipaddr, userAgent string) (*models.LoginResult, *errx.Error)
 	// WireTwoFA attaches the 2FA challenger (post-construction; nil = 2FA off).

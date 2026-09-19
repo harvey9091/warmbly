@@ -314,31 +314,38 @@ func (s *authService) clearLoginFailures(ctx context.Context, email string) {
 	}
 }
 
-// ReauthFailureExceeded reports whether this account has spent its budget of
-// failed confirmations. Fails open on a cache error, like the login counter:
-// the budget is a brake on guessing, and a Redis outage must not stop someone
-// confirming their own change.
-func (s *authService) ReauthFailureExceeded(ctx context.Context, userID uuid.UUID) bool {
-	count, err := s.cache.Get(ctx, getReauthFailureKey(userID)).Int64()
-	if err != nil {
-		if !errors.Is(err, redis.Nil) {
-			errs.CaptureException(err)
-		}
-		return false
-	}
-	return count >= LoginFailureLimit
-}
-
-// RecordReauthFailure charges one failed confirmation to the account.
-func (s *authService) RecordReauthFailure(ctx context.Context, userID uuid.UUID) {
+// ReserveReauthAttempt charges one attempt before the proof is checked, so
+// concurrent guesses cannot all pass a read-only check. Fails open on a cache
+// error, like the login counter: the budget is a brake on guessing, and a
+// Redis outage must not stop someone confirming their own change.
+func (s *authService) ReserveReauthAttempt(ctx context.Context, userID uuid.UUID) bool {
 	key := getReauthFailureKey(userID)
 	count, err := s.cache.Incr(ctx, key).Result()
 	if err != nil {
 		errs.CaptureException(err)
-		return
+		return true
 	}
 	if count == 1 {
 		if err := s.cache.Expire(ctx, key, LoginFailureTTL).Err(); err != nil {
+			errs.CaptureException(err)
+		}
+	}
+	return count <= LoginFailureLimit
+}
+
+// ReleaseReauthAttempt refunds a reserved attempt that ended before any
+// credential was compared.
+func (s *authService) ReleaseReauthAttempt(ctx context.Context, userID uuid.UUID) {
+	key := getReauthFailureKey(userID)
+	n, err := s.cache.Decr(ctx, key).Result()
+	if err != nil {
+		errs.CaptureException(err)
+		return
+	}
+	// A key that expired in between comes back from DECR with no TTL; drop it
+	// so the budget cannot be left without an expiry.
+	if n <= 0 {
+		if err := s.cache.Del(ctx, key).Err(); err != nil {
 			errs.CaptureException(err)
 		}
 	}

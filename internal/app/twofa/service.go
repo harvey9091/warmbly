@@ -26,17 +26,46 @@ const (
 	recoveryCount = 10
 )
 
+// InvalidCodeID is the response code for a TOTP or recovery code that did not match.
+const InvalidCodeID = "two_fa_invalid_code"
+
+// ErrInvalidCode is the answer to a TOTP or recovery code that did not match.
+// It carries a stable identifier so a client can show an inline "try again"
+// instead of a generic failure.
+func ErrInvalidCode() *errx.Error {
+	return errx.NewWithIdentifier(errx.BadRequest, InvalidCodeID, "That code didn't match. Check your authenticator and try again.")
+}
+
 // EnrollStart is the one-time secret + provisioning URI shown during enrollment.
+// The parameters are spelled out for the manual-entry path, so a client never
+// has to parse them back out of the URI.
 type EnrollStart struct {
 	Secret     string `json:"secret"`
 	OtpauthURI string `json:"otpauth_uri"`
+	Issuer     string `json:"issuer"`
+	Account    string `json:"account"`
+	Algorithm  string `json:"algorithm"`
+	Digits     int    `json:"digits"`
+	Period     int    `json:"period"`
+}
+
+// Status is what the security settings page shows about the user's 2FA.
+type Status struct {
+	Enabled                bool       `json:"enabled"`
+	ConfirmedAt            *time.Time `json:"confirmed_at,omitempty"`
+	RecoveryCodesRemaining int        `json:"recovery_codes_remaining"`
+	RecoveryCodesTotal     int        `json:"recovery_codes_total"`
 }
 
 type Service interface {
 	IsEnabled(ctx context.Context, userID uuid.UUID) (bool, error)
+	Status(ctx context.Context, userID uuid.UUID) (*Status, error)
 	EnrollStart(ctx context.Context, userID uuid.UUID) (*EnrollStart, *errx.Error)
 	EnrollConfirm(ctx context.Context, userID uuid.UUID, code string) ([]string, *errx.Error)
 	Disable(ctx context.Context, userID uuid.UUID, code string) *errx.Error
+	// RegenerateRecoveryCodes replaces every recovery code with a fresh set,
+	// returned in plaintext once. Requires a current TOTP or recovery code.
+	RegenerateRecoveryCodes(ctx context.Context, userID uuid.UUID, code string) ([]string, *errx.Error)
 	// VerifyCurrentCode checks a TOTP or recovery code for a user who is
 	// already signed in, without changing anything. Used by the re-auth
 	// endpoint so someone with 2FA on can confirm with their authenticator
@@ -67,6 +96,44 @@ func (s *service) IsEnabled(ctx context.Context, userID uuid.UUID) (bool, error)
 	return s.repo.IsEnabled(ctx, userID)
 }
 
+func (s *service) Status(ctx context.Context, userID uuid.UUID) (*Status, error) {
+	row, err := s.repo.Get(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if row == nil || !row.Enabled {
+		return &Status{}, nil
+	}
+	unused, total, err := s.repo.CountRecoveryCodes(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return &Status{Enabled: true, ConfirmedAt: row.ConfirmedAt, RecoveryCodesRemaining: unused, RecoveryCodesTotal: total}, nil
+}
+
+// RegenerateRecoveryCodes issues a new set and retires the old one in the same
+// write, so a leaked sheet stops working the moment the new one is shown.
+func (s *service) RegenerateRecoveryCodes(ctx context.Context, userID uuid.UUID, code string) ([]string, *errx.Error) {
+	row, err := s.repo.Get(ctx, userID)
+	if err != nil {
+		return nil, errx.InternalError()
+	}
+	if row == nil || !row.Enabled {
+		return nil, errx.New(errx.BadRequest, "2FA is not enabled")
+	}
+	if !s.validCode(ctx, userID, row, code) {
+		return nil, ErrInvalidCode()
+	}
+	codes, hashes, err := generateRecoveryCodes()
+	if err != nil {
+		return nil, errx.InternalError()
+	}
+	if err := s.repo.InsertRecoveryCodes(ctx, userID, hashes); err != nil {
+		return nil, errx.InternalError()
+	}
+	return codes, nil
+}
+
 // Disable removes 2FA, requiring a valid current TOTP or recovery code (proof of
 // possession) — a hijacked live session can't silently strip 2FA.
 func (s *service) Disable(ctx context.Context, userID uuid.UUID, code string) *errx.Error {
@@ -78,7 +145,7 @@ func (s *service) Disable(ctx context.Context, userID uuid.UUID, code string) *e
 		return errx.New(errx.BadRequest, "2FA is not enabled")
 	}
 	if !s.validCode(ctx, userID, row, code) {
-		return errx.New(errx.BadRequest, "Invalid code")
+		return ErrInvalidCode()
 	}
 	if err := s.repo.Delete(ctx, userID); err != nil {
 		return errx.InternalError()

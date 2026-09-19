@@ -23,19 +23,25 @@ A passkey is tied to your device and unlocked with biometrics or a PIN, so it al
 
 ## Two-factor authentication
 
-2FA (TOTP) adds a rotating 6-digit code to every password sign-in, so a stolen password alone is not enough. Any standard authenticator works: Google Authenticator, 1Password, Authy.
+2FA (TOTP) adds a rotating 6-digit code to every password sign-in, so a stolen password alone is not enough. Any standard authenticator works: Google Authenticator, Microsoft Authenticator, 1Password, Authy, Bitwarden.
 
-**Enable 2FA** runs three steps: copy the setup secret into your authenticator, enter a code to confirm it works (it verifies as soon as the sixth digit lands), and save your one-time recovery codes.
+**Set up** walks through three steps:
+
+1. **Scan.** Point your authenticator at the QR code. If you cannot scan (a desktop password manager, say), open **Can't scan it? Enter the key manually** and copy the setup key; the account, issuer, digit count, interval and algorithm are listed beside it for apps that ask.
+2. **Verify.** Type the 6-digit code the app now shows for Warmbly. It verifies as soon as the sixth digit lands, and a wrong code clears the field so you can try the next one.
+3. **Save codes.** Ten recovery codes appear once. **Download** saves them as a text file, **Copy** puts them on the clipboard, and **Print** opens a printable sheet. The wizard cannot be closed until you confirm you have saved them.
 
 <Callout type="warn" title="Recovery codes are shown only once">
-They are displayed a single time during setup, each works once, and they are your way back in if you lose your authenticator. Store them in a password manager before closing the wizard; **Copy all** grabs them at once.
+Each works once, and they are your way back in if you lose your authenticator. Store them in a password manager before closing the wizard. With no codes and no authenticator you are locked out of your account.
 </Callout>
+
+Once 2FA is on, the Security page shows when it was enabled and how many recovery codes are left. **Regenerate** issues a fresh set of ten after a current code; every previous code stops working the moment the new ones are shown. The row turns amber when three or fewer remain.
 
 At sign-in, the code submits automatically once six digits are in. Without your authenticator, choose **Use a recovery code**.
 
 Each code works once. An authenticator code stays valid for about a minute so a slow connection still works, but once it has signed you in, that same code is spent and cannot be used again.
 
-Disabling asks for a current code or a recovery code first. With 2FA off you are protected only by your password plus the emailed code, and setting it up again issues a fresh secret and new recovery codes, invalidating the old ones.
+**Turn off** asks for a current code or a recovery code first, then an explicit confirmation. With 2FA off you are protected only by your password plus the emailed code, your recovery codes stop working, and setting it up again issues a fresh secret and new recovery codes.
 
 ## Passkeys
 

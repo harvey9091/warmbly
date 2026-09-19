@@ -71,13 +71,13 @@ func (h *Handler) Reauth(c *gin.Context) {
 	// Refused before the hash comparison, so a caller past the budget cannot
 	// measure Argon2's timing either.
 	ctx := c.Request.Context()
-	if h.AuthService.ReauthFailureExceeded(ctx, uid) {
+	if !h.AuthService.ReserveReauthAttempt(ctx, uid) {
 		errx.Handle(c, errx.ErrAuthLimit)
 		return
 	}
 
+	// The reserved attempt stays charged on a miss.
 	if !h.reauthProofValid(c, uid, req) {
-		h.AuthService.RecordReauthFailure(ctx, uid)
 		// One message for both factors: which one matched is not something an
 		// attacker holding a token should learn here.
 		errx.Handle(c, errx.ErrCredentials)

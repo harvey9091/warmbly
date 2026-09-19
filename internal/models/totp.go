@@ -1,12 +1,17 @@
 package models
 
-import "github.com/google/uuid"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // UserTOTP is a user's TOTP 2FA settings row (the secret is sealed at rest).
 type UserTOTP struct {
 	UserID       uuid.UUID
 	SecretSealed string
 	Enabled      bool
+	ConfirmedAt  *time.Time
 }
 
 // RecoveryCode is one (argon2-hashed) single-use 2FA recovery code.

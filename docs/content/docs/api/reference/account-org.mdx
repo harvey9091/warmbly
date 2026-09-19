@@ -684,21 +684,26 @@ TOTP-based 2FA. Enrollment and management require a live session. The login chal
 
 `GET /auth/2fa/status`
 
-Reports whether the caller has 2FA enabled.
+Reports whether the caller has 2FA enabled, when it was confirmed, and how many recovery codes are left. `confirmed_at` is omitted while 2FA is off.
 
 Auth: Session only (not available to API keys).
 
 #### Response
 
 ```json
-{ "enabled": false }
+{
+  "enabled": true,
+  "confirmed_at": "2026-09-19T10:24:00Z",
+  "recovery_codes_remaining": 8,
+  "recovery_codes_total": 10
+}
 ```
 
 ### Begin enrollment
 
 `POST /auth/2fa/enroll/start`
 
-Generates a TOTP secret and the `otpauth://` provisioning URI (returned once). The client renders the URI as a QR code.
+Generates a TOTP secret and the `otpauth://` provisioning URI (returned once). The client renders the URI as a QR code; the remaining fields spell out the same parameters for manual entry.
 
 Auth: Session only (not available to API keys).
 
@@ -707,7 +712,12 @@ Auth: Session only (not available to API keys).
 ```json
 {
   "secret": "JBSWY3DPEHPK3PXP",
-  "otpauth_uri": "otpauth://totp/Warmbly:alex@acme.com?secret=JBSWY3DPEHPK3PXP&issuer=Warmbly"
+  "otpauth_uri": "otpauth://totp/Warmbly:alex@acme.com?secret=JBSWY3DPEHPK3PXP&issuer=Warmbly&algorithm=SHA1&digits=6&period=30",
+  "issuer": "Warmbly",
+  "account": "alex@acme.com",
+  "algorithm": "SHA1",
+  "digits": 6,
+  "period": 30
 }
 ```
 
@@ -715,7 +725,7 @@ Auth: Session only (not available to API keys).
 
 `POST /auth/2fa/enroll/confirm`
 
-Verifies a TOTP code, enables 2FA, and returns the one-time recovery codes (shown once).
+Verifies a TOTP code, enables 2FA, and returns the one-time recovery codes (shown once). A code that does not match answers `400` with code `two_fa_invalid_code`.
 
 Auth: Session only (not available to API keys).
 
@@ -733,11 +743,33 @@ Auth: Session only (not available to API keys).
 }
 ```
 
+### Regenerate recovery codes
+
+`POST /auth/2fa/recovery-codes`
+
+Replaces every recovery code with a fresh set, returned once. Requires a current TOTP or recovery code in the body; a code that does not match answers `400` with code `two_fa_invalid_code`. The previous codes stop working as soon as the new set is issued. Wrong codes here and on `DELETE /auth/2fa` count against the same per-account attempt budget as `POST /auth/reauth`; once it is spent both answer `400` with "Too many attempts" until it resets. No `Idempotency-Key` is needed: the proof code is single-use, so a retried request is refused rather than rotating the set twice.
+
+Auth: Session only (not available to API keys).
+
+#### Request body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `code` | string | yes | A current TOTP or recovery code. |
+
+#### Response
+
+```json
+{
+  "recovery_codes": ["a1b2-c3d4", "e5f6-g7h8", "..."]
+}
+```
+
 ### Disable 2FA
 
 `DELETE /auth/2fa`
 
-Turns off 2FA. Requires a current TOTP or recovery code in the body.
+Turns off 2FA. Requires a current TOTP or recovery code in the body; a code that does not match answers `400` with code `two_fa_invalid_code`.
 
 Auth: Session only (not available to API keys).
 
