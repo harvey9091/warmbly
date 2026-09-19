@@ -839,6 +839,7 @@ var ExcludedTables = map[string]string{
 	"sessions":                     "Live login sessions. They are bound to the source instance's signing key and must not survive a move.",
 	"mailbox_erasures":             "Erasure still owed for a mailbox this instance deleted: a grant to revoke at the provider, and message bodies to remove from this instance's blob store. Both name work on the instance that wrote the row, and the mailboxes are already gone.",
 	"login_history":                "Where people signed in from, kept only to compare a new sign-in against recent ones. It belongs to the person rather than the workspace, and a destination must build its own baseline before it can call anything anomalous.",
+	"user_view_preferences":        "Each member's own column layout and sort for the dashboard's lists. It belongs to the person rather than the workspace: members are matched by account on import and a layout names custom fields the destination may not hold yet, so everyone starts from the default view and picks their columns again.",
 }
 
 // TableByName indexes Tables for lookup during import.

@@ -1035,9 +1035,38 @@ var contactSorts = map[string]contactSort{
 	"first_name":     {expr: "c.first_name", kind: sortText},
 	"last_name":      {expr: "c.last_name", kind: sortText},
 	"email":          {expr: "c.email", kind: sortText},
+	"company":        {expr: "c.company", kind: sortText},
+	"phone":          {expr: "c.phone", kind: sortText},
 	"created_at":     {expr: "c.created_at", kind: sortTimestamp},
 	"updated_at":     {expr: "c.updated_at", kind: sortTimestamp},
 	"campaign_count": {expr: "COALESCE(cl.campaign_count,0)", kind: sortNumber},
+}
+
+// resolveContactSort turns a request's sort_by into the column the list orders
+// on. Search and SearchIDs both go through it, so "select all matching" walks
+// the rows in the order the list showed them.
+//
+// A custom field ("custom:<key>") sorts on its jsonb value as text, with a
+// blank value treated as missing so it sits with the rows that lack the field.
+// The key is a bound parameter, never written into the SQL: it is user data.
+// The placeholder is appended to args here, so the same expression serves the
+// cursor comparison, the sort_value column and ORDER BY. Anything unknown
+// falls back to created_at, the documented behaviour.
+func resolveContactSort(sortBy string, args *[]any, argIndex *int) (string, contactSort) {
+	if spec, ok := contactSorts[sortBy]; ok {
+		return sortBy, spec
+	}
+	if key, ok := models.ContactSortCustomField(sortBy); ok && utils.IsValidJSONKey(key) {
+		spec := contactSort{
+			expr:     fmt.Sprintf("NULLIF(c.custom_fields ->> $%d::text, '')", *argIndex),
+			kind:     sortText,
+			nullable: true,
+		}
+		*args = append(*args, key)
+		*argIndex++
+		return models.ContactSortCustomPrefix + key, spec
+	}
+	return "created_at", contactSorts["created_at"]
 }
 
 // contactFilter is a compiled contact search: the WHERE terms, the args they
@@ -1303,11 +1332,7 @@ func (r *contactRepository) Search(
 	// -----------------------------
 	// campaign_count is a computed column, so the cursor compares against the
 	// expression rather than the SELECT alias, which WHERE cannot see.
-	sortName := "created_at"
-	if _, ok := contactSorts[filters.SortBy]; ok {
-		sortName = filters.SortBy
-	}
-	spec := contactSorts[sortName]
+	sortName, spec := resolveContactSort(filters.SortBy, &args, &argIndex)
 	direction := "DESC"
 	nulls := "NULLS FIRST"
 	if filters.Reverse {
@@ -1335,13 +1360,6 @@ func (r *contactRepository) Search(
 		if cursor.Value != nil && !spec.wellFormed(*cursor.Value) {
 			return nil, errx.New(errx.BadRequest, "invalid cursor")
 		}
-		bound := spec.bound(fmt.Sprintf("$%d", argIndex))
-		args = append(args, cursor.Value)
-		argIndex++
-		idArg := fmt.Sprintf("$%d", argIndex)
-		args = append(args, cursor.ID)
-		argIndex++
-
 		// The tiebreak follows the sort direction, so one index serves both ways
 		// round; the boundary row itself is included because it is this page's
 		// first row.
@@ -1349,17 +1367,28 @@ func (r *contactRepository) Search(
 		if direction == "ASC" {
 			cmp, tie = ">", ">="
 		}
-		after := fmt.Sprintf("(%[1]s %[2]s %[3]s OR (%[1]s = %[3]s AND c.id %[5]s %[4]s))", sortBy, cmp, bound, idArg, tie)
-		if spec.nullable {
-			switch {
-			case cursor.Value == nil:
-				// The boundary sits in the NULL block: the rest of that block by
-				// id, plus every non-NULL row when NULLs come first.
-				after = fmt.Sprintf("(%s IS NULL AND c.id %s %s)", sortBy, tie, idArg)
-				if nulls == "NULLS FIRST" {
-					after += fmt.Sprintf(" OR %s IS NOT NULL", sortBy)
-				}
-			case nulls == "NULLS LAST":
+		var after string
+		if spec.nullable && cursor.Value == nil {
+			// The boundary sits in the NULL block: the rest of that block by
+			// id, plus every non-NULL row when NULLs come first. No value is
+			// bound here, because a parameter the clause never names is one
+			// Postgres cannot type.
+			idArg := fmt.Sprintf("$%d", argIndex)
+			args = append(args, cursor.ID)
+			argIndex++
+			after = fmt.Sprintf("(%s IS NULL AND c.id %s %s)", sortBy, tie, idArg)
+			if nulls == "NULLS FIRST" {
+				after += fmt.Sprintf(" OR %s IS NOT NULL", sortBy)
+			}
+		} else {
+			bound := spec.bound(fmt.Sprintf("$%d", argIndex))
+			args = append(args, cursor.Value)
+			argIndex++
+			idArg := fmt.Sprintf("$%d", argIndex)
+			args = append(args, cursor.ID)
+			argIndex++
+			after = fmt.Sprintf("(%[1]s %[2]s %[3]s OR (%[1]s = %[3]s AND c.id %[5]s %[4]s))", sortBy, cmp, bound, idArg, tie)
+			if spec.nullable && nulls == "NULLS LAST" {
 				// Past the non-NULL rows, the NULL block still follows.
 				after += fmt.Sprintf(" OR %s IS NULL", sortBy)
 			}
@@ -1527,8 +1556,12 @@ func (r *contactRepository) Search(
 			%s
 			%s
 		`, countJoin, whereSQL)
+		// The count sees the filter terms only: no cursor on a first page, and
+		// the sort's own parameter (a custom field's key) is not referenced by
+		// the WHERE, so passing it would leave Postgres a placeholder it cannot
+		// type.
 		var tmp int64
-		if err := r.DB.QueryRow(ctx, countQuery, args[:argIndex-1]...).Scan(&tmp); err != nil {
+		if err := r.DB.QueryRow(ctx, countQuery, fq.args...).Scan(&tmp); err != nil {
 			db.CaptureError(err, "countQuery", args, "queryrow")
 			return nil, errx.InternalError()
 		}
@@ -1736,12 +1769,9 @@ func (r *contactRepository) SearchIDs(ctx context.Context, orgID string, filters
 		return nil, ferr
 	}
 	args := fq.args
+	argIndex := fq.nextArg
 
-	sortName := "created_at"
-	if _, ok := contactSorts[filters.SortBy]; ok {
-		sortName = filters.SortBy
-	}
-	spec := contactSorts[sortName]
+	sortName, spec := resolveContactSort(filters.SortBy, &args, &argIndex)
 	direction, nulls := "DESC", "NULLS FIRST"
 	if filters.Reverse {
 		direction, nulls = "ASC", "NULLS LAST"
@@ -1767,7 +1797,7 @@ func (r *contactRepository) SearchIDs(ctx context.Context, orgID string, filters
 		%s
 		ORDER BY %s %s %s, c.id %s
 		LIMIT $%d
-	`, campaignCountJoin, whereSQL, spec.expr, direction, nulls, direction, fq.nextArg)
+	`, campaignCountJoin, whereSQL, spec.expr, direction, nulls, direction, argIndex)
 	args = append(args, max+1)
 
 	rows, err := r.DB.Query(ctx, query, args...)

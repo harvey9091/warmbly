@@ -70,6 +70,9 @@ func (s *contactService) Export(
 		searchFilters = req.Filters
 	}
 	if searchFilters != nil {
+		if err := validateSort(*searchFilters); err != nil {
+			return "", "", 0, err
+		}
 		if err := validateLeadFilters(*searchFilters); err != nil {
 			return "", "", 0, err
 		}

@@ -99,6 +99,7 @@ Some things belong to an instance rather than to a workspace, so they are not ap
 | Scheduled deletions | A pending deletion from the source must never follow the workspace to its new home |
 | Failure and delivery counters | A webhook endpoint's failure streak and auto-disable state, and whether a notification's email already went out, describe what happened on the source. They start fresh, so an endpoint is not pre-disabled on the new instance and a notification is not re-sent |
 | Sends still in flight | A campaign step handed to a worker on the source has no worker on the destination to report back, so it arrives queued and is sent there instead of waiting forever. Steps already sent keep their history |
+| Personal list layouts | Which columns each member shows on the contacts list and how they sort it belongs to the person, not the workspace. Everyone starts from the default view on the new instance and picks their columns again |
 
 An import runs as one transaction. If anything fails, nothing lands and the workspace is untouched.
 

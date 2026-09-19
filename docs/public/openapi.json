@@ -23993,7 +23993,7 @@
           },
           "sort_by": {
             "type": "string",
-            "description": "Sort column: created_at (the default), updated_at, first_name, last_name, email, or campaign_count. Any other value falls back to created_at."
+            "description": "Sort column: created_at (the default), updated_at, first_name, last_name, email, company, phone, or campaign_count. custom:<key> sorts on a custom field as text, with contacts lacking the field grouped last when ascending and first when descending; a custom-field name that could never exist is rejected with 400 invalid_sort_by. Any other unknown value falls back to created_at."
           },
           "reverse": {
             "type": "boolean",

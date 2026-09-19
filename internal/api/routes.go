@@ -1300,6 +1300,13 @@ func Run(
 				account.GET("/danger-zone", h.GetAccountDangerZone)
 				account.POST("/danger-zone/delete", middleware.RequireFreshAuth(), h.ScheduleAccountDeletion)
 				account.DELETE("/danger-zone/delete", h.CancelAccountDeletion)
+
+				// A member's own layout of a dashboard list (columns, order,
+				// sort) in the current workspace. Personal, so JWT only: an API
+				// key has no screen to lay out.
+				account.GET("/views/:view", m.RequireOrganization(), h.GetViewPreferences)
+				account.PUT("/views/:view", m.RequireOrganization(), h.UpdateViewPreferences)
+				account.DELETE("/views/:view", m.RequireOrganization(), h.ResetViewPreferences)
 			}
 
 			jwtOnly.GET("/invitations", h.GetMyPendingInvitations)

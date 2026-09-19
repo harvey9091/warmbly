@@ -14,26 +14,21 @@ import React from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
     AlertTriangleIcon,
-    BanIcon,
-    Building2Icon,
+    ArrowDownIcon,
+    ArrowUpIcon,
     CableIcon,
     CheckIcon,
-    ClockIcon,
     CornerUpLeftIcon,
     DownloadIcon,
-    InfoIcon,
     LayersIcon,
     Loader2Icon,
-    MailIcon,
     MailOpenIcon,
     MoreHorizontalIcon,
     MousePointerClickIcon,
     PauseIcon,
-    PhoneIcon,
     PlayIcon,
     PlusIcon,
     RefreshCcwIcon,
-    Settings2Icon,
     ShieldCheckIcon,
     SheetIcon,
     SparklesIcon,
@@ -51,7 +46,6 @@ import useSearchContacts from "@/lib/api/hooks/app/contacts/useSearchContacts";
 import type SearchContacts from "@/lib/api/models/app/contacts/SearchContacts";
 import useDeleteContacts from "@/lib/api/hooks/app/contacts/useDeleteContacts";
 import { useRequestContactVerification } from "@/lib/api/hooks/app/contacts/useContactVerification";
-import VerificationBadge from "./VerificationBadge";
 import { useBatchResearch } from "@/lib/api/hooks/app/contacts/useContactResearch";
 import useIntegrationConnections from "@/lib/api/hooks/app/integrations/useIntegrationConnections";
 import { usePushContacts } from "@/lib/api/hooks/app/integrations/usePushContacts";
@@ -63,14 +57,13 @@ import {
 import toast from "react-hot-toast";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
-import clippedTitle from "@/lib/helper/clippedTitle";
 import FilterBar from "./filters/FilterBar";
 import { hasNarrowingFilters, isCompleteCustomFilter, scopeSearch } from "./filters/helpers";
 import ContactEdit from "./ContactEdit";
 import type { ContactSlideTab } from "./contact-edit/tabs";
 import type MiniCampaign from "@/lib/api/models/app/campaigns/MiniCampaign";
 import { holdSummary } from "@/lib/api/models/app/contacts/Contact";
-import type { ContactCampaignProgress, LeadEngagement, LeadStatus, VerificationSource, VerificationStatus } from "@/lib/api/models/app/contacts/Contact";
+import type { ContactCampaignProgress, LeadEngagement, LeadStatus } from "@/lib/api/models/app/contacts/Contact";
 import type { CampaignLeadCounts } from "@/lib/api/models/app/contacts/SearchContactsResult";
 import ContactsEditBulk from "./ContactsEditBulk";
 import PauseLeadDialog from "./PauseLeadDialog";
@@ -96,7 +89,12 @@ import type { ExportScopeContext } from "./ExportDialog";
 import useUpdateContactsBulk from "@/lib/api/hooks/app/contacts/useUpdateContactsBulk";
 import useAiMetered from "@/hooks/useAiMetered";
 import SyncSourcesPanel from "./SyncSourcesPanel";
-import { CategoryChip } from "./CategoryPicker";
+import { columnClass, sortOptions, type ContactColumn, type ContactRow } from "./columns";
+import { ColumnChooser, SortMenu, type ViewSortState } from "./ViewControls";
+import { useContactView } from "./useContactView";
+import { readCachedView } from "@/lib/api/hooks/app/views/useViewPreferences";
+import type { SearchContactsSortBy } from "@/lib/api/models/app/contacts/search-contacts.types";
+import type { ViewName } from "@/lib/api/models/app/views/ViewPreferences";
 
 import {
     EmptyBlock,
@@ -114,7 +112,6 @@ import {
     PopoverMenuContent,
     PopoverMenuItem,
     PopoverMenuLabel,
-    PopoverMenuSeparator,
     PopoverMenuTrigger,
     SelectButton,
 } from "@/components/ui/popover-menu";
@@ -162,13 +159,69 @@ export default function ContactsTable({
     // ?category=<id> pre-filters the list (the Categories tab links here).
     const [params] = useSearchParams();
 
+    // The member's saved layout for this list: its columns and its sort. The
+    // Leads tab and the contacts page are two views with two layouts.
+    const viewName: ViewName = current_campaign ? "campaign_leads" : "contacts";
+    const view = useContactView(viewName);
+
     const [searchProps, setSearchProps] = React.useState<SearchContacts>(() => {
         const category = params.get("category");
+        // The browser's copy of the saved sort seeds the first request, so the
+        // list does not load in one order and then reload in another.
+        const cached = readCachedView(view.scope, viewName)?.sort;
         return {
             ...scopeSearch({ campaignId: current_campaign?.id, segmentId: segment?.id }),
             category_ids: category && !segment && !current_campaign ? [category] : undefined,
+            ...(cached ? { sort_by: cached.by as SearchContactsSortBy, reverse: cached.reverse } : {}),
         };
     });
+
+    // The saved sort applies once the server's copy is in hand, and only when
+    // it differs from what is already applied, so a change made here (which
+    // writes the same sort back) does not re-apply itself.
+    const appliedSortRef = React.useRef<string | null>(null);
+    React.useEffect(() => {
+        if (!view.loaded) return;
+        const saved = view.savedSort;
+        const sig = saved ? `${saved.by}:${saved.reverse}` : "default";
+        if (appliedSortRef.current === sig) return;
+        appliedSortRef.current = sig;
+        setSearchProps((prev) => ({
+            ...prev,
+            sort_by: (saved?.by ?? "created_at") as SearchContactsSortBy,
+            reverse: saved?.reverse ?? false,
+        }));
+    }, [view.loaded, view.savedSort]);
+    const sortState: ViewSortState = { by: searchProps.sort_by, reverse: searchProps.reverse };
+    function changeSort(next: ViewSortState) {
+        appliedSortRef.current = `${next.by}:${next.reverse}`;
+        setSearchProps((s) => ({ ...s, sort_by: next.by, reverse: next.reverse }));
+        view.setSort({ by: next.by, reverse: next.reverse });
+    }
+    // A header click: the same column flips direction, a new one starts the
+    // way its kind reads best (A to Z for text, newest or most first otherwise).
+    function sortByColumn(col: ContactColumn) {
+        if (!col.sortKey) return;
+        if (searchProps.sort_by === col.sortKey) changeSort({ by: col.sortKey, reverse: !searchProps.reverse });
+        else changeSort({ by: col.sortKey, reverse: !!col.sortAsc });
+    }
+    function resetView() {
+        view.reset();
+        appliedSortRef.current = "default";
+        setSearchProps((s) => ({ ...s, sort_by: "created_at", reverse: false }));
+    }
+    const viewControls = (
+        <>
+            <SortMenu sort={sortState} options={sortOptions(viewName)} customKeys={view.customKeys} onChange={changeSort} />
+            <ColumnChooser
+                visible={view.columns}
+                available={view.available}
+                customized={view.customized}
+                onChange={view.setColumns}
+                onReset={resetView}
+            />
+        </>
+    );
 
     function saveAsSegment(draft: SearchContacts) {
         const { conditions, dropped } = filtersToSegment(draft, current_campaign?.id);
@@ -496,6 +549,9 @@ export default function ContactsTable({
             onRetry={() => contactsData.refetch()}
             isRefetching={contactsData.isFetching && !contactsData.isPending}
             contacts={rows}
+            columns={view.columns}
+            sort={sortState}
+            onSort={sortByColumn}
             isRowSelected={isRowSelected}
             onToggle={(id, on) => setRowSel((s) => rowSelection.toggleRow(s, id, on))}
             isSelectedAll={loadedAllSelected}
@@ -656,6 +712,7 @@ export default function ContactsTable({
                         placeholder="Search leads…"
                         className="w-full sm:w-56"
                     />
+                    {viewControls}
                     <TopbarAction
                         variant="ghost"
                         icon={<LayersIcon className="w-3 h-3" />}
@@ -926,45 +983,7 @@ export default function ContactsTable({
                     placeholder="Search by name, email, company…"
                     className="w-full sm:w-72"
                 />
-                <PopoverMenu align="end">
-                    <PopoverMenuTrigger asChild>
-                        <SelectButton
-                            icon={<Settings2Icon className="w-3.5 h-3.5" />}
-                            label="Sort"
-                        />
-                    </PopoverMenuTrigger>
-                    <PopoverMenuContent>
-                        <PopoverMenuLabel>Sort by</PopoverMenuLabel>
-                        {[
-                            ["created_at", "Date added"],
-                            ["email", "Email"],
-                            ["first_name", "First name"],
-                            ["last_name", "Last name"],
-                            ["company", "Company"],
-                        ].map(([key, label]) => (
-                            <PopoverMenuItem
-                                key={key}
-                                selected={searchProps.sort_by === key}
-                                onSelect={() =>
-                                    setSearchProps((s) => ({
-                                        ...s,
-                                        sort_by: key as SearchContacts["sort_by"],
-                                    }))
-                                }
-                            >
-                                {label}
-                            </PopoverMenuItem>
-                        ))}
-                        <PopoverMenuSeparator />
-                        <PopoverMenuItem
-                            selected={searchProps.reverse}
-                            onSelect={() => setSearchProps((s) => ({ ...s, reverse: !s.reverse }))}
-                            closeOnSelect={false}
-                        >
-                            Reverse order
-                        </PopoverMenuItem>
-                    </PopoverMenuContent>
-                </PopoverMenu>
+                {viewControls}
             </SectionBar>
 
             <FilterBar
@@ -1055,6 +1074,9 @@ function ContactsTableBody({
     onRetry,
     isRefetching,
     contacts,
+    columns,
+    sort,
+    onSort,
     isRowSelected,
     onToggle,
     isSelectedAll,
@@ -1081,25 +1103,11 @@ function ContactsTableBody({
     errorMessage: string;
     onRetry: () => void;
     isRefetching: boolean;
-    contacts: {
-        id: string;
-        first_name: string;
-        last_name: string;
-        email: string;
-        company: string;
-        phone: string;
-        subscribed: boolean;
-        campaigns: { id: string }[];
-        categories?: { id: string; title: string; color: string }[];
-        campaign_lead?: ContactCampaignProgress | null;
-        verification_status?: VerificationStatus;
-        verification_sub_status?: string;
-        verification_source?: VerificationSource;
-        verification_provider?: string;
-        verification_checked_at?: string | null;
-        verification_confidence?: number;
-        created_at: Date;
-    }[];
+    contacts: ContactRow[];
+    // The saved view: the columns in order (Name first) and the current sort.
+    columns: ContactColumn[];
+    sort: ViewSortState;
+    onSort: (col: ContactColumn) => void;
     isRowSelected: (id: string) => boolean;
     onToggle: (id: string, on: boolean) => void;
     isSelectedAll: boolean;
@@ -1129,15 +1137,6 @@ function ContactsTableBody({
     loadedCount: number;
     totalCount: number;
 }) {
-    // Name is the only auto-width column, so it takes every pixel the sized
-    // columns leave — under table-fixed a second auto column would split that
-    // slack with it and size the name like a phone number. Which breakpoint each
-    // sized column appears at is then just "does Name still clear ~170px": Leads
-    // carries five campaign columns Contacts does not, so company waits longer
-    // for room there, and a phone number is no part of reading a campaign, so
-    // Leads drops that column and the contact drawer keeps the address.
-    const companyCol = embedded ? "w-40 hidden xl:table-cell" : "w-36 hidden lg:table-cell";
-    const phoneCol = "w-36 hidden xl:table-cell";
 
     if (isLoading) {
         return (
@@ -1274,54 +1273,9 @@ function ContactsTableBody({
                                 onChange={onToggleAll}
                             />
                         </th>
-                        <Th>Name</Th>
-                        <Th className={companyCol}>Company</Th>
-                        {!embedded && <Th className={phoneCol}>Phone</Th>}
-                        <Th className="w-12 sm:w-32">
-                            {/* Below sm the pill is its icon alone, so the column
-                                narrows to it and the label waits for the room —
-                                but never leaves the accessibility tree. */}
-                            <span className="sr-only">{embedded ? "Progress" : "Status"}</span>
-                            <span aria-hidden className="hidden sm:inline">{embedded ? "Progress" : "Status"}</span>
-                        </Th>
-                        {embedded && (
-                            <>
-                                <Th className="w-24 hidden lg:table-cell">
-                                    <span className="inline-flex items-center gap-1">
-                                        Opened
-                                        <span
-                                            className="inline-flex cursor-help text-slate-300 hover:text-slate-500"
-                                            title="Opens rely on the mail client loading images. Clients that block images show no open even when the email was read. A click by the person always counts as an open."
-                                        >
-                                            <InfoIcon className="w-3 h-3" aria-label="How opens are counted" />
-                                        </span>
-                                    </span>
-                                </Th>
-                                <Th className="w-24 hidden lg:table-cell">Clicked</Th>
-                                <Th className="w-24 hidden lg:table-cell">Replied</Th>
-                            </>
-                        )}
-                        {embedded ? (
-                            <>
-                                <Th className="w-32 hidden xl:table-cell">Current step</Th>
-                                <Th className="w-36 hidden 2xl:table-cell">
-                                    <span className="inline-flex items-center gap-1">
-                                        Sender
-                                        <span
-                                            className="inline-flex cursor-help text-slate-300 hover:text-slate-500"
-                                            title="The mailbox this lead's whole sequence sends from. It is picked when the first email goes out and every follow-up keeps it, so the contact always hears from one address."
-                                        >
-                                            <InfoIcon className="w-3 h-3" aria-label="How the sender is chosen" />
-                                        </span>
-                                    </span>
-                                </Th>
-                            </>
-                        ) : (
-                            <Th className="w-28 text-right hidden lg:table-cell">Campaigns</Th>
-                        )}
-                        <Th className={`text-right ${embedded ? "w-32 hidden 2xl:table-cell" : "w-24 hidden md:table-cell"}`}>
-                            {embedded ? "Last activity" : "Added"}
-                        </Th>
+                        {columns.map((col) => (
+                            <Th key={col.id} col={col} sort={sort} onSort={onSort} />
+                        ))}
                         <th className="px-3 py-2 w-[76px]"></th>
                     </tr>
                 </thead>
@@ -1377,152 +1331,14 @@ function ContactsTableBody({
                                         onChange={() => onToggle(c.id, !isSel)}
                                     />
                                 </td>
-                                <td className="px-3 overflow-hidden">
-                                    <div className="flex items-center gap-2.5 min-w-0">
-                                        <div className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center shrink-0">
-                                            <span className="text-[9.5px] font-semibold text-slate-600">
-                                                {(c.first_name || c.email)?.slice(0, 2).toUpperCase()}
-                                            </span>
-                                        </div>
-                                        {/* flex-1, not shrink-to-fit: the chip cap below is a
-                                            percentage, so this has to be the column's width and
-                                            not the name's. */}
-                                        <div className="flex-1 min-w-0">
-                                            <div className={`text-[12.5px] font-medium truncate leading-tight flex items-center gap-1.5 ${processed ? "text-slate-400" : "text-slate-900"}`}>
-                                                <span className="truncate" {...clippedTitle}>{name}</span>
-                                                {/* One tag, then a count. The Name column is a fixed width
-                                                    now, and two tags sharing it with a name left each of them
-                                                    about three legible characters. The tags take at most 45%
-                                                    of the line, and the +N tooltip names the rest in full. */}
-                                                {c.categories && c.categories.length > 0 && (
-                                                    <span className="inline-flex items-center gap-0.5 min-w-0 max-w-[45%]">
-                                                        <CategoryChip category={c.categories[0]} compact />
-                                                        {c.categories.length > 1 && (
-                                                            <span
-                                                                className="inline-flex items-center h-4 px-1 shrink-0 rounded text-[10px] font-medium bg-slate-100 text-slate-500"
-                                                                title={c.categories.slice(1).map((x) => x.title).join(", ")}
-                                                            >
-                                                                +{c.categories.length - 1}
-                                                            </span>
-                                                        )}
-                                                    </span>
-                                                )}
-                                            </div>
-                                            <div className="text-[10.5px] text-slate-400 truncate font-mono leading-tight flex items-center gap-1">
-                                                <MailIcon className="w-2.5 h-2.5 shrink-0" />
-                                                <span className="truncate" {...clippedTitle}>{c.email}</span>
-                                                <VerificationBadge contact={c} />
-                                            </div>
-                                        </div>
-                                    </div>
-                                </td>
-                                <td className={`px-3 overflow-hidden text-[12px] text-slate-600 ${companyCol}`}>
-                                    {c.company ? (
-                                        <div className="flex items-center gap-1.5 min-w-0">
-                                            <Building2Icon className="w-3 h-3 shrink-0 text-slate-400" />
-                                            <span className="truncate" {...clippedTitle}>
-                                                {c.company}
-                                            </span>
-                                        </div>
-                                    ) : (
-                                        <span className="text-slate-300">—</span>
-                                    )}
-                                </td>
-                                {!embedded && (
-                                    <td className={`px-3 overflow-hidden text-[12px] text-slate-600 font-mono ${phoneCol}`}>
-                                        {c.phone ? (
-                                            <div className="flex items-center gap-1.5 min-w-0">
-                                                <PhoneIcon className="w-3 h-3 shrink-0 text-slate-400" />
-                                                <span className="truncate" {...clippedTitle}>
-                                                    {c.phone}
-                                                </span>
-                                            </div>
-                                        ) : (
-                                            <span className="text-slate-300">—</span>
-                                        )}
+                                {columns.map((col) => (
+                                    <td
+                                        key={col.id}
+                                        className={`px-3 overflow-hidden ${columnClass(col)} ${col.cellClassName ?? ""}`}
+                                    >
+                                        {col.cell({ c, lead, processed: !!processed, embedded: !!embedded })}
                                     </td>
-                                )}
-                                <td className="px-3 overflow-hidden">
-                                    {embedded ? (
-                                        <LeadStatusPill lead={lead} />
-                                    ) : (
-                                        <StatusPill subscribed={c.subscribed} />
-                                    )}
-                                </td>
-                                {embedded && (
-                                    <>
-                                        <EngagementCell
-                                            n={lead?.opened ?? 0}
-                                            sent={(lead?.sent ?? 0) > 0}
-                                            Icon={MailOpenIcon}
-                                            label="opened"
-                                            auto={(lead?.machine_opened ?? 0) > 0}
-                                        />
-                                        <EngagementCell
-                                            n={lead?.clicked ?? 0}
-                                            sent={(lead?.sent ?? 0) > 0}
-                                            Icon={MousePointerClickIcon}
-                                            label="clicked"
-                                        />
-                                        <EngagementCell
-                                            n={lead?.replied ?? 0}
-                                            sent={(lead?.sent ?? 0) > 0}
-                                            Icon={CornerUpLeftIcon}
-                                            label="replied"
-                                        />
-                                    </>
-                                )}
-                                {embedded ? (
-                                    <>
-                                    <td className="px-3 overflow-hidden hidden xl:table-cell">
-                                        {lead?.current_step ? (
-                                            <span
-                                                title={lead.current_step}
-                                                className={`inline-flex items-center h-5 px-1.5 rounded text-[11px] font-medium max-w-full ${
-                                                    processed
-                                                        ? "bg-slate-100 text-slate-400"
-                                                        : "bg-sky-100 text-sky-700"
-                                                }`}
-                                            >
-                                                <span className="truncate">{lead.current_step}</span>
-                                            </span>
-                                        ) : (
-                                            <span className="text-[11px] text-slate-300">Not started</span>
-                                        )}
-                                    </td>
-                                    <td className="px-3 overflow-hidden hidden 2xl:table-cell">
-                                        {lead?.sender ? (
-                                            <span
-                                                title={`Every step of this lead's sequence sends from ${lead.sender}`}
-                                                className="block truncate text-[11.5px] text-slate-600"
-                                            >
-                                                {lead.sender}
-                                            </span>
-                                        ) : (
-                                            <span className="text-[11px] text-slate-300">Not assigned</span>
-                                        )}
-                                    </td>
-                                    </>
-                                ) : (
-                                    <td className="px-3 text-right font-mono text-[12px] text-slate-600 tabular-nums hidden lg:table-cell">
-                                        {c.campaigns?.length ?? 0}
-                                    </td>
-                                )}
-                                <td className={`px-3 text-right font-mono text-[11px] text-slate-500 tabular-nums ${embedded ? "hidden 2xl:table-cell" : "hidden md:table-cell"}`}>
-                                    {embedded
-                                        ? lead?.last_activity_at
-                                            ? new Date(lead.last_activity_at).toLocaleDateString("en-US", {
-                                                  month: "short",
-                                                  day: "numeric",
-                                              })
-                                            : "—"
-                                        : c.created_at
-                                            ? new Date(c.created_at).toLocaleDateString("en-US", {
-                                                  month: "short",
-                                                  day: "numeric",
-                                              })
-                                            : "—"}
-                                </td>
+                                ))}
                                 <td className="px-3" onClick={(e) => e.stopPropagation()}>
                                     {/* Touch-safe: always visible on mobile, hover-reveal on desktop. */}
                                     <div className="flex items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
@@ -1586,131 +1402,28 @@ function ContactsTableBody({
     );
 }
 
-function Th({ children, className }: { children: React.ReactNode; className?: string }) {
+// A header cell. A sortable column's header is the sort control: the arrow
+// shows on hover, and stays while the column is the active sort.
+function Th({ col, sort, onSort }: { col: ContactColumn; sort: ViewSortState; onSort: (col: ContactColumn) => void }) {
+    const base = `px-3 py-2 text-[10px] font-medium text-slate-400 uppercase tracking-[0.14em] truncate ${columnClass(col)}`;
+    const content = col.header ?? col.label;
+    if (!col.sortKey) return <th className={base}>{content}</th>;
+    const active = sort.by === col.sortKey;
+    const Dir = sort.reverse ? ArrowUpIcon : ArrowDownIcon;
     return (
-        <th
-            className={`px-3 py-2 text-[10px] font-medium text-slate-400 uppercase tracking-[0.14em] truncate ${className ?? ""}`}
-        >
-            {children}
+        <th className={base} aria-sort={active ? (sort.reverse ? "ascending" : "descending") : "none"}>
+            <button
+                type="button"
+                onClick={() => onSort(col)}
+                title={`Sort by ${col.label}`}
+                className={`group/th inline-flex items-center gap-1 max-w-full uppercase tracking-[0.14em] hover:text-slate-700 transition-colors ${
+                    active ? "text-slate-700" : ""
+                } ${col.align === "right" ? "flex-row-reverse" : ""}`}
+            >
+                <span className="truncate">{content}</span>
+                <Dir className={`w-3 h-3 shrink-0 ${active ? "" : "opacity-0 group-hover/th:opacity-60"}`} aria-hidden />
+            </button>
         </th>
-    );
-}
-
-function StatusPill({ subscribed }: { subscribed: boolean }) {
-    const label = subscribed ? "subscribed" : "unsubscribed";
-    return (
-        <span
-            className={`inline-flex items-center gap-1 max-w-full text-[10.5px] font-medium uppercase tracking-[0.08em] ${
-                subscribed ? "text-emerald-700" : "text-slate-500"
-            }`}
-        >
-            <span
-                className={`size-1.5 shrink-0 rounded-full ${subscribed ? "bg-emerald-500" : "bg-slate-300"}`}
-            />
-            {/* The dot carries the state on its own below sm, so the word stays
-                for screen readers at every width and the visible copy is the
-                one that comes and goes. */}
-            <span className="sr-only">{label}</span>
-            <span aria-hidden className="hidden sm:inline truncate" {...clippedTitle}>
-                {label}
-            </span>
-        </span>
-    );
-}
-
-// One engagement column of the Leads view. A count of steps engaged, a dash
-// for a lead that was sent but never did, and blank for a lead never emailed.
-// A machine-only open (Apple MPP prefetch) reads "auto" so it is not mistaken
-// for a person.
-function EngagementCell({
-    n,
-    sent,
-    Icon,
-    label,
-    auto = false,
-}: {
-    n: number;
-    sent: boolean;
-    Icon: typeof MailOpenIcon;
-    label: string;
-    auto?: boolean;
-}) {
-    return (
-        <td className="px-3 overflow-hidden hidden lg:table-cell">
-            {n > 0 ? (
-                <span
-                    className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 tabular-nums"
-                    title={`${label} ${n} ${n === 1 ? "email" : "emails"}`}
-                >
-                    <Icon className="w-3 h-3 shrink-0" />
-                    {n}
-                </span>
-            ) : auto ? (
-                <span
-                    className="text-[10.5px] text-slate-400"
-                    title="Opened by a mail client automatically, not by a person"
-                >
-                    auto
-                </span>
-            ) : sent ? (
-                <span className="text-slate-300 text-[11px]" aria-label={`not ${label}`}>
-                    —
-                </span>
-            ) : null}
-        </td>
-    );
-}
-
-// Per-lead processing state inside a campaign (campaign Leads view only).
-// `active` renders the animated dot-grid loader (the same "processing" motif
-// used across the app); every other state is a distinct lucide icon.
-const LEAD_META: Record<
-    LeadStatus,
-    { label: string; dot: string; text: string; Icon: typeof ClockIcon }
-> = {
-    pending: { label: "Queued", dot: "bg-slate-300", text: "text-slate-500", Icon: ClockIcon },
-    active: { label: "Processing", dot: "bg-sky-500", text: "text-sky-700", Icon: ClockIcon },
-    completed: { label: "Done", dot: "bg-indigo-500", text: "text-indigo-700", Icon: CheckIcon },
-    replied: { label: "Replied", dot: "bg-emerald-500", text: "text-emerald-700", Icon: CornerUpLeftIcon },
-    bounced: { label: "Bounced", dot: "bg-rose-500", text: "text-rose-600", Icon: AlertTriangleIcon },
-    failed: { label: "Failed", dot: "bg-rose-500", text: "text-rose-600", Icon: AlertTriangleIcon },
-    unsubscribed: { label: "Unsubscribed", dot: "bg-slate-300", text: "text-slate-400", Icon: BanIcon },
-    paused: { label: "Paused", dot: "bg-violet-400", text: "text-violet-600", Icon: PauseIcon },
-    undeliverable: { label: "Undeliverable", dot: "bg-amber-500", text: "text-amber-600", Icon: AlertTriangleIcon },
-};
-
-function LeadStatusPill({ lead }: { lead?: ContactCampaignProgress | null }) {
-    const status: LeadStatus = lead?.status ?? "pending";
-    const meta = LEAD_META[status];
-    const Icon = meta.Icon;
-    // A failed lead carries the worker's reason; surface it on hover since the
-    // pill itself only has room for the word.
-    const title =
-        status === "failed" && lead?.failure_reason
-            ? `Could not send: ${lead.failure_reason}`
-            : status === "undeliverable"
-                ? "Address verification refused this recipient, so the campaign skips it"
-                : lead?.hold
-                    ? holdSummary(lead.hold)
-                    : undefined;
-    return (
-        <span
-            className={`inline-flex items-center gap-1.5 max-w-full text-[10.5px] font-medium uppercase tracking-[0.08em] ${meta.text}`}
-            title={title}
-        >
-            {status === "active" ? (
-                <span className="campaign-grid text-sky-600 shrink-0" aria-hidden />
-            ) : (
-                <Icon className="w-3 h-3 shrink-0" />
-            )}
-            <span className="sr-only">{meta.label}</span>
-            {/* The reason, when there is one, is worth more than the word it
-                covers — and React owning the attribute is what clears any word
-                the tooltip helper left here before the lead changed state. */}
-            <span aria-hidden className="hidden sm:inline truncate" title={title} {...(title ? {} : clippedTitle)}>
-                {meta.label}
-            </span>
-        </span>
     );
 }
 
