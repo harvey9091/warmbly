@@ -2,6 +2,7 @@ package email
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -66,14 +67,16 @@ func (s *emailService) ValidateCredentials(ctx context.Context, orgID uuid.UUID,
 	for {
 		msg, err := r.ReceiveMessage(subscribeContext)
 		if err != nil {
-			// Ask the context, not the error. A deadline reached while
-			// waiting is the mail host being slow, not this service being
-			// broken, but go-redis pushes the deadline down onto the socket
-			// and it comes back as a net timeout rather than
-			// context.DeadlineExceeded. The context is the only thing that
-			// knows whose deadline it was: a socket timeout while it is still
-			// live is Redis failing and stays an internal error.
-			if subscribeContext.Err() != nil {
+			// Ask the context, not the error, and ask it for the deadline
+			// specifically. A deadline reached while waiting is the mail host
+			// being slow, not this service being broken, but go-redis pushes
+			// the deadline down onto the socket and it comes back as a net
+			// timeout rather than context.DeadlineExceeded, so the error's own
+			// shape cannot say whose deadline it was. The context can, and it
+			// also distinguishes the two ways it ends: only the timeout below
+			// is the mail host. A socket timeout while the context is still
+			// live is Redis failing, and a caller who went away is neither.
+			if errors.Is(subscribeContext.Err(), context.DeadlineExceeded) {
 				return errx.ErrEmailValidation
 			}
 			errs.CaptureException(err)

@@ -1,38 +1,38 @@
 {
-  "name": "warmbly-docs",
-  "version": "0.0.0",
-  "private": true,
-  "scripts": {
-    "build": "next build",
-    "dev": "next dev",
-    "start": "next start",
-    "types:check": "fumadocs-mdx && next typegen && tsc --noEmit",
-    "postinstall": "fumadocs-mdx",
-    "lint": "eslint"
-  },
-  "dependencies": {
-    "@radix-ui/react-dialog": "^1.1.4",
-    "fumadocs-core": "16.4.11",
-    "fumadocs-mdx": "14.2.6",
-    "fumadocs-ui": "16.4.11",
-    "lucide-react": "^0.563.0",
-    "mermaid": "^11.16.0",
-    "next": "16.3.3",
-    "next-themes": "^0.4.6",
-    "react": "^19.2.3",
-    "react-dom": "^19.2.3",
-    "tailwind-merge": "^3.4.0"
-  },
-  "devDependencies": {
-    "@tailwindcss/postcss": "^4.1.18",
-    "@types/mdx": "^2.0.13",
-    "@types/node": "^25.0.10",
-    "@types/react": "^19.2.9",
-    "@types/react-dom": "^19.2.3",
-    "eslint": "^9.39.2",
-    "eslint-config-next": "16.3.3",
-    "postcss": "^8.5.23",
-    "tailwindcss": "^4.1.18",
-    "typescript": "^5.9.3"
-  }
+    "name": "warmbly-docs",
+    "version": "0.0.0",
+    "private": true,
+    "scripts": {
+        "build": "next build",
+        "dev": "next dev",
+        "start": "next start",
+        "types:check": "fumadocs-mdx && next typegen && tsc --noEmit",
+        "postinstall": "fumadocs-mdx",
+        "lint": "eslint"
+    },
+    "dependencies": {
+        "@radix-ui/react-dialog": "^1.1.23",
+        "fumadocs-core": "16.4.11",
+        "fumadocs-mdx": "14.2.6",
+        "fumadocs-ui": "16.4.11",
+        "lucide-react": "^0.563.0",
+        "mermaid": "^11.17.2",
+        "next": "16.3.3",
+        "next-themes": "^0.4.6",
+        "react": "^19.3.0",
+        "react-dom": "^19.3.0",
+        "tailwind-merge": "^3.7.0"
+    },
+    "devDependencies": {
+        "@tailwindcss/postcss": "^4.3.3",
+        "@types/mdx": "^2.0.14",
+        "@types/node": "^25.9.7",
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
+        "eslint": "^9.39.5",
+        "eslint-config-next": "16.3.3",
+        "postcss": "^8.5.28",
+        "tailwindcss": "^4.3.3",
+        "typescript": "^5.9.3"
+    }
 }
