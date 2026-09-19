@@ -93,7 +93,11 @@ func Loop(ctx context.Context, name string, interval time.Duration, runOnBoot bo
 
 	st, svc := current()
 	if st != nil {
-		next := time.Now().Add(interval)
+		// The offset is served before the ticker starts, so it counts toward
+		// the first run whether or not that run happens at boot. Leaving it
+		// out of the non-boot case recorded a next run the loop was already
+		// past, and the panel showed it overdue for the length of the offset.
+		next := time.Now().Add(offset + interval)
 		if runOnBoot {
 			next = time.Now().Add(offset)
 		}

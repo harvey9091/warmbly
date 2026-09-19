@@ -38,13 +38,16 @@ const (
 
 	// How many pooled processes one database is assumed to carry: backend and
 	// consumer, each counted twice because a rolling deploy runs the outgoing
-	// and incoming container at once. Used only to lower a pool that the
-	// server cannot honour, never to raise one.
+	// and incoming container at once. This is a per-process best effort, not a
+	// fleet-wide allocation: nothing here knows how many clients the database
+	// really has, so a deployment with more than four sets DB_MAX_CONNS itself.
+	// Used only to lower a pool the server cannot honour, never to raise one.
 	serverShareDivisor = int32(4)
-	// The floor the clamp will not go under. Four connections deadlocked the
-	// backend once already (see above), so a server too small for the fleet
-	// gets a loud warning and a working process, not a strangled one.
-	minClampedMaxConns = int32(10)
+	// Below this the share is too small to serve a process comfortably, and
+	// the operator is told. It is a warning threshold and nothing else: raising
+	// the pool to meet it would hand out capacity the server does not have,
+	// which is the exhaustion this exists to prevent.
+	lowCapacityWarnBelow = int32(10)
 
 	// Postgres idle-in-transaction safety net. If a code path forgets
 	// `defer tx.Rollback(ctx)`, the server will abort the leaked tx
@@ -121,6 +124,19 @@ func New(ctx context.Context, endpoint string) (*DB, error) {
 	}, nil
 }
 
+// processShare is one process's cut of the connections the server leaves
+// unreserved. It never returns more than that cut: rounding it up to something
+// comfortable would hand out capacity the server does not have, which is the
+// exhaustion this exists to prevent. One is the floor only because a pool of
+// zero cannot serve anything.
+func processShare(usable int32) int32 {
+	share := usable / serverShareDivisor
+	if share < 1 {
+		return 1
+	}
+	return share
+}
+
 // serverConnectionShare reports the largest pool this process may take from
 // the server, or 0 when the server cannot be asked. Boot must not depend on
 // the answer: a probe that fails leaves the configured size in place.
@@ -151,12 +167,12 @@ func serverConnectionShare(ctx context.Context, cfg *pgx.ConnConfig) int32 {
 		return 0
 	}
 
-	share := usable / serverShareDivisor
-	if share < minClampedMaxConns {
+	share := processShare(usable)
+	if share < lowCapacityWarnBelow {
 		log.Warn().
 			Int32("usable_server_connections", usable).
-			Msg("db: the server has too few connections for the fleet; every service will contend for slots until its max_connections is raised")
-		share = minClampedMaxConns
+			Int32("process_share", share).
+			Msg("db: the server has too few connections for the fleet; services will contend for slots until its max_connections is raised")
 	}
 	return share
 }
