@@ -2,6 +2,8 @@ package config
 
 import (
 	"os"
+	"strconv"
+	"strings"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -11,6 +13,16 @@ import (
 type Oauth2Inbox struct {
 	Google  *oauth2.Config
 	Outlook *oauth2.Config
+}
+
+// GoogleOAuthConnect reports whether a NEW Gmail mailbox may be connected with
+// Google sign-in. Off by default: the connect dialog walks people through an
+// app password over IMAP and SMTP instead, which needs no verified Google app.
+// Mailboxes already connected with Google sign-in are untouched either way and
+// can still be re-authorized. BOX_GOOGLE_OAUTH_CONNECT=true turns it on.
+func GoogleOAuthConnect() bool {
+	b, err := strconv.ParseBool(strings.TrimSpace(os.Getenv("BOX_GOOGLE_OAUTH_CONNECT")))
+	return err == nil && b
 }
 
 func GoogleOauth2Inbox(baseURL string) *oauth2.Config {

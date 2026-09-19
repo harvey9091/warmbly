@@ -55,6 +55,11 @@ type DeploymentAuthConfig struct {
 	// referral fields) that make no sense on someone's own server.
 	SelfHosted bool `json:"self_hosted"`
 
+	// GmailOAuthConnect is whether a new Gmail mailbox may be connected with
+	// Google sign-in. False routes the connect dialog through the app-password
+	// walkthrough; mailboxes already on Google sign-in are unaffected.
+	GmailOAuthConnect bool `json:"gmail_oauth_connect"`
+
 	// BillingEnabled mirrors the backend feature gate exactly: false when
 	// BILLING_PROVIDER=none, in which case every feature is unlocked and the
 	// dashboard must not present the org as being on a trial or free tier.
@@ -135,6 +140,7 @@ func (h *Handler) AuthConfig(c *gin.Context) {
 		Providers:         providers,
 		ProviderLabels:    h.AuthService.FederatedProviderLabels(),
 		SelfHosted:        config.SelfHosted(),
+		GmailOAuthConnect: config.GoogleOAuthConnect(),
 		BillingEnabled:    config.BillingProvider() != "none",
 		SetupRequired:     h.BootstrapService != nil && h.BootstrapService.Required(c.Request.Context()),
 		InvitesRequired:   registration == config.RegistrationInviteOnly,

@@ -745,6 +745,12 @@ var table = []Entry{
 		Resolve:    envValue("BOX_GOOGLE_CLIENT_SECRET"),
 	},
 	{
+		Key: "BOX_GOOGLE_OAUTH_CONNECT", Group: GroupWorkers, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "true lets new Gmail mailboxes connect with Google sign-in. Off, the connect dialog walks through an app password over IMAP and SMTP instead; mailboxes already on Google sign-in keep working and can be re-authorized either way.",
+		DocsAnchor: docsWorkers,
+		Resolve:    boolOr("BOX_GOOGLE_OAUTH_CONNECT", false),
+	},
+	{
 		Key: "BOX_OUTLOOK_CLIENT_ID", Group: GroupWorkers, RuntimeChangeable: ChangeBootOnly,
 		Effect:     "Your Microsoft 365 OAuth client for connecting Outlook mailboxes.",
 		DocsAnchor: docsWorkers,

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
+	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/cache"
 	"github.com/warmbly/warmbly/internal/models"
@@ -77,6 +78,10 @@ func (s *service) StartOAuth(ctx context.Context, inst *models.PoolLinkInstance,
 	}
 	if req.Provider != models.InboxProviderGoogle && req.Provider != models.InboxProviderOutlook {
 		return nil, errx.ErrEmailOnboardProvider
+	}
+	// The cloud's own Google app decides here, not the linked instance's.
+	if req.Provider == models.InboxProviderGoogle && !config.GoogleOAuthConnect() {
+		return nil, errx.ErrEmailOnboardGoogleOAuthDisabled
 	}
 	if !returnURLAllowed(req.ReturnURL, inst.URL) {
 		return nil, ErrOAuthReturnURL
