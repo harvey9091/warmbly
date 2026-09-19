@@ -904,7 +904,7 @@ What the campaign sends today and every limit that decided it, worked out on the
 
 ### Response
 
-The arithmetic adds up: `configured_ceiling` minus every `limits[].emails` minus `sent_today` is `expected_remaining`, and `projected_today` is `sent_today` plus `expected_remaining`. `limits` lists only the clamps that removed something, in the order the scheduler applies them; `bottleneck` names the one that decides the number (`""` when nothing binds, `budget_spent` when every mailbox has used its day). `day` and the times are in the campaign's timezone. `organization` is present only when the workspace's plan has a daily allowance.
+The arithmetic adds up: `configured_ceiling` minus every `limits[].emails` minus `sent_today` is `expected_remaining`, and `projected_today` is `sent_today` plus `expected_remaining`. `limits` lists only the clamps that removed something, in the order the scheduler applies them; `bottleneck` names the one that decides the number (`""` when nothing binds, `budget_spent` when every mailbox has used its day). `day` is the budget day in UTC (every daily counter resets at midnight UTC, whatever the campaign's timezone); the window's times are in the campaign's timezone. `leads.waiting_on_sender` counts due steps whose own mailbox has nothing left today, since each contact keeps the address they first heard from. `organization` is present only when the workspace's plan has a daily allowance.
 
 ```json
 {
@@ -934,6 +934,7 @@ The arithmetic adds up: `configured_ceiling` minus every `limits[].emails` minus
     "waiting_on_step": 200,
     "waiting_on_condition": 0,
     "held": 3,
+    "waiting_on_sender": 0,
     "new_leads_started_today": 8,
     "max_new_leads_per_day": 0
   },

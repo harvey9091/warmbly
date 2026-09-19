@@ -1293,10 +1293,19 @@ func (s *campaignService) SendPlan(ctx context.Context, orgID uuid.UUID, campaig
 	if !ok {
 		return nil, errx.New(errx.Internal, "send planning is not available")
 	}
+	key := campaign.ID.String()
+	if s.planCache != nil {
+		if plan, ok := s.planCache.get(key); ok {
+			return plan, nil
+		}
+	}
 	plan, err := planner.PlanCampaignDay(ctx, campaign.ID, s.orgDailyLimit(ctx, orgID))
 	if err != nil {
 		errs.CaptureException(err)
 		return nil, errx.InternalError()
+	}
+	if s.planCache != nil {
+		s.planCache.put(key, plan)
 	}
 	return plan, nil
 }
@@ -1305,6 +1314,11 @@ func (s *campaignService) WorkspaceCapacity(ctx context.Context, orgID uuid.UUID
 	planner, ok := s.planner()
 	if !ok {
 		return nil, errx.New(errx.Internal, "send planning is not available")
+	}
+	if s.capacityCache != nil {
+		if out, ok := s.capacityCache.get(orgID.String()); ok {
+			return out, nil
+		}
 	}
 	accounts, xerr := s.emailRepo.GetAllActiveInScope(ctx, repository.NewAccountScope(&orgID))
 	if xerr != nil {
@@ -1321,6 +1335,9 @@ func (s *campaignService) WorkspaceCapacity(ctx context.Context, orgID uuid.UUID
 			out.Capacity = min(out.Capacity, limit)
 			out.Remaining = min(out.Remaining, max(0, limit-sent))
 		}
+	}
+	if s.capacityCache != nil {
+		s.capacityCache.put(orgID.String(), out)
 	}
 	return out, nil
 }

@@ -56,6 +56,7 @@ export interface LeadSupply {
     waiting_on_step: number;
     waiting_on_condition: number;
     held: number;
+    waiting_on_sender: number;
     new_leads_started_today: number;
     max_new_leads_per_day: number;
     next_due_at?: string;

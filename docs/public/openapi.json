@@ -23163,6 +23163,7 @@
           "waiting_on_step",
           "waiting_on_condition",
           "held",
+          "waiting_on_sender",
           "new_leads_started_today",
           "max_new_leads_per_day"
         ],
@@ -23190,6 +23191,10 @@
           "held": {
             "type": "integer",
             "description": "Leads paused with no end."
+          },
+          "waiting_on_sender": {
+            "type": "integer",
+            "description": "Due steps whose own mailbox has nothing left today; each contact keeps the address they first heard from."
           },
           "new_leads_started_today": {
             "type": "integer"
@@ -23340,7 +23345,7 @@
           },
           "day": {
             "type": "string",
-            "description": "The sending day, YYYY-MM-DD in the campaign's timezone."
+            "description": "The budget day, YYYY-MM-DD in UTC: every daily counter resets at midnight UTC whatever the campaign's timezone. The window's times are in the campaign's timezone."
           },
           "timezone": {
             "type": "string"
@@ -25858,7 +25863,14 @@
           },
           "folder": {
             "type": "string",
-            "enum": ["inbox", "sent", "drafts", "archive", "spam", "trash"],
+            "enum": [
+              "inbox",
+              "sent",
+              "drafts",
+              "archive",
+              "spam",
+              "trash"
+            ],
             "description": "Canonical folder the message sits in."
           },
           "parent_id": {

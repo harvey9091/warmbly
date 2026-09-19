@@ -16,13 +16,17 @@ import (
 type CampaignSendPlan struct {
 	CampaignID uuid.UUID `json:"campaign_id"`
 	Status     string    `json:"status"`
-	// Day is the sending day the plan is for, in the campaign's timezone.
+	// Day is the budget day the plan counts: every daily counter resets at
+	// midnight UTC, whatever the campaign's timezone, so this is the UTC
+	// date. The window's times are in the campaign's own timezone.
 	Day        string    `json:"day"`
 	Timezone   string    `json:"timezone"`
 	ComputedAt time.Time `json:"computed_at"`
 
 	// ConfiguredCeiling is the sum of the attached mailboxes' own daily caps:
-	// the number the settings suggest before anything else is applied.
+	// the number the settings suggest before anything else is applied. A
+	// mailbox that already sent past a cap lowered during the day counts
+	// what it sent, so the waterfall still adds up.
 	ConfiguredCeiling int `json:"configured_ceiling"`
 	// Projected is today's total: what has gone out plus what is still
 	// expected to.
@@ -116,6 +120,10 @@ type CampaignLeadSupply struct {
 	WaitingOnCondition int `json:"waiting_on_condition"`
 	// Held is the leads paused (out of office, or by hand).
 	Held int `json:"held"`
+	// WaitingOnSender is the due steps whose own mailbox has nothing left
+	// today. Each contact keeps the address they first heard from, so these
+	// wait for it rather than going out from another mailbox.
+	WaitingOnSender int `json:"waiting_on_sender"`
 	// NewLeadsStartedToday and MaxNewLeadsPerDay are the new-lead throttle;
 	// the cap is 0 when unlimited.
 	NewLeadsStartedToday int `json:"new_leads_started_today"`

@@ -139,6 +139,9 @@ type TaskRepository interface {
 	// mailbox they went out from. A mailbox's daily budget is shared by every
 	// campaign it is on, so a plan has to know which campaign spent it.
 	CountCampaignSendsTodayBySender(ctx context.Context, campaignID uuid.UUID) (map[uuid.UUID]int, error)
+	// CountCampaignEmailsSentTodayByAccounts is CountCampaignEmailsSentToday
+	// for a whole pool in one read; an id with no sends is absent.
+	CountCampaignEmailsSentTodayByAccounts(ctx context.Context, accountIDs []uuid.UUID) (map[uuid.UUID]int, error)
 	CountWarmupEmailsSentToday(ctx context.Context, accountID uuid.UUID) (int, error)
 
 	// Create user-initiated email task (transactional)
@@ -448,6 +451,39 @@ func (r *taskRepository) CountCampaignEmailsSentToday(ctx context.Context, accou
 	var count int
 	err := r.db.QueryRow(ctx, query, accountID).Scan(&count)
 	return count, err
+}
+
+// CountCampaignEmailsSentTodayByAccounts is the per-mailbox ledger for a pool
+// in one query, so a plan over a large workspace does not ask once per mailbox.
+func (r *taskRepository) CountCampaignEmailsSentTodayByAccounts(ctx context.Context, accountIDs []uuid.UUID) (map[uuid.UUID]int, error) {
+	out := make(map[uuid.UUID]int, len(accountIDs))
+	if len(accountIDs) == 0 {
+		return out, nil
+	}
+	query := `
+		SELECT t.email_account_id, COUNT(*)
+		FROM tasks t
+		WHERE t.email_account_id = ANY($1)
+		  AND t.status = 'completed'
+		  AND t.task_type = 'campaign'
+		  AND DATE(t.completed_at) = CURRENT_DATE
+		  AND ` + taskDispatchedEmail + `
+		GROUP BY t.email_account_id
+	`
+	rows, err := r.db.Query(ctx, query, accountIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
 }
 
 // CountCampaignSendsTodayBySender is CountCampaignEmailsSentToday for one

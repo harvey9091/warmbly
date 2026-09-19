@@ -281,7 +281,10 @@ type CampaignProgressRepository interface {
 	// each one stands, so a day's plan knows how many sends the leads can
 	// take rather than only how many the mailboxes can give. until is the
 	// end of the day being planned.
-	LeadSupply(ctx context.Context, campaignID uuid.UUID, until time.Time) (*LeadSupply, error)
+	// unavailable is the pool mailboxes that cannot send for the rest of the
+	// day: a lead bound to one waits for it, as FindRoutedPairs makes it,
+	// rather than counting as a send another mailbox could make.
+	LeadSupply(ctx context.Context, campaignID uuid.UUID, until time.Time, unavailable map[uuid.UUID]bool) (*LeadSupply, error)
 
 	// CountUndeliverableLeads counts the leads FindRoutedPairs excludes
 	// because address verification refused them. Reported when a campaign
@@ -2337,13 +2340,16 @@ type LeadSupply struct {
 	WaitingOnCondition int
 	// Held is the leads under a live hold with no end.
 	Held int
+	// WaitingOnSender is the due email steps whose own mailbox has nothing
+	// left today; each contact keeps the address they first heard from.
+	WaitingOnSender int
 	// NextDueAt is the soonest moment a waiting lead becomes due.
 	NextDueAt *time.Time
 }
 
 // LeadSupply walks every routable lead through the campaign's routing and
 // tallies where each one stands relative to now and `until`.
-func (r *campaignProgressRepository) LeadSupply(ctx context.Context, campaignID uuid.UUID, until time.Time) (*LeadSupply, error) {
+func (r *campaignProgressRepository) LeadSupply(ctx context.Context, campaignID uuid.UUID, until time.Time, unavailable map[uuid.UUID]bool) (*LeadSupply, error) {
 	out := &LeadSupply{}
 	router, err := r.loadRouter(ctx, campaignID)
 	if err != nil {
@@ -2385,10 +2391,16 @@ func (r *campaignProgressRepository) LeadSupply(ctx context.Context, campaignID 
 				out.WaitingOnStep++
 				continue
 			}
+			if in.sender != nil && unavailable[*in.sender] {
+				out.WaitingOnSender++
+				continue
+			}
 			out.DueLaterToday++
 			if res.IsNewLead {
 				out.DueLaterTodayNewLeads++
 			}
+		case in.sender != nil && unavailable[*in.sender]:
+			out.WaitingOnSender++
 		default:
 			out.DueNow++
 			if res.IsNewLead {

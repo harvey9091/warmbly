@@ -568,36 +568,14 @@ func (s *analyticsService) coldRampInfo(ctx context.Context, email *models.Email
 		return nil
 	}
 	state, ok := states[email.ID]
-	if !ok || state.WarmupStartedAt == nil {
+	if !ok {
 		return nil
 	}
-
-	now := time.Now()
-	warmupDays := int(now.Sub(*state.WarmupStartedAt).Hours() / 24)
-	if warmupDays < 0 {
-		warmupDays = 0
-	}
-	var rampStart time.Time
-	if state.ColdRampStartedAt != nil {
-		rampStart = *state.ColdRampStartedAt
-	}
-
-	ceiling := warmupramp.ColdCeiling(warmupDays, rampStart, state.Placements, now, email.CampaignLimit)
-	if ceiling >= email.CampaignLimit {
+	info := warmupramp.Notice(state.WarmupStartedAt, state.ColdRampStartedAt, state.Placements, email.CampaignLimit, time.Now())
+	if info == nil || info.Ceiling >= email.CampaignLimit {
 		return nil
 	}
-
-	remaining := email.CampaignLimit - ceiling
-	days := remaining / warmupramp.ColdRampIncrement
-	if remaining%warmupramp.ColdRampIncrement != 0 {
-		days++
-	}
-	return &models.ColdRampInfo{
-		Ceiling:       ceiling,
-		MailboxCap:    email.CampaignLimit,
-		DaysToFullCap: days,
-		Held:          warmupramp.ColdHeldUntil(rampStart, state.Placements, now, warmupramp.FreezeWindow) != nil,
-	}
+	return info
 }
 
 // sendLifecycleInfo reports the mailbox's cold-rotation state, but only when

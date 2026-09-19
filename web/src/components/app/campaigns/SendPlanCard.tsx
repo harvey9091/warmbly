@@ -211,6 +211,7 @@ function LeadsLine({ plan }: { plan: SendPlan }) {
     if (l.due_later_today) parts.push(`${l.due_later_today.toLocaleString()} later today`);
     if (l.waiting_on_step) parts.push(`${l.waiting_on_step.toLocaleString()} waiting on a step`);
     if (l.waiting_on_condition) parts.push(`${l.waiting_on_condition.toLocaleString()} in a branch window`);
+    if (l.waiting_on_sender) parts.push(`${l.waiting_on_sender.toLocaleString()} waiting for their own mailbox`);
     if (l.held) parts.push(`${l.held.toLocaleString()} held`);
     if (l.max_new_leads_per_day > 0) parts.push(`${l.new_leads_started_today}/${l.max_new_leads_per_day} new leads today`);
     return (
@@ -221,12 +222,34 @@ function LeadsLine({ plan }: { plan: SendPlan }) {
     );
 }
 
+// A payload with a list missing must not take the whole overview down with
+// it: the strip is a hint above the page, not the page.
+function withDefaults(plan: SendPlan): SendPlan {
+    return {
+        ...plan,
+        limits: plan.limits ?? [],
+        mailboxes: plan.mailboxes ?? [],
+        window: plan.window ?? { sending_day: false, open_now: false, minutes_left: 0 },
+        leads: plan.leads ?? {
+            due_now: 0, due_later_today: 0, new_leads_due_today: 0, waiting_on_step: 0,
+            waiting_on_condition: 0, held: 0, waiting_on_sender: 0, new_leads_started_today: 0, max_new_leads_per_day: 0,
+        },
+        configured_ceiling: plan.configured_ceiling ?? 0,
+        projected_today: plan.projected_today ?? 0,
+        sent_today: plan.sent_today ?? 0,
+        expected_remaining: plan.expected_remaining ?? 0,
+        bottleneck: plan.bottleneck ?? "",
+        timezone: plan.timezone || "UTC",
+        status: plan.status ?? "",
+    };
+}
+
 export default function SendPlanCard({ campaignId }: { campaignId: string }) {
     const q = useCampaignSendPlan(campaignId);
     // One strip by default; the working is behind a toggle so the analytics
     // below it stay above the fold.
     const [open, setOpen] = useState(false);
-    const plan = q.data;
+    const plan = q.data && typeof q.data === "object" && "campaign_id" in q.data ? withDefaults(q.data) : undefined;
 
     if (q.isPending) {
         return (

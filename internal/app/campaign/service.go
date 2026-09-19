@@ -120,6 +120,10 @@ type campaignService struct {
 	// segments counts an audience for Estimate. Optional: without it an
 	// estimate reports zero recipients.
 	segments SegmentCounter
+	// planCache and capacityCache hold the two derived reads for a few
+	// seconds each; see readCache.
+	planCache     *readCache[*models.CampaignSendPlan]
+	capacityCache *readCache[*models.WorkspaceSendCapacity]
 }
 
 // SegmentCounter is the slice of the segment service Estimate needs.
@@ -180,6 +184,8 @@ func NewService(
 	streamingPublisher *pubsub.StreamingPublisher,
 ) CampaignService {
 	return &campaignService{
+		planCache:          newReadCache[*models.CampaignSendPlan](15 * time.Second),
+		capacityCache:      newReadCache[*models.WorkspaceSendCapacity](60 * time.Second),
 		campaignRepository: campaignRepository,
 		taskRepo:           taskRepo,
 		emailRepo:          emailRepo,

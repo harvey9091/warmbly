@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 )
 
+var _ = uuid.Nil
+
 // The day's plan reads the leads through the same routing the send path
 // uses, and the per-campaign sender ledger through the same predicate the
 // per-mailbox budget uses. Both are SQL, so both are checked live.
@@ -31,7 +33,7 @@ func TestLiveLeadSupplyCountsWhereEveryLeadStands(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := repo.LeadSupply(ctx, f.campaign, time.Now().Add(2*time.Hour))
+	got, err := repo.LeadSupply(ctx, f.campaign, time.Now().Add(2*time.Hour), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,19 +46,35 @@ func TestLiveLeadSupplyCountsWhereEveryLeadStands(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE campaigns SET entry_delay_minutes = 60 WHERE id = $1`, f.campaign); err != nil {
 		t.Fatal(err)
 	}
-	got, err = repo.LeadSupply(ctx, f.campaign, time.Now().Add(2*time.Hour))
+	got, err = repo.LeadSupply(ctx, f.campaign, time.Now().Add(2*time.Hour), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.DueNow != 0 || got.DueLaterToday != 2 || got.DueLaterTodayNewLeads != 2 || got.NextDueAt == nil {
 		t.Fatalf("with a 60-minute entry delay and a day ending in 2 hours, got %+v, want 2 due later today", got)
 	}
-	got, err = repo.LeadSupply(ctx, f.campaign, time.Now().Add(30*time.Minute))
+	got, err = repo.LeadSupply(ctx, f.campaign, time.Now().Add(30*time.Minute), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.DueNow != 0 || got.DueLaterToday != 0 || got.WaitingOnStep != 2 {
 		t.Fatalf("with a 60-minute entry delay and a day ending in 30 minutes, got %+v, want 2 waiting on a step", got)
+	}
+
+	// A lead bound to a mailbox that has nothing left today waits for it,
+	// exactly as routing parks it, rather than counting as a send.
+	if _, err := pool.Exec(ctx, `UPDATE campaigns SET entry_delay_minutes = 0 WHERE id = $1`, f.campaign); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE campaign_leads SET email_account_id = $1 WHERE campaign_id = $2 AND contact_id = $3`, f.mailbox, f.campaign, f.leads[0]); err != nil {
+		t.Fatal(err)
+	}
+	got, err = repo.LeadSupply(ctx, f.campaign, time.Now().Add(2*time.Hour), map[uuid.UUID]bool{f.mailbox: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DueNow != 1 || got.WaitingOnSender != 1 {
+		t.Fatalf("with lead 0 bound to a spent mailbox, got %+v, want 1 due and 1 waiting on its sender", got)
 	}
 }
 

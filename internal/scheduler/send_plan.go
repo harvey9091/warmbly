@@ -9,7 +9,6 @@ import (
 	"github.com/warmbly/warmbly/internal/app/behavior"
 	"github.com/warmbly/warmbly/internal/app/warmupramp"
 	"github.com/warmbly/warmbly/internal/models"
-	"github.com/warmbly/warmbly/internal/repository"
 )
 
 // CampaignSendPlanner is satisfied by the scheduler service.
@@ -34,24 +33,23 @@ type mailboxDay struct {
 	health healthRead
 	gate   mailboxGate
 
-	configured           int
-	sentThis, sentOther  int
-	remaining            int
-	byCampaignLimit      int
-	byRamp               int
-	byGraduation         int
-	byRisk               int
-	byGate               int
-	byOther              int
-	byHealthPace         int
-	byHours              int
-	byBehavior           int
-	bySpacing            int
-	state                string
-	reopensAt            time.Time
-	minGap               int
-	graduation           *models.ColdRampInfo
-	sendsTodayIfReopened bool
+	configured          int
+	sentThis, sentOther int
+	remaining           int
+	byCampaignLimit     int
+	byRamp              int
+	byGraduation        int
+	byRisk              int
+	byGate              int
+	byOther             int
+	byHealthPace        int
+	byHours             int
+	byBehavior          int
+	bySpacing           int
+	state               string
+	reopensAt           time.Time
+	minGap              int
+	graduation          *models.ColdRampInfo
 }
 
 // stagedCap is explainCap with every intermediate cap kept, so a plan can say
@@ -100,10 +98,12 @@ func room(capv, sentThis int) int {
 // campaign's sending time still ahead today; zero means the window is closed
 // for the rest of the day and the campaign-level clamp reports it instead.
 func (s *schedulerService) planMailbox(ctx context.Context, pass *campaignPass, acct models.Email, sentThis, sentAll int, now time.Time, windowSecondsLeft int, windowClosesAt time.Time) mailboxDay {
-	d := mailboxDay{acct: acct, configured: acct.CampaignLimit, sentThis: sentThis, sentOther: max(0, sentAll-sentThis), minGap: acct.MinWaitTime}
+	// A cap lowered after sends went out counts what went out, so the
+	// waterfall's arithmetic holds on the very day the cap moved.
+	d := mailboxDay{acct: acct, configured: max(acct.CampaignLimit, sentThis), sentThis: sentThis, sentOther: max(0, sentAll-sentThis), minGap: acct.MinWaitTime}
 	stages, limitedBy := stagedCap(pass, acct)
 	d.cap = capClamp{Cap: stages[4], LimitedBy: limitedBy}
-	r := room(stages[0], sentThis)
+	r := room(d.configured, sentThis)
 	step := func(capv int) int {
 		next := room(capv, sentThis)
 		delta := r - next
@@ -114,8 +114,8 @@ func (s *schedulerService) planMailbox(ctx context.Context, pass *campaignPass, 
 	d.byRamp = step(stages[2])
 	d.byGraduation = step(stages[3])
 	d.byRisk = step(stages[4])
-	if st, ok := pass.coldRamp[acct.ID]; ok && st.WarmupStartedAt != nil && stages[3] < stages[2] {
-		d.graduation = coldRampInfo(st, stages[2], now)
+	if st, ok := pass.coldRamp[acct.ID]; ok && stages[3] < stages[2] {
+		d.graduation = warmupramp.Notice(st.WarmupStartedAt, st.ColdRampStartedAt, st.Placements, stages[2], now)
 	}
 
 	// Standing gates: authentication, cold rotation, warmup health. Asked with
@@ -161,6 +161,17 @@ func (s *schedulerService) planMailbox(ctx context.Context, pass *campaignPass, 
 	secondsLeft := windowSecondsLeft
 	bhv := pass.behaviors[acct.ID]
 	if bhv.Enabled {
+		// Today's rolled budget first: placeWithinBehavior walks to tomorrow
+		// when it is spent, and that is the plan binding, not the hours.
+		today := bhv.PlanOn(behavior.PlanDateFor(now, bhv.Loc))
+		if today.IsWorkingDay && behavior.MinuteOfDay(now, bhv.Loc) < today.WorkEndMinute {
+			if s.behaviorDailyCap(ctx, bhv, r, now) == 0 {
+				d.state = models.MailboxPlanBudgetSpent
+				d.gate = mailboxGate{reason: gateBudget, paced: true}
+				d.byBehavior = r
+				return d
+			}
+		}
 		openAt, ok := s.placeWithinBehavior(ctx, bhv, now)
 		if !ok {
 			d.state = models.MailboxPlanNoWorkingDay
@@ -180,7 +191,7 @@ func (s *schedulerService) planMailbox(ctx context.Context, pass *campaignPass, 
 			secondsLeft = min(secondsLeft, int(windowClosesAt.Sub(openAt).Seconds()))
 		}
 		next = min(r, s.behaviorDailyCap(ctx, bhv, r, openAt))
-		d.byBehavior = r - next
+		d.byBehavior += r - next
 		r = next
 		if r == 0 {
 			d.state = models.MailboxPlanBudgetSpent
@@ -189,18 +200,23 @@ func (s *schedulerService) planMailbox(ctx context.Context, pass *campaignPass, 
 		}
 		d.minGap = s.behaviorGapFloor(bhv, openAt, acct.MinWaitTime)
 		plan := bhv.PlanOn(behavior.PlanDateFor(openAt, bhv.Loc))
-		workEnd := time.Date(openAt.In(bhv.Loc).Year(), openAt.In(bhv.Loc).Month(), openAt.In(bhv.Loc).Day(), 0, 0, 0, 0, bhv.Loc).Add(time.Duration(plan.WorkEndMinute) * time.Minute)
+		local := openAt.In(bhv.Loc)
+		workEnd := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, bhv.Loc).Add(time.Duration(plan.WorkEndMinute) * time.Minute)
 		secondsLeft = min(secondsLeft, max(0, int(workEnd.Sub(openAt).Seconds())))
-		if plan.HourlyLimit > 0 && secondsLeft > 0 {
+		// The hourly ceiling is the plan's own clamp, so it is charged to it.
+		if plan.HourlyLimit > 0 {
 			hours := (secondsLeft + 3599) / 3600
 			if byHour := plan.HourlyLimit * hours; byHour < r {
-				// Counted with the spacing below: both are pace, not budget.
-				secondsLeft = min(secondsLeft, byHour*max(1, d.minGap))
+				d.byBehavior += r - byHour
+				r = byHour
 			}
 		}
 	} else if acct.Timezone != "" && acct.Timezone != pass.campaign.Timezone {
+		// The 8am-8pm band in the mailbox's own timezone, both ends: the
+		// placer moves any send past 8pm to the next morning.
 		loc := loadLocation(acct.Timezone)
-		if h := now.In(loc).Hour(); h < 8 || h >= 20 {
+		local := now.In(loc)
+		if h := local.Hour(); h < 8 || h >= 20 {
 			open := businessHoursReopen(now, loc)
 			d.reopensAt = open
 			if !sameLocalDay(open, now, loc) || !open.Before(windowClosesAt) {
@@ -210,6 +226,10 @@ func (s *schedulerService) planMailbox(ctx context.Context, pass *campaignPass, 
 				return d
 			}
 			secondsLeft = min(secondsLeft, int(windowClosesAt.Sub(open).Seconds()))
+		}
+		bandEnd := time.Date(local.Year(), local.Month(), local.Day(), 20, 0, 0, 0, loc)
+		if bandEnd.Before(windowClosesAt) {
+			secondsLeft = min(secondsLeft, max(0, int(bandEnd.Sub(now).Seconds())))
 		}
 	}
 
@@ -253,31 +273,6 @@ func (s *schedulerService) planMailbox(ctx context.Context, pass *campaignPass, 
 		d.reopensAt = earliest
 	}
 	return d
-}
-
-// coldRampInfo is the mailbox drawer's graduation notice, computed from the
-// pass's own read so the plan and the drawer cannot disagree.
-func coldRampInfo(st repository.ColdRampState, mailboxCap int, now time.Time) *models.ColdRampInfo {
-	warmupDays := int(now.Sub(*st.WarmupStartedAt).Hours() / 24)
-	if warmupDays < 0 {
-		warmupDays = 0
-	}
-	var rampStart time.Time
-	if st.ColdRampStartedAt != nil {
-		rampStart = *st.ColdRampStartedAt
-	}
-	ceiling := warmupramp.ColdCeiling(warmupDays, rampStart, st.Placements, now, mailboxCap)
-	left := mailboxCap - ceiling
-	days := left / warmupramp.ColdRampIncrement
-	if left%warmupramp.ColdRampIncrement != 0 {
-		days++
-	}
-	return &models.ColdRampInfo{
-		Ceiling:       ceiling,
-		MailboxCap:    mailboxCap,
-		DaysToFullCap: days,
-		Held:          warmupramp.ColdHeldUntil(rampStart, st.Placements, now, warmupramp.FreezeWindow) != nil,
-	}
 }
 
 // dayWindow is the campaign's calendar for today, in its own timezone.
@@ -379,7 +374,7 @@ func (s *schedulerService) PlanCampaignDay(ctx context.Context, campaignID uuid.
 	plan := &models.CampaignSendPlan{
 		CampaignID: campaign.ID,
 		Status:     campaign.Status,
-		Day:        now.In(tz).Format("2006-01-02"),
+		Day:        now.UTC().Format("2006-01-02"),
 		Timezone:   tz.String(),
 		ComputedAt: now,
 		Window:     window,
@@ -392,6 +387,9 @@ func (s *schedulerService) PlanCampaignDay(ctx context.Context, campaignID uuid.
 		return nil, err
 	}
 	pass := s.newCampaignPass(ctx, campaign, accounts)
+	if err := s.prefillSentToday(ctx, pass, accounts); err != nil {
+		return nil, err
+	}
 	sentBySender, err := s.taskRepo.CountCampaignSendsTodayBySender(ctx, campaignID)
 	if err != nil {
 		return nil, err
@@ -513,8 +511,15 @@ func (s *schedulerService) PlanCampaignDay(ctx context.Context, campaignID uuid.
 		}
 	}
 
-	// The leads: mailboxes can only send to a step that is due today.
-	supply, err := s.campaignProgressRepo.LeadSupply(ctx, campaignID, closesAt)
+	// The leads: mailboxes can only send to a step that is due today, and a
+	// lead bound to a mailbox with nothing left waits for it.
+	unavailable := map[uuid.UUID]bool{}
+	for _, d := range days {
+		if d.remaining == 0 {
+			unavailable[d.acct.ID] = true
+		}
+	}
+	supply, err := s.campaignProgressRepo.LeadSupply(ctx, campaignID, closesAt, unavailable)
 	if err != nil {
 		return nil, err
 	}
@@ -528,6 +533,7 @@ func (s *schedulerService) PlanCampaignDay(ctx context.Context, campaignID uuid.
 		DueNow: supply.DueNow, DueLaterToday: supply.DueLaterToday,
 		NewLeadsDueToday: supply.DueNowNewLeads + supply.DueLaterTodayNewLeads,
 		WaitingOnStep:    supply.WaitingOnStep, WaitingOnCondition: supply.WaitingOnCondition, Held: supply.Held,
+		WaitingOnSender:      supply.WaitingOnSender,
 		NewLeadsStartedToday: newLeadsToday, MaxNewLeadsPerDay: campaign.MaxNewLeadsPerDay, NextDueAt: supply.NextDueAt,
 	}
 	followUps := supply.DueNow + supply.DueLaterToday - plan.Leads.NewLeadsDueToday
@@ -562,6 +568,10 @@ func (s *schedulerService) PoolCapacityToday(ctx context.Context, campaign *mode
 		campaign = &models.Campaign{}
 	}
 	pass := s.newCampaignPass(ctx, campaign, accounts)
+	// One read for the whole pool. A miss is not an error here: a mailbox
+	// whose sends are unknown counts toward capacity and nothing toward
+	// remaining, which is the conservative side.
+	_ = s.prefillSentToday(ctx, pass, accounts)
 	out := &models.WorkspaceSendCapacity{}
 	for _, acct := range accounts {
 		out.ConfiguredCeiling += acct.CampaignLimit
@@ -585,9 +595,26 @@ func (s *schedulerService) PoolCapacityToday(ctx context.Context, campaign *mode
 		out.Capacity += capv
 		sent, err := s.sentTodayFor(ctx, pass, acct.ID)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		out.Remaining += max(0, capv-sent)
 	}
 	return out, nil
+}
+
+// prefillSentToday loads the pool's sends today in one query into the pass's
+// memo, so the per-mailbox reads that follow cost nothing.
+func (s *schedulerService) prefillSentToday(ctx context.Context, pass *campaignPass, accounts []models.Email) error {
+	ids := make([]uuid.UUID, 0, len(accounts))
+	for _, a := range accounts {
+		ids = append(ids, a.ID)
+	}
+	counts, err := s.taskRepo.CountCampaignEmailsSentTodayByAccounts(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		pass.sentToday[id] = counts[id]
+	}
+	return nil
 }
