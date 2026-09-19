@@ -1,10 +1,12 @@
 // Full-page screen a hosted workspace sees on a locked page before it has a
-// plan: the auth screen's sky, one floating card, and the three ways forward.
+// plan: the auth screen's sky, one floating card, what is already included
+// and the plan that unlocks the feature. Self-hosting is a footnote: it is
+// one way to run the product, not the reason to be here.
 
 import React from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
-import { ArrowRightIcon, CheckIcon, CloudIcon, InboxIcon, ServerIcon, SparklesIcon } from "lucide-react";
+import { ArrowRightIcon, CheckIcon, CloudIcon, InboxIcon, SparklesIcon } from "lucide-react";
 import { getPlan } from "@/lib/plans";
 import { useAppStore } from "@/stores";
 import { useUpgradeDialog } from "@/hooks/context/upgrade";
@@ -47,12 +49,11 @@ export default function SubscriptionLockedScreen({ feature }: { feature: string 
                         {feature} unlocks with a plan.
                     </h1>
                     <p className="mt-3 text-[14px] text-slate-500 leading-relaxed max-w-xl mx-auto">
-                        Your workspace is free forever for warming mailboxes. Pick how you want to send: connect mailboxes here, run Warmbly on your own server,
-                        or choose a plan for the full hosted product.
+                        Your workspace is free forever for warming mailboxes. Pick a plan when you are ready to send from it.
                     </p>
                 </div>
 
-                <div className="grid md:grid-cols-3 gap-px bg-slate-200/70 border-y border-slate-200/70">
+                <div className="grid md:grid-cols-2 gap-px bg-slate-200/70 border-y border-slate-200/70">
                     <Path
                         icon={InboxIcon}
                         eyebrow="Included"
@@ -60,15 +61,6 @@ export default function SubscriptionLockedScreen({ feature }: { feature: string 
                         body="Connect mailboxes and they warm in the Warmbly pool at no cost, with replies and spam rescue handled for you."
                         cta="Go to mailboxes"
                         to="/app/emails"
-                    />
-                    <Path
-                        icon={ServerIcon}
-                        eyebrow="Free"
-                        title="Self-host Warmbly"
-                        body="Run the whole platform on your server, unlimited, then link the instance so this workspace warms its mailboxes."
-                        cta="Self-host guide"
-                        href={SELF_HOST_DOCS}
-                        secondary={{ label: "Linked instances", to: "/app/settings/warmbly-cloud" }}
                     />
                     <Path
                         icon={CloudIcon}
@@ -83,7 +75,13 @@ export default function SubscriptionLockedScreen({ feature }: { feature: string 
                 </div>
 
                 <div className="px-7 py-4 md:px-10 flex flex-wrap items-center justify-between gap-2 text-[12px] text-slate-500">
-                    <span>Settings, billing and your mailboxes stay open on the free workspace.</span>
+                    <span>
+                        Prefer your own server?{" "}
+                        <a href={SELF_HOST_DOCS} target="_blank" rel="noreferrer" className="font-medium text-slate-700 hover:text-slate-900">
+                            Self-host for free
+                        </a>{" "}
+                        and link it here to warm its mailboxes.
+                    </span>
                     {!isOwner && <span>Only the workspace owner can choose a plan.</span>}
                 </div>
             </motion.div>

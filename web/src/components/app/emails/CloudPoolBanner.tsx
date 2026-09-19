@@ -1,10 +1,12 @@
 // Mailboxes page strip for self-hosted instances: invites an unlinked
 // instance to connect, and shows a linked one how many mailboxes are in the
-// pool. Dismissal of the invite is remembered locally.
+// pool. Dismissal of the invite is remembered locally. Once linked the strip
+// stays quiet: one line of state, and the Premium nudge only when the free
+// allowance is actually used up.
 
 import React from "react";
 import { Link } from "react-router-dom";
-import { CloudIcon, XIcon } from "lucide-react";
+import { ArrowRightIcon, CloudIcon, ExternalLinkIcon, MailCheckIcon, TrendingUpIcon, XIcon } from "lucide-react";
 import useCloudPool from "@/hooks/useCloudPool";
 
 const DISMISS_KEY = "warmbly.cloud-pool-banner.dismissed";
@@ -16,17 +18,49 @@ export default function CloudPoolBanner({ onConnect, mailboxCount }: { onConnect
     if (!pool.selfHosted || pool.loading) return null;
 
     if (pool.connected) {
-        const limit = pool.plan?.mailbox_limit ?? null;
+        const plan = pool.plan;
+        const limit = plan?.mailbox_limit ?? null;
+        const premium = plan?.tier === "paid";
+        // The allowance is per cloud workspace, so the cloud's count is the
+        // one that decides, not this instance's own enrolled count.
+        const used = plan?.enrolled ?? pool.enrolledCount;
+        const atLimit = !premium && limit !== null && used >= limit && mailboxCount > pool.enrolledCount;
+        if (atLimit && plan?.upgrade_url) {
+            return (
+                <div>
+                    <div className="flex items-center gap-3 rounded-md border border-slate-200 bg-white px-3 py-2.5 text-[12.5px] text-slate-700">
+                        <SoftIcon icon={TrendingUpIcon} />
+                        <span className="min-w-0 flex-1 leading-snug">
+                            <span className="font-medium text-slate-900">Give every mailbox better deliverability.</span>{" "}
+                            <span className="text-slate-500">
+                                All {limit} free pool mailboxes are in use. Premium warms the rest in the premium pool, built for inbox placement, for ${plan.price_usd} a month.
+                            </span>
+                        </span>
+                        <a
+                            href={plan.upgrade_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="shrink-0 h-7 px-2.5 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-colors"
+                        >
+                            Upgrade to Premium
+                            <ExternalLinkIcon className="w-3 h-3" />
+                        </a>
+                    </div>
+                </div>
+            );
+        }
         return (
-            <div className="px-5 pt-4">
-                <div className="flex items-center gap-2.5 rounded-md border border-sky-200/70 bg-sky-50/60 px-3 py-2 text-[12.5px] text-sky-900">
+            <div>
+                <div className="flex items-center gap-2.5 rounded-md border border-slate-200 bg-white px-3 py-2 text-[12.5px] text-slate-700">
                     <CloudIcon className="w-4 h-4 shrink-0 text-sky-600" />
                     <span className="min-w-0 flex-1 leading-snug">
                         <span className="font-medium">
-                            {pool.enrolledCount === 0 ? "No mailbox is in the Warmbly pool yet." : `${pool.enrolledCount} of ${mailboxCount} mailboxes warm in the Warmbly pool.`}
+                            {pool.enrolledCount === 0
+                                ? "No mailbox is warming in Warmbly Cloud yet."
+                                : `${pool.enrolledCount} of ${mailboxCount} mailboxes warm in Warmbly Cloud.`}
                         </span>{" "}
-                        <span className="text-sky-900/80">
-                            {limit === null ? "Unlimited mailboxes." : `${pool.enrolledCount} of ${limit} free.`} Use the cloud icon on a row, or the warmup menu, to add one.
+                        <span className="text-slate-500">
+                            {premium ? "Premium pool." : limit === null ? "Unlimited." : `${used} of ${limit} free.`}
                         </span>
                     </span>
                     <Link to="/app/settings/warmbly-cloud" className="shrink-0 text-[12px] font-medium text-sky-700 hover:text-sky-900 underline underline-offset-2">
@@ -40,21 +74,23 @@ export default function CloudPoolBanner({ onConnect, mailboxCount }: { onConnect
     if (dismissed) return null;
 
     return (
-        <div className="px-5 pt-4">
-            <div className="flex items-center gap-2.5 rounded-md border border-sky-200/70 bg-gradient-to-r from-sky-50 to-white px-3 py-2.5 text-[12.5px] text-slate-800">
-                <span className="size-7 rounded-md bg-sky-600 text-white inline-flex items-center justify-center shrink-0">
-                    <CloudIcon className="w-3.5 h-3.5" />
-                </span>
+        <div>
+            <div className="flex items-center gap-3 rounded-md border border-slate-200 bg-white px-3 py-2.5 text-[12.5px] text-slate-700">
+                <SoftIcon icon={MailCheckIcon} />
                 <span className="min-w-0 flex-1 leading-snug">
-                    <span className="font-medium">Warm these mailboxes in the Warmbly pool.</span>{" "}
-                    <span className="text-slate-600">Thousands of real mailboxes, replies and spam rescue handled for you. Free for up to 10 mailboxes; everything else stays on this server.</span>
+                    <span className="font-medium text-slate-900">Get these mailboxes into the inbox, not spam.</span>{" "}
+                    <span className="text-slate-500">
+                        Warm them in Warmbly Cloud's large, active pool to build sender reputation, with replies and spam rescue handled for you.
+                        Free for 10 mailboxes, set up in a minute, and your data stays here.
+                    </span>
                 </span>
                 <button
                     type="button"
                     onClick={onConnect}
                     className="shrink-0 h-7 px-2.5 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-colors"
                 >
-                    Connect
+                    Connect for free
+                    <ArrowRightIcon className="w-3 h-3" />
                 </button>
                 <button
                     type="button"
@@ -69,5 +105,14 @@ export default function CloudPoolBanner({ onConnect, mailboxCount }: { onConnect
                 </button>
             </div>
         </div>
+    );
+}
+
+// A soft round badge: tinted fill and a hairline ring, lighter than a solid tile.
+function SoftIcon({ icon: Icon }: { icon: React.ComponentType<{ className?: string }> }) {
+    return (
+        <span className="size-8 rounded-full bg-sky-50 text-sky-600 ring-1 ring-sky-100 inline-flex items-center justify-center shrink-0" aria-hidden="true">
+            <Icon className="w-4 h-4" />
+        </span>
     );
 }

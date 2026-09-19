@@ -29,7 +29,10 @@ export interface PoolLinkPlan {
     mailbox_limit: number | null;
     enrolled: number;
     price_usd: number;
+    /** The cloud's billing page with the warmup plan checkout open; only on the free tier. */
     upgrade_url?: string;
+    /** The cloud's billing page; absent when the cloud runs without billing. */
+    manage_url?: string;
     warmup_entitled: boolean;
 }
 

@@ -7,26 +7,51 @@
 import { Link } from "react-router-dom";
 import { SparklesIcon } from "lucide-react";
 import useFeatureAccess from "@/hooks/useFeatureAccess";
+import useCloudPool from "@/hooks/useCloudPool";
+import { usePermission } from "@/hooks/usePermission";
 import { PLAN_ACCENT_CLASSES, getPlan } from "@/lib/plans";
 import { cn } from "@/lib/utils";
 
 export function PlanPill() {
     const access = useFeatureAccess();
+    const pool = useCloudPool();
+    // The Warmbly Cloud page is manage-settings gated; everyone else lands
+    // on their profile rather than on a "no access" screen.
+    const cloudTo = usePermission("MANAGE_SETTINGS") ? "/app/settings/warmbly-cloud" : "/app/settings/profile";
     if (access.loading) {
         return (
             <div className="h-6 w-16 rounded border border-slate-200 bg-slate-100 animate-pulse" />
         );
     }
 
-    // No billing provider: nothing is metered, so there is no plan to show.
+    // No billing provider: nothing is metered here. The one plan a
+    // self-hosted instance can hold is its Warmbly Cloud pool plan, so once
+    // it is linked the pill shows that instead of the deployment mode.
     if (!access.billing) {
+        if (pool.selfHosted && pool.connected && pool.plan) {
+            const premium = pool.plan.tier === "paid";
+            return (
+                <Badge
+                    to={cloudTo}
+                    className={premium ? "bg-sky-50 text-sky-700 border-sky-100" : "bg-slate-100 text-slate-600 border-slate-200"}
+                    dot={premium ? "bg-sky-500" : "bg-slate-400"}
+                    label={premium ? "Cloud · Premium" : "Cloud · Free"}
+                    title={
+                        premium
+                            ? "Warmbly Cloud Premium: better deliverability for every mailbox"
+                            : `Warmbly Cloud: ${pool.plan.enrolled} of ${pool.plan.mailbox_limit ?? 10} free pool mailboxes used`
+                    }
+                    icon={premium}
+                />
+            );
+        }
         return (
             <Badge
-                to={access.isOwner ? "/app/settings/workspace" : "/app/settings/profile"}
+                to={cloudTo}
                 className="bg-indigo-50 text-indigo-700 border-indigo-100"
                 dot="bg-indigo-500"
                 label="Self-hosted"
-                title="Self-hosted deployment: every feature is unlocked"
+                title="Self-hosted: every feature is unlocked. Warm your mailboxes in the Warmbly pool"
                 icon
             />
         );
