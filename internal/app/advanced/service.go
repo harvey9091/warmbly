@@ -1594,9 +1594,9 @@ func (s *service) verifyEventOwnership(ctx context.Context, organizationID uuid.
 		ct, err := s.taskRepo.GetCampaignTask(ctx, *req.TaskID)
 		switch {
 		case err == nil && ct != nil && ct.CampaignID != nil:
-			// The task names its own campaign; a task from one campaign paired
-			// with another campaign's id is how a caller would aim a real
-			// bounce at a step it does not own.
+			// The task names its own campaign, so the pair has to agree: a real
+			// task id combined with a different campaign id describes a step
+			// that does not exist.
 			if req.CampaignID != nil && *ct.CampaignID != *req.CampaignID {
 				return foreign
 			}
@@ -1644,12 +1644,12 @@ func (s *service) IngestDeliverabilityEvent(ctx context.Context, organizationID 
 		return errx.New(errx.BadRequest, "invalid event_type")
 	}
 
-	// Every id in the body is caller-supplied, and the ids of a campaign, a
-	// contact and a send task are all visible to the recipient of one campaign
-	// email (the task id is in the tracking pixel URL). Without this gate a
-	// customer could report bounces and complaints against another workspace's
-	// campaign, moving its progress counters, its A/B assignment and its
-	// auto-pause breaker, and raising a warmup spam report on its mailbox.
+	// Every id in the body is caller-supplied, and a campaign, contact and task
+	// id are all visible to the recipient of a campaign email: the task id is in
+	// the tracking pixel URL. They therefore prove nothing on their own, and
+	// each has to be resolved inside the caller's workspace before this event is
+	// allowed to move progress counters, A/B assignment, the auto-pause breaker
+	// or warmup health.
 	if xerr := s.verifyEventOwnership(ctx, organizationID, req); xerr != nil {
 		return xerr
 	}

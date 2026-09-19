@@ -56,9 +56,9 @@ func (h *Handler) UpdateOutreachSettings(c *gin.Context) {
 }
 
 // ownedCampaign resolves the :id campaign for the advanced-outreach routes and
-// proves it belongs to the caller's organization. These routes are scoped only
-// by campaign id, so without this a member of any workspace could read and
-// rewrite another one's sending settings and A/B variants by id.
+// proves it belongs to the caller's organization. The route carries only a
+// campaign id, so this is the only thing that ties the request to a tenant:
+// every handler here must go through it rather than parsing the param itself.
 func (h *Handler) ownedCampaign(c *gin.Context) (uuid.UUID, *errx.Error) {
 	campaignID, err := uuid.Parse(c.Param("id"))
 	if err != nil {

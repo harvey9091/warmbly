@@ -560,10 +560,10 @@ func (r *crmRepository) DeleteStage(ctx context.Context, orgID, stageID uuid.UUI
 
 // crmRefs names the foreign rows a deal, task or note can point at. Every one
 // of them arrives in the request body, and the read path joins them back onto
-// the row, so each has to be proven to live in the caller's organization before
-// it is stored. Without this a member of one workspace could create a deal
-// naming another workspace's contact and read that contact's name, address and
-// company back out of the deal search.
+// the row and returns their fields, so each has to be proven to live in the
+// caller's organization before it is stored. The joins carry the tenant
+// predicate as well: a stored reference and a read of it are two separate
+// chances to get this wrong.
 type crmRefs struct {
 	PipelineID      *uuid.UUID
 	StageID         *uuid.UUID

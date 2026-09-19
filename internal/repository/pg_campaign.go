@@ -1110,8 +1110,8 @@ func (r *campaignRepository) Update(ctx context.Context, orgID, campaignID strin
 		argPos++
 	}
 	if data.ContactOrderField != nil {
-		// The two order fields above are allowlisted and this one was not, even
-		// though it is the one that reaches an ORDER BY expression. It is a
+		// This is the order field that reaches an ORDER BY expression, so it is
+		// validated on the way in like the two allowlisted ones above. It is a
 		// custom-field key, so it answers to the same rule as every other
 		// custom-field key in the product.
 		field := utils.NormalizeJSONKey(*data.ContactOrderField)

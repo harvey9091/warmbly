@@ -1309,10 +1309,10 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 	// 2. Ordered candidate contacts + their last-sent step (with engagement) + sent set.
 	//
 	// args carries the query's bound parameters. The custom-field key is one of
-	// them: it is the only part of the ORDER BY that comes from a customer, and
-	// concatenating it into the SQL text put an injection inside a quoted
-	// literal that ran on the scheduler rather than the request, where nobody
-	// would have seen it fail.
+	// them: it is the only part of this ORDER BY that comes from a customer, so
+	// it is bound rather than written into the SQL text. This query runs on the
+	// scheduler rather than in a request, which is the worst place to learn that
+	// an identifier was not what it claimed.
 	args := []any{campaignID, config.CampaignSendMaxAttempts}
 
 	var contactOrder string

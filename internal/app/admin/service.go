@@ -595,11 +595,10 @@ func (s *adminService) GrantAdminPermissions(ctx context.Context, adminID, targe
 		return errx.New(errx.BadRequest, "cannot modify your own permissions")
 	}
 
-	// An admin may only hand out permissions they hold themselves. Without
-	// this, the single grant_admin_access bit was enough to mint a super admin,
-	// or to escalate in two hops by granting a colleague everything and having
-	// them grant it back. A super admin holds every bit, so this never blocks
-	// them.
+	// An admin may only hand out permissions they hold themselves, so holding
+	// grant_admin_access is not by itself a route to every other bit, directly
+	// or in two hops through a colleague. A super admin holds every bit, so this
+	// never blocks them.
 	granter, gerr := s.repo.GetUserDetail(ctx, adminID)
 	if gerr != nil {
 		errs.CaptureException(gerr)

@@ -923,8 +923,8 @@ func (s *organizationService) GetUserPendingInvitations(ctx context.Context, ema
 }
 
 // CancelInvitation cancels a pending invitation. The org id comes from the
-// caller's session, never from the request: without it any workspace holding
-// manage_team could delete another one's pending invitations by id.
+// caller's session, never from the request, so the invitation id alone cannot
+// address a row outside the caller's workspace.
 func (s *organizationService) CancelInvitation(ctx context.Context, orgID, invitationID uuid.UUID) *errx.Error {
 	inv, err := s.orgRepo.GetInvitationByID(ctx, invitationID)
 	if err != nil {

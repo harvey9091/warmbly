@@ -660,11 +660,10 @@ func (s *service) restoreBlobs(ctx context.Context, tx pgx.Tx, orgID uuid.UUID, 
 			"Object storage is not configured here, so %d attachment(s) in the archive were not restored.", len(m.Blobs))}
 	}
 
-	// The keys come out of the archive, which is a file the customer uploaded.
-	// Writing one verbatim let a crafted archive place bytes on another
-	// workspace's keys, and place an executable content type under a public
-	// prefix that /public then served from this origin. A key is only written
-	// when it is one this product mints, for this workspace.
+	// The keys come out of the archive, which is a file the customer uploaded,
+	// so the archive does not get to choose where the bytes land. A key is only
+	// written when it matches a shape this product mints, and a public one is
+	// re-scoped to this workspace with its extension checked.
 	scope, err := loadBlobKeyScope(ctx, tx, orgID)
 	if err != nil {
 		return []string{"Attachments were not restored: this instance could not confirm which objects the archive is allowed to write."}

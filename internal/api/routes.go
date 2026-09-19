@@ -850,9 +850,9 @@ func Run(
 			{
 				apiKeys.GET("", h.ListAPIKeys)
 				// A new key is a durable credential that outlives the session
-				// that made it, so it needs a fresh confirmation. RequireFreshAuth
-				// also refuses API-key callers, which stops one leaked key from
-				// minting more.
+				// that made it, so a session caller confirms first. A key or
+				// OAuth caller has no session to confirm and passes through to
+				// the permission gate.
 				apiKeys.POST("", middleware.RequireFreshAuth(), h.CreateAPIKey)
 				apiKeys.GET("/permissions", h.ListAPIPermissions)
 				apiKeys.GET("/usage/summary", h.GetAPIKeyUsageSummary)

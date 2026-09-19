@@ -13,11 +13,11 @@ import (
 //
 // CASA 2.4.1 asks for a full session plus re-authentication or a secondary
 // check before a sensitive account change. Changing a password and disabling
-// 2FA already demand a current credential. The changes gated here did not, and
-// each of them either hands an attacker a durable credential of their own (an
-// API key, a passkey registered to their device) or is irreversible from the
-// victim's side (ownership transfer, scheduled deletion). A stolen access token
-// was enough for all of them.
+// 2FA already demand a current credential; the actions gated here are the rest
+// of that set. Each either hands out a credential that outlives the session
+// that created it (an API key, a passkey registered to a device) or cannot be
+// reversed by the person it was done to (ownership transfer, scheduled
+// deletion), which is more than a live token alone should carry.
 //
 // The caller re-authenticates at POST /v1/auth/reauth and retries.
 //

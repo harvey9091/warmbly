@@ -50,9 +50,8 @@ func TestBlobKeyScopeAllows(t *testing.T) {
 // An archive made on another instance names the SOURCE workspace in the keys of
 // its public objects, because that is the path the bytes lived at there. Those
 // keys are rewritten to the importing workspace rather than refused: refusing
-// would make every cross-instance import silently lose its images, and
-// honouring the source id would let a crafted archive write into another
-// workspace's prefix.
+// would make every cross-instance import silently lose its images, and taking
+// the source id at its word would let the archive choose the prefix.
 func TestBlobKeyScopeRewritesTheWorkspaceSegment(t *testing.T) {
 	dest := uuid.MustParse("11111111-1111-4111-8111-111111111111")
 	source := uuid.MustParse("22222222-2222-4222-8222-222222222222")

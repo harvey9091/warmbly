@@ -13,18 +13,15 @@ import (
 // The object keys an archive may write, and nothing else.
 //
 // A key in the manifest is a string from a file the customer uploaded, so it is
-// attacker-controlled in exactly the way a filename is, and it used to be
-// handed to the blob store verbatim. Two things followed from that. A crafted
-// archive could write over another workspace's objects by naming their keys,
-// because a key carries its own scope and nothing checked it against the
-// workspace doing the import. And a key under a public prefix is served from
-// `/public` with a Content-Type derived from its extension, so `evil.svg` or
-// `evil.html` became stored script on this instance's own origin, reachable
-// without signing in. Every upload handler forces the extension for that exact
-// reason; the import path was the way around them.
+// untrusted in exactly the way a filename is, and two properties of a key make
+// that matter. A key carries its own workspace scope, so it has to be settled
+// against the workspace doing the import rather than taken at its word. And a
+// key under a public prefix is served from `/public` with a Content-Type
+// derived from its extension, which is why every upload handler forces that
+// extension from a server-side allowlist instead of trusting a filename.
 //
 // So a key is accepted only when it matches a shape this product actually
-// mints, for this destination workspace.
+// mints, and is written under this destination workspace.
 const maxBlobKeyLength = 512
 
 // publicBlobExtensions is the set of extensions the upload handlers can produce
@@ -76,9 +73,9 @@ func loadBlobKeyScope(ctx context.Context, tx pgx.Tx, orgID uuid.UUID) (blobKeyS
 // The two org-scoped public prefixes carry the SOURCE workspace's id, because
 // that is the path the bytes lived at on the instance that exported them. On a
 // cross-instance move the destination workspace has a different id, so the
-// segment is rewritten rather than checked: validating it would refuse every
-// legitimate archive, and honouring it would let a crafted one write into
-// another workspace's prefix. Rewriting does both jobs at once.
+// segment is rewritten rather than checked. Validating it would refuse every
+// legitimate archive; taking it at its word would let the archive choose which
+// workspace's prefix the bytes land in. Rewriting does both jobs at once.
 //
 // The caller has to store the returned key, not the one in the manifest, and
 // repoint the row that references it.
@@ -118,9 +115,8 @@ func (s blobKeyScope) allows(key string) bool {
 		// email-images/<orgID>/<name>.<ext>, form-assets/<orgID>/<name>.<ext>.
 		// Both are served from /public, so the extension has to be an image.
 		// The workspace segment is not compared: it names the SOURCE workspace
-		// and plan rewrites it to this one, which is what keeps a crafted
-		// archive out of another workspace's prefix. It still has to be a uuid,
-		// so the shape cannot be used to smuggle anything.
+		// and plan rewrites it to this one, which is what decides the prefix the
+		// bytes land under. It still has to be a uuid, so the shape stays fixed.
 		if len(parts) != 3 || !publicImageName(parts[2]) {
 			return false
 		}
