@@ -74,16 +74,29 @@ type AdminService interface {
 	LogAdminAction(ctx context.Context, adminID uuid.UUID, action, targetType string, targetID *uuid.UUID, details map[string]any, ipAddress, userAgent string)
 }
 
+// SessionRevoker ends a user's live sessions. Implemented by the token
+// service, which also clears the Redis session cache: a database-only revoke
+// stays invisible to every request served from cache, which is most of them.
+type SessionRevoker interface {
+	RevokeOtherSessions(ctx context.Context, userID, currentSessionID uuid.UUID) *errx.Error
+}
+
 type adminService struct {
 	repo repository.AdminRepository
 	// The owner-visible campaign activity feed.
 	campaignLogRepo repository.CampaignLogRepository
+	// sessions ends a banned user's live sessions. Nil-safe: without it a ban
+	// still lands, it just does not take effect until the tokens expire.
+	sessions SessionRevoker
 }
 
 // NewService creates a new admin service
 func NewService(repo repository.AdminRepository, campaignLogRepo repository.CampaignLogRepository) AdminService {
 	return &adminService{repo: repo, campaignLogRepo: campaignLogRepo}
 }
+
+// WithSessionRevoker wires the session revoker used when a login ban lands.
+func (s *adminService) WithSessionRevoker(r SessionRevoker) { s.sessions = r }
 
 // logAction logs an admin action
 func (s *adminService) logAction(ctx context.Context, adminID uuid.UUID, action, targetType string, targetID uuid.UUID, details map[string]any, ipAddress, userAgent string) {
@@ -197,6 +210,18 @@ func (s *adminService) BanUser(ctx context.Context, adminID, userID uuid.UUID, r
 	if err := s.repo.BanUser(ctx, userID, adminID, reason, uint32(scope)); err != nil {
 		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to ban user")
+	}
+
+	// A login ban that leaves live sessions alone bans nothing for up to twelve
+	// hours: the access token keeps working, the refresh token mints new ones
+	// from it, and the websocket keeps streaming. uuid.Nil matches no session,
+	// so every one of them is revoked.
+	if models.BanScope(scope).Has(models.BanScopeLogin) && s.sessions != nil {
+		if rerr := s.sessions.RevokeOtherSessions(ctx, userID, uuid.Nil); rerr != nil {
+			// The ban is already recorded; report the leftover sessions rather
+			// than failing the ban and leaving the account unbanned.
+			errs.CaptureException(rerr)
+		}
 	}
 
 	s.logAction(ctx, adminID, "ban_user", "user", userID, map[string]any{"reason": reason, "scope": uint32(scope)}, ipAddress, userAgent)
@@ -570,6 +595,23 @@ func (s *adminService) GrantAdminPermissions(ctx context.Context, adminID, targe
 		return errx.New(errx.BadRequest, "cannot modify your own permissions")
 	}
 
+	// An admin may only hand out permissions they hold themselves. Without
+	// this, the single grant_admin_access bit was enough to mint a super admin,
+	// or to escalate in two hops by granting a colleague everything and having
+	// them grant it back. A super admin holds every bit, so this never blocks
+	// them.
+	granter, gerr := s.repo.GetUserDetail(ctx, adminID)
+	if gerr != nil {
+		errs.CaptureException(gerr)
+		return errx.New(errx.Internal, "failed to check admin permissions")
+	}
+	if granter == nil {
+		return errx.ErrForbidden
+	}
+	if permissions&^granter.AdminPermissions != 0 {
+		return errx.New(errx.Forbidden, "cannot grant an admin permission you do not hold yourself")
+	}
+
 	if err := s.repo.UpdateUserAdminPermissions(ctx, targetUserID, uint32(permissions), adminID); err != nil {
 		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to grant admin permissions")
@@ -583,6 +625,25 @@ func (s *adminService) RevokeAdminPermissions(ctx context.Context, adminID, targ
 	// Cannot modify own permissions
 	if adminID == targetUserID {
 		return errx.New(errx.BadRequest, "cannot modify your own permissions")
+	}
+
+	// Refuse to remove the last super admin. warmblyctl already guards this;
+	// the API did not, so the instance could be left with nobody able to grant
+	// admin access back, recoverable only with database access.
+	target, terr := s.repo.GetUserDetail(ctx, targetUserID)
+	if terr != nil {
+		errs.CaptureException(terr)
+		return errx.New(errx.Internal, "failed to load user")
+	}
+	if target != nil && target.AdminPermissions.IsSuperAdmin() {
+		remaining, cerr := s.repo.CountSuperAdmins(ctx)
+		if cerr != nil {
+			errs.CaptureException(cerr)
+			return errx.New(errx.Internal, "failed to count admins")
+		}
+		if remaining <= 1 {
+			return errx.New(errx.BadRequest, "this is the last super admin; grant another one before revoking this one")
+		}
 	}
 
 	if err := s.repo.UpdateUserAdminPermissions(ctx, targetUserID, 0, adminID); err != nil {

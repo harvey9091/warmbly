@@ -27,6 +27,14 @@ import (
 // a second time on commit; storing the parsed buffer between calls
 // would either pin memory or require a tmp store, neither of which is
 // worth it for the typical (small) file size.
+// XLSX decompression budgets. A contact import is a list of people, so even a
+// very large one is tens of megabytes of text; these are generous for that and
+// far below what a zip bomb needs.
+const (
+	xlsxUnzipLimitBytes    = 512 << 20 // 512 MiB total uncompressed
+	xlsxUnzipXMLLimitBytes = 64 << 20  // 64 MiB for any single XML part
+)
+
 func (s *contactService) ImportPreview(ctx context.Context, r io.Reader, filename string) (*models.ContactImportPreview, *errx.Error) {
 	rows, format, xerr := parseSpreadsheet(r, filename)
 	if xerr != nil {
@@ -730,7 +738,25 @@ func appendUnique(dst []string, add ...string) []string {
 // parseSpreadsheet returns rows as a 2-D slice and the detected format.
 // CSV is decoded with the stdlib (forgiving about trailing commas /
 // quoting), XLSX is decoded with excelize. Anything else 400s.
-func parseSpreadsheet(r io.Reader, filename string) ([][]string, string, *errx.Error) {
+// parseSpreadsheet turns an uploaded file into rows.
+//
+// It recovers from a panic in the parser. The XLSX reader is a third-party
+// parser of a zip of XML written by whoever uploaded the file, and it carries
+// at least one open advisory with no fix available (a negative shared-string
+// index panics). The request middleware would catch that and answer 500, but a
+// malformed workbook is the caller's problem and should read as one, not as an
+// instance fault that pages the error tracker.
+func parseSpreadsheet(r io.Reader, filename string) (rows [][]string, kind string, xerr *errx.Error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			rows, kind = nil, ""
+			xerr = errx.New(errx.BadRequest, "this file could not be read as a spreadsheet; export it again from your spreadsheet application and retry")
+		}
+	}()
+	return parseSpreadsheetInner(r, filename)
+}
+
+func parseSpreadsheetInner(r io.Reader, filename string) ([][]string, string, *errx.Error) {
 	ext := strings.ToLower(filepath.Ext(filename))
 	switch ext {
 	case ".csv", ".tsv", ".txt", "":
@@ -746,7 +772,16 @@ func parseSpreadsheet(r io.Reader, filename string) ([][]string, string, *errx.E
 		}
 		return rows, "csv", nil
 	case ".xlsx", ".xlsm":
-		f, err := excelize.OpenReader(r)
+		// An XLSX is a zip of XML, so its uncompressed size is unrelated to the
+		// upload cap. excelize defaults to a 16 GB unzip budget, and GetRows
+		// materialises the whole sheet before the row cap is ever applied, so a
+		// small file with a sparse dimension and a large shared-strings table
+		// could exhaust memory on the backend. Bound the decompression, then
+		// stream the rows and stop at the cap.
+		f, err := excelize.OpenReader(r, excelize.Options{
+			UnzipSizeLimit:    xlsxUnzipLimitBytes,
+			UnzipXMLSizeLimit: xlsxUnzipXMLLimitBytes,
+		})
 		if err != nil {
 			return nil, "xlsx", errx.New(errx.BadRequest, "failed to parse XLSX: "+err.Error())
 		}
@@ -759,8 +794,27 @@ func parseSpreadsheet(r io.Reader, filename string) ([][]string, string, *errx.E
 			}
 			sheetName = names[0]
 		}
-		rows, err := f.GetRows(sheetName)
+		it, err := f.Rows(sheetName)
 		if err != nil {
+			return nil, "xlsx", errx.New(errx.BadRequest, "failed to read XLSX rows: "+err.Error())
+		}
+		defer it.Close()
+
+		// One row past the cap, so the caller can still tell "too many rows"
+		// from "exactly at the limit".
+		limit := models.MaxContactImportRows + 1
+		rows := make([][]string, 0, 256)
+		for it.Next() {
+			cols, cerr := it.Columns()
+			if cerr != nil {
+				return nil, "xlsx", errx.New(errx.BadRequest, "failed to read XLSX rows: "+cerr.Error())
+			}
+			rows = append(rows, cols)
+			if len(rows) >= limit {
+				break
+			}
+		}
+		if err := it.Error(); err != nil {
 			return nil, "xlsx", errx.New(errx.BadRequest, "failed to read XLSX rows: "+err.Error())
 		}
 		return rows, "xlsx", nil

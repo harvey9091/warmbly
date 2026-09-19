@@ -144,6 +144,8 @@ Two more controls are yours:
 - **Captcha challenge** adds a Cloudflare Turnstile check to the form. The toggle appears once the operator has configured Turnstile for the instance.
 - **Allowed embed domains** limits which sites may embed the form. With domains listed, browsers refuse to frame the page anywhere else (a domain covers its subdomains); empty allows any site. The hosted link keeps working either way.
 
+  Worth listing your domains even if you only embed on one site. A form left open to any origin can be framed invisibly under someone else's page and used to collect leads that look like yours, and the browser is the only thing that can prevent it.
+
 ## Data and portability
 
 Forms, their design, their logo and cover images, their submissions, personalized link tickets and funnel events all belong to the **Contacts** data group of a [workspace archive](/guides/workspace-export-import/). The public form id travels with them, so embed codes installed on your website keep working after a move to another instance (point your embeds at the new host), and link tickets travel verbatim, so personalized links already sitting in sent emails keep identifying their contacts. A form's campaign link is dropped on import when campaigns stay behind.

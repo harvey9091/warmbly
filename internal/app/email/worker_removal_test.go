@@ -74,7 +74,7 @@ func (s *stubRemovalRepo) GetSMTPCredentials(ctx context.Context, emailAccountID
 	return &repository.SMTPCredentials{SMTPHost: "smtp.test.local", SMTPPort: 587, IMAPHost: "imap.test.local", IMAPPort: 993}, nil
 }
 
-func (s *stubRemovalRepo) Delete(ctx context.Context, emailAccountID string, workerLoadRefund float64) *errx.Error {
+func (s *stubRemovalRepo) Delete(ctx context.Context, userID, emailAccountID string, workerLoadRefund float64) *errx.Error {
 	s.deleteCalls++
 	s.refunded = append(s.refunded, workerLoadRefund)
 	s.record("delete")
@@ -269,7 +269,7 @@ func TestDisablingSucceedsEvenWhenTheBusIsDown(t *testing.T) {
 func TestDeleteTellsTheWorkerBeforeTheRowGoes(t *testing.T) {
 	f := newRemovalFixture(t)
 
-	if xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String()); xerr != nil {
+	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr != nil {
 		t.Fatalf("delete: %v", xerr)
 	}
 
@@ -294,7 +294,7 @@ func TestDeleteKeepsTheMailboxWhenTheWorkerCannotBeTold(t *testing.T) {
 	f := newRemovalFixture(t)
 	f.pub.removeErr = errBusDown
 
-	xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String())
+	xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String())
 	if xerr == nil {
 		t.Fatal("the mailbox was deleted without the worker ever being told")
 	}
@@ -315,7 +315,7 @@ func TestDeleteKeepsTheMailboxWhenTheAssignmentCannotBeRead(t *testing.T) {
 	f := newRemovalFixture(t)
 	f.repo.workerErr = errx.InternalError()
 
-	if xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String()); xerr == nil {
+	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr == nil {
 		t.Fatal("the mailbox was deleted on an unreadable assignment")
 	}
 	if f.repo.deleteCalls != 0 {
@@ -329,7 +329,7 @@ func TestDeleteWithoutAWorkerStillRemovesTheRow(t *testing.T) {
 	f.repo.workerID = nil
 	f.repo.account.WorkerID = nil
 
-	if xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String()); xerr != nil {
+	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr != nil {
 		t.Fatalf("delete: %v", xerr)
 	}
 	if len(f.pub.removed) != 0 {
@@ -347,7 +347,7 @@ func TestDeleteWithoutAWorkerStillRemovesTheRow(t *testing.T) {
 func TestDeleteGivesTheWorkerItsCapacityBack(t *testing.T) {
 	f := newRemovalFixture(t)
 
-	if xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String()); xerr != nil {
+	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr != nil {
 		t.Fatalf("delete: %v", xerr)
 	}
 	if len(f.repo.refunded) != 1 || f.repo.refunded[0] != worker.MailboxWeight("smtp_imap", false) {
@@ -363,7 +363,7 @@ func TestDeleteRefundsTheWeightTheMailboxWasChargedAt(t *testing.T) {
 	f.repo.account.Provider = "gmail"
 	f.repo.account.Warmup = &warming
 
-	if xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String()); xerr != nil {
+	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr != nil {
 		t.Fatalf("delete: %v", xerr)
 	}
 	if len(f.repo.refunded) != 1 || f.repo.refunded[0] != worker.MailboxWeight("gmail", true) {
@@ -373,40 +373,34 @@ func TestDeleteRefundsTheWeightTheMailboxWasChargedAt(t *testing.T) {
 
 // The removal must never be reachable for a mailbox the caller does not own:
 // the lookup that finds it is unscoped, so ownership is checked here.
-func TestDeleteRefusesAMailboxOfAnotherWorkspace(t *testing.T) {
+func TestDeleteRefusesAMailboxTheCallerDoesNotOwn(t *testing.T) {
 	f := newRemovalFixture(t)
-	other := uuid.New()
-	f.repo.account.OrganizationID = &other
+	f.repo.account.UserID = uuid.New().String()
 
-	xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String())
+	xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String())
 	if xerr != errx.ErrNotFound {
 		t.Fatalf("error = %v, want not found", xerr)
 	}
 	if len(f.pub.removed) != 0 || f.repo.deleteCalls != 0 {
-		t.Errorf("acted on another workspace's mailbox: %d removals, %d deletes", len(f.pub.removed), f.repo.deleteCalls)
+		t.Errorf("acted on someone else's mailbox: %d removals, %d deletes", len(f.pub.removed), f.repo.deleteCalls)
 	}
 }
 
-// The mailbox belongs to the workspace, not to whoever connected it: a
-// teammate with the permission can disconnect it, and the removal still names
-// the owner, which is the id the consumer's unibox cleanup is keyed on.
-func TestDeleteByATeammateNamesTheOwner(t *testing.T) {
+// Owner ids arriving in different letter case are the same owner; Postgres
+// compares them as uuids and so does this.
+func TestDeleteAcceptsTheOwnerInAnyCase(t *testing.T) {
 	f := newRemovalFixture(t)
-	owner := uuid.New().String()
-	f.repo.account.UserID = owner
+	f.repo.account.UserID = uuidUpper(f.user)
 
-	if xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String()); xerr != nil {
-		t.Fatalf("a teammate was refused a mailbox in their own workspace: %v", xerr)
-	}
-	if len(f.pub.removed) != 1 || f.pub.removed[0].userID != owner {
-		t.Errorf("removal = %+v, want one naming owner %s", f.pub.removed, owner)
+	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr != nil {
+		t.Fatalf("the owner was refused their own mailbox: %v", xerr)
 	}
 }
 
 func TestDeleteRejectsAMalformedID(t *testing.T) {
 	f := newRemovalFixture(t)
 
-	if xerr := f.svc.Delete(context.Background(), f.org.String(), "not-a-uuid"); xerr != errx.ErrUuid {
+	if xerr := f.svc.Delete(context.Background(), f.user.String(), "not-a-uuid"); xerr != errx.ErrUuid {
 		t.Fatalf("error = %v, want a uuid error", xerr)
 	}
 	if f.repo.deleteCalls != 0 {
@@ -420,7 +414,7 @@ func TestDeleteOfAMissingMailboxPublishesNothing(t *testing.T) {
 	f := newRemovalFixture(t)
 	f.repo.getErr = errx.ErrNotFound
 
-	if xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String()); xerr != errx.ErrNotFound {
+	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr != errx.ErrNotFound {
 		t.Fatalf("error = %v, want not found", xerr)
 	}
 	if len(f.pub.removed) != 0 || f.repo.deleteCalls != 0 {
@@ -434,7 +428,7 @@ func TestDeleteWithNoPublisherWired(t *testing.T) {
 	f := newRemovalFixture(t)
 	f.svc.publisher = nil
 
-	if xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String()); xerr != nil {
+	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr != nil {
 		t.Fatalf("delete: %v", xerr)
 	}
 	if f.repo.deleteCalls != 1 {
@@ -445,6 +439,17 @@ func TestDeleteWithNoPublisherWired(t *testing.T) {
 	}
 }
 
+// uuidUpper renders an id the way a caller that upper-cases its ids would.
+func uuidUpper(id uuid.UUID) string {
+	out := []rune(id.String())
+	for i, r := range out {
+		if r >= 'a' && r <= 'f' {
+			out[i] = r - 32
+		}
+	}
+	return string(out)
+}
+
 // A delete that fails after the removal was published leaves a mailbox that is
 // still active but no longer loaded anywhere. It goes straight back on rather
 // than waiting minutes for the reconciler.
@@ -452,7 +457,7 @@ func TestAFailedDeletePutsTheMailboxBackOnItsWorker(t *testing.T) {
 	f := newRemovalFixture(t)
 	f.repo.deleteErr = errx.InternalError()
 
-	if xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String()); xerr == nil {
+	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr == nil {
 		t.Fatal("a failed delete was reported as success")
 	}
 	if len(f.pub.added) != 1 || f.pub.added[0] != f.mailbox {

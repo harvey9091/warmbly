@@ -1570,6 +1570,60 @@ func ptrTime(t time.Time) *time.Time {
 	return &t
 }
 
+// verifyEventOwnership refuses a deliverability event whose campaign, contact
+// or task belongs to another organization. Anything absent is fine; anything
+// present has to resolve inside the caller's workspace.
+func (s *service) verifyEventOwnership(ctx context.Context, organizationID uuid.UUID, req *models.IngestDeliverabilityEventRequest) *errx.Error {
+	foreign := errx.New(errx.NotFound, "campaign, contact or task not found")
+
+	if req.CampaignID != nil {
+		campaign, err := s.campaignRepo.GetByID(ctx, *req.CampaignID)
+		if err != nil || campaign == nil || campaign.OrganizationID == nil || *campaign.OrganizationID != organizationID {
+			return foreign
+		}
+	}
+
+	if req.ContactID != nil {
+		owned, xerr := s.contactRepo.GetByIDsAndOrganization(ctx, organizationID, []uuid.UUID{*req.ContactID})
+		if xerr != nil || len(owned) == 0 {
+			return foreign
+		}
+	}
+
+	if req.TaskID != nil {
+		ct, err := s.taskRepo.GetCampaignTask(ctx, *req.TaskID)
+		switch {
+		case err == nil && ct != nil && ct.CampaignID != nil:
+			// The task names its own campaign; a task from one campaign paired
+			// with another campaign's id is how a caller would aim a real
+			// bounce at a step it does not own.
+			if req.CampaignID != nil && *ct.CampaignID != *req.CampaignID {
+				return foreign
+			}
+			taskCampaign, cErr := s.campaignRepo.GetByID(ctx, *ct.CampaignID)
+			if cErr != nil || taskCampaign == nil || taskCampaign.OrganizationID == nil || *taskCampaign.OrganizationID != organizationID {
+				return foreign
+			}
+		default:
+			// Not every task belongs to a campaign: a test send and an inbound
+			// bounce resolved by message id both reach here with a task that has
+			// no campaign row. Those still have to belong to the caller, so
+			// fall back to the mailbox that owns the task rather than refusing
+			// and silently dropping real bounce processing.
+			task, tErr := s.taskRepo.GetTask(ctx, *req.TaskID)
+			if tErr != nil || task == nil {
+				return foreign
+			}
+			account, aErr := s.emailRepo.GetByID(ctx, task.EmailAccountID)
+			if aErr != nil || account == nil || account.OrganizationID == nil || *account.OrganizationID != organizationID {
+				return foreign
+			}
+		}
+	}
+
+	return nil
+}
+
 func (s *service) IngestDeliverabilityEvent(ctx context.Context, organizationID uuid.UUID, req *models.IngestDeliverabilityEventRequest) *errx.Error {
 	if req == nil {
 		return errx.New(errx.BadRequest, "event payload is required")
@@ -1588,6 +1642,16 @@ func (s *service) IngestDeliverabilityEvent(ctx context.Context, organizationID 
 		models.DeliverabilityEventReply:
 	default:
 		return errx.New(errx.BadRequest, "invalid event_type")
+	}
+
+	// Every id in the body is caller-supplied, and the ids of a campaign, a
+	// contact and a send task are all visible to the recipient of one campaign
+	// email (the task id is in the tracking pixel URL). Without this gate a
+	// customer could report bounces and complaints against another workspace's
+	// campaign, moving its progress counters, its A/B assignment and its
+	// auto-pause breaker, and raising a warmup spam report on its mailbox.
+	if xerr := s.verifyEventOwnership(ctx, organizationID, req); xerr != nil {
+		return xerr
 	}
 
 	idempotencyKey := strings.TrimSpace(req.IdempotencyKey)

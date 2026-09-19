@@ -11,7 +11,7 @@
 # (adds librdkafka + CGO; slower, and CGO cannot cross-compile — build each arch
 # on a native runner). Runtime selection is still by env
 # (EVENTBUS_PROVIDER / CODEC_PROVIDER).
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 ARG GO_TAGS=""
 ARG TARGETOS TARGETARCH

@@ -90,10 +90,10 @@ type OrganizationService interface {
 	// Invitations
 	GetPendingInvitations(ctx context.Context, orgID uuid.UUID) ([]models.OrganizationInvitation, *errx.Error)
 	GetUserPendingInvitations(ctx context.Context, email string) ([]models.OrganizationInvitation, *errx.Error)
-	CancelInvitation(ctx context.Context, invitationID uuid.UUID) *errx.Error
+	CancelInvitation(ctx context.Context, orgID, invitationID uuid.UUID) *errx.Error
 
 	// Ownership transfer
-	TransferOwnership(ctx context.Context, orgID, newOwnerUserID uuid.UUID) *errx.Error
+	TransferOwnership(ctx context.Context, orgID, actorUserID, newOwnerUserID uuid.UUID) *errx.Error
 
 	// Permission checks
 	HasPermission(ctx context.Context, orgID, userID uuid.UUID, perm models.OrganizationPermission) (bool, *errx.Error)
@@ -152,7 +152,7 @@ type OrganizationService interface {
 	// RejectLimitRequest path. Approving rewrites the override row via
 	// SetLimitOverrides so the audit story stays unified.
 	SubmitLimitIncreaseRequest(ctx context.Context, orgID, submitterID uuid.UUID, req *models.CreateLimitIncreaseRequest) (*models.LimitIncreaseRequest, *errx.Error)
-	ListLimitRequestsForOrg(ctx context.Context, orgID uuid.UUID) ([]models.LimitIncreaseRequest, *errx.Error)
+	ListLimitRequestsForOrg(ctx context.Context, orgID, requesterID uuid.UUID) ([]models.LimitIncreaseRequest, *errx.Error)
 	CancelLimitRequest(ctx context.Context, id, userID uuid.UUID) *errx.Error
 	AdminListLimitRequests(ctx context.Context, search *models.AdminLimitRequestSearch) (*models.AdminLimitRequestsResult, *errx.Error)
 	ApproveLimitRequest(ctx context.Context, id, reviewerID uuid.UUID, notes string) (*models.LimitIncreaseRequest, *errx.Error)
@@ -548,6 +548,21 @@ func (s *organizationService) GetMembership(ctx context.Context, orgID, userID u
 	return member, nil
 }
 
+// requireMember is the membership gate for handlers that carry an org id in
+// the path rather than taking it from the session. GetMembership answers
+// (nil, nil) for a non-member, so callers that only test the error let
+// everyone through; this is the form that fails closed.
+func (s *organizationService) requireMember(ctx context.Context, orgID, userID uuid.UUID) *errx.Error {
+	member, xerr := s.GetMembership(ctx, orgID, userID)
+	if xerr != nil {
+		return xerr
+	}
+	if member == nil {
+		return errx.New(errx.Forbidden, "not a member of this organization")
+	}
+	return nil
+}
+
 // InviteMember invites a new member to the organization
 func (s *organizationService) InviteMember(ctx context.Context, orgID uuid.UUID, inviterID uuid.UUID, req *models.InviteMemberRequest) (*models.OrganizationInvitation, *errx.Error) {
 	// Refuse to mint an invitation the recipient could never redeem. With
@@ -687,9 +702,17 @@ func (s *organizationService) PreviewInvitation(ctx context.Context, token strin
 	if inv == nil {
 		return nil, errx.New(errx.NotFound, "invitation not found")
 	}
+	// An expired invitation is answered with the fact that it expired and
+	// nothing else. The token is unguessable, but it can outlive its usefulness
+	// in an inbox or a log, and there is no reason for a stale one to keep
+	// handing out the invitee's address and the workspace's name.
+	if inv.IsExpired() {
+		return &models.InvitationPreview{Expired: true}, nil
+	}
+
 	preview := &models.InvitationPreview{
 		Email:   inv.Email,
-		Expired: inv.IsExpired(),
+		Expired: false,
 	}
 	if inv.Organization != nil {
 		preview.OrganizationName = inv.Organization.Name
@@ -899,8 +922,19 @@ func (s *organizationService) GetUserPendingInvitations(ctx context.Context, ema
 	return invitations, nil
 }
 
-// CancelInvitation cancels a pending invitation
-func (s *organizationService) CancelInvitation(ctx context.Context, invitationID uuid.UUID) *errx.Error {
+// CancelInvitation cancels a pending invitation. The org id comes from the
+// caller's session, never from the request: without it any workspace holding
+// manage_team could delete another one's pending invitations by id.
+func (s *organizationService) CancelInvitation(ctx context.Context, orgID, invitationID uuid.UUID) *errx.Error {
+	inv, err := s.orgRepo.GetInvitationByID(ctx, invitationID)
+	if err != nil {
+		errs.CaptureException(err)
+		return errx.New(errx.Internal, "failed to load invitation")
+	}
+	if inv == nil || inv.OrganizationID != orgID {
+		return errx.ErrNotFound
+	}
+
 	if err := s.orgRepo.DeleteInvitation(ctx, invitationID); err != nil {
 		errs.CaptureException(err)
 		return errx.New(errx.Internal, "failed to cancel invitation")
@@ -909,7 +943,22 @@ func (s *organizationService) CancelInvitation(ctx context.Context, invitationID
 }
 
 // TransferOwnership transfers organization ownership
-func (s *organizationService) TransferOwnership(ctx context.Context, orgID, newOwnerUserID uuid.UUID) *errx.Error {
+func (s *organizationService) TransferOwnership(ctx context.Context, orgID, actorUserID, newOwnerUserID uuid.UUID) *errx.Error {
+	// Only the current owner may hand the workspace over. The route is gated
+	// on PermTransferOwnership, but that permission can sit in a custom role,
+	// and a delegate transferring ownership to themselves is an escalation.
+	org, oerr := s.orgRepo.GetByID(ctx, orgID)
+	if oerr != nil {
+		errs.CaptureException(oerr)
+		return errx.New(errx.Internal, "failed to load organization")
+	}
+	if org == nil {
+		return errx.ErrNotFound
+	}
+	if org.OwnerUserID != actorUserID {
+		return errx.New(errx.Forbidden, "only the workspace owner can transfer ownership")
+	}
+
 	// Verify new owner is a member
 	member, err := s.orgRepo.GetMember(ctx, orgID, newOwnerUserID)
 	if err != nil {
@@ -1428,7 +1477,7 @@ func (s *organizationService) SubmitLimitIncreaseRequest(ctx context.Context, or
 	// on its behalf. Owner check happens at the per-org-permission
 	// layer for org-config writes; for limit requests any active
 	// member is acceptable.
-	if _, xerr := s.GetMembership(ctx, orgID, submitterID); xerr != nil {
+	if xerr := s.requireMember(ctx, orgID, submitterID); xerr != nil {
 		return nil, xerr
 	}
 
@@ -1484,7 +1533,10 @@ func (s *organizationService) SubmitLimitIncreaseRequest(ctx context.Context, or
 	return lr, nil
 }
 
-func (s *organizationService) ListLimitRequestsForOrg(ctx context.Context, orgID uuid.UUID) ([]models.LimitIncreaseRequest, *errx.Error) {
+func (s *organizationService) ListLimitRequestsForOrg(ctx context.Context, orgID, requesterID uuid.UUID) ([]models.LimitIncreaseRequest, *errx.Error) {
+	if xerr := s.requireMember(ctx, orgID, requesterID); xerr != nil {
+		return nil, xerr
+	}
 	rows, err := s.orgRepo.ListLimitRequestsForOrg(ctx, orgID)
 	if err != nil {
 		errs.CaptureException(err)

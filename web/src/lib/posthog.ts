@@ -80,13 +80,20 @@ export function loadPostHog(): Promise<PostHog | null> {
                 capture_performance: { web_vitals: true, network_timing: true },
                 disable_session_recording: !POSTHOG_SESSION_REPLAY,
                 session_recording: {
-                    // Only what is typed into a password field is hidden. A
-                    // mailbox's app password and an API secret are both
-                    // password inputs, so that is exactly the credential set.
+                    // Password inputs cover the mailbox app password and the
+                    // API secret. They do not cover the one-time codes, which
+                    // are plain inputs so the browser will autofill them from
+                    // SMS and mail, nor a secret the page has already revealed
+                    // as text. Those carry data-ph-mask / .ph-mask and are
+                    // named here.
                     maskAllInputs: false,
                     maskInputOptions: { password: true },
+                    maskTextSelector: "[data-ph-mask], .ph-mask, [data-otp-input], input[autocomplete='one-time-code']",
                 },
-                enable_recording_console_log: true,
+                // Console output is replayed alongside the session, so anything
+                // printed is retained. Off: it is not worth one careless log of
+                // a token, and exceptions are captured separately below.
+                enable_recording_console_log: false,
                 respect_dnt: false,
                 capture_exceptions: POSTHOG_ERROR_TRACKING
                     ? {

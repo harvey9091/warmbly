@@ -33,6 +33,8 @@ They are displayed a single time during setup, each works once, and they are you
 
 At sign-in, the code submits automatically once six digits are in. Without your authenticator, choose **Use a recovery code**.
 
+Each code works once. An authenticator code stays valid for about a minute so a slow connection still works, but once it has signed you in, that same code is spent and cannot be used again.
+
 Disabling asks for a current code or a recovery code first. With 2FA off you are protected only by your password plus the emailed code, and setting it up again issues a fresh secret and new recovery codes, invalidating the old ones.
 
 ## Passkeys
@@ -47,6 +49,21 @@ Each entry shows when it was added and last used, and can be renamed or removed.
 Unsynced passkeys live only on the device that created them. On a device without one, Warmbly says none was found and you sign in with your password, then add a passkey there.
 </Callout>
 
+## Confirming sensitive changes
+
+Some changes ask you to confirm it is you even though you are already signed in:
+
+- creating an API key
+- adding or removing a passkey
+- transferring a workspace to someone else
+- scheduling a workspace or account for deletion
+
+Enter your password or a code from your authenticator, whichever your account has. The confirmation lasts five minutes, so a run of related changes only asks once.
+
+If you signed up with Google, Apple or your company's single sign-on, your account may have neither a password nor 2FA yet. There is nothing to confirm with in that case, so turn on 2FA first; the prompt says so rather than refusing a password you never set.
+
+This exists because the things on that list either hand out a credential that outlives the session that made it, or cannot be undone from your side. Someone who got hold of a signed-in browser should not be able to do any of them without knowing something you know.
+
 ## Sessions
 
 Every signed-in device appears under **Sessions** with its device (`Chrome on macOS`), location where known, sign-in method (Email, Google, Apple, or Passkey), and last activity. Your current device is tagged **This device**.
@@ -57,9 +74,17 @@ Every signed-in device appears under **Sessions** with its device (`Chrome on ma
 Sign out the session, change your password, and make sure 2FA is on. Signing out other sessions is the fastest way to cut off access.
 </Callout>
 
+## Choosing a password
+
+A password has to be between 8 and 128 characters, and it is checked against a list of the 100,000 most commonly breached passwords published by the UK National Cyber Security Centre. If yours appears there, it is refused and you are told why. The check is case-insensitive, so capitalising the first letter of a known password does not get past it.
+
+There is no rule about mixing upper case, digits and symbols. A long passphrase you can remember beats a short one with a symbol bolted on, which is what current guidance from NIST and the NCSC both say. The dashboard shows a strength meter as you type.
+
+Repeated wrong passwords are counted per account, not just per device, so guessing one account from many addresses does not buy an attacker more attempts. After ten failures the account stops accepting password attempts for an hour. Signing in correctly clears the count.
+
 ## Password and alerts
 
-Change your password under **Password**: current password, then a new one of at least 12 characters with upper and lower case and a number. **Changing it signs out every other device automatically**, while the device you change it on stays in. Accounts that only use Google, Apple, or a passkey have no password to change.
+Change your password under **Password**: current password, then a new one. **Changing it signs out every other device automatically**, while the device you change it on stays in. Accounts that only use Google, Apple, or a passkey have no password to change.
 
 **Sign-in alerts** notify you when your account is accessed from a new browser and OS combination, naming the device and location with a reminder to act if it was not you. They appear in your in-app feed by default; enable email under **Settings > Notifications**, Security section, Email channel. Your first sign-in is never alerted, as there is nothing to compare against.
 

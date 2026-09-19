@@ -13,6 +13,7 @@ import (
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/cache"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -36,6 +37,12 @@ type Service interface {
 	EnrollStart(ctx context.Context, userID uuid.UUID) (*EnrollStart, *errx.Error)
 	EnrollConfirm(ctx context.Context, userID uuid.UUID, code string) ([]string, *errx.Error)
 	Disable(ctx context.Context, userID uuid.UUID, code string) *errx.Error
+	// VerifyCurrentCode checks a TOTP or recovery code for a user who is
+	// already signed in, without changing anything. Used by the re-auth
+	// endpoint so someone with 2FA on can confirm with their authenticator
+	// rather than retyping a password they may not have (passkey and SSO
+	// accounts often have none).
+	VerifyCurrentCode(ctx context.Context, userID uuid.UUID, code string) bool
 	// CreatePendingChallenge mints a short-lived single-use pending token for a
 	// 2FA login challenge (called from the login gate after the email code).
 	CreatePendingChallenge(ctx context.Context, userID uuid.UUID) (string, int, *errx.Error)
@@ -79,6 +86,18 @@ func (s *service) Disable(ctx context.Context, userID uuid.UUID, code string) *e
 	return nil
 }
 
+// VerifyCurrentCode reports whether the code is a valid TOTP or recovery code
+// for this user right now. A recovery code is consumed, and a TOTP step is
+// retired, exactly as they are at sign-in: a code that has confirmed something
+// must not confirm a second thing.
+func (s *service) VerifyCurrentCode(ctx context.Context, userID uuid.UUID, code string) bool {
+	row, err := s.repo.Get(ctx, userID)
+	if err != nil || row == nil || !row.Enabled {
+		return false
+	}
+	return s.validCode(ctx, userID, row, code)
+}
+
 // validCode checks a code against the user's TOTP secret OR consumes a matching
 // recovery code. Used by both Disable and VerifyLogin.
 func (s *service) validCode(ctx context.Context, userID uuid.UUID, row *models.UserTOTP, code string) bool {
@@ -89,7 +108,19 @@ func (s *service) validCode(ctx context.Context, userID uuid.UUID, row *models.U
 	if err != nil {
 		return false
 	}
-	return ValidateCode(secret, code)
+	step, ok := ValidateCodeStep(secret, code)
+	if !ok {
+		return false
+	}
+	// A correct code is only accepted once. Its step is retired here, so the
+	// same digits presented again inside their ±1-step validity window are
+	// refused rather than signing someone in a second time.
+	fresh, cerr := s.repo.ConsumeTOTPStep(ctx, userID, step)
+	if cerr != nil {
+		errs.CaptureException(cerr)
+		return false
+	}
+	return fresh
 }
 
 // --- pending-challenge cache (Redis, mirrors the auth login_sess pattern) ---

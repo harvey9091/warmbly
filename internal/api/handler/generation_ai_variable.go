@@ -80,7 +80,7 @@ func (h *Handler) GenerateAIVariable(c *gin.Context) {
 		return
 	}
 	if h.AIProvider == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "AI generation is not configured."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "AI generation is not configured."))
 		return
 	}
 
@@ -210,7 +210,7 @@ func (h *Handler) GenerateAIVariable(c *gin.Context) {
 				remaining = bal
 			}
 		}
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "AI generation is temporarily unavailable. Your credit was not charged."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "AI generation is temporarily unavailable. Your credit was not charged."))
 		return
 	}
 

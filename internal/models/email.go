@@ -481,6 +481,13 @@ type EmailOnboardingState struct {
 	// EmailAccountID marks a re-authorization round trip: the finish leg
 	// renews this mailbox's tokens instead of connecting a new one.
 	EmailAccountID *uuid.UUID `json:"email_account_id,omitempty"`
+	// CodeVerifier is the PKCE verifier for this round trip. It stays here,
+	// server-side, and is never sent to the browser: the point of PKCE is that
+	// only the party that started the flow can finish it, so an authorization
+	// code intercepted anywhere between the provider and this backend is not
+	// redeemable. Empty for a state written before PKCE was added, which the
+	// exchange tolerates so an in-flight consent still lands.
+	CodeVerifier string `json:"code_verifier,omitempty"`
 }
 
 // EmailOnboardingStartResponse is returned from POST /emails/onboarding/oauth/start.

@@ -226,7 +226,7 @@ func main() {
 	// integration actions in-process (cipher + Postgres are available here; the
 	// consumer is control-plane, not a worker). Suppression already lives in the
 	// advanced repo, so no separate suppression repo is wired here.
-	webhookRepoC := repository.NewWebhookRepository(primaryDB.Pool)
+	webhookRepoC := repository.NewWebhookRepositorySealed(primaryDB.Pool, credEncrypter)
 	webhookService := webhook.NewService(webhookRepoC)
 	// The consumer dispatches lower-volume reply/warmup events (not per-contact
 	// campaign fan-out), so a generous static cap is enough here; the plan-based

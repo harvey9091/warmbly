@@ -128,6 +128,13 @@ func (h *Handler) renderOAuthCallback(c *gin.Context, provider string) {
 		data.Status = "Connection cancelled."
 	}
 
+	// This page is one inline script that hands the code to the opener and
+	// closes. It loads nothing and submits nothing, so the policy says so;
+	// 'unsafe-inline' covers the script that is the page itself.
+	// Cross-Origin-Opener-Policy is relaxed here because talking to the
+	// opener is the whole job, and the message is addressed to one origin.
+	c.Header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+	c.Header("Cross-Origin-Opener-Policy", "unsafe-none")
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.Status(http.StatusOK)
 	_ = callbackPage.Execute(c.Writer, data)

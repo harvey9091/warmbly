@@ -6,6 +6,9 @@
 //    obvious "you are not an admin" screen rather than silently
 //    forwarding them — same-domain dashboard users could otherwise
 //    land here by mistake.
+// 4. If they are an admin but their session did not present a second factor,
+//    say so and point at where to turn one on. The backend refuses these
+//    routes either way; this is what turns that 403 into instructions.
 
 import { useEffect } from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
@@ -65,6 +68,22 @@ export function RequireAdmin() {
                 </p>
                 <a href="/auth/login" className="text-sm underline text-muted-foreground">
                     Switch account
+                </a>
+            </div>
+        );
+    }
+
+    if (me.session_mfa_verified === false) {
+        return (
+            <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-background p-6 text-center">
+                <AdminBadge />
+                <h1 className="text-xl font-semibold">Two-factor authentication required</h1>
+                <p className="text-sm text-muted-foreground max-w-sm">
+                    Administrative access needs a second factor. Open the dashboard, turn on 2FA
+                    or add a passkey under Settings &gt; Security, then sign in here again.
+                </p>
+                <a href="/auth/login" className="text-sm underline text-muted-foreground">
+                    Sign in again
                 </a>
             </div>
         );

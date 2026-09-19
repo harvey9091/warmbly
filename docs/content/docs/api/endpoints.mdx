@@ -290,7 +290,7 @@ Changing Advisor settings (`PATCH /advisor/settings`) is JWT only, alongside the
 | Method | Path | API Permission |
 |--------|------|----------------|
 | GET | `/api-keys` | `API_KEYS` |
-| POST | `/api-keys` | `API_KEYS` |
+| POST | `/api-keys` | `API_KEYS`, JWT only |
 | GET | `/api-keys/permissions` | `API_KEYS` |
 | GET | `/api-keys/:id` | `API_KEYS` |
 | PATCH | `/api-keys/:id` | `API_KEYS` |
@@ -299,6 +299,8 @@ Changing Advisor settings (`PATCH /advisor/settings`) is JWT only, alongside the
 | DELETE | `/api-keys/self` | none |
 
 `DELETE /api-keys/:id/permanent` deletes a key that has already been revoked or has expired, taking its usage logs with it. A key that could still authenticate gets a `409`, because revoking is what records that a credential was ended and why. See [Ending a key](/api/authentication/).
+
+`POST /api-keys` requires a recent confirmation (`POST /auth/reauth`) when called from a signed-in session, because a key outlives the session that made it and a stolen browser token should not be able to leave one behind. An API key or OAuth token calling it is unaffected: it has no session and no second factor to present, it was itself minted from a confirmed session, and the `API_KEYS` scope is the explicit grant that governs it. Automation and the CLI keep working.
 
 `DELETE /api-keys/self` revokes the key the request was made with, and is the one route here that needs no scope. A credential must always be able to end itself: requiring `API_KEYS` to sign out would leave a read-only key on a laptop someone is handing back live, which is what [`warmbly auth logout`](/api/cli/) promises to prevent. A JWT caller gets a `400`: there is no key in that request to end, only a session, which `POST /auth/logout` ends.
 
@@ -388,10 +390,27 @@ Folders (on campaigns), tags (on mailboxes) and categories (on contacts and inbo
 These never accept an API key. They depend on a human-bound session: billing flows, governance, OAuth onboarding, websocket bootstrap, and operational destruction.
 
 - `POST /auth/login`, `/auth/login/confirm`, `/auth/register`, `/auth/register/confirm`, `/auth/refresh`, `/auth/reset-password`, `/auth/reset-password/confirm`
+- `POST /auth/reauth` (re-prove the account holder behind a live session, for the changes that require a recent confirmation)
 - `GET /auth/config` (public deployment capabilities: which sign-in methods this backend has enabled, whether a login code step follows, whether signups are open, whether the instance still needs claiming)
 - `GET /auth/instance` (JWT only: the running Warmbly version of a self-hosted instance and whether a newer release exists, for the dashboard's version pill; a hosted deployment answers `self_hosted: false` and nothing else)
 
 `POST /auth/register` accepts an optional `invite` field carrying an invitation token. On a deployment running `DISABLE_REGISTRATION=invite_only` it is what permits the signup, and the account is created inside the inviting organization rather than in a new one. The token must resolve to a live invitation whose email equals the submitted address, otherwise the request is refused with `invitation_invalid`. Omitting it on a closed deployment returns `registration_invite_only` or `registration_closed`. See [error codes](/api/error-codes/#registration-and-invitation-refusals).
+
+### Actions that need a recent confirmation
+
+Four changes require the session to have confirmed the account holder within the last five minutes, over and above the permission they already need:
+
+| Action | Route |
+|--------|-------|
+| Create an API key | `POST /api-keys` |
+| Add a passkey | `POST /auth/passkey/register/begin`, `/finish` |
+| Remove a passkey | `DELETE /auth/passkey/credentials/:id` |
+| Transfer a workspace | `POST /organizations/transfer-ownership` |
+| Schedule a workspace or account for deletion | `POST /organizations/current/danger-zone/delete`, `POST /me/danger-zone/delete` |
+
+Each either hands out a credential that outlives the session that created it, or cannot be reversed by the person it was done to. Without a confirmation they answer `403` with code `reauth_required`; confirm with `POST /auth/reauth` (password or a current two-factor code) and retry. See [error codes](/api/error-codes/#confirmation-required).
+
+This applies to session callers. An API key or OAuth token has no session to confirm and is not the threat here, so it passes straight through to the route's permission gate.
 
 `GET /auth/config` gained two fields: `invites_required` (boolean, true when an invitation token is needed to create an account) and `docs_url` (string, the deployment's link to the accounts and access documentation, for a client to surface next to a refusal).
 

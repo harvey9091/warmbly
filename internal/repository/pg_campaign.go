@@ -17,6 +17,7 @@ import (
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/pkg/mailhtml"
+	"github.com/warmbly/warmbly/internal/utils"
 	"github.com/warmbly/warmbly/internal/utils/paging"
 	"github.com/warmbly/warmbly/internal/utils/validate"
 )
@@ -1109,8 +1110,16 @@ func (r *campaignRepository) Update(ctx context.Context, orgID, campaignID strin
 		argPos++
 	}
 	if data.ContactOrderField != nil {
+		// The two order fields above are allowlisted and this one was not, even
+		// though it is the one that reaches an ORDER BY expression. It is a
+		// custom-field key, so it answers to the same rule as every other
+		// custom-field key in the product.
+		field := utils.NormalizeJSONKey(*data.ContactOrderField)
+		if field != "" && !utils.IsValidJSONKey(field) {
+			return nil, errx.ErrInvalid
+		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "contact_order_field", argPos))
-		args = append(args, *data.ContactOrderField)
+		args = append(args, field)
 		argPos++
 	}
 

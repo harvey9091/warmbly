@@ -227,6 +227,12 @@ var Tables = []Table{
 		Name: "webhook_endpoints", Group: models.OrgDataGroupCore,
 		Scope:         scopeOrg,
 		ResetOnImport: []string{"last_success_at", "last_failure_at", "last_failure_reason", "consecutive_failures", "first_failure_at", "auto_disabled_at", "disabled_reason"},
+		// The signing secret is sealed under the instance key, so it has to be
+		// re-sealed on the way across or the destination hands the receiver
+		// signatures computed from ciphertext it could not read.
+		Secrets: []SecretColumn{
+			{Column: "secret", Domain: KeyDomainInstance},
+		},
 	},
 	{
 		Name: "outreach_settings", Group: models.OrgDataGroupCore,

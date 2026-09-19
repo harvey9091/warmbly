@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	tokenpkg "github.com/warmbly/warmbly/internal/app/token"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/notify/templates"
@@ -83,7 +84,7 @@ func (s *authService) startPasswordReset(ctx context.Context, data *ResetPasswor
 	issuedAt := time.Now()
 	expiresAt := issuedAt.Add(PasswordResetTTL)
 
-	token, err := s.tokenService.GenerateToken(user.ID, sessionID, data.Email, nonce, issuedAt, expiresAt)
+	token, err := s.tokenService.GenerateTokenFor(tokenpkg.PurposePasswordReset, user.ID, sessionID, data.Email, nonce, issuedAt, expiresAt)
 	if err != nil {
 		errs.CaptureException(err)
 		return errx.InternalError()
@@ -139,7 +140,7 @@ func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPassw
 		return err
 	}
 
-	sess, err := s.tokenService.VerifyToken(session)
+	sess, err := s.tokenService.VerifyTokenFor(tokenpkg.PurposePasswordReset, session)
 	if err != nil {
 		return err
 	}
@@ -161,8 +162,13 @@ func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPassw
 		return err
 	}
 
-	if !crypt.ValidatePassword(data.Password) {
-		return errx.ErrPassword
+	// Proving control of the mailbox clears any lockout that wrong passwords
+	// accumulated, so a person who was locked out is not still locked out after
+	// resetting, and an attacker cannot keep the lock on by guessing.
+	s.clearLoginFailures(ctx, normalizeEmail(sess.Email))
+
+	if perr := crypt.PasswordError(data.Password); perr != nil {
+		return perr
 	}
 
 	passwordHash, hashErr := argon2.Hash(data.Password)
@@ -209,8 +215,8 @@ func (s *authService) ChangePassword(ctx context.Context, userID, currentSession
 		return errx.ErrCredentials
 	}
 
-	if !crypt.ValidatePassword(data.NewPassword) {
-		return errx.ErrPassword
+	if perr := crypt.PasswordError(data.NewPassword); perr != nil {
+		return perr
 	}
 	if data.NewPassword == data.CurrentPassword {
 		return errx.New(errx.BadRequest, "the new password must be different")
@@ -236,4 +242,9 @@ func (s *authService) ChangePassword(ctx context.Context, userID, currentSession
 		}
 	}
 	return nil
+}
+
+// PasswordHashFor returns the stored argon2 hash for a user.
+func (s *authService) PasswordHashFor(ctx context.Context, userID uuid.UUID) (string, *errx.Error) {
+	return s.authRepository.GetPasswordHash(ctx, userID)
 }

@@ -49,6 +49,7 @@ RUN --mount=type=secret,id=sentry_auth_token,required=false \
 # entrypoint renders /config.js from container env at startup.
 FROM nginx:1.27-alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY nginx-security-headers.conf /etc/nginx/warmbly-security-headers.conf
 RUN nginx -t
 COPY --from=build /app/dist /usr/share/nginx/html
 # public/ files keep their checkout mode through the build; on a filesystem

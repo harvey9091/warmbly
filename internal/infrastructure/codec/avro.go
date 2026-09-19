@@ -11,7 +11,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/schemaregistry"
@@ -134,7 +133,7 @@ func (c *AvroCodec) register(subject string, schema avro.Schema) (int, error) {
 	}
 	id, err = c.client.Register(subject, schemaregistry.SchemaInfo{Schema: string(doc)}, true)
 	if err != nil {
-		return 0, fmt.Errorf("codec: register %s: %w%s", subject, err, registryHint(err))
+		return 0, fmt.Errorf("codec: register %s: %w", subject, err)
 	}
 	c.mu.Lock()
 	c.ids[key] = id
@@ -165,29 +164,3 @@ func (c *AvroCodec) schemaByID(subject string, id int) (avro.Schema, error) {
 
 // subjectFor is Confluent's TopicNameStrategy, the default everywhere else.
 func subjectFor(topic string) string { return topic + "-value" }
-
-// registryHint names what a registry refusal means and what resolves it.
-//
-// The bare answer is a number: "error code: 40901: Schema being registered is
-// incompatible with an earlier schema for subject w.<uuid>-value". Every send
-// on that worker's topic fails for as long as the two disagree, and the number
-// alone does not say that the subject is per topic, that the envelope is
-// derived from the registry in internal/models/event_variants.go, or that the
-// fix is a compatibility decision rather than a retry.
-func registryHint(err error) string {
-	text := err.Error()
-	switch {
-	case strings.Contains(text, "40901"):
-		return " (the subject already holds a schema this one cannot evolve from," +
-			" so nothing can be published on this topic until they agree:" +
-			" check the envelope derived in internal/models/event_schema.go against" +
-			" the subject's registered versions, and the subject's compatibility level)"
-	case strings.Contains(text, "40401") || strings.Contains(text, "40403"):
-		return " (the registry has no such subject or version; a registry that" +
-			" does not auto-register needs the subject created before a publish)"
-	case strings.Contains(text, "401") && strings.Contains(strings.ToLower(text), "unauthorized"):
-		return " (the registry refused the credentials in SCHEMA_REGISTRY_URL;" +
-			" check the key and secret this instance was given)"
-	}
-	return ""
-}

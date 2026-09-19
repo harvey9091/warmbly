@@ -16,3 +16,22 @@ const (
 	// their own values, so the security page can name what was actually used.
 	AuthProviderOIDC = "oidc"
 )
+
+// Token purposes. Every JWT this service signs carries one, and each verifier
+// requires the purpose it expects.
+//
+// Without it, all of these tokens were interchangeable: they share one signing
+// key and one claim shape, so a password-reset link token or the challenge
+// token issued after a password but before the emailed code would open a
+// websocket and stream a workspace's events. The Go side was safe only because
+// each token is separately bound to a nonce in Redis or a row in `sessions`;
+// the realtime service checks neither, and had nothing else to go on.
+const (
+	PurposeAccess        = "access"
+	PurposeRefresh       = "refresh"
+	PurposeWebSocket     = "ws"
+	PurposeLoginCode     = "login"
+	PurposeRegistration  = "registration"
+	PurposePasswordReset = "reset"
+	PurposeTwoFAPending  = "2fa"
+)

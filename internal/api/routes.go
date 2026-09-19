@@ -39,7 +39,7 @@ func Run(
 	// ours, which reports the panic with its request context before returning
 	// the same 500. Everything else about the pair is unchanged.
 	r := gin.New()
-	r.Use(gin.Logger())
+	r.Use(middleware.RequestLogger())
 	r.Use(middleware.Recovery())
 
 	// Gin trusts every proxy by default, which makes X-Forwarded-For (and so
@@ -54,6 +54,10 @@ func Run(
 	} else {
 		_ = r.SetTrustedProxies(nil)
 	}
+
+	// Registered before every route, including the public ones below, so the
+	// headers reach the OAuth bouncer pages and /public as well as the API.
+	r.Use(middleware.SecurityHeaders())
 
 	r.Use(middleware.RequestIDMiddleware())
 	r.Use(middleware.APIVersionMiddleware(middleware.APIVersion))
@@ -93,7 +97,7 @@ func Run(
 	// token rather than an operator session, because the machine running it
 	// has no credentials yet.
 	r.GET("/join.sh", h.ServeJoinScript)
-	r.POST("/api/v1/fleet/join", h.FleetJoin)
+	r.POST("/api/v1/fleet/join", m.PublicIPRateLimitMiddleware(), h.FleetJoin)
 
 	// Public OAuth-bouncer pages used by the mailbox onboarding popup.
 	// The provider redirects here; the page postMessages the code/state
@@ -109,13 +113,13 @@ func Run(
 	// Public recipient unsubscribe (RFC 8058 one-click and the link in the
 	// email). The path token is signed per recipient; GET only shows a
 	// confirm page, POST suppresses. Unauthenticated by design.
-	r.GET("/unsubscribe/:token", h.UnsubscribePage)
-	r.POST("/unsubscribe/:token", h.UnsubscribeSubmit)
-	r.POST("/unsubscribe/:token/resubscribe", h.UnsubscribeUndo)
+	r.GET("/unsubscribe/:token", m.PublicIPRateLimitMiddleware(), h.UnsubscribePage)
+	r.POST("/unsubscribe/:token", m.PublicIPRateLimitMiddleware(), h.UnsubscribeSubmit)
+	r.POST("/unsubscribe/:token/resubscribe", m.PublicIPRateLimitMiddleware(), h.UnsubscribeUndo)
 
 	// Public invitation preview for the /invite landing page. Unauthenticated:
 	// the secret token in the query is the capability.
-	r.GET("/invitations/lookup", h.PreviewInvitation)
+	r.GET("/invitations/lookup", m.PublicIPRateLimitMiddleware(), h.PreviewInvitation)
 
 	// On-demand TLS gate for the reverse proxy in front of this instance
 	// (Caddy's `ask`). Unauthenticated because the proxy has no credential to
@@ -126,7 +130,7 @@ func Run(
 	// PostHog reverse proxy. Content blockers drop requests to posthog.com, so
 	// the frontends are pointed here and this forwards them. Public by
 	// necessity: it serves the browser before anyone has signed in.
-	r.Any("/ingest/*path", h.PostHogProxy)
+	r.Any("/ingest/*path", m.PublicIPRateLimitMiddleware(), h.PostHogProxy)
 
 	// Internal backend-to-backend endpoints. Workers call these instead of
 	// touching Postgres directly, per the no-direct-data-services rule in
@@ -401,12 +405,21 @@ func Run(
 		protectedAuth.POST("/2fa/enroll/confirm", h.TwoFAEnrollConfirm)
 		protectedAuth.DELETE("/2fa", h.TwoFADisable)
 
+		// Re-prove the account holder behind a live session. What the routes
+		// marked RequireFreshAuth below are waiting for.
+		protectedAuth.POST("/reauth", h.Reauth)
+
 		// Passkey enrollment + management require an authenticated session.
-		protectedAuth.POST("/passkey/register/begin", h.PasskeyRegisterBegin)
-		protectedAuth.POST("/passkey/register/finish", h.PasskeyRegisterFinish)
+		//
+		// Registering a passkey adds a credential that signs in on its own, so
+		// it is a sensitive change in the CASA 2.4.1 sense: a stolen token must
+		// not be enough to leave a permanent way back in. Listing and renaming
+		// are not.
+		protectedAuth.POST("/passkey/register/begin", middleware.RequireFreshAuth(), h.PasskeyRegisterBegin)
+		protectedAuth.POST("/passkey/register/finish", middleware.RequireFreshAuth(), h.PasskeyRegisterFinish)
 		protectedAuth.GET("/passkey/credentials", h.PasskeyListCredentials)
 		protectedAuth.PATCH("/passkey/credentials/:id", h.PasskeyRenameCredential)
-		protectedAuth.DELETE("/passkey/credentials/:id", h.PasskeyDeleteCredential)
+		protectedAuth.DELETE("/passkey/credentials/:id", middleware.RequireFreshAuth(), h.PasskeyDeleteCredential)
 	}
 
 	// The full customer-facing API surface (the API-key-capable `protected`
@@ -836,7 +849,11 @@ func Run(
 			apiKeys.Use(m.RateLimitMiddleware(models.RateLimitWrite))
 			{
 				apiKeys.GET("", h.ListAPIKeys)
-				apiKeys.POST("", h.CreateAPIKey)
+				// A new key is a durable credential that outlives the session
+				// that made it, so it needs a fresh confirmation. RequireFreshAuth
+				// also refuses API-key callers, which stops one leaked key from
+				// minting more.
+				apiKeys.POST("", middleware.RequireFreshAuth(), h.CreateAPIKey)
 				apiKeys.GET("/permissions", h.ListAPIPermissions)
 				apiKeys.GET("/usage/summary", h.GetAPIKeyUsageSummary)
 				apiKeys.GET("/usage/analytics", h.GetAPIKeyAnalytics)
@@ -1216,7 +1233,7 @@ func Run(
 				org.DELETE("/invitations/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageTeam), h.CancelInvitation)
 				org.GET("/invitations/:id/link", m.RequireOrganization(), m.RequirePermission(models.PermManageTeam), h.GetInvitationLink)
 
-				org.POST("/transfer-ownership", m.RequireOrganization(), m.RequirePermission(models.PermTransferOwnership), h.TransferOwnership)
+				org.POST("/transfer-ownership", m.RequireOrganization(), m.RequirePermission(models.PermTransferOwnership), middleware.RequireFreshAuth(), h.TransferOwnership)
 
 				org.POST("/avatar", m.RequireOrganization(), h.UploadOrganizationAvatar)
 				org.DELETE("/avatar", m.RequireOrganization(), h.DeleteOrganizationAvatar)
@@ -1238,7 +1255,7 @@ func Run(
 				org.GET("/current/import/:id", m.RequireOrganization(), h.GetOrgImport)
 
 				org.GET("/current/danger-zone", m.RequireOrganization(), h.GetOrganizationDangerZone)
-				org.POST("/current/danger-zone/delete", m.RequireOrganization(), h.ScheduleOrganizationDeletion)
+				org.POST("/current/danger-zone/delete", m.RequireOrganization(), middleware.RequireFreshAuth(), h.ScheduleOrganizationDeletion)
 				org.DELETE("/current/danger-zone/delete", m.RequireOrganization(), h.CancelOrganizationDeletion)
 
 				// Customer-facing limit-increase requests. The "current
@@ -1279,7 +1296,7 @@ func Run(
 			account := jwtOnly.Group("/me")
 			{
 				account.GET("/danger-zone", h.GetAccountDangerZone)
-				account.POST("/danger-zone/delete", h.ScheduleAccountDeletion)
+				account.POST("/danger-zone/delete", middleware.RequireFreshAuth(), h.ScheduleAccountDeletion)
 				account.DELETE("/danger-zone/delete", h.CancelAccountDeletion)
 			}
 

@@ -222,7 +222,7 @@ func (d Deps) cancelInvitation(ctx context.Context, inv Invocation, args json.Ra
 	if err != nil {
 		return "", err
 	}
-	if xerr := d.Org.CancelInvitation(ctx, iid); xerr != nil {
+	if xerr := d.Org.CancelInvitation(ctx, inv.OrgID, iid); xerr != nil {
 		return "", fromErrx(xerr)
 	}
 	d.logAudit(ctx, inv, models.AuditActionRemove, models.AuditEntityInvitation, &iid, nil)

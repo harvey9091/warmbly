@@ -14,7 +14,7 @@ const PoolLinkInstanceKey = "pool_link_instance"
 func (h *Handler) PoolLinkAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if h.PoolLinkService == nil {
-			errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Pool link is not enabled on this instance."))
+			errx.JSON(c, errx.New(errx.NotImplemented, "pool link is not enabled on this instance"))
 			c.Abort()
 			return
 		}

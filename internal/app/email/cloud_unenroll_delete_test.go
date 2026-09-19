@@ -57,7 +57,7 @@ func TestDeleteRevokesTheCloudEnrollmentBeforeTheRowGoes(t *testing.T) {
 	f := newRemovalFixture(t)
 	u := withCloudEnrollment(f, false)
 
-	if xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String()); xerr != nil {
+	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr != nil {
 		t.Fatalf("delete: %v", xerr)
 	}
 	if len(u.calls) != 1 || u.calls[0] != f.mailbox {
@@ -84,7 +84,7 @@ func TestDeleteKeepsTheMailboxWhenTheCloudRefusesTheRevocation(t *testing.T) {
 	u := withCloudEnrollment(f, false)
 	u.err = errx.InternalError()
 
-	xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String())
+	xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String())
 	if xerr == nil {
 		t.Fatal("the mailbox was deleted while the pool still held its password")
 	}
@@ -106,7 +106,7 @@ func TestDeleteKeepsTheMailboxWhenTheEnrollmentCannotBeRead(t *testing.T) {
 	withCloudEnrollment(f, false)
 	f.svc.cloudLink = &stubCloudLinkRepo{err: errors.New("db down")}
 
-	if xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String()); xerr == nil {
+	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr == nil {
 		t.Fatal("the mailbox was deleted on an unreadable cloud enrollment")
 	}
 	if f.repo.deleteCalls != 0 {
@@ -127,7 +127,7 @@ func TestDeleteKeepsTheMailboxWhenCloudRevocationIsNotWired(t *testing.T) {
 			f := newRemovalFixture(t)
 			tc.setup(f.svc)
 
-			xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String())
+			xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String())
 			if xerr == nil || xerr.Identifier != ErrCloudEnrollmentStuck.Identifier {
 				t.Fatalf("error = %v, want %q", xerr, ErrCloudEnrollmentStuck.Identifier)
 			}
@@ -145,7 +145,7 @@ func TestDeleteReleasesTheCloudLinkForAManagedMailbox(t *testing.T) {
 	f := newRemovalFixture(t)
 	u := withCloudEnrollment(f, true)
 
-	if xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String()); xerr != nil {
+	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr != nil {
 		t.Fatalf("delete: %v", xerr)
 	}
 	if len(u.calls) != 1 || u.calls[0] != f.mailbox {
@@ -176,7 +176,7 @@ func TestDeleteSkipsTheCloudWhenTheMailboxIsNotEnrolled(t *testing.T) {
 	u := withCloudEnrollment(f, false)
 	f.svc.cloudLink = &stubCloudLinkRepo{}
 
-	if xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String()); xerr != nil {
+	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr != nil {
 		t.Fatalf("delete: %v", xerr)
 	}
 	if len(u.calls) != 0 {

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/warmbly/warmbly/internal/api/middleware"
 	"github.com/warmbly/warmbly/internal/formwire"
 )
 
@@ -121,7 +122,20 @@ func New(cfg Config) (*Server, error) {
 }
 
 func (s *Server) Router(trustedProxies []string) (*gin.Engine, error) {
-	r := gin.Default()
+	// Not gin.Default(): its logger prints the full request URI, and the form
+	// page carries the per-contact prefill ticket as ?t=<uuid>. That ticket
+	// discloses the contact's name, address, company and phone to whoever
+	// holds it, so it must not be written to an access log.
+	//
+	// Release mode too, unless the operator asked for otherwise: this is an
+	// internet-facing service, and debug mode prints the route table and a
+	// warning banner on every start.
+	if env := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV"))); os.Getenv("GIN_MODE") == "" &&
+		env != "" && env != "dev" && env != "development" && env != "local" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+	r := gin.New()
+	r.Use(middleware.RequestLogger(), gin.Recovery())
 	// Same posture as the backend: trust no proxy unless the operator names
 	// it, so a forged X-Forwarded-For cannot dodge the submit limiter.
 	if len(trustedProxies) > 0 {

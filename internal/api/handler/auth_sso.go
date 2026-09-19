@@ -106,7 +106,7 @@ func (h *Handler) ssoCallback(c *gin.Context, in auth.SSOCallback) {
 
 	handoff, err := h.AuthService.SSOCallbackComplete(c.Request.Context(), in)
 	if err != nil {
-		c.Redirect(http.StatusFound, base+"/auth/login?sso_error="+url.QueryEscape(err.UserMessage()))
+		c.Redirect(http.StatusFound, base+"/auth/login?sso_error="+url.QueryEscape(err.Message))
 		return
 	}
 

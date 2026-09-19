@@ -27,6 +27,9 @@ type AdminRepository interface {
 	GetUserDetail(ctx context.Context, userID uuid.UUID) (*models.AdminUserDetail, error)
 	GetUserPreview(ctx context.Context, userID uuid.UUID) (*models.AdminUserPreview, error)
 	UpdateUserAdminPermissions(ctx context.Context, userID uuid.UUID, permissions uint32, grantedBy uuid.UUID) error
+	// CountSuperAdmins reports how many users hold every live admin
+	// permission, so the last one cannot be revoked through the API.
+	CountSuperAdmins(ctx context.Context) (int, error)
 	BanUser(ctx context.Context, userID, bannedBy uuid.UUID, reason string, scope uint32) error
 	UnbanUser(ctx context.Context, userID, unbannedBy uuid.UUID, reason string) error
 	GetUserBans(ctx context.Context, userID uuid.UUID) ([]models.UserBan, error)
@@ -2151,4 +2154,13 @@ func itoa(i int) string {
 
 func joinStrings(strs []string, sep string) string {
 	return strings.Join(strs, sep)
+}
+
+// CountSuperAdmins counts users holding the full live admin mask.
+func (r *adminRepository) CountSuperAdmins(ctx context.Context) (int, error) {
+	var n int
+	err := r.db.QueryRow(ctx,
+		`SELECT count(*) FROM users WHERE (admin_permissions & $1) = $1`,
+		uint32(models.LiveAdminPermissions)).Scan(&n)
+	return n, err
 }

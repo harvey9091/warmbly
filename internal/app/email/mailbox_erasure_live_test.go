@@ -60,7 +60,7 @@ func TestLiveDeleteRecordsTheErasureItCannotPerform(t *testing.T) {
 	exec(t, f, `INSERT INTO email_accounts_oauth (email_account_id, access_token, refresh_token, expires_at)
 	            VALUES ($1, 'sealed-access', 'sealed-refresh', now() + interval '1 hour')`, f.mailbox)
 
-	if xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String()); xerr != nil {
+	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr != nil {
 		t.Fatalf("delete: %v", xerr)
 	}
 	if f.mailboxExists(t) {
@@ -91,7 +91,7 @@ func TestLiveDeleteQueuesErasureForAMailboxWithNoGrant(t *testing.T) {
 	f := newRemovalLiveFixture(t)
 	cleanErasure(t, f)
 
-	if xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String()); xerr != nil {
+	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr != nil {
 		t.Fatalf("delete: %v", xerr)
 	}
 	row := readErasure(t, f)
@@ -110,7 +110,7 @@ func TestLiveAFailedDeleteQueuesNoErasure(t *testing.T) {
 	cleanErasure(t, f)
 	f.pub.removeErr = errBusDown
 
-	if xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String()); xerr == nil {
+	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr == nil {
 		t.Fatal("the delete was reported as succeeding")
 	}
 	if !f.mailboxExists(t) {
@@ -157,7 +157,7 @@ func TestLiveDeleteTakesTheRowsThatHadNoForeignKey(t *testing.T) {
 	exec(t, f, `INSERT INTO warmup_pending_engagements (email_account_id, payload, fire_at)
 	            VALUES ($1, '{}'::jsonb, now())`, f.mailbox)
 
-	if xerr := f.svc.Delete(ctx, f.org.String(), f.mailbox.String()); xerr != nil {
+	if xerr := f.svc.Delete(ctx, f.user.String(), f.mailbox.String()); xerr != nil {
 		t.Fatalf("delete: %v", xerr)
 	}
 
@@ -222,7 +222,7 @@ func TestLiveDeleteClearsLabelsOnThreadsItEmptied(t *testing.T) {
 			f.user, m.thread)
 	}
 
-	if xerr := f.svc.Delete(ctx, f.org.String(), f.mailbox.String()); xerr != nil {
+	if xerr := f.svc.Delete(ctx, f.user.String(), f.mailbox.String()); xerr != nil {
 		t.Fatalf("delete: %v", xerr)
 	}
 

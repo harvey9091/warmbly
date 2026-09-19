@@ -273,7 +273,7 @@ func (d Deps) getContactSentEmails(ctx context.Context, inv Invocation, args jso
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
-	res, xerr := d.Contacts.ListSentEmails(ctx, inv.UserID, cid, limit, nil, nil)
+	res, xerr := d.Contacts.ListSentEmails(ctx, inv.OrgID, cid, limit, nil, nil)
 	if xerr != nil {
 		return "", fromErrx(xerr)
 	}

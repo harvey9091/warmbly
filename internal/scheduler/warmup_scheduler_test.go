@@ -62,23 +62,3 @@ func TestWarmupRampTarget(t *testing.T) {
 		})
 	}
 }
-
-func TestWarmupBudgetReached(t *testing.T) {
-	tests := []struct {
-		name   string
-		budget WarmupBudget
-		want   bool
-	}{
-		{"under target", WarmupBudget{Target: 10, Sent: 8}, false},
-		{"at target", WarmupBudget{Target: 8, Sent: 8}, true},
-		{"over target after a cut", WarmupBudget{Target: 8, Sent: 9}, true},
-		{"nobody to write to is the partner draw's call, not the cap's", WarmupBudget{NoPartners: true}, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.budget.Reached(); got != tt.want {
-				t.Errorf("Reached() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}

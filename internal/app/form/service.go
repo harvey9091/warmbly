@@ -527,7 +527,11 @@ func buildSubmission(fields []models.FormField, answers map[string][]string) (ma
 		if len(vals) > 0 {
 			v = strings.TrimSpace(vals[0])
 		}
-		if f.Type == models.FormFieldHidden && v == "" {
+		// A hidden field's value is the owner's, not the submitter's. Taking
+		// the posted value when one was sent let anyone rewrite the campaign
+		// tag, source or routing key the owner configured, simply by adding the
+		// field to the request.
+		if f.Type == models.FormFieldHidden {
 			v = f.Value
 		}
 		if len(v) > models.FormMaxAnswerLen {

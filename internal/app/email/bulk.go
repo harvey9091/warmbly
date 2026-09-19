@@ -29,7 +29,7 @@ func (s *emailService) OnboardSMTPIMAPBulk(ctx context.Context, userID string, o
 	fail := func(i int, xerr *errx.Error) {
 		res.Data[i] = models.MailboxBulkRow{
 			Row: i, Email: rows[i].Email, Status: models.MailboxBulkFailed,
-			Code: bulkCode(xerr), Message: xerr.UserMessage(),
+			Code: bulkCode(xerr), Message: xerr.Message,
 		}
 	}
 
@@ -116,12 +116,12 @@ func (s *emailService) OnboardSMTPIMAPBulk(ctx context.Context, userID string, o
 			case errors.Is(xerr, errx.ErrEmailOnboardAlreadyExists):
 				res.Data[i] = models.MailboxBulkRow{
 					Row: i, Email: row.Email, Status: models.MailboxBulkSkipped,
-					Code: "already_connected", Message: xerr.UserMessage(),
+					Code: "already_connected", Message: xerr.Message,
 				}
 			default:
 				res.Data[i] = models.MailboxBulkRow{
 					Row: i, Email: row.Email, Status: models.MailboxBulkFailed,
-					Code: bulkCode(xerr), Message: xerr.UserMessage(),
+					Code: bulkCode(xerr), Message: xerr.Message,
 				}
 			}
 		}(i)

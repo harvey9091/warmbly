@@ -14,7 +14,7 @@ import (
 
 func (h *Handler) poolLinkReady(c *gin.Context) bool {
 	if h.PoolLinkService == nil {
-		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Pool link is not enabled on this instance."))
+		errx.JSON(c, errx.New(errx.NotImplemented, "pool link is not enabled on this instance"))
 		return false
 	}
 	return true

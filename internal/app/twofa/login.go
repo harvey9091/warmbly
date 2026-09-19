@@ -22,7 +22,7 @@ func (s *service) CreatePendingChallenge(ctx context.Context, userID uuid.UUID) 
 		return "", 0, errx.InternalError()
 	}
 	now := time.Now()
-	pendTok, terr := s.tokens.GenerateToken(userID, sid, "", nonce, now, now.Add(pendingTTL))
+	pendTok, terr := s.tokens.GenerateTokenFor(token.PurposeTwoFAPending, userID, sid, "", nonce, now, now.Add(pendingTTL))
 	if terr != nil {
 		return "", 0, errx.InternalError()
 	}
@@ -35,7 +35,7 @@ func (s *service) CreatePendingChallenge(ctx context.Context, userID uuid.UUID) 
 // VerifyLogin validates the pending token + code (TOTP or recovery) and, on
 // success, mints a real session via the SAME path as a normal login.
 func (s *service) VerifyLogin(ctx context.Context, pendingToken, code, ipaddr, userAgent string) (*models.Token, *errx.Error) {
-	claims, xerr := s.tokens.VerifyToken(pendingToken)
+	claims, xerr := s.tokens.VerifyTokenFor(token.PurposeTwoFAPending, pendingToken)
 	if xerr != nil {
 		return nil, errx.New(errx.BadRequest, "Invalid or expired session")
 	}
@@ -74,5 +74,7 @@ func (s *service) VerifyLogin(ctx context.Context, pendingToken, code, ipaddr, u
 	// Single-use: delete the pending record BEFORE minting (delete-then-mint
 	// closes a double-spend race).
 	s.deletePending(ctx, claims.SessionID)
-	return s.tokens.GenerateSession(ctx, claims.UserID, "", ipaddr, userAgent, token.AuthProviderEmail)
+	// The password was checked before the challenge was minted and a TOTP or
+	// recovery code has just been checked here, so this session has two factors.
+	return s.tokens.GenerateMFASession(ctx, claims.UserID, "", ipaddr, userAgent, token.AuthProviderEmail)
 }

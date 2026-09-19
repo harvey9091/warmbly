@@ -44,6 +44,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/warmbly/warmbly/internal/pkg/safehttp"
 	"github.com/warmbly/warmbly/internal/pkg/signuprisk"
 )
 
@@ -171,6 +172,11 @@ type SMTPVerifier struct {
 	// smtpPort is always "25" in production (MX hosts listen nowhere else);
 	// it exists so tests can point probe() at a local server.
 	smtpPort string
+	// allowPrivateMX lets probe() dial a non-public address. False everywhere
+	// but in tests, which run their fake MX on loopback. In production an MX
+	// that resolves to a private or link-local address is a user-controlled DNS
+	// record pointing at our own network, which is the whole SSRF shape.
+	allowPrivateMX bool
 	// domains remembers per-domain facts (no MX, catch-all, undisclosing
 	// provider) so a 50k list at 2k domains costs 2k probes, not 50k.
 	domains *domainCache
@@ -410,8 +416,37 @@ type probeResult struct {
 //	               that rejects our HELO / sender / IP / relay policy is unknown
 //	4xx / timeout/ dial error -> unknown (greylist, blocked :25, transient)
 func (v *SMTPVerifier) probe(ctx context.Context, host, localpart, domain string) probeResult {
+	// The host is an MX name resolved from an address the user typed, so where
+	// it points is the user's choice. Publishing `MX 169.254.169.254` or
+	// `MX 127.0.0.1` for a domain you control turns "verify this address" into
+	// a connect to the instance's own network. Resolve first, refuse anything
+	// that is not a public address, then dial the address that was checked so
+	// a second lookup cannot answer differently.
+	ips, rerr := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if rerr != nil || len(ips) == 0 {
+		return probeResult{outcome: probeUnknown, sessionFailed: true, reason: "mx lookup failed"}
+	}
+	if !v.allowPrivateMX {
+		for _, ip := range ips {
+			if safehttp.IsBlockedIP(ip) {
+				return probeResult{outcome: probeUnknown, sessionFailed: true, reason: "mx resolves to a non-public address"}
+			}
+		}
+	}
+
+	// Try each address rather than only the first. LookupIP returns A and AAAA
+	// mixed, so on an IPv4-only host a domain whose first record is AAAA would
+	// always report unknown, which is a silent accuracy loss rather than an
+	// error anyone would notice.
 	dialer := net.Dialer{Timeout: v.cfg.DialTimeout}
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, v.smtpPort))
+	var conn net.Conn
+	var err error
+	for _, ip := range ips {
+		conn, err = dialer.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), v.smtpPort))
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
 		// Most commonly: outbound :25 blocked by the cloud provider, or the MX is
 		// firewalled/tarpitting. Either way we cannot conclude invalid.

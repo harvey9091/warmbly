@@ -75,6 +75,16 @@ func (s *FilesystemStore) Get(_ context.Context, key string) (io.ReadCloser, err
 		}
 		return nil, err
 	}
+	// A key naming a directory ("avatars/") opens cleanly and then reads as an
+	// empty object, so the public route answered 200 with no body instead of
+	// 404. Treat it as absent, which is what it is.
+	if info, serr := f.Stat(); serr != nil || info.IsDir() {
+		_ = f.Close()
+		if serr != nil {
+			return nil, serr
+		}
+		return nil, ErrNotFound
+	}
 	return f, nil
 }
 

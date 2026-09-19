@@ -348,7 +348,7 @@ func readAvatarUpload(c *gin.Context) ([]byte, string, string, *errx.Error) {
 
 func putPublicObject(ctx context.Context, store storage.Store, key string, body []byte, mime string) (string, *errx.Error) {
 	if store == nil {
-		return "", errx.NewPublic(errx.ServiceUnavailable, "Object storage not configured.")
+		return "", errx.New(errx.ServiceUnavailable, "object storage not configured")
 	}
 	// Public-read URL with long-lived cache. The backend chooses the right
 	// semantics per store (S3 sets an ACL + s3 URL; filesystem writes and

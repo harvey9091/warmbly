@@ -52,6 +52,18 @@ type Session struct {
 	// How this session authenticated: email, google, apple, webauthn.
 	AuthProvider string `json:"auth_provider"`
 
+	// MFAVerified is true when a second factor was presented to establish this
+	// session: a TOTP code, a recovery code, or a passkey (which proves
+	// possession of the device and, through the platform, the person). It is
+	// separate from AuthProvider because a password sign-in that then passed
+	// TOTP and one that did not both record "email".
+	MFAVerified bool `json:"mfa_verified"`
+
+	// ReauthAt is when this session last re-proved the account holder. Nil
+	// means never. Sensitive account changes require it to be recent; see
+	// RequireFreshAuth.
+	ReauthAt *time.Time `json:"reauth_at,omitempty"`
+
 	CreatedAt time.Time  `json:"created_at"`
 	RevokedAt *time.Time `json:"revoked_at"`
 	ExpiresAt *time.Time `json:"expires_at"`

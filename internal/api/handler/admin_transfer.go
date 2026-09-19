@@ -27,7 +27,7 @@ func (h *Handler) adminTransferOrg(c *gin.Context) (uuid.UUID, bool) {
 	}
 	org, err := h.OrgRepo.GetByID(c.Request.Context(), orgID)
 	if err != nil {
-		errx.JSON(c, errx.New(errx.Internal, err.Error()))
+		errx.JSON(c, errx.NewPublic(errx.Internal, err.Error()))
 		return uuid.Nil, false
 	}
 	if org == nil {
@@ -35,7 +35,7 @@ func (h *Handler) adminTransferOrg(c *gin.Context) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	if h.OrgTransferService == nil {
-		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Workspace transfer is not available on this instance."))
+		errx.JSON(c, errx.New(errx.NotImplemented, "Workspace transfer is not available on this instance."))
 		return uuid.Nil, false
 	}
 	return orgID, true

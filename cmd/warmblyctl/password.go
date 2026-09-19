@@ -57,10 +57,14 @@ func readPassword(ctx context.Context, fromStdin bool, what string) (string, err
 // validatePassword uses the same rule the dashboard enforces, so the scripted
 // route is never weaker than the interactive one.
 func validatePassword(password string) error {
-	if crypt.ValidatePassword(password) {
+	switch crypt.CheckPassword(password) {
+	case crypt.PasswordOK:
 		return nil
+	case crypt.PasswordBreached:
+		return errors.New("that password appears in a public list of breached passwords, so it is not accepted. Nothing was changed.")
+	default:
+		return errors.New("that password is not accepted: it must be between 8 and 128 characters. Nothing was changed.")
 	}
-	return errors.New("that password is not accepted: it must be between 8 and 128 characters. Nothing was changed.")
 }
 
 func promptSecret(ctx context.Context, label string) (string, error) {

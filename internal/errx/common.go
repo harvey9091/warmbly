@@ -26,19 +26,27 @@ var (
 	ErrToken = New(Unauthorized, "Invalid or expired token.")
 	ErrAuth  = New(Unauthorized, "Missing or invalid Authorization header.")
 
-	ErrUser        = New(BadRequest, "That account doesn't exist.")
-	ErrPassword    = New(BadRequest, "Password must be at least 8 characters long.")
-	ErrEmail       = New(BadRequest, "Invalid email address.")
-	ErrCredentials = New(BadRequest, "Invalid email or password.")
-	ErrSession     = New(BadRequest, "Invalid or expired session.")
-	ErrCodeLimit   = New(BadRequest, "Too many attempts. Start a new session and try again later.")
-	ErrCode        = New(BadRequest, "Invalid or expired verification code.")
-	ErrAuthLimit   = New(BadRequest, "Too many attempts, please try again later.")
+	ErrUser     = New(BadRequest, "User doesn't exists.")
+	ErrPassword = New(BadRequest, "Password must be at least 8 characters long.")
+	// ErrPasswordTooLong and ErrPasswordBreached separate the two other ways a
+	// password is refused, so nobody is told to lengthen a 40-character
+	// passphrase that was rejected for appearing in a breach corpus.
+	ErrPasswordTooLong  = New(BadRequest, "Password must be at most 128 characters long.")
+	ErrPasswordBreached = NewWithIdentifier(BadRequest, "password_breached", "This password appears in a public list of breached passwords. Choose one that does not.")
+	ErrEmail            = New(BadRequest, "Invalid email address.")
+	ErrCredentials      = New(BadRequest, "Invalid email or password.")
+	ErrSession          = New(BadRequest, "Invalid or expired session.")
+	ErrCodeLimit        = New(BadRequest, "Too many attempts. Start a new session and try again later.")
+	ErrCode             = New(BadRequest, "Invalid or expired verification code.")
+	ErrAuthLimit        = New(BadRequest, "Too many attempts, please try again later.")
 
 	// ErrMailUndeliverable separates "we could not send you the email" from
 	// every other internal fault. It used to be a bare 500, which on a
 	// self-hosted install with no working relay is the single least helpful
 	// thing to show someone who cannot log in.
+	// Public: this is the one internal fault whose message the person reading
+	// it can act on, and blanking it leaves a self-hoster with a broken relay
+	// no way to tell that is the problem.
 	ErrMailUndeliverable = NewPublic(Internal, "We couldn't send the email. If you administer this server, check the mail transport configuration.")
 
 	// Registration refusals. Each names the deployment policy rather than the
@@ -82,12 +90,6 @@ var (
 	ErrPasskeyNotFound = New(NotFound, "Passkey not found.")
 	ErrPasskeyExists   = New(Conflict, "This passkey is already registered.")
 	ErrPasskeyNone     = New(BadRequest, "No passkey was found for this account.")
-	// A passkey ceremony holds its challenge outside the browser for the few
-	// minutes between starting and finishing, so a store that cannot keep it
-	// stops the ceremony. It is not the passkey's fault and not the person's,
-	// and "Something went wrong" sent them to re-register a key that works.
-	ErrPasskeyUnavailable = NewWithIdentifier(ServiceUnavailable, "passkey_unavailable",
-		"Passkey sign-in isn't available right now. Try again in a moment, or sign in with your password.")
 
 	// Organization
 	//
@@ -108,18 +110,8 @@ var (
 	ErrGroupMax   = New(BadRequest, "You reached the maximum amount.")
 
 	// Email
-	ErrEmailCredentials = New(BadRequest, "Invalid email credentials.")
-	// The mail server did not answer inside the check's deadline. Named
-	// separately from bad credentials because the two have different fixes:
-	// this one is a host, a port or a firewall, not a password.
-	ErrEmailValidation = NewWithIdentifier(BadRequest, "mailbox_validation_timeout",
-		"The mail server didn't answer in time, so the credentials could not be checked. Confirm the host, port and security settings, then try again.")
-	// Raised when the check itself could not be run: the machine that tests
-	// credentials could not be reached, or the channel its answer comes back
-	// on was unavailable. Nothing about the mailbox is known either way, which
-	// is why it is not a credentials refusal.
-	ErrEmailValidationUnavailable = NewWithIdentifier(ServiceUnavailable, "mailbox_validation_unavailable",
-		"Warmbly couldn't check these credentials right now, so nothing was saved. Try again in a moment.")
+	ErrEmailCredentials     = New(BadRequest, "Invalid email credentials.")
+	ErrEmailValidation      = New(BadRequest, "Deadline exceed, try again later.")
 	ErrEmailOnboardProvider = New(BadRequest, "Unsupported email provider. Use 'gmail', 'outlook', or 'smtp_imap'.")
 	// Raised when the provider is supported but this deployment has no OAuth
 	// client for it. Self-host only: the hosted product always has both set. The
@@ -134,7 +126,7 @@ var (
 	ErrEmailOnboardExchange      = New(BadRequest, "Could not exchange the authorization code with the provider.")
 	ErrEmailOnboardUserInfo      = New(BadRequest, "Could not read account details from the provider.")
 	ErrEmailOnboardAlreadyExists = New(Conflict, "This email account is already connected.")
-	ErrEmailOnboardNoWorker      = NewPublic(ServiceUnavailable, "No mailbox workers are available right now. Please try again shortly.")
+	ErrEmailOnboardNoWorker      = New(ServiceUnavailable, "No mailbox workers are available right now. Please try again shortly.")
 	ErrEmailReauthProvider       = New(BadRequest, "This mailbox connects with SMTP/IMAP credentials. Update its credentials instead of re-authorizing.")
 	ErrEmailReauthOAuthOnly      = New(BadRequest, "This mailbox signs in with OAuth. Re-authorize it instead of entering credentials.")
 	ErrEmailReauthWrongAccount   = New(Conflict, "The account you signed in with is not this mailbox's address. Sign in with the mailbox's own account and try again.")

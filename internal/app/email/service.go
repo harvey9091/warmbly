@@ -60,7 +60,7 @@ type EmailService interface {
 	// lift the cold-send and warmup gate, so it sits behind the write
 	// permission while CheckDomainAuth stays readable.
 	RefreshDomainAuth(ctx context.Context, orgID, emailAccountID string) (*dnsauth.Result, *errx.Error)
-	Delete(ctx context.Context, orgID, emailAccountID string) *errx.Error
+	Delete(ctx context.Context, userID, emailAccountID string) *errx.Error
 
 	// GetSendIdentity reports which addresses the mailbox's provider will let
 	// it send as, which one is in use, and where the stored signature came
@@ -344,8 +344,8 @@ func (s *emailService) publishAccountEvent(ctx context.Context, eventType pubsub
 // GetSyncState returns the persisted sync state and the policy currently in
 // force. It goes through Get so ownership is checked the same way as every
 // other per-mailbox read.
-func (s *emailService) GetSyncState(ctx context.Context, userID, emailID string) (*models.SyncState, models.SyncPolicy, *errx.Error) {
-	acc, xerr := s.Get(ctx, userID, emailID)
+func (s *emailService) GetSyncState(ctx context.Context, orgID, emailID string) (*models.SyncState, models.SyncPolicy, *errx.Error) {
+	acc, xerr := s.Get(ctx, orgID, emailID)
 	if xerr != nil {
 		return nil, models.SyncPolicy{}, xerr
 	}

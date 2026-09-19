@@ -29,7 +29,7 @@ type jsonRPCRequest struct {
 // MCPEndpoint — POST /api/v1/mcp. Handles one JSON-RPC message.
 func (h *Handler) MCPEndpoint(c *gin.Context) {
 	if h.AITools == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "MCP is not available"))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "MCP is not available"))
 		return
 	}
 	var req jsonRPCRequest

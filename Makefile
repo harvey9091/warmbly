@@ -42,7 +42,7 @@ PROTO_GEN_FILES := $(PROTO_DIR)/tasks.pb.go
         restart restart-go restart-all infra infra-down app app-down app-logs \
         backend forms forms-web consumer worker run dev tracking realtime web \
         admin site docs grant-admin revoke-admin gen-key installer-sha installer-check installer-demo \
-        db-reset db-wipe migrate warmbly warmbly-dist cli-sha cli-check images-check
+        db-reset db-wipe migrate warmbly warmbly-dist cli-sha cli-check images-check casa-evidence
 
 setup-tools:
 	@echo "Installing required Go tools into $(GO_BIN)"
@@ -726,6 +726,11 @@ installer-sha:
 
 # Everything CI runs against the installer: POSIX parse, shellcheck, --help,
 # --print-env, a compose file per answer shape, and the checksum.
+# Generate the CASA dependency-scan artifacts. Read-only; writes under
+# compliance/casa/artifacts/.
+casa-evidence:
+	./scripts/casa-evidence.sh
+
 installer-check:
 	@./scripts/check-installer.sh
 

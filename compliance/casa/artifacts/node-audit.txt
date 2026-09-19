@@ -1,0 +1,37 @@
+# Node production dependencies
+
+Generated: 2026-09-19T06:06:32Z
+Commit: f404f34b623be86434dcfa029e594f4d1943a8b4
+
+
+## web
+
+```
+No known vulnerabilities found
+```
+
+## admin
+
+```
+1 vulnerabilities found
+Severity: 1 low
+```
+
+## site
+
+```
+No known vulnerabilities found
+```
+
+## docs
+
+```
+7 vulnerabilities found
+Severity: 2 low | 5 moderate
+```
+
+## forms
+
+```
+No known vulnerabilities found
+```

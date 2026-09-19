@@ -134,10 +134,15 @@ func (s *emailSendService) SendEmail(ctx context.Context, userID, orgID, account
 		}
 	}
 
-	// Validate email account exists and belongs to user/org
+	// GetByID is unscoped (the org-scoped Get omits worker_id, which the
+	// send needs), so the tenant check lives here: a foreign mailbox id is
+	// indistinguishable from a missing one.
 	account, xerr := s.emailRepo.GetByID(ctx, accountID)
 	if xerr != nil {
 		return nil, xerr
+	}
+	if account == nil || account.OrganizationID == nil || *account.OrganizationID != orgID {
+		return nil, errx.New(errx.NotFound, "email account not found")
 	}
 
 	// Check CanUseUnibox feature gate

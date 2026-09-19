@@ -20,6 +20,9 @@ export WARMBLY_API_URL=https://api.your-instance.com  # omit for the hosted serv
 
 Keys are created in the dashboard under Settings > API keys, or with
 `warmblyctl apikey create` if you already hold a key with the API_KEYS scope.
+Creating one in the dashboard asks you to confirm your password or a two-factor
+code first; creating one with an existing key does not, because the key's scope
+is already that grant.
 Everything you can do is bounded by the key's scopes; `warmblyctl me` shows
 who the key is and what it holds. On the local dev stack the seeded
 full-access key is `wmbly_seed_acme_owner_full_access_0000000000` with

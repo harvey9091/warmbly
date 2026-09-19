@@ -12,7 +12,53 @@ import type Token from "@/lib/api/models/auth/Token";
 
 interface AuthRequestConfig extends AxiosRequestConfig {
     authorization?: boolean
+    // Set on the re-authentication call itself, so a wrong password there
+    // reaches the caller instead of reopening the prompt that made it.
+    skipReauthPrompt?: boolean
 }
+
+// promptForReauth opens the global "confirm it is you" dialog and resolves when
+// the person confirms, rejects when they cancel.
+//
+// Some changes need a proof of identity newer than the session: minting an API
+// key, registering a passkey, transferring a workspace, scheduling a deletion.
+// Handling it here means every one of those retries automatically once the
+// prompt is satisfied, rather than each call site growing its own dialog.
+function promptForReauth(): Promise<void> {
+    if (typeof window === "undefined") return Promise.reject(new Error("no window"));
+    return new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const once = (fn: () => void) => () => {
+            if (settled) return;
+            settled = true;
+            fn();
+        };
+
+        // ReauthModal is mounted under the /app layout. A gated call made from
+        // outside that tree would otherwise leave this promise pending forever
+        // and the mutation spinning with nothing on screen, so a listener that
+        // never answers is treated as a refusal.
+        const timer = window.setTimeout(
+            once(() => reject(new Error("no confirmation prompt is available here"))),
+            REAUTH_PROMPT_TIMEOUT_MS,
+        );
+        const finish = (fn: () => void) =>
+            once(() => {
+                window.clearTimeout(timer);
+                fn();
+            });
+
+        window.dispatchEvent(
+            new CustomEvent("reauth-required", {
+                detail: { resolve: finish(resolve), reject: finish(() => reject(new Error("cancelled"))) },
+            }),
+        );
+    });
+}
+
+// Long enough for someone to find their authenticator, short enough that a
+// missing prompt surfaces as an error rather than a hang.
+const REAUTH_PROMPT_TIMEOUT_MS = 2 * 60 * 1000;
 
 // Refresh lock: only one refresh at a time, others wait for it
 let refreshPromise: Promise<Token> | null = null;
@@ -92,6 +138,20 @@ export default async function Request<T>(config: AuthRequestConfig): Promise<T> 
                 clearTokens();
                 throw sessionExpired();
             }
+        }
+
+        // A change that needs a fresher proof of identity: prompt, then retry
+        // once. Checked before the generic 403 branch below so it gets its own
+        // dialog rather than the permission-denied one.
+        if (
+            appErr?.code === "reauth_required" &&
+            config.authorization &&
+            !config.skipReauthPrompt &&
+            typeof window !== "undefined"
+        ) {
+            await promptForReauth();
+            const res = await Client.request(config);
+            return reviveDates(res.data);
         }
 
         // A denied WRITE action (edit/save/delete) gets one clear, app-wide

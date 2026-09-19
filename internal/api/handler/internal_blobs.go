@@ -93,11 +93,15 @@ func (h *Handler) InternalPresignBlob(c *gin.Context) {
 		return
 	}
 	if !keyAllowedForNode(req.Key) {
+		// The clearest probe signal the instance produces: a real node only
+		// ever asks for prefixes it uses.
+		logBrokerAccess(c, "blob.presign."+string(op), req.Key, false, "key outside the node prefixes")
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": "key " + req.Key + " is outside the prefixes a node may reach",
 		})
 		return
 	}
+	logBrokerAccess(c, "blob.presign."+string(op), req.Key, true, "")
 
 	url, err := h.Storage.PresignedURL(c.Request.Context(), op, req.Key, req.ContentType, blobPresignTTL)
 	if err != nil {

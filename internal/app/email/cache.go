@@ -39,17 +39,16 @@ func (s *emailService) takeOnboardingState(ctx context.Context, state string) (*
 	if s.r == nil {
 		return nil, errx.InternalError()
 	}
-	raw, err := s.r.Get(ctx, onboardingStateKey(state)).Bytes()
+	// GetDel, not Get-then-Del: with two statements, two callbacks arriving at
+	// once both read the state before either deletes it, and "single use"
+	// stops being true. The SSO path already uses this; this one did not.
+	raw, err := s.r.GetDel(ctx, onboardingStateKey(state)).Bytes()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return nil, errx.ErrEmailOnboardState
 		}
 		errs.CaptureException(err)
 		return nil, errx.InternalError()
-	}
-	// Single-use: remove immediately to prevent replay even on later errors.
-	if err := s.r.Del(ctx, onboardingStateKey(state)).Err(); err != nil {
-		errs.CaptureException(err)
 	}
 	var out models.EmailOnboardingState
 	if err := json.Unmarshal(raw, &out); err != nil {

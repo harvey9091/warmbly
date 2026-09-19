@@ -33,8 +33,8 @@ func (s *service) saveSession(ctx context.Context, key string, data *webauthn.Se
 	}
 
 	if err := s.cache.Set(ctx, key, raw, CeremonyTTL).Err(); err != nil {
-		errs.CaptureException(err, errs.Tag("cache.key", "webauthn"), errs.Tag("cache.op", "set"))
-		return errx.ErrPasskeyUnavailable
+		errs.CaptureException(err)
+		return errx.InternalError()
 	}
 
 	return nil
@@ -49,11 +49,8 @@ func (s *service) takeSession(ctx context.Context, key string) (*webauthn.Sessio
 		if errors.Is(err, redis.Nil) {
 			return nil, errx.ErrPasskeySession
 		}
-		// A store that could not be read is not an expired ceremony: saying
-		// "your passkey request expired" would send someone to start again
-		// into the same failure.
-		errs.CaptureException(err, errs.Tag("cache.key", "webauthn"), errs.Tag("cache.op", "getdel"))
-		return nil, errx.ErrPasskeyUnavailable
+		errs.CaptureException(err)
+		return nil, errx.InternalError()
 	}
 
 	var data webauthn.SessionData

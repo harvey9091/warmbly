@@ -29,7 +29,7 @@ func (h *Handler) IdempotencyMiddleware() gin.HandlerFunc {
 			return
 		}
 		if h.IdempotencyService == nil {
-			errx.Handle(c, errx.NewPublic(errx.ServiceUnavailable, "Idempotency service is not available."))
+			errx.Handle(c, errx.New(errx.ServiceUnavailable, "idempotency service is not available"))
 			c.Abort()
 			return
 		}

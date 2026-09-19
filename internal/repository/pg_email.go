@@ -139,10 +139,16 @@ type EmailRepository interface {
 	// domains. It returns the mailboxes that entered the failing state on THIS
 	// call, which is what the sweep notifies on.
 	UpdateDomainAuthState(ctx context.Context, domain, state string, spf, dkim, dmarc bool, dmarcPolicy, reason string, checkedAt time.Time) ([]models.EmailAuthTransition, *errx.Error)
+	// UpdateDomainAuthStateForOrg is the same write confined to one
+	// organization's mailboxes. The user-facing "check again" button uses it:
+	// the verdict comes from public DNS so it cannot be poisoned, but one
+	// workspace pressing a button must not rewrite rows belonging to every
+	// other workspace that happens to send from the same domain.
+	UpdateDomainAuthStateForOrg(ctx context.Context, orgID uuid.UUID, domain, state string, spf, dkim, dmarc bool, dmarcPolicy, reason string, checkedAt time.Time) ([]models.EmailAuthTransition, *errx.Error)
 	// Delete removes a mailbox and refunds workerLoadRefund of its worker's
 	// load in the same transaction, so a deleted mailbox can never leave a
 	// worker permanently charged for it.
-	Delete(ctx context.Context, emailAccountID string, workerLoadRefund float64) *errx.Error
+	Delete(ctx context.Context, userID, emailAccountID string, workerLoadRefund float64) *errx.Error
 
 	NewOauthAccount(ctx context.Context, userID string, data models.NewOauthAccount) (*models.Email, *errx.Error)
 	// NewManagedAccount creates an OAuth mailbox whose credential lives on Warmbly Cloud, so no token row is written.
@@ -1300,16 +1306,28 @@ func (r *emailRepository) ListAuthCheckDue(ctx context.Context, staleBefore time
 }
 
 func (r *emailRepository) UpdateDomainAuthState(ctx context.Context, domain, state string, spf, dkim, dmarc bool, dmarcPolicy, reason string, checkedAt time.Time) ([]models.EmailAuthTransition, *errx.Error) {
+	return r.updateDomainAuthState(ctx, nil, domain, state, spf, dkim, dmarc, dmarcPolicy, reason, checkedAt)
+}
+
+func (r *emailRepository) UpdateDomainAuthStateForOrg(ctx context.Context, orgID uuid.UUID, domain, state string, spf, dkim, dmarc bool, dmarcPolicy, reason string, checkedAt time.Time) ([]models.EmailAuthTransition, *errx.Error) {
+	return r.updateDomainAuthState(ctx, &orgID, domain, state, spf, dkim, dmarc, dmarcPolicy, reason, checkedAt)
+}
+
+func (r *emailRepository) updateDomainAuthState(ctx context.Context, orgID *uuid.UUID, domain, state string, spf, dkim, dmarc bool, dmarcPolicy, reason string, checkedAt time.Time) ([]models.EmailAuthTransition, *errx.Error) {
 	// Only 'passing' clears the grace clock; 'unknown' preserves it so a domain
 	// cannot flap through a transient DNS error to escape the gate.
 	// `before` keys on auth_failing_since, not auth_state, or that same flap
 	// would re-report every mailbox on the domain as newly failing.
+	// $9 confines the write to one workspace when the caller named one, and is
+	// NULL for the background sweep, which is meant to cover every mailbox on
+	// the domain.
 	query := `
 		WITH before AS (
 			SELECT id
 			FROM email_accounts
 			WHERE status = 'active'
 			  AND lower(split_part(email, '@', 2)) = $8
+			  AND ($9::uuid IS NULL OR organization_id = $9::uuid)
 			  AND auth_failing_since IS NOT NULL
 		),
 		updated AS (
@@ -1323,6 +1341,7 @@ func (r *emailRepository) UpdateDomainAuthState(ctx context.Context, domain, sta
 			        ELSE auth_failing_since
 			    END
 			WHERE status = 'active' AND lower(split_part(email, '@', 2)) = $8
+			  AND ($9::uuid IS NULL OR organization_id = $9::uuid)
 			RETURNING id, email, organization_id, auth_state
 		)
 		SELECT u.id, u.email, u.organization_id
@@ -1340,6 +1359,7 @@ func (r *emailRepository) UpdateDomainAuthState(ctx context.Context, domain, sta
 		reason,
 		checkedAt,
 		strings.ToLower(strings.TrimSpace(domain)),
+		orgID,
 	}
 
 	rows, err := r.DB.Query(ctx, query, params...)
@@ -1385,18 +1405,16 @@ const deleteDeadlockAttempts = 3
 // that side is this one. Nothing is wrong when it happens and the work is
 // entirely redoable, so surfacing it meant someone clicking Disconnect got an
 // error for an operation that would have succeeded a moment later.
-func (r *emailRepository) Delete(ctx context.Context, emailAccountID string, workerLoadRefund float64) *errx.Error {
+func (r *emailRepository) Delete(ctx context.Context, userID, emailAccountID string, workerLoadRefund float64) *errx.Error {
 	for attempt := 1; ; attempt++ {
-		xerr, deadlocked := r.deleteOnce(ctx, emailAccountID, workerLoadRefund)
+		xerr, deadlocked := r.deleteOnce(ctx, userID, emailAccountID, workerLoadRefund)
 		if !deadlocked || attempt >= deleteDeadlockAttempts {
 			return xerr
 		}
 	}
 }
 
-// deleteOnce deletes by id alone: the service has already proved the mailbox
-// belongs to the caller's workspace, and no other scope is narrower than that.
-func (r *emailRepository) deleteOnce(ctx context.Context, emailAccountID string, workerLoadRefund float64) (*errx.Error, bool) {
+func (r *emailRepository) deleteOnce(ctx context.Context, userID, emailAccountID string, workerLoadRefund float64) (*errx.Error, bool) {
 	tx, err := r.DB.Begin(ctx)
 	if err != nil {
 		db.CaptureError(err, "", nil, "begin")
@@ -1412,11 +1430,11 @@ func (r *emailRepository) deleteOnce(ctx context.Context, emailAccountID string,
 		UPDATE warmup_reputation_ledger l
 		   SET recorded_at = now()
 		  FROM email_accounts a
-		 WHERE a.id = $1
+		 WHERE a.user_id = $1 AND a.id = $2
 		   AND l.organization_id = a.organization_id
 		   AND l.email = lower(btrim(a.email))
 	`
-	bumpParams := []any{emailAccountID}
+	bumpParams := []any{userID, emailAccountID}
 	if _, err := tx.Exec(ctx, bump, bumpParams...); err != nil {
 		if isDeadlock(err) {
 			return errx.InternalError(), true
@@ -1429,23 +1447,23 @@ func (r *emailRepository) deleteOnce(ctx context.Context, emailAccountID string,
 	// sealed refresh token lives in email_accounts_oauth, which cascades away
 	// with the mailbox, so reading it afterwards is impossible and the grant
 	// would stay live at the provider forever.
-	const scope = `a.id = $1`
-	if _, err := EnqueueMailboxErasures(ctx, tx, scope, emailAccountID); err != nil {
+	const scope = `a.user_id = $1 AND a.id = $2`
+	if _, err := EnqueueMailboxErasures(ctx, tx, scope, userID, emailAccountID); err != nil {
 		return errx.InternalError(), isDeadlock(err)
 	}
 
 	// The threads this mailbox holds messages in, read while they still exist.
-	threads, err := CollectMailboxThreadState(ctx, tx, scope, emailAccountID)
+	threads, err := CollectMailboxThreadState(ctx, tx, scope, userID, emailAccountID)
 	if err != nil {
 		return errx.InternalError(), isDeadlock(err)
 	}
 
 	query := `
 		DELETE FROM email_accounts
-		WHERE id = $1
+		WHERE user_id = $1 AND id = $2
 		RETURNING worker_id
 	`
-	params := []any{emailAccountID}
+	params := []any{userID, emailAccountID}
 
 	var workerID *uuid.UUID
 	if err := tx.QueryRow(ctx, query, params...).Scan(&workerID); err != nil {

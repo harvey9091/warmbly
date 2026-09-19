@@ -39,12 +39,17 @@ func (h *Handler) SubmitLimitIncreaseRequest(c *gin.Context) {
 
 // ListOrgLimitRequests is GET /v1/organizations/:orgId/limit-requests.
 func (h *Handler) ListOrgLimitRequests(c *gin.Context) {
+	session := middleware.GetSession(c)
+	if session == nil {
+		errx.JSON(c, errx.ErrUnauthorized)
+		return
+	}
 	orgID, err := uuid.Parse(c.Param("orgId"))
 	if err != nil {
 		errx.JSON(c, errx.New(errx.BadRequest, "invalid organization ID"))
 		return
 	}
-	rows, xerr := h.OrganizationService.ListLimitRequestsForOrg(c.Request.Context(), orgID)
+	rows, xerr := h.OrganizationService.ListLimitRequestsForOrg(c.Request.Context(), orgID, session.UserID)
 	if xerr != nil {
 		errx.JSON(c, xerr)
 		return

@@ -55,7 +55,7 @@ Five values protect the whole instance. Compose ships a working default for each
 
 | Variable | Format | What it protects | Restart needed |
 |---|---|---|---|
-| `AUTH_SECRET` | 32 characters or more | JWT and session signing. The realtime service reads the same value as `JWT_SECRET` | yes |
+| `AUTH_SECRET` | 32 characters or more, enforced at boot | JWT and session signing. The realtime service reads the same value as `JWT_SECRET` and applies the same floor. Both refuse to start below it: a shorter HS256 key can be recovered offline from any token the service has issued | yes |
 | `INTERNAL_API_TOKEN` | any random string | The backend's `/api/v1/internal/` routes, which workers and the tracking service authenticate against | yes |
 | `NODE_BROKER_TOKEN` | any random string | The routes that perform a privileged operation for the caller: opening a sealed data key, signing a blob operation, and minting a provider access token for a mailbox Warmbly Cloud manages. Optional, and falls back to `INTERNAL_API_TOKEN`. The same value has to be set on the control plane and on every node that calls those routes, or they answer 401. Worth setting in a split deployment, where the tracking and forms services are internet-facing and hold the shared token | yes |
 | `SECRET_KEY_BASE` | 64 characters or more | Phoenix session signing in the realtime service | yes |
@@ -143,6 +143,7 @@ TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12
 | `SSO_AUTO_PROVISION` | `true` lets a verified identity provider assertion create an account regardless of `DISABLE_REGISTRATION` | `false` | yes |
 | `AUTH_IP_RATE_LIMIT` | Unauthenticated auth requests allowed per source IP per 15 minutes | `60` | yes |
 | `CLI_AUTH_IP_RATE_LIMIT` | CLI sign-in handshake requests allowed per source IP per 15 minutes. Its own budget, because one `warmbly auth login` polls around 200 times and must not exhaust the allowance above | `500` | yes |
+| `PUBLIC_IP_RATE_LIMIT` | Requests allowed per source IP per 15 minutes on the remaining public routes: unsubscribe, invitation preview, fleet enrolment and the analytics proxy. Each carries its authorization in a high-entropy token, so this bounds unmetered writes and relayed bandwidth rather than guessing. Counts reads as well as writes, unlike the auth limiter | `600` | yes |
 | `WARMBLY_BOOTSTRAP_EMAIL` | First owner's address, read only while the users table is empty | unset | yes |
 | `WARMBLY_BOOTSTRAP_PASSWORD_HASH` | Argon2 PHC string for that owner. Preferred over the plaintext form | unset | yes |
 | `WARMBLY_BOOTSTRAP_PASSWORD` | Plaintext convenience form. Warns at boot, and leaves a password in your process environment | unset | yes |
@@ -680,7 +681,8 @@ The Elixir websocket service. Its runtime configuration is read only when the re
 | `REDIS_URL` | The Redis bridge the backend publishes events onto | `redis://localhost:6379/0` |
 | `PHX_HOST` | The service's own hostname | `localhost` |
 | `PORT` | Listen port | `4000` |
-| `CHECK_ORIGIN` | `true` accepts a websocket upgrade only from `PHX_HOST` | `false` |
+| `CHECK_ORIGIN_HOSTS` | Origins a browser may open a socket from, comma separated, e.g. `https://app.example.com,https://admin.example.com`. Not this service's own host | unset |
+| `CHECK_ORIGIN` | Legacy host-based form, consulted only when `CHECK_ORIGIN_HOSTS` is empty. `true` accepts an upgrade only from `PHX_HOST` | `false` |
 | `PUBSUB_ENABLED` | `true` swaps the Redis bridge for Google Pub/Sub | `false` |
 | `GCP_PROJECT_ID` | Required when `PUBSUB_ENABLED=true`; the service refuses to boot without it | unset |
 | `MAX_CONNECTIONS_PER_USER` | Concurrent sockets one account may hold. The caller's plan limit applies too, whichever is lower | `10` |
@@ -694,8 +696,10 @@ The Elixir websocket service. Its runtime configuration is read only when the re
 | `SENTRY_DSN` | The same through Sentry. An empty string is treated as unset on purpose, because the library rejects `""` hard enough to take the node down | unset |
 | `WARMBLY_RELEASE` | The build reported errors are tagged with | `dev` |
 
-<Callout type="warn" title="CHECK_ORIGIN is false by default">
-The shipped default accepts a websocket upgrade from **any** origin. A token is still required to join a channel, so an attacker needs a valid JWT either way, but on a deployment reachable from the internet set `PHX_HOST` to the public websocket hostname and `CHECK_ORIGIN=true` so only your own dashboard can open a socket.
+<Callout type="warn" title="The origin check is off until you list your origins">
+With neither variable set, a websocket upgrade is accepted from any origin. A short-lived ticket is still required to open the socket, and channel membership is checked on every join, so an attacker needs a real credential either way. On a deployment reachable from the internet, set `CHECK_ORIGIN_HOSTS` to your dashboard and admin origins.
+
+List the origins the **browser connects from**, not the websocket host. The `Origin` header on an upgrade names the page that opened the socket, which is the dashboard. Setting `CHECK_ORIGIN=true` and pointing `PHX_HOST` at the websocket hostname refuses every real connection, which is the trap this variable replaces. The installer sets `CHECK_ORIGIN_HOSTS` correctly for you.
 </Callout>
 
 ## Settings stored in the database

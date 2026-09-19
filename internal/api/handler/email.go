@@ -303,15 +303,11 @@ func (h *Handler) UpdateEmailTrackingDomain(c *gin.Context) {
 }
 
 func (h *Handler) DeleteEmail(c *gin.Context) {
-	orgID := middleware.GetOrganizationID(c)
-	if orgID == nil {
-		errx.Handle(c, errx.New(errx.BadRequest, "no organization selected"))
-		return
-	}
+	userIDStr := middleware.GetUserID(c)
 
 	emailAccountID := c.Param("id")
 
-	if err := h.EmailService.Delete(c.Request.Context(), orgID.String(), emailAccountID); err != nil {
+	if err := h.EmailService.Delete(c.Request.Context(), userIDStr, emailAccountID); err != nil {
 		errx.Handle(c, err)
 		return
 	}
