@@ -24,3 +24,10 @@ overrides:
   # site is in scope for the dependency scan and an unjustified high finding is
   # the same amount of work to explain as to fix.
   image-size: ^2.0.3
+  # Clear GHSA-w9m9-85wc-3x92 (DoS through uncontrolled AST recursion) in the
+  # postcss-selector-parser fumadocs-ui pulls in.
+  postcss-selector-parser: '>=7.1.3'
+  # fumadocs-mdx pins an esbuild carrying GHSA-g7r4-m6w7-qqqr, where the dev
+  # server serves any file to any origin. Build-time only here, and the docs
+  # site is a static export, but the fix is a version bump.
+  esbuild: '>=0.28.1'

@@ -31,8 +31,13 @@ defmodule Realtime.MixProject do
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},
       {:plug_cowboy, "~> 2.7"},
-      # cowlib has no patched release for EEF-CVE-2026-43966/43969; cowboy >= 2.16
-      # rejects CR/LF response header values before the wire, so keep this floor.
+      # cowlib 2.20.0 is the latest release and still carries
+      # EEF-CVE-2026-43966 (response splitting) and -43969 (cookie header
+      # injection); neither is patched upstream. 43966 is answered by the floor
+      # below: cowboy >= 2.16 rejects CR/LF in response header values before the
+      # wire. 43969 needs cow_cookie:cookie/1, and this service sets no cookie
+      # on any path: the socket authenticates from a JWT and answers with none.
+      # Keep the floor, and re-check both when cowlib next publishes.
       {:cowboy, "~> 2.16"},
       {:jason, "~> 1.4"},
 

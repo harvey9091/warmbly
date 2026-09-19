@@ -454,6 +454,24 @@ A `400` whose `code` is `storage_limit_reached` comes from `POST /campaigns/:id/
 - `GET /organization/current/limits` reports `storage.used_bytes` and `storage.limit_bytes`, and `storage.over_quota` when a plan change left the workspace above the quota. Existing attachments keep sending either way
 - Delete attachments you no longer need (`DELETE /campaigns/:id/attachments/:attachmentId`) or images (`DELETE /email-images/:id`), or move to a paid plan for the larger quota
 
+#### `mailbox_validation_timeout`
+
+A `400` whose `code` is `mailbox_validation_timeout` comes from the SMTP and IMAP connect endpoints. Warmbly proves credentials by opening a real connection to the mail server before it stores anything, and the server did not answer inside that window. Nothing was saved and no mailbox was created.
+
+```json
+{
+  "error": "Bad Request",
+  "message": "Warmbly could not get an answer from this mail server in time. Nothing was saved. Check the host and port, then try again.",
+  "code": "mailbox_validation_timeout",
+  "request_id": "6f3c0a1e-2d47-4c6b-9a1f-2b7c5f0e8d31"
+}
+```
+
+**How to fix:**
+- Check the host and port. A port that nothing listens on takes the full timeout rather than refusing straight away
+- Retry. A mail server under load can be slow once and answer immediately on the next attempt
+- Confirm the server accepts connections from outside your network, and that the security setting matches the port: `tls` for 465 and 993, `starttls` for 587 and 143
+
 #### `mailbox_worker_unreachable`
 
 A `503` whose `code` is `mailbox_worker_unreachable` comes from `DELETE /emails/{id}`. Disconnecting a mailbox has to reach the machine that syncs it before the record goes, because once the record is gone nothing can tell that machine to stop. When the instruction cannot be delivered, nothing is removed and the mailbox is left exactly as it was.

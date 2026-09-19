@@ -110,8 +110,9 @@ var (
 	ErrGroupMax   = New(BadRequest, "You reached the maximum amount.")
 
 	// Email
-	ErrEmailCredentials     = New(BadRequest, "Invalid email credentials.")
-	ErrEmailValidation      = New(BadRequest, "Deadline exceed, try again later.")
+	ErrEmailCredentials = New(BadRequest, "Invalid email credentials.")
+	ErrEmailValidation  = NewWithIdentifier(BadRequest, "mailbox_validation_timeout",
+		"Warmbly could not get an answer from this mail server in time. Nothing was saved. Check the host and port, then try again.")
 	ErrEmailOnboardProvider = New(BadRequest, "Unsupported email provider. Use 'gmail', 'outlook', or 'smtp_imap'.")
 	// Raised when the provider is supported but this deployment has no OAuth
 	// client for it. Self-host only: the hosted product always has both set. The

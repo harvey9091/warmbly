@@ -2,9 +2,15 @@
 # Generate the CASA dependency-scan artifacts.
 #
 # Everything here is read-only against the tree: it runs scanners and writes
-# their output under compliance/casa/artifacts/. Two artifacts cannot come from
-# this repository and are attached by hand before submission: the Qualys SSL
-# Labs report per hostname, and the authenticated Burp Suite scan.
+# their output into the evidence pack, which lives OUTSIDE this repository.
+# This repository is public and the product self-hosts, so a pack naming every
+# control's location and every advisory still open is a map for anyone
+# attacking an instance that has not updated. CASA_EVIDENCE_DIR overrides the
+# destination; the default is ~/warmbly-casa-private/casa/artifacts.
+#
+# Two artifacts cannot come from this repository and are attached by hand
+# before submission: the Qualys SSL Labs report per hostname, and the
+# authenticated Burp Suite scan.
 #
 # A scanner that is not installed is recorded as not run rather than silently
 # skipped. An evidence pack with a gap in it is honest; one that hides the gap
@@ -12,8 +18,15 @@
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
-OUT="compliance/casa/artifacts"
+OUT="${CASA_EVIDENCE_DIR:-$HOME/warmbly-casa-private/casa/artifacts}"
 mkdir -p "$OUT"
+case "$(cd "$OUT" && pwd -P)/" in
+"$(pwd -P)"/*)
+    echo "refusing to write the evidence pack inside the repository: $OUT" >&2
+    echo "this repository is public; set CASA_EVIDENCE_DIR to a path outside it" >&2
+    exit 1
+    ;;
+esac
 STAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 COMMIT="$(git rev-parse HEAD)"
 
@@ -21,6 +34,7 @@ header() {
     printf '# %s\n\nGenerated: %s\nCommit: %s\n\n' "$1" "$STAMP" "$COMMIT"
 }
 
+echo "==> writing to $OUT"
 echo "==> govulncheck (default build)"
 {
     header "govulncheck, default build"
@@ -82,5 +96,5 @@ echo "Wrote:"
 ls -1 "$OUT"
 echo
 echo "Still to attach by hand before submission:"
-echo "  - Qualys SSL Labs report per hostname in compliance/casa/scope.md"
+echo "  - Qualys SSL Labs report per hostname, per the pack's scope.md"
 echo "  - Authenticated Burp Suite scan using the ADA scan configuration"

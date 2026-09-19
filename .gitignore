@@ -110,3 +110,7 @@ build-errors.log
 xcuserdata/
 .DS_Store
 /.worktrees/
+
+# The CASA evidence pack lives outside this repository on purpose: it maps every
+# control to its file and lists the advisories still open. See AGENTS.md.
+compliance/

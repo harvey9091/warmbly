@@ -42,6 +42,19 @@ func (s *emailService) ValidateCredentials(ctx context.Context, orgID uuid.UUID,
 		return errx.InternalError()
 	}
 
+	// This side must wait longer than the worker's own budget, or the answer
+	// arrives after the only listener has given up and every slow mail host
+	// reads as an outage.
+	subscribeContext, cancel := context.WithTimeout(ctx, validationWait)
+	defer cancel()
+
+	// Subscribe before the job goes out. Redis pub/sub keeps nothing for a
+	// channel with no subscriber, so a worker that answers between the publish
+	// and the SUBSCRIBE lands its reply nowhere and the wait below runs to its
+	// deadline with the validation already done.
+	r := s.r.Subscribe(subscribeContext, "email_validation:"+processID.String())
+	defer r.Close()
+
 	if err := s.publisher.PublishEmailValidation(ctx, workerID, models.EventWorkerEmailValidation{
 		OrgID:       orgID,
 		ProcessID:   processID,
@@ -51,16 +64,19 @@ func (s *emailService) ValidateCredentials(ctx context.Context, orgID uuid.UUID,
 		return errx.InternalError()
 	}
 
-	subscribeContext, cancel := context.WithDeadline(ctx, time.Now().Add(5*time.Second))
-	defer cancel()
-
-	r := s.r.Subscribe(ctx, "email_validation:"+processID.String())
-	defer r.Close()
-
 	for {
 		msg, err := r.ReceiveMessage(subscribeContext)
 		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
+			// Ask the context, not the error, and ask it for the deadline
+			// specifically. A deadline reached while waiting is the mail host
+			// being slow, not this service being broken, but go-redis pushes
+			// the deadline down onto the socket and it comes back as a net
+			// timeout rather than context.DeadlineExceeded, so the error's own
+			// shape cannot say whose deadline it was. The context can, and it
+			// also distinguishes the two ways it ends: only the timeout below
+			// is the mail host. A socket timeout while the context is still
+			// live is Redis failing, and a caller who went away is neither.
+			if errors.Is(subscribeContext.Err(), context.DeadlineExceeded) {
 				return errx.ErrEmailValidation
 			}
 			errs.CaptureException(err)
@@ -75,3 +91,8 @@ func (s *emailService) ValidateCredentials(ctx context.Context, orgID uuid.UUID,
 		}
 	}
 }
+
+// validationWait is how long the caller waits for a worker's verdict. It is
+// deliberately longer than the worker's own deadline (config.EmailValidationBudget)
+// so a verdict produced right at that limit is still heard.
+const validationWait = 9 * time.Second

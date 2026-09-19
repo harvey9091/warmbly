@@ -310,9 +310,9 @@ func (s *service) Disconnect(ctx context.Context) *errx.Error {
 		if s.emailSvc == nil {
 			continue
 		}
-		if acc, xerr := s.emails.GetByID(ctx, m.EmailAccountID); xerr == nil {
+		if acc, xerr := s.emails.GetByID(ctx, m.EmailAccountID); xerr == nil && acc.OrganizationID != nil {
 			s.forgetToken(m.EmailAccountID)
-			_ = s.emailSvc.Delete(ctx, acc.UserID, acc.ID.String())
+			_ = s.emailSvc.Delete(ctx, acc.OrganizationID.String(), acc.ID.String())
 		}
 	}
 	if err := s.repo.UnenrollAll(ctx); err != nil {
@@ -483,8 +483,9 @@ func (s *service) Enroll(ctx context.Context, orgID, accountID uuid.UUID) (*mode
 }
 
 func (s *service) Unenroll(ctx context.Context, orgID, accountID uuid.UUID) *errx.Error {
-	acc, xerr := s.ownedAccount(ctx, orgID, accountID)
-	if xerr != nil {
+	// Called for the tenant check, not the row: everything below keys on the
+	// workspace the caller proved here.
+	if _, xerr := s.ownedAccount(ctx, orgID, accountID); xerr != nil {
 		return xerr
 	}
 	m, err := s.repo.GetByAccount(ctx, accountID)
@@ -495,7 +496,7 @@ func (s *service) Unenroll(ctx context.Context, orgID, accountID uuid.UUID) *err
 		return nil
 	}
 	if m.Managed {
-		return s.removeManaged(ctx, acc.UserID, m)
+		return s.removeManaged(ctx, orgID.String(), m)
 	}
 	// Local row first, so a failed cloud call can be retried from a consistent
 	// state instead of leaving the mailbox with no warmup anywhere.

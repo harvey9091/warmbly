@@ -308,6 +308,8 @@ It keeps its worker assignment while off, so switching it back on puts it back o
 
 **Disconnecting** removes the mailbox for good. It is on the mailbox's own **More** menu in the list, as **Disconnect mailbox**, and at the bottom of its **Settings** tab under Danger zone. To remove several at once, tick their rows and use the selection bar. The machine syncing it is told to drop it before the record is removed, because afterwards there is nothing left to tell. If that instruction cannot be delivered, the disconnect fails with a `503` and nothing is removed, so retry it in a moment rather than assuming it worked.
 
+A mailbox belongs to the workspace, not to the member who connected it. Anyone with the **Manage mailboxes** permission can switch any of the workspace's mailboxes off, change its warmup, or disconnect it, including ones a teammate added and ones whose owner has since left. That is the same permission the list itself is behind, so a mailbox you can see is a mailbox you can act on.
+
 Everything belonging to that mailbox goes with it: its imported mail in the unibox, its warmup history and pool membership, its credentials, its sender links, and any send still scheduled for it. A campaign that was using it keeps running on its remaining senders, and the leads it had been writing to move onto them at their next step. Export the workspace first if you want a copy. Disable the mailbox instead when you only want it to stop.
 
 ### What disconnecting erases

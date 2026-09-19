@@ -5,9 +5,12 @@ use crate::nats::NatsProducer;
 /// Producer is the transport-agnostic tracking-event publisher. NATS is the
 /// default; the Kafka variant is only present when compiled with
 /// `--features kafka` and selected at runtime by EVENTBUS_PROVIDER=kafka.
+/// The NATS variant is boxed because it is several times the size of the Kafka
+/// one, and an enum is as large as its largest variant: every Producer moved
+/// around on the kafka build would otherwise carry that footprint.
 #[derive(Clone)]
 pub enum Producer {
-    Nats(NatsProducer),
+    Nats(Box<NatsProducer>),
     #[cfg(feature = "kafka")]
     Kafka(crate::kafka::KafkaProducer),
 }
@@ -32,7 +35,7 @@ impl Producer {
                 return Err("EVENTBUS_PROVIDER=kafka but the tracking service was built without the `kafka` feature; rebuild with --features kafka or use NATS".into());
             }
         }
-        Ok(Producer::Nats(NatsProducer::new(config).await?))
+        Ok(Producer::Nats(Box::new(NatsProducer::new(config).await?)))
     }
 
     pub async fn publish(&self, event: TrackingEvent) {

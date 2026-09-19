@@ -9,8 +9,20 @@ import (
 	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
+// probeBudget bounds the two live dials. The reply below must be publishable
+// after it runs out, so the dials get their own context rather than sharing the
+// handler's: a mail host slow enough to use the whole budget used to leave no
+// context left to answer on, and the verdict was dropped on the floor.
+const probeBudget = 5 * time.Second
+
+// replyBudget is the separate, short budget for publishing the verdict. It is
+// derived from the incoming context, not from the probe one, so an exhausted
+// probe deadline cannot cancel the answer.
+const replyBudget = 3 * time.Second
+
 func (w *WorkerService) HandleEmailValidation(ctx context.Context, data models.EventWorkerEmailValidation) error {
-	ctx, cancel := context.WithDeadline(ctx, time.Now().Add(5*time.Second))
+	parent := ctx
+	ctx, cancel := context.WithTimeout(ctx, probeBudget)
 	defer cancel()
 
 	cipher, err := w.CipherService.Cipher(ctx, data.OrgID)
@@ -64,7 +76,9 @@ func (w *WorkerService) HandleEmailValidation(ctx context.Context, data models.E
 		msg = "0"
 	}
 
-	if err := w.Cache.Publish(ctx, "email_validation:"+data.ProcessID.String(), msg).Err(); err != nil {
+	replyCtx, replyCancel := context.WithTimeout(context.WithoutCancel(parent), replyBudget)
+	defer replyCancel()
+	if err := w.Cache.Publish(replyCtx, "email_validation:"+data.ProcessID.String(), msg).Err(); err != nil {
 		errs.CaptureException(err)
 		return nil
 	}

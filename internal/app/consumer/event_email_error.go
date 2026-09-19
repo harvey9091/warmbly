@@ -244,6 +244,20 @@ func (s *JobsService) HandleEmailServerError(ctx context.Context, event models.E
 		return err
 	}
 
+	// A mailbox whose row is gone reports here and nowhere else. Its provider
+	// failures are classified as server errors (wmail.err maps NotFound into
+	// that bucket), and the server-error path deliberately changes no status,
+	// so the eviction that deactivateAccount performs was unreachable for the
+	// one case that needs it most: a worker holding a mailbox that no longer
+	// exists calls the provider once a sync interval, forever, and burns the
+	// account's API quota doing it.
+	if s.Publisher != nil && s.EmailRepository != nil {
+		if _, xerr := s.EmailRepository.GetWorkerID(ctx, emailAccountID); errors.Is(xerr, errx.ErrNotFound) {
+			s.evictDeletedMailbox(ctx, userID, emailAccountID)
+			return nil
+		}
+	}
+
 	var taskID *uuid.UUID
 	if event.TaskID != "" {
 		tid, err := uuid.Parse(event.TaskID)

@@ -1,7 +1,0 @@
-# Rust dependencies
-
-Generated: 2026-09-19T06:06:32Z
-Commit: f404f34b623be86434dcfa029e594f4d1943a8b4
-
-cargo-audit is not installed on this machine, so this scan did not run here.
-CI runs it on every dependency change: see the rust job in .github/workflows/security.yml.
