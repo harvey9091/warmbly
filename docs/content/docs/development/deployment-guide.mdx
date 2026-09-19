@@ -462,7 +462,7 @@ Nothing to configure. Add the mailbox in the dashboard with its host, port, user
 
 ### Gmail and Google Workspace
 
-Nothing to configure by default: the connect dialog walks users through a Google app password over `smtp.gmail.com` and `imap.gmail.com`, see [the mailbox guide](/guides/mailboxes/#gmail-and-google-workspace). Set up a Google OAuth client only if you want to offer Google sign-in for new Gmail mailboxes, which also needs `BOX_GOOGLE_OAUTH_CONNECT=true`; without it the client is used solely to keep mailboxes that are already on Google sign-in refreshing.
+Nothing to configure by default: the connect dialog walks users through a Google app password over `smtp.gmail.com` and `imap.gmail.com`, see [the mailbox guide](/guides/mailboxes/#gmail-and-google-workspace). Set up a Google OAuth client only if you want to offer Google sign-in for new Gmail mailboxes, which also needs `BOX_GOOGLE_OAUTH_CONNECT=true`; without it the client still serves the mailboxes already connected that way, both refreshing their tokens and re-authorizing them when Google invalidates a grant.
 
 <Steps>
 
