@@ -36,6 +36,7 @@ import (
 type attributingSender struct {
 	mu   sync.Mutex
 	from map[uuid.UUID]uuid.UUID
+	msgs map[uuid.UUID]EmailMessage
 }
 
 func (s *attributingSender) Send(ctx context.Context, taskID uuid.UUID, msg EmailMessage, account models.Email) error {
@@ -43,8 +44,10 @@ func (s *attributingSender) Send(ctx context.Context, taskID uuid.UUID, msg Emai
 	defer s.mu.Unlock()
 	if s.from == nil {
 		s.from = map[uuid.UUID]uuid.UUID{}
+		s.msgs = map[uuid.UUID]EmailMessage{}
 	}
 	s.from[taskID] = account.ID
+	s.msgs[taskID] = msg
 	return nil
 }
 
@@ -55,8 +58,17 @@ func (s *attributingSender) sentFrom(taskID uuid.UUID) (uuid.UUID, bool) {
 	return id, ok
 }
 
+// message is what went on the wire for a task, as the worker saw it.
+func (s *attributingSender) message(taskID uuid.UUID) (EmailMessage, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	msg, ok := s.msgs[taskID]
+	return msg, ok
+}
+
 type rotationFixture struct {
 	pool           *pgxpool.Pool
+	handle         *db.DB
 	user, org      uuid.UUID
 	mailboxes      []uuid.UUID
 	campaign, step uuid.UUID
@@ -83,7 +95,7 @@ func newRotationFixture(t *testing.T, leads int) *rotationFixture {
 	pool := handle.Pool
 
 	f := &rotationFixture{
-		pool: pool, user: uuid.New(), org: uuid.New(),
+		pool: pool, handle: handle, user: uuid.New(), org: uuid.New(),
 		campaign: uuid.New(), step: uuid.New(),
 		mailboxes: []uuid.UUID{uuid.New(), uuid.New()},
 		sender:    &attributingSender{},
