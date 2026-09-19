@@ -96,9 +96,9 @@ func (f *ledgerFixture) penalise(t *testing.T, id uuid.UUID, score float64, stat
 	           WHERE email_account_id = $1`, id, score, state, until)
 }
 
-func (f *ledgerFixture) remove(t *testing.T, user, id uuid.UUID) {
+func (f *ledgerFixture) remove(t *testing.T, id uuid.UUID) {
 	t.Helper()
-	if xerr := f.emails.Delete(context.Background(), user.String(), id.String(), 0); xerr != nil {
+	if xerr := f.emails.Delete(context.Background(), id.String(), 0); xerr != nil {
 		t.Fatalf("Delete: %v", xerr)
 	}
 }
@@ -176,7 +176,7 @@ func TestLiveReputationMirrorFollowsTheAddressAcrossRemoval(t *testing.T) {
 
 	written := m.recordedAt
 	time.Sleep(20 * time.Millisecond)
-	f.remove(t, f.user, first)
+	f.remove(t, first)
 	m = f.mirrorRow(t)
 	if m == nil {
 		t.Fatal("removing the mailbox lost its standing")
@@ -203,7 +203,7 @@ func TestLiveReputationMirrorLeavesNothingForGoodStanding(t *testing.T) {
 	f := newLedgerFixture(t)
 	first := f.addMailbox(t, f.user)
 	f.join(t, first)
-	f.remove(t, f.user, first)
+	f.remove(t, first)
 	if m := f.mirrorRow(t); m != nil {
 		t.Fatalf("a mailbox in good standing left a mirror row: %+v", m)
 	}
@@ -273,7 +273,7 @@ func TestLiveReputationMirrorNeverLapsesAReviewBlock(t *testing.T) {
 	if m == nil || m.standing != nil {
 		t.Fatalf("a review block must mirror with no standing_until: %+v", m)
 	}
-	f.remove(t, f.user, id)
+	f.remove(t, id)
 	f.exec(t, `UPDATE warmup_reputation_ledger SET recorded_at = now() - interval '400 days' WHERE organization_id = $1`, f.org)
 	if _, err := f.warmups.PurgeExpiredReputationLedger(context.Background()); err != nil {
 		t.Fatalf("purge: %v", err)
@@ -308,7 +308,7 @@ func TestLiveReputationMirrorLapsesOnlyWithoutALiveRow(t *testing.T) {
 	}
 
 	// Removed and lapsed: forgotten, and reported.
-	f.remove(t, f.user, id)
+	f.remove(t, id)
 	age()
 	purged, err := f.warmups.PurgeExpiredReputationLedger(context.Background())
 	if err != nil {
@@ -326,7 +326,7 @@ func TestLiveReputationMirrorDoesNotInheritALapsedStanding(t *testing.T) {
 	id := f.addMailbox(t, f.user)
 	f.join(t, id)
 	f.penalise(t, id, 40, "quarantined", ptr(time.Now().Add(7*24*time.Hour)))
-	f.remove(t, f.user, id)
+	f.remove(t, id)
 	f.exec(t, `UPDATE warmup_reputation_ledger SET standing_until = now() - interval '200 days', recorded_at = now() - interval '200 days' WHERE organization_id = $1`, f.org)
 
 	again := f.addMailbox(t, f.user)

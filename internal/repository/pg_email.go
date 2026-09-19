@@ -142,7 +142,7 @@ type EmailRepository interface {
 	// Delete removes a mailbox and refunds workerLoadRefund of its worker's
 	// load in the same transaction, so a deleted mailbox can never leave a
 	// worker permanently charged for it.
-	Delete(ctx context.Context, userID, emailAccountID string, workerLoadRefund float64) *errx.Error
+	Delete(ctx context.Context, emailAccountID string, workerLoadRefund float64) *errx.Error
 
 	NewOauthAccount(ctx context.Context, userID string, data models.NewOauthAccount) (*models.Email, *errx.Error)
 	// NewManagedAccount creates an OAuth mailbox whose credential lives on Warmbly Cloud, so no token row is written.
@@ -1385,16 +1385,18 @@ const deleteDeadlockAttempts = 3
 // that side is this one. Nothing is wrong when it happens and the work is
 // entirely redoable, so surfacing it meant someone clicking Disconnect got an
 // error for an operation that would have succeeded a moment later.
-func (r *emailRepository) Delete(ctx context.Context, userID, emailAccountID string, workerLoadRefund float64) *errx.Error {
+func (r *emailRepository) Delete(ctx context.Context, emailAccountID string, workerLoadRefund float64) *errx.Error {
 	for attempt := 1; ; attempt++ {
-		xerr, deadlocked := r.deleteOnce(ctx, userID, emailAccountID, workerLoadRefund)
+		xerr, deadlocked := r.deleteOnce(ctx, emailAccountID, workerLoadRefund)
 		if !deadlocked || attempt >= deleteDeadlockAttempts {
 			return xerr
 		}
 	}
 }
 
-func (r *emailRepository) deleteOnce(ctx context.Context, userID, emailAccountID string, workerLoadRefund float64) (*errx.Error, bool) {
+// deleteOnce deletes by id alone: the service has already proved the mailbox
+// belongs to the caller's workspace, and no other scope is narrower than that.
+func (r *emailRepository) deleteOnce(ctx context.Context, emailAccountID string, workerLoadRefund float64) (*errx.Error, bool) {
 	tx, err := r.DB.Begin(ctx)
 	if err != nil {
 		db.CaptureError(err, "", nil, "begin")
@@ -1410,11 +1412,11 @@ func (r *emailRepository) deleteOnce(ctx context.Context, userID, emailAccountID
 		UPDATE warmup_reputation_ledger l
 		   SET recorded_at = now()
 		  FROM email_accounts a
-		 WHERE a.user_id = $1 AND a.id = $2
+		 WHERE a.id = $1
 		   AND l.organization_id = a.organization_id
 		   AND l.email = lower(btrim(a.email))
 	`
-	bumpParams := []any{userID, emailAccountID}
+	bumpParams := []any{emailAccountID}
 	if _, err := tx.Exec(ctx, bump, bumpParams...); err != nil {
 		if isDeadlock(err) {
 			return errx.InternalError(), true
@@ -1427,23 +1429,23 @@ func (r *emailRepository) deleteOnce(ctx context.Context, userID, emailAccountID
 	// sealed refresh token lives in email_accounts_oauth, which cascades away
 	// with the mailbox, so reading it afterwards is impossible and the grant
 	// would stay live at the provider forever.
-	const scope = `a.user_id = $1 AND a.id = $2`
-	if _, err := EnqueueMailboxErasures(ctx, tx, scope, userID, emailAccountID); err != nil {
+	const scope = `a.id = $1`
+	if _, err := EnqueueMailboxErasures(ctx, tx, scope, emailAccountID); err != nil {
 		return errx.InternalError(), isDeadlock(err)
 	}
 
 	// The threads this mailbox holds messages in, read while they still exist.
-	threads, err := CollectMailboxThreadState(ctx, tx, scope, userID, emailAccountID)
+	threads, err := CollectMailboxThreadState(ctx, tx, scope, emailAccountID)
 	if err != nil {
 		return errx.InternalError(), isDeadlock(err)
 	}
 
 	query := `
 		DELETE FROM email_accounts
-		WHERE user_id = $1 AND id = $2
+		WHERE id = $1
 		RETURNING worker_id
 	`
-	params := []any{userID, emailAccountID}
+	params := []any{emailAccountID}
 
 	var workerID *uuid.UUID
 	if err := tx.QueryRow(ctx, query, params...).Scan(&workerID); err != nil {

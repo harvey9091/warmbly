@@ -321,25 +321,33 @@ func (s *emailService) resolveDomainAuth(ctx context.Context, orgID, emailAccoun
 // Delete disconnects a mailbox. The worker is told to drop it BEFORE the row
 // goes, because afterwards no assignment is left to read and nothing can repair
 // a missed removal, so a removal that cannot be sent fails the whole delete.
-func (s *emailService) Delete(ctx context.Context, userID, emailAccountID string) *errx.Error {
+//
+// Scoped to the workspace, like every other mailbox route: the list shows a
+// teammate every mailbox in it and the route is gated on manage_emails, so a
+// delete that only the connecting member could perform answered 404 to
+// everyone else on a row they could see.
+func (s *emailService) Delete(ctx context.Context, orgID, emailAccountID string) *errx.Error {
 	accountID, err := uuid.Parse(emailAccountID)
 	if err != nil {
 		return errx.ErrUuid
 	}
+	org, err := uuid.Parse(orgID)
+	if err != nil {
+		return errx.ErrUuid
+	}
 
-	// Read by id: Get is scoped by organization and was being handed a user id,
-	// so it never found the mailbox and every side effect below was skipped.
-	// Ownership moves here, or the removal below would be publishable for a
-	// mailbox the caller does not own.
+	// Ownership is proved here, before the removal below is publishable, and
+	// the repository deletes by id on the strength of it.
 	account, xerr := s.emailRepository.GetByID(ctx, accountID)
 	if xerr != nil {
 		return xerr
 	}
-	if account == nil || !sameUser(account.UserID, userID) {
+	if account == nil || account.OrganizationID == nil || *account.OrganizationID != org {
 		return errx.ErrNotFound
 	}
 
-	if xerr := s.dropFromWorker(ctx, userID, accountID); xerr != nil {
+	// The owner's id, not the caller's: the consumer's unibox cleanup is keyed on it.
+	if xerr := s.dropFromWorker(ctx, account.UserID, accountID); xerr != nil {
 		return xerr
 	}
 
@@ -353,7 +361,7 @@ func (s *emailService) Delete(ctx context.Context, userID, emailAccountID string
 	// nulls worker_id, so a worker not credited here stays charged for a
 	// mailbox that no longer exists, unrepairably.
 	refund := worker.MailboxWeight(account.Provider, account.Warmup != nil)
-	if xerr := s.emailRepository.Delete(ctx, userID, emailAccountID, refund); xerr != nil {
+	if xerr := s.emailRepository.Delete(ctx, emailAccountID, refund); xerr != nil {
 		// The removal already went out and the mailbox is still active: put it
 		// back now instead of leaving it dark until the reconciler's next pass.
 		s.loadAccountBestEffort(ctx, accountID)
@@ -406,14 +414,6 @@ func (s *emailService) unenrollFromCloud(ctx context.Context, account *models.Em
 		return ErrCloudEnrollmentStuck
 	}
 	return nil
-}
-
-// sameUser compares user ids as uuids, the way the delete's own WHERE clause
-// does, so formatting alone never reads as a different owner.
-func sameUser(a, b string) bool {
-	left, aerr := uuid.Parse(a)
-	right, berr := uuid.Parse(b)
-	return aerr == nil && berr == nil && left == right
 }
 
 func (s *emailService) syncWarmupPoolMembership(ctx context.Context, account *models.Email) {

@@ -463,7 +463,7 @@ func (s *service) Enroll(ctx context.Context, inst *models.PoolLinkInstance, req
 	}
 
 	if err := s.repo.EnrollMailbox(ctx, &models.PoolLinkMailbox{InstanceID: inst.ID, RemoteID: req.RemoteID, EmailAccountID: acc.ID}); err != nil {
-		_ = s.emailSvc.Delete(ctx, userID, acc.ID.String())
+		_ = s.emailSvc.Delete(ctx, orgID.String(), acc.ID.String())
 		return nil, errx.InternalError()
 	}
 
@@ -645,11 +645,7 @@ func (s *service) Unenroll(ctx context.Context, inst *models.PoolLinkInstance, r
 	}
 	// A managed mailbox belongs to the workspace; only the link goes.
 	if !m.Managed {
-		userID, xerr := s.ownerUserID(ctx, inst)
-		if xerr != nil {
-			return xerr
-		}
-		if xerr := s.emailSvc.Delete(ctx, userID, m.EmailAccountID.String()); xerr != nil && xerr != errx.ErrNotFound {
+		if xerr := s.emailSvc.Delete(ctx, inst.OrganizationID.String(), m.EmailAccountID.String()); xerr != nil && xerr != errx.ErrNotFound {
 			return xerr
 		}
 	}
