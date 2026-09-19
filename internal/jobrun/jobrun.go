@@ -10,6 +10,7 @@ package jobrun
 
 import (
 	"context"
+	"hash/fnv"
 	"sync"
 	"time"
 
@@ -35,6 +36,30 @@ type Store interface {
 
 // requestPoll is how often a loop checks for a "run now" request.
 const requestPoll = 15 * time.Second
+
+// phaseWindow is how far apart loops that share an interval are pulled. Every
+// loop registers in the same instant at boot, so without an offset the nine
+// hourly jobs keep firing together for the life of the process: seven backend
+// jobs opened a database connection in one second and the server refused all
+// of them at once. The offset is derived from the job's name, so it is the
+// same on every restart and a job keeps its slot rather than shuffling.
+const phaseWindow = 45 * time.Second
+
+// phaseOffset is the job's fixed place inside the window, never past its own
+// interval so a frequent job is not held longer than its period.
+func phaseOffset(name string, interval time.Duration) time.Duration {
+	window := phaseWindow
+	if interval < window {
+		window = interval
+	}
+	ms := window.Milliseconds()
+	if ms <= 0 {
+		return 0
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(name))
+	return time.Duration(int64(h.Sum32())%ms) * time.Millisecond
+}
 
 var (
 	mu      sync.RWMutex
@@ -64,11 +89,17 @@ func Loop(ctx context.Context, name string, interval time.Duration, runOnBoot bo
 	if interval <= 0 {
 		interval = time.Minute
 	}
+	offset := phaseOffset(name, interval)
+
 	st, svc := current()
 	if st != nil {
-		next := time.Now().Add(interval)
+		// The offset is served before the ticker starts, so it counts toward
+		// the first run whether or not that run happens at boot. Leaving it
+		// out of the non-boot case recorded a next run the loop was already
+		// past, and the panel showed it overdue for the length of the offset.
+		next := time.Now().Add(offset + interval)
 		if runOnBoot {
-			next = time.Now()
+			next = time.Now().Add(offset)
 		}
 		if err := st.Register(ctx, name, svc, interval, next); err != nil {
 			log.Warn().Err(err).Str("job", name).Msg("jobrun: register failed")
@@ -77,6 +108,18 @@ func Loop(ctx context.Context, name string, interval time.Duration, runOnBoot bo
 
 	run := func() {
 		Run(ctx, name, interval, fn)
+	}
+
+	// Hold the job off its phase before anything else, so the ticker started
+	// below inherits the offset and the spread survives every later tick.
+	if offset > 0 {
+		timer := time.NewTimer(offset)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
 	}
 
 	if runOnBoot {

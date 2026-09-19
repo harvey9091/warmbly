@@ -89,3 +89,23 @@ export const clearTokens = () => {
 
   setToken(null);
 }
+
+// SESSION_ENDED_EVENT is how the api client, which is not a component and
+// holds no router, says the session is over.
+//
+// Clearing the tokens was never enough on its own. The three queries
+// UserProvider watches are cached and none of them polls, so nothing re-ran to
+// notice, and the app stayed on a page it could no longer authenticate while
+// the socket retried its handshake every few seconds for as long as the tab
+// was open.
+export const SESSION_ENDED_EVENT = "warmbly:session-ended";
+
+// endSession ends the session and says so. Use it wherever the server has
+// refused the credentials; clearTokens alone is for a sign-out that already
+// owns the navigation.
+export const endSession = () => {
+  clearTokens();
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(SESSION_ENDED_EVENT));
+  }
+};
