@@ -22,6 +22,8 @@ const canonical = new URL(Astro.url.pathname, Astro.site ?? 'https://warmbly.com
 // Per-post social/share image: use the post cover when set, else the site card.
 const shareImage = cover ?? '/og-image.jpg';
 const shareImageAbsolute = new URL(shareImage, Astro.site ?? 'https://warmbly.com').toString();
+// Covers in public/blog are all exported at 1200x600; the site card is 1920x1008.
+const shareImageSize = cover ? { w: 1200, h: 600 } : { w: 1920, h: 1008 };
 
 const articleJsonLd = {
   '@context': 'https://schema.org',
@@ -61,7 +63,7 @@ const neighbors = [
   next ? { label: 'Up next', post: next } : null,
 ].filter(Boolean) as { label: string; post: BlogPost }[];
 ---
-<Layout title={`${title} | Warmbly Blog`} description={description} ogImage={shareImage} ogType="article" jsonLd={[articleJsonLd, breadcrumbJsonLd]}>
+<Layout title={`${title} | Warmbly Blog`} description={description} ogImage={shareImage} ogImageWidth={shareImageSize.w} ogImageHeight={shareImageSize.h} {...(cover ? { ogImageAlt: title } : {})} ogType="article" jsonLd={[articleJsonLd, breadcrumbJsonLd]}>
   <!-- TOP BAR: sticky under the site header, carries the reading progress -->
   <div class="sticky top-14 z-30 bg-white/90 backdrop-blur-md border-b border-[color:var(--border)]">
     <div class="container-page py-3 flex items-center justify-between text-[11.5px] font-mono">
