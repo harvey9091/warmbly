@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -44,8 +46,25 @@ func New(ctx context.Context, endpoint string) (*DB, error) {
 		return nil, err
 	}
 
-	dbConfig.MaxConns = defaultMaxConns
+	// The pool ceiling is per process, and the database's is for the whole
+	// fleet: every backend replica, every consumer and every warmblyctl run
+	// takes its own share. Exhausting max_connections shows up as "remaining
+	// connection slots are reserved", which no amount of retrying fixes, so
+	// the size has to be tunable without a rebuild. A DSN that names
+	// pool_max_conns keeps it; DB_MAX_CONNS overrides both.
+	if dbConfig.MaxConns <= 0 {
+		dbConfig.MaxConns = defaultMaxConns
+	}
+	if n := envInt32("DB_MAX_CONNS"); n > 0 {
+		dbConfig.MaxConns = n
+	}
 	dbConfig.MinConns = defaultMinConns
+	if n := envInt32("DB_MIN_CONNS"); n >= 0 && os.Getenv("DB_MIN_CONNS") != "" {
+		dbConfig.MinConns = n
+	}
+	if dbConfig.MinConns > dbConfig.MaxConns {
+		dbConfig.MinConns = dbConfig.MaxConns
+	}
 	dbConfig.MaxConnLifetime = defaultMaxConnLifetime
 	dbConfig.MaxConnIdleTime = defaultMaxConnIdleTime
 	dbConfig.HealthCheckPeriod = defaultHealthCheckPeriod
@@ -65,4 +84,19 @@ func New(ctx context.Context, endpoint string) (*DB, error) {
 	return &DB{
 		Pool: conn,
 	}, nil
+}
+
+// envInt32 reads a positive pool bound from the environment. Anything unset or
+// unparseable returns -1 so the caller keeps its own default rather than
+// sizing the pool from a typo.
+func envInt32(name string) int32 {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return -1
+	}
+	n, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil || n < 0 {
+		return -1
+	}
+	return int32(n)
 }

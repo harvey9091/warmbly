@@ -55,6 +55,10 @@ export function useKeyboardShortcuts({ onOpenShortcuts, onOpenSearch }: UseKeybo
 
       if (isEditing) return;
 
+      // KeyboardEvent.key is absent on some synthetic events (password
+      // managers, IME composition, extensions), and reading it off a
+      // global listener throws on whatever page the reader is on.
+      if (typeof event.key !== "string") return;
       const key = event.key.toLowerCase();
 
       if ((event.ctrlKey || event.metaKey) && key === 'k') {

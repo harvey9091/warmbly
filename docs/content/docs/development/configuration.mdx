@@ -323,6 +323,8 @@ A worker's command topic is named after the node id issued when it joined, so th
 |---|---|---|---|
 | `PRIMARY_DB` | PostgreSQL connection string. Carries inline credentials, so it is never returned by any API | the compose postgres | yes |
 | `PGSSLROOTCERT` | Certificate bundle used to verify the database's TLS certificate, read by the Postgres driver. Amazon RDS chains to a root in no public trust store, so `sslmode=verify-full` against it needs AWS's bundle; the backend and consumer images ship it at `/etc/ssl/rds/global-bundle.pem`. Prefer `sslrootcert=` in the DSN so the setting travels with the connection it applies to | unset (system trust store) | yes |
+| `DB_MAX_CONNS` | Maximum pooled Postgres connections for one Go process (backend, consumer). The ceiling that matters is the database's `max_connections`, and every replica, consumer and `warmblyctl` run takes its own share of it, so a fleet that outgrows the server needs this lowered rather than the server restarted. A `pool_max_conns` in the DSN is honoured when this is unset | `25` | yes |
+| `DB_MIN_CONNS` | Connections each Go process keeps open while idle. Capped at `DB_MAX_CONNS` | `2` | yes |
 | `DATABASE_URL` | The realtime service's own name for the same database | the compose postgres | yes |
 | `DATABASE_POOL_SIZE` | Maximum pooled connections **for the realtime service only**. The Go services use the driver default and do not read it | `10` | yes |
 | `DATABASE_SSL` | Whether the realtime service connects to Postgres over TLS | `true`, and `false` under compose | yes |

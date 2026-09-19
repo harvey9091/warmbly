@@ -178,6 +178,18 @@ const NOISE = [
 // reached error tracking only by also escaping to the global rejection handler.
 const NOISE_TYPES = ["AuthError"];
 
+// A message that is an object's default toString carries nothing: no name, no
+// cause, no place. They arrive from browser extensions and from handlers that
+// concatenate a DOM Event into a string, they all fingerprint together, and
+// nobody can act on one. A frame would make it findable, so only the ones with
+// no stack at all are dropped.
+function isUninformative(entry: Record<string, unknown>): boolean {
+    const value = entry.value ?? entry.$exception_value;
+    if (typeof value !== "string" || !value.includes("[object ")) return false;
+    const trace = entry.stacktrace as { frames?: unknown[] } | undefined;
+    return !Array.isArray(trace?.frames) || trace.frames.length === 0;
+}
+
 function isNoise(properties: Properties): boolean {
     const exceptionList = properties.$exception_list;
     if (Array.isArray(exceptionList) && exceptionList.some((exception) => {
@@ -186,7 +198,8 @@ function isNoise(properties: Properties): boolean {
         const type = entry.type ?? entry.$exception_type;
         const value = entry.value ?? entry.$exception_value;
         return (typeof type === "string" && NOISE_TYPES.includes(type))
-            || (typeof value === "string" && NOISE.includes(value.trim()));
+            || (typeof value === "string" && NOISE.includes(value.trim()))
+            || isUninformative(entry);
     })) {
         return true;
     }

@@ -34,7 +34,7 @@ type EmailService interface {
 	BulkUpdateTags(ctx context.Context, orgID string, emailIDs, addTags, removeTags []uuid.UUID) (int, *errx.Error)
 	// SetWarmupLifecycle starts, pauses, resumes, or disables warmup for a
 	// mailbox. start/resume preserve ramp progress; disable turns warmup off.
-	SetWarmupLifecycle(ctx context.Context, userID, emailAccountID, action string) (*models.Email, *errx.Error)
+	SetWarmupLifecycle(ctx context.Context, orgID, emailAccountID, action string) (*models.Email, *errx.Error)
 	// SetSendHold holds a mailbox in reserve or releases it; a release lands
 	// wherever its warmup health says, so an unhealthy mailbox rests.
 	SetSendHold(ctx context.Context, orgID, emailAccountID string, hold bool) (*models.SendLifecycleState, *errx.Error)
@@ -60,7 +60,7 @@ type EmailService interface {
 	// lift the cold-send and warmup gate, so it sits behind the write
 	// permission while CheckDomainAuth stays readable.
 	RefreshDomainAuth(ctx context.Context, orgID, emailAccountID string) (*dnsauth.Result, *errx.Error)
-	Delete(ctx context.Context, userID, emailAccountID string) *errx.Error
+	Delete(ctx context.Context, orgID, emailAccountID string) *errx.Error
 
 	// GetSendIdentity reports which addresses the mailbox's provider will let
 	// it send as, which one is in use, and where the stored signature came

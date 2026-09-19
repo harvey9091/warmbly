@@ -41,10 +41,17 @@ export interface GlobalShortcut extends ShortcutRow {
   run: (ctx: Ctx) => void
 }
 
+// KeyboardEvent.key is not guaranteed: password managers, IME composition and
+// extension-dispatched events all deliver a keydown with no key, and reading
+// .toLowerCase() off it throws out of a global listener, which is an unhandled
+// error on whatever page the user happened to be on.
+const keyOf = (e: KeyboardEvent) =>
+  typeof e.key === "string" ? e.key.toLowerCase() : ""
+
 // A bare key with no modifier held. Every single-press shortcut goes through
 // this, so none of them can collide with a Ctrl/Cmd combo.
 const plain = (k: string) => (e: KeyboardEvent) =>
-  !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === k
+  !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && keyOf(e) === k
 
 const mod = (e: KeyboardEvent) => e.ctrlKey || e.metaKey
 
@@ -106,7 +113,7 @@ export const globalShortcuts: GlobalShortcut[] = [
     group: 'assistant',
     whileTyping: true,
     available: () => checkPermission('USE_AI'),
-    match: (e) => mod(e) && e.key.toLowerCase() === 'i',
+    match: (e) => mod(e) && keyOf(e) === 'i',
     run: () => {
       const s = useAppStore.getState()
       // Minimized means docked to the status bar, so the combo restores it
@@ -158,7 +165,7 @@ export const globalShortcuts: GlobalShortcut[] = [
     description: 'Go to last item',
     group: 'list',
     needs: 'listEdge',
-    match: (e) => !mod(e) && !e.altKey && e.shiftKey && e.key.toLowerCase() === 'g',
+    match: (e) => !mod(e) && !e.altKey && e.shiftKey && keyOf(e) === 'g',
     run: () => shortcutAction('listEdge')?.('last'),
   },
   {
@@ -230,7 +237,7 @@ export const globalShortcuts: GlobalShortcut[] = [
     description: 'Command palette',
     group: 'actions',
     whileTyping: true,
-    match: (e) => mod(e) && e.key.toLowerCase() === 'k',
+    match: (e) => mod(e) && keyOf(e) === 'k',
     run: () => useAppStore.getState().setCommandPaletteOpen(true),
   },
 ]
@@ -381,7 +388,8 @@ export function useKeyboardShortcuts() {
           target.isContentEditable ||
           !!target.closest?.('[role="textbox"]'))
 
-      const key = event.key.toLowerCase()
+      const key = keyOf(event)
+      if (!key) return
       const ctx = { navigate }
 
       // Escape always abandons a half-typed sequence, typing or not.

@@ -179,16 +179,16 @@ func (s *service) connectBrokered(ctx context.Context, st brokerState, code stri
 	}
 	remoteID := uuid.New()
 	if err := s.repo.EnrollMailbox(ctx, &models.PoolLinkMailbox{InstanceID: inst.ID, RemoteID: remoteID, EmailAccountID: acc.ID, Managed: true}); err != nil {
-		_ = s.emailSvc.Delete(ctx, userID, acc.ID.String())
+		_ = s.emailSvc.Delete(ctx, orgID.String(), acc.ID.String())
 		return uuid.Nil, errx.InternalError()
 	}
-	s.startWarmup(ctx, userID, acc.ID)
+	s.startWarmup(ctx, orgID.String(), acc.ID)
 	return remoteID, nil
 }
 
 // startWarmup: failures here are retried by the reconciler.
-func (s *service) startWarmup(ctx context.Context, userID string, accountID uuid.UUID) {
-	if _, xerr := s.emailSvc.SetWarmupLifecycle(ctx, userID, accountID.String(), "start"); xerr != nil {
+func (s *service) startWarmup(ctx context.Context, orgID string, accountID uuid.UUID) {
+	if _, xerr := s.emailSvc.SetWarmupLifecycle(ctx, orgID, accountID.String(), "start"); xerr != nil {
 		log.Warn().Str("account_id", accountID.String()).Msg("pool link: warmup start failed after enrollment")
 	}
 	if err := s.emailSvc.LoadAccountOntoWorker(ctx, accountID); err != nil {

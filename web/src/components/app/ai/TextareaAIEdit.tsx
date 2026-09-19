@@ -140,7 +140,7 @@ export default function TextareaAIEdit({
         const ta = textareaRef.current;
         if (!ta) return;
         const onKey = (e: KeyboardEvent) => {
-            if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "j") return;
+            if (!(e.metaKey || e.ctrlKey) || e.key?.toLowerCase() !== "j") return;
             const { selectionStart: s, selectionEnd: en } = ta;
             if (s === en) return;
             e.preventDefault();

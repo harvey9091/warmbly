@@ -177,6 +177,69 @@ Do not:
 - do not run the Go test suite as a default gate unless the task is specifically about those tests.
 - do not push hoping CI passes; a `gofmt -l` / `make lint` / `pnpm typecheck` failure is always a real CI failure.
 
+## Security And Compliance Invariants
+
+Warmbly's Google OAuth client is assessed against **ADA CASA v2.1.1 at Assurance Level 1**, which maps to OWASP ASVS 4.0.3. The evidence pack is `compliance/casa/` and it is a claim about the code on `main`: a change that breaks one of the invariants below does not just introduce a bug, it makes a submitted statement untrue and puts the OAuth client's verification at risk. Treat them as constraints on every change, not as a checklist run before an audit.
+
+Run `scripts/casa-evidence.sh` to regenerate the scanner artifacts. Update `compliance/casa/evidence.md` in the same change as any code that alters a control it cites.
+
+### Disclosure: this repository is public and the product self-hosts
+
+Every instance that has not updated yet runs the code an attacker can read here. So:
+
+- **describe the invariant, never the gap.** A comment, commit subject, PR body or doc that says what used to be possible is a working exploit for every unpatched instance. Write "every read of an organization's data is scoped by `organization_id`", not "before this, X could read Y"
+- do not add a before-and-after account of a security fix to the repository. Keep that out of tree
+- a security fix ships like any other change: a normal subject line naming what the code now does
+
+### Authentication
+
+- passwords are hashed with **Argon2id** and nothing else. No change may introduce a second scheme, weaken the parameters, or store a password in any reversible form
+- `crypt.CheckPassword` (`internal/pkg/crypt/validation.go`) is the only gate on a new or changed password, and it refuses anything on the embedded NCSC breached list (`internal/pkg/crypt/passwords/breached.txt`). Every path that accepts a password must call it: registration, reset, change, invitation acceptance, and any future one
+- every auth-sensitive entry point is behind CAPTCHA (`internal/pkg/captcha/turnstile.go`): login, registration, password reset, confirmation
+- TOTP verification records the step it consumed (`user_totp_settings.last_used_step`) and refuses a replay of it. Any new second factor needs equivalent single-use enforcement
+- **admin routes require a session that verified a second factor.** `middleware.RequireAdminPermission` refuses `!session.MFAVerified` with `admin_mfa_required`. Never add an admin route that bypasses it
+- an operation that changes who can get in, or moves money or ownership, requires a fresh authentication (`middleware.RequireFreshAuth`, `POST /v1/auth/reauth`). API-key and OAuth callers pass through, because they present a credential on every call and have no session to refresh
+
+### Sessions and tokens
+
+- **every token carries a purpose** and is verified against the one purpose its consumer accepts (`internal/app/token/config.go`: `access`, `refresh`, `ws`, `login`, `registration`, `reset`, `2fa`). A token minted for one flow must never verify in another. A new token type gets a new purpose constant, not a reused one
+- `VerifyToken` pins the algorithm to HS256 and requires an expiry. Do not relax either, and do not add a verification path that skips `token.VerifyToken`
+- `AUTH_SECRET` has a hard floor of `config.MinAuthSecretLength` (32 bytes) and the backend refuses to boot below it. The realtime service applies the same floor to `JWT_SECRET`, which is the same value. Neither check may become a warning
+- banning a user, changing a password and revoking a session all terminate the sessions they invalidate. A new "lock this account" path must revoke too, or it locks nothing
+
+### Access control: the rule that is easiest to get wrong
+
+**The route's permission gate and the service's data scope must agree, and both must be the organization.** Mailboxes, contacts, campaigns, tokens and message content are organization assets; they are not owned by the member who created them.
+
+A route gated on an organization permission whose service then filters by `user_id` produces the worst kind of failure: the resource is listed, the caller passes the gate, and the write returns "not found". It reads as data corruption and it strands resources permanently when the member who created them leaves. Going the other way, a user-scoped gate with an organization-scoped query is a tenant leak.
+
+So, for anything organization-owned:
+
+- the SQL predicate is `organization_id = $1`. A helper that takes a "scope" fragment gets the organization one
+- the handler resolves the tenant with `middleware.GetOrganizationID(c)` and refuses when it is absent
+- ownership is checked against the caller's organization before any side effect is published, not after
+- `user_id` stays on the row as a record of who connected it, and is used for attribution and for addressing worker events. It is not an authorization key
+
+Everything else in section 3 of the evidence pack rests on this: no identifier from the request body may select a row without a tenant predicate, and a reference to another entity (a campaign, a contact, a task) is verified to belong to the same organization before it is accepted.
+
+### Communications
+
+- `middleware.SecurityHeaders` sets HSTS, `X-Content-Type-Options`, `X-Frame-Options`, a referrer policy and a default-deny CSP on every API response. Do not remove a header to make a page work; scope the exception
+- the realtime websocket checks the browser's `Origin` against `CHECK_ORIGIN_HOSTS`. Non-browser clients send no origin and are unaffected. Adding a first-party origin means adding it to that list in every environment
+- webhook targets stay HTTPS and HMAC-signed, and SSRF-prone destinations are refused. Only a self-hosted or development instance may opt out
+
+### Errors, logging and data exposure
+
+- a server-class (`Internal`) error answers the caller with one fixed sentence and a request id. The real message is logged against that id. `errx.NewPublic` is the narrow exception, for a message an operator can act on, and never for one built from an underlying error
+- no secret, credential, token or full DSN may reach a log line, an error message or an analytics event. Errors sent to PostHog go through `internal/observability/errs`, and the database wrapper strips parameter values
+- ciphertext columns carry the right key domain. `KeyDomainInstance` is `CREDENTIALS_ENCRYPTION_KEY`, `KeyDomainOrgDEK` is the per-organization DEK. They are not interchangeable
+
+### Dependencies and configuration
+
+- `scripts/casa-evidence.sh` runs `govulncheck`, the Node, Rust and Elixir audits and a Trivy scan. A reachable vulnerability with an upstream fix is fixed; one without gets a written justification in the evidence pack, not silence
+- no credential of any kind is committed. A node in the fleet holds no cloud credential: the privileged operations are brokered through the internal API
+- a new environment variable is documented in `docs/content/docs/development/configuration.mdx` in the same change
+
 ## Local Development
 
 Event codec: `json` is the default the Makefile and docker-compose set, because it needs nothing. `avro` works too: the worker command and result envelopes carry an `any` body, and a schema is derived for each from the declared registry in `internal/models/event_variants.go` (see `event_schema.go`), so a new event type is not carried until it is added there. It is only compiled into the `-kafka` images and resolves every event against `SCHEMA_REGISTRY_URL`. `tracking-events` reads the same setting: the consumer decodes both of its topics with one codec, so the Rust publisher honours `CODEC_PROVIDER` on Kafka as well as on NATS. Avro there needs a Schema Registry and is refused at boot without one; JSON needs nothing.

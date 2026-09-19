@@ -111,7 +111,7 @@ type EmailRepository interface {
 	// resumes where it left off); "pause" keeps progress; "disable" turns
 	// warmup off entirely. The timestamp math runs in SQL so the transition
 	// is atomic and idempotent.
-	SetWarmupLifecycle(ctx context.Context, userID, emailAccountID, action string) (*models.Email, *errx.Error)
+	SetWarmupLifecycle(ctx context.Context, orgID, emailAccountID, action string) (*models.Email, *errx.Error)
 	UpdateTrackingDomain(ctx context.Context, orgID, emailAccountID, domain string, verified bool, verifiedAt *time.Time) *errx.Error
 	UpdateTrackDirectMail(ctx context.Context, orgID, emailAccountID string, enabled bool) *errx.Error
 	// ListOrganizationIDs names every workspace with a mailbox, for sweeps that
@@ -148,7 +148,7 @@ type EmailRepository interface {
 	// Delete removes a mailbox and refunds workerLoadRefund of its worker's
 	// load in the same transaction, so a deleted mailbox can never leave a
 	// worker permanently charged for it.
-	Delete(ctx context.Context, userID, emailAccountID string, workerLoadRefund float64) *errx.Error
+	Delete(ctx context.Context, orgID, emailAccountID string, workerLoadRefund float64) *errx.Error
 
 	NewOauthAccount(ctx context.Context, userID string, data models.NewOauthAccount) (*models.Email, *errx.Error)
 	// NewManagedAccount creates an OAuth mailbox whose credential lives on Warmbly Cloud, so no token row is written.
@@ -1405,16 +1405,16 @@ const deleteDeadlockAttempts = 3
 // that side is this one. Nothing is wrong when it happens and the work is
 // entirely redoable, so surfacing it meant someone clicking Disconnect got an
 // error for an operation that would have succeeded a moment later.
-func (r *emailRepository) Delete(ctx context.Context, userID, emailAccountID string, workerLoadRefund float64) *errx.Error {
+func (r *emailRepository) Delete(ctx context.Context, orgID, emailAccountID string, workerLoadRefund float64) *errx.Error {
 	for attempt := 1; ; attempt++ {
-		xerr, deadlocked := r.deleteOnce(ctx, userID, emailAccountID, workerLoadRefund)
+		xerr, deadlocked := r.deleteOnce(ctx, orgID, emailAccountID, workerLoadRefund)
 		if !deadlocked || attempt >= deleteDeadlockAttempts {
 			return xerr
 		}
 	}
 }
 
-func (r *emailRepository) deleteOnce(ctx context.Context, userID, emailAccountID string, workerLoadRefund float64) (*errx.Error, bool) {
+func (r *emailRepository) deleteOnce(ctx context.Context, orgID, emailAccountID string, workerLoadRefund float64) (*errx.Error, bool) {
 	tx, err := r.DB.Begin(ctx)
 	if err != nil {
 		db.CaptureError(err, "", nil, "begin")
@@ -1430,11 +1430,11 @@ func (r *emailRepository) deleteOnce(ctx context.Context, userID, emailAccountID
 		UPDATE warmup_reputation_ledger l
 		   SET recorded_at = now()
 		  FROM email_accounts a
-		 WHERE a.user_id = $1 AND a.id = $2
+		 WHERE a.organization_id = $1 AND a.id = $2
 		   AND l.organization_id = a.organization_id
 		   AND l.email = lower(btrim(a.email))
 	`
-	bumpParams := []any{userID, emailAccountID}
+	bumpParams := []any{orgID, emailAccountID}
 	if _, err := tx.Exec(ctx, bump, bumpParams...); err != nil {
 		if isDeadlock(err) {
 			return errx.InternalError(), true
@@ -1447,23 +1447,23 @@ func (r *emailRepository) deleteOnce(ctx context.Context, userID, emailAccountID
 	// sealed refresh token lives in email_accounts_oauth, which cascades away
 	// with the mailbox, so reading it afterwards is impossible and the grant
 	// would stay live at the provider forever.
-	const scope = `a.user_id = $1 AND a.id = $2`
-	if _, err := EnqueueMailboxErasures(ctx, tx, scope, userID, emailAccountID); err != nil {
+	const scope = `a.organization_id = $1 AND a.id = $2`
+	if _, err := EnqueueMailboxErasures(ctx, tx, scope, orgID, emailAccountID); err != nil {
 		return errx.InternalError(), isDeadlock(err)
 	}
 
 	// The threads this mailbox holds messages in, read while they still exist.
-	threads, err := CollectMailboxThreadState(ctx, tx, scope, userID, emailAccountID)
+	threads, err := CollectMailboxThreadState(ctx, tx, scope, orgID, emailAccountID)
 	if err != nil {
 		return errx.InternalError(), isDeadlock(err)
 	}
 
 	query := `
 		DELETE FROM email_accounts
-		WHERE user_id = $1 AND id = $2
+		WHERE organization_id = $1 AND id = $2
 		RETURNING worker_id
 	`
-	params := []any{userID, emailAccountID}
+	params := []any{orgID, emailAccountID}
 
 	var workerID *uuid.UUID
 	if err := tx.QueryRow(ctx, query, params...).Scan(&workerID); err != nil {
@@ -1522,7 +1522,7 @@ func (r *emailRepository) deleteOnce(ctx context.Context, userID, emailAccountID
 //     ramp continues where it left off; an already-active mailbox is a no-op.
 //   - pause: stamps warmup_paused_at only while actively warming.
 //   - disable: clears warmup entirely (next restart begins a fresh ramp).
-func (r *emailRepository) SetWarmupLifecycle(ctx context.Context, userID, emailAccountID, action string) (*models.Email, *errx.Error) {
+func (r *emailRepository) SetWarmupLifecycle(ctx context.Context, orgID, emailAccountID, action string) (*models.Email, *errx.Error) {
 	var setClause string
 	switch action {
 	case "start", "resume":
@@ -1546,19 +1546,20 @@ func (r *emailRepository) SetWarmupLifecycle(ctx context.Context, userID, emailA
 	query := fmt.Sprintf(`
 		UPDATE email_accounts
 		SET %s, updated_at = now()
-		WHERE user_id = $1 AND id = $2
+		WHERE organization_id = $1 AND id = $2
 	`, setClause)
 
-	tag, err := r.DB.Exec(ctx, query, userID, emailAccountID)
+	tag, err := r.DB.Exec(ctx, query, orgID, emailAccountID)
 	if err != nil {
-		db.CaptureError(err, query, []any{userID, emailAccountID}, "exec")
+		db.CaptureError(err, query, []any{orgID, emailAccountID}, "exec")
 		return nil, errx.InternalError()
 	}
 	if tag.RowsAffected() == 0 {
 		return nil, errx.ErrNotFound
 	}
 
-	// Get is organization-scoped and ownership was checked by the UPDATE, so re-read by id.
+	// The UPDATE already proved the mailbox belongs to this workspace, so the
+	// re-read can go by id.
 	id, perr := uuid.Parse(emailAccountID)
 	if perr != nil {
 		return nil, errx.ErrUuid
