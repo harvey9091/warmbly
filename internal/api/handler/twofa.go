@@ -4,9 +4,28 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
+	"github.com/warmbly/warmbly/internal/app/twofa"
 	"github.com/warmbly/warmbly/internal/errx"
 )
+
+// withCodeBudget runs a signed-in code check under the reauth failure budget,
+// so a session cannot guess its way to a valid code on these routes either.
+func (h *Handler) withCodeBudget(c *gin.Context, uid uuid.UUID, check func() *errx.Error) *errx.Error {
+	ctx := c.Request.Context()
+	if h.AuthService.ReauthFailureExceeded(ctx, uid) {
+		return errx.ErrAuthLimit
+	}
+	xerr := check()
+	switch {
+	case xerr == nil:
+		h.AuthService.ClearReauthFailures(ctx, uid)
+	case xerr.Identifier == twofa.InvalidCodeID:
+		h.AuthService.RecordReauthFailure(ctx, uid)
+	}
+	return xerr
+}
 
 // TwoFAStatus reports whether the caller has 2FA enabled, since when, and how
 // many recovery codes are left.
@@ -37,7 +56,12 @@ func (h *Handler) TwoFARegenerateRecoveryCodes(c *gin.Context) {
 		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
 		return
 	}
-	codes, xerr := h.TwoFAService.RegenerateRecoveryCodes(c.Request.Context(), uid, body.Code)
+	var codes []string
+	xerr := h.withCodeBudget(c, uid, func() *errx.Error {
+		var e *errx.Error
+		codes, e = h.TwoFAService.RegenerateRecoveryCodes(c.Request.Context(), uid, body.Code)
+		return e
+	})
 	if xerr != nil {
 		errx.JSON(c, xerr)
 		return
@@ -90,7 +114,10 @@ func (h *Handler) TwoFADisable(c *gin.Context) {
 		Code string `json:"code"`
 	}
 	_ = c.ShouldBindJSON(&body)
-	if xerr := h.TwoFAService.Disable(c.Request.Context(), uid, body.Code); xerr != nil {
+	xerr := h.withCodeBudget(c, uid, func() *errx.Error {
+		return h.TwoFAService.Disable(c.Request.Context(), uid, body.Code)
+	})
+	if xerr != nil {
 		errx.JSON(c, xerr)
 		return
 	}

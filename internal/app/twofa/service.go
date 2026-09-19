@@ -26,11 +26,14 @@ const (
 	recoveryCount = 10
 )
 
+// InvalidCodeID is the response code for a TOTP or recovery code that did not match.
+const InvalidCodeID = "two_fa_invalid_code"
+
 // ErrInvalidCode is the answer to a TOTP or recovery code that did not match.
 // It carries a stable identifier so a client can show an inline "try again"
 // instead of a generic failure.
 func ErrInvalidCode() *errx.Error {
-	return errx.NewWithIdentifier(errx.BadRequest, "two_fa_invalid_code", "That code didn't match. Check your authenticator and try again.")
+	return errx.NewWithIdentifier(errx.BadRequest, InvalidCodeID, "That code didn't match. Check your authenticator and try again.")
 }
 
 // EnrollStart is the one-time secret + provisioning URI shown during enrollment.
