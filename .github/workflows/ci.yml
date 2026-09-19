@@ -326,9 +326,18 @@ jobs:
       # needs no librdkafka / libcurl / libsasl system headers. Those are only
       # required for the optional `--features kafka` build.
 
+      # Pinned to whatever the image builds with, not to `stable`. A dependency
+      # that raises its rust-version above the builder's is invisible to a
+      # `stable` job and surfaces only when the release tries to build the
+      # image, which is the worst place to find out.
+      - name: Read the builder's Rust version
+        id: rust-version
+        run: echo "version=$(sed -n 's/^FROM rust:\([0-9.]*\)-alpine.*/\1/p' Dockerfile | head -1)" >> "$GITHUB_OUTPUT"
+
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.rust-version.outputs.version }}
           components: rustfmt, clippy
 
       - name: Cache Cargo
