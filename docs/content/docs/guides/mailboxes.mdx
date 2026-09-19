@@ -11,12 +11,12 @@ Open **Accounts** and choose **Add account**.
 
 | Provider | Method | Notes |
 |----------|--------|-------|
-| Gmail / Google Workspace | OAuth (`gmail`) | Not recommended yet, see below. Connect Gmail over IMAP + SMTP with an app password for now |
+| Gmail / Google Workspace | App password over IMAP + SMTP (`smtp_imap`) | The connect dialog walks you through it in three steps, see [Gmail and Google Workspace](#gmail-and-google-workspace) below. Google sign-in for new mailboxes is coming soon |
 | Outlook / Microsoft 365 | OAuth (`outlook`) | Recommended. No password stored. Runs on Microsoft Graph |
 | Any other server | IMAP + SMTP (`smtp_imap`) | Custom domains, self-hosted, or providers without OAuth. Any IMAP server works, including Outlook.com, Microsoft 365 over IMAP, Yahoo, Fastmail, Zoho, cPanel and self-hosted Dovecot |
 
-<Callout type="warn" title="Google sign-in is not recommended yet">
-  Warmbly's Google app is still going through review for the Gmail access it needs, so a mailbox connected with Google sign-in can fail to send or lose its authorization without warning. Google also caps how many accounts an app in review may hold, so a mailbox connected now may be disconnected later if there is no capacity left, and you would have to connect it again. The connect dialog marks the Gmail row in red and explains this. Connect Gmail and Google Workspace mailboxes over IMAP and SMTP with an app password instead; see [Gmail over IMAP and SMTP](#gmail-over-imap-and-smtp) below. Nothing has to change once Google sign-in is ready.
+<Callout title="Google sign-in is coming soon">
+  For now, new Gmail and Google Workspace mailboxes connect with an app password; the connect dialog says so and walks you through it. A mailbox you already connected with Google sign-in is not affected: it keeps sending and syncing as before, and if Google ever invalidates its token the **Re-authorize** button in its drawer still works. Nothing has to be reconnected. A self-hosted instance with its own Google app can turn sign-in back on for new mailboxes with `BOX_GOOGLE_OAUTH_CONNECT=true`, see [configuration](/development/configuration/#mailbox-connections).
 </Callout>
 
 **OAuth** sends you to your provider's consent screen and returns a token instead of a password. Both OAuth providers use the provider's native API, never IMAP or SMTP, so consent asks to send mail and to read and organize your mailbox. Google additionally asks to read your mail settings, which is what lets Warmbly offer the addresses Google has verified you to send as and import the signature you already wrote there. It needs no app passwords or server settings. Note that Google revokes Gmail tokens when the account's password changes, so a password change there means [re-authorizing the mailbox](#reconnecting-an-account) once.
@@ -52,23 +52,24 @@ With two-factor authentication on, generate an app password in your provider's s
 
 Warmbly signs in with whichever method your server offers, preferring CRAM-MD5, then LOGIN, then PLAIN. Servers that accept only one of these, which includes Microsoft 365 relays and most appliance relays, work without any setting to change.
 
-### Gmail over IMAP and SMTP
+### Gmail and Google Workspace
 
-Until Google sign-in is recommended, this is how to connect a Gmail or Google Workspace mailbox:
+Choose **Add account**, then **Gmail / Google Workspace**. The dialog walks through three steps, and the only things you type are the address and the app password; the server settings are Gmail's own and are filled in for you.
 
-1. Turn on 2-Step Verification on the Google account, under [Google Account, Security](https://myaccount.google.com/security). Google only offers app passwords once it is on, and only alongside a second-step method other than a security key. Add an authenticator app if security keys are the only method on the account.
-2. Create an app password at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords), name it Warmbly, and copy the 16 characters. Google shows them once.
-3. There is nothing to turn on for IMAP. Google removed the IMAP setting in January 2025 and personal Gmail accounts have it on permanently. On Google Workspace it is the administrator's call: they can switch IMAP off for the organization under **Apps**, **Google Workspace**, **Gmail**, **End user access**, and can block app passwords as well.
-4. In Warmbly choose **Add account**, then **Other (SMTP / IMAP)**, and fill in:
+1. **Turn on 2-Step Verification** on the Google account, under [Google Account, Security](https://myaccount.google.com/security). Google only offers app passwords once it is on, and only alongside a second-step method other than a security key (a phone prompt, an authenticator app or a text message). Already on? Continue.
+2. **Create an app password** at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords): name it Warmbly, press **Create**, and copy the 16 characters. Google shows them once; the spaces between the groups do not matter, the dialog drops them.
+3. **Connect**: enter your name, the full address (including `@gmail.com` or your Workspace domain) and the app password. Warmbly checks it against Google before saving anything.
+
+The settings the dialog uses, in case you connect the same mailbox through **Other (SMTP / IMAP)** or the [CSV import](#connecting-many-mailboxes-at-once):
 
 ```text
 SMTP   host: smtp.gmail.com   port: 465   security: SSL / TLS
 IMAP   host: imap.gmail.com   port: 993   security: SSL / TLS
 ```
 
-The username is the full address, including `@gmail.com` or your Workspace domain. The password is the app password, never the account password. Deleting the app password in the Google account disconnects the mailbox, which is the same revocation an OAuth token gives you.
+The username is the full address on both. The password is the app password, never the account password. There is nothing to turn on for IMAP: Google removed that setting in January 2025 and personal Gmail accounts have it on permanently. Deleting the app password in the Google account disconnects the mailbox, which is the same revocation an OAuth token gives you.
 
-Some accounts cannot have an app password at all: enrolling in Google's [Advanced Protection Program](https://landing.google.com/advancedprotection/) revokes them and hides the page, and a Workspace administrator can block them for the organization. Ask the administrator to allow app passwords, or connect the mailbox with Google sign-in and accept the limits in the warning above.
+On Google Workspace the administrator decides. They can switch IMAP off for the organization under **Apps**, **Google Workspace**, **Gmail**, **End user access**, and control app passwords under **Security**, **Authentication**, **2-Step Verification**, where **Allow users to generate app passwords** is the setting and enforcing security keys as the only second step removes them regardless. Some accounts cannot have an app password at all: enrolling in Google's [Advanced Protection Program](https://landing.google.com/advancedprotection/) revokes them and hides the page. Ask the administrator to allow app passwords for the mailboxes you send from.
 
 <Callout type="warn" title="Authentication runs on connect">
   Credentials and both connections are validated when you add the account, so wrong settings fail immediately rather than silently at send time. Tokens and credentials are sealed with envelope encryption before they touch storage.
@@ -116,7 +117,7 @@ There is no daily cap on how many mailboxes you connect: a Business workspace ca
 
 ## Connecting many mailboxes at once
 
-Pick **Bulk import from CSV** in the connect dialog to connect any number of SMTP and IMAP mailboxes from one file. Gmail and Outlook mailboxes sign in one at a time, because each needs its own consent.
+Pick **Bulk import from CSV** in the connect dialog to connect any number of SMTP and IMAP mailboxes from one file. Gmail mailboxes qualify, with the [settings above](#gmail-and-google-workspace) and an app password per row. Outlook mailboxes sign in one at a time, because each needs its own consent.
 
 **The file.** One mailbox per row. `email`, `smtp_host` and `imap_host` are required, plus a password; everything else has a default.
 
@@ -144,7 +145,7 @@ The same endpoint is available to the API as `POST /emails/onboarding/smtp-imap/
 
 When the provider stops accepting a mailbox's stored credential (a password change, a revoked grant, an expired app password), the mailbox is taken out of sending and syncing and its drawer shows the reason under **Needs attention**, with the fix right on the error:
 
-- **Gmail and Outlook**: a **Re-authorize** button re-runs the provider consent in a popup, preselecting the mailbox's own address. The consent must be for that same address; signing in with a different account is refused instead of quietly connecting the wrong mailbox.
+- **Gmail (connected with Google sign-in) and Outlook**: a **Re-authorize** button re-runs the provider consent in a popup, preselecting the mailbox's own address. This works for an existing Gmail mailbox even while Google sign-in is paused for new ones. The consent must be for that same address; signing in with a different account is refused instead of quietly connecting the wrong mailbox.
 - **SMTP / IMAP**: an **Update credentials** button opens a form for the new password (or new host and port). The replacement is validated against your server before it is saved, the same as at connect time.
 
 A successful reconnect stores the new credential, clears the authentication error, reactivates the mailbox on its existing worker, and it resumes syncing from where it stopped. Nothing else changes: settings, history, warmup progress, and campaign membership all stay.
@@ -206,7 +207,7 @@ A signature carrying a `<style>` block, a whole HTML document, or an event handl
 
 ### Sending identity
 
-A Gmail mailbox can send as more than one address. Anything you have added under "Send mail as" in Gmail and finished verifying, a role address like hello@ or an address on a second domain you own, is an address Warmbly can put on the From header.
+A Gmail mailbox connected with Google sign-in can send as more than one address. Anything you have added under "Send mail as" in Gmail and finished verifying, a role address like hello@ or an address on a second domain you own, is an address Warmbly can put on the From header.
 
 Pick it under **Sending identity** on the mailbox's Settings tab. The list is read from Google, so it holds exactly what Google will accept: an alias still waiting on its verification email is shown but cannot be chosen, because Google would refuse the send. Press **Refresh addresses** after adding one in Gmail. Leaving the selection on the mailbox address, which is where every mailbox starts, changes nothing.
 

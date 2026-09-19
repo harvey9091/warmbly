@@ -129,6 +129,12 @@ var (
 		"Gmail is not configured on this deployment. Set BOX_GOOGLE_CLIENT_ID and BOX_GOOGLE_CLIENT_SECRET in your .env, then restart. See https://docs.warmbly.com/development/deployment-guide/#connect-mailboxes")
 	ErrEmailOnboardOutlookNotConfigured = NewWithIdentifier(ServiceUnavailable, "mailbox_provider_not_configured",
 		"Microsoft 365 is not configured on this deployment. Set BOX_OUTLOOK_CLIENT_ID and BOX_OUTLOOK_CLIENT_SECRET in your .env, then restart. See https://docs.warmbly.com/development/deployment-guide/#connect-mailboxes")
+	// Raised when a new Gmail mailbox asks for Google sign-in while the
+	// deployment routes new Gmail mailboxes through an app password instead
+	// (config.GoogleOAuthConnect). Re-authorizing an existing mailbox never
+	// hits this.
+	ErrEmailOnboardGoogleOAuthDisabled = NewWithIdentifier(Forbidden, "mailbox_gmail_oauth_disabled",
+		"New Gmail mailboxes connect with an app password over IMAP and SMTP on this deployment, not with Google sign-in. Mailboxes already connected with Google sign-in keep working and can still be re-authorized. See https://docs.warmbly.com/guides/mailboxes/#gmail-and-google-workspace")
 	ErrEmailOnboardState         = New(BadRequest, "Invalid or expired onboarding state.")
 	ErrEmailOnboardCode          = New(BadRequest, "Authorization code is missing or invalid.")
 	ErrEmailOnboardExchange      = New(BadRequest, "Could not exchange the authorization code with the provider.")

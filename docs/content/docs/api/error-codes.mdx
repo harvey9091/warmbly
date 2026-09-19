@@ -169,6 +169,23 @@ Returned when authenticated but lacking necessary permissions.
 - Verify IP restrictions if configured
 - Request additional permissions if needed
 
+#### `mailbox_gmail_oauth_disabled`
+
+A `403` whose `code` is `mailbox_gmail_oauth_disabled` comes from `POST /emails/onboarding/oauth/start` with `provider: "gmail"`. The deployment routes new Gmail mailboxes through an app password over IMAP and SMTP instead of Google sign-in, which is the default; `GET /auth/config` announces it as `gmail_oauth_connect: false`. Nothing about the caller's permissions is wrong. Re-authorizing an existing Gmail mailbox (`POST /emails/onboarding/oauth/reauth/:id`) is never refused this way.
+
+```json
+{
+  "error": "Forbidden",
+  "message": "New Gmail mailboxes connect with an app password over IMAP and SMTP on this deployment, not with Google sign-in.",
+  "code": "mailbox_gmail_oauth_disabled",
+  "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
+}
+```
+
+**How to fix:**
+- Connect the mailbox through `POST /emails/onboarding/smtp-imap` with `smtp.gmail.com:465` and `imap.gmail.com:993`, both TLS, and a Google app password. See [Gmail and Google Workspace](/guides/mailboxes/#gmail-and-google-workspace)
+- A self-hosted instance with its own Google app can set `BOX_GOOGLE_OAUTH_CONNECT=true` to allow Google sign-in for new mailboxes
+
 #### Registration and invitation refusals
 
 Signup and invitation refusals carry their own `code`, so a client can branch on the specific condition instead of matching on text. They describe the deployment's policy and never say anything about whether a given address exists.

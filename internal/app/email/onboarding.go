@@ -24,6 +24,10 @@ import (
 // OAuthStart issues a fresh state nonce and returns the provider-specific authorization URL.
 // The caller is expected to redirect the user to the URL and post back to OAuthFinish on return.
 func (s *emailService) OAuthStart(ctx context.Context, userID string, orgID *uuid.UUID, provider models.InboxProvider) (*models.EmailOnboardingStartResponse, *errx.Error) {
+	// A new mailbox only; OAuthReauth renews an existing one and is not gated.
+	if provider == models.InboxProviderGoogle && !config.GoogleOAuthConnect() {
+		return nil, errx.ErrEmailOnboardGoogleOAuthDisabled
+	}
 	cfg, xerr := s.oauthConfigFor(provider)
 	if xerr != nil {
 		return nil, xerr

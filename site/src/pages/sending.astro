@@ -42,7 +42,7 @@ const scenarios = [
 ];
 
 const providers = [
-  { name: 'Google Workspace',  tag: 'Gmail · OAuth 2.0', body: 'Gmail API for send. Threaded replies preserved via In-Reply-To and References. Postmaster Tools surfaced where the domain is enrolled.', accent: '#ea4335' },
+  { name: 'Google Workspace',  tag: 'Gmail · app password', body: 'A guided setup over smtp.gmail.com and imap.gmail.com, no Google app review in the way. Threaded replies preserved via In-Reply-To and References. Postmaster Tools surfaced where the domain is enrolled.', accent: '#ea4335' },
   { name: 'Microsoft 365',     tag: 'Outlook · OAuth',   body: 'Graph API for send with shared-mailbox support. IMAP and EWS for sync. Tenant-scoped admin consent.', accent: '#0078d4' },
   { name: 'Custom SMTP / IMAP',tag: 'BYOS · TLS',        body: 'Bring your own server. TLS, STARTTLS, app passwords, and OAuth where the provider supports it. iCloud and Zoho work first-class.', accent: '#0284c7' },
 ];
@@ -240,7 +240,7 @@ const faq = [
           318ms from queue to 200 OK.
         </h2>
         <p class="mt-4 text-[15.5px] text-foreground/70 leading-relaxed">
-          One message, every handoff. Latencies here are illustrative for a Gmail send on a warm worker. Real traces are visible in the per-mailbox event view.
+          One message, every handoff. Latencies here are illustrative for a Gmail mailbox connected with Google sign-in, on a warm worker; one connected with an app password takes the SMTP path at the same points. Real traces are visible in the per-mailbox event view.
         </p>
       </div>
 
@@ -343,7 +343,7 @@ const faq = [
       <div class="max-w-2xl mb-10">
         <div class="text-[11px] uppercase tracking-[0.18em] font-mono text-[#0284c7] mb-3">Providers</div>
         <h2 class="text-[28px] md:text-[40px] font-semibold tracking-[-0.025em] leading-[1.06] text-heading">
-          Native Gmail. Native Outlook. SMTP for the rest.
+          Gmail in three steps. Native Outlook. SMTP for the rest.
         </h2>
       </div>
 
@@ -422,7 +422,7 @@ const faq = [
 
   <CTA
     title="Connect a mailbox. Send your first campaign today."
-    description="OAuth in 30 seconds. Worker assignment is automatic."
+    description="Connect Gmail with an app password or Outlook with one sign-in. Worker assignment is automatic."
     primaryLabel="Start free"
     primaryHref="https://app.warmbly.com/register"
   />

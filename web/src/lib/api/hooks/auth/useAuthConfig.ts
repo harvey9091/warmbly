@@ -25,6 +25,9 @@ export const AUTH_CONFIG_FALLBACK: AuthConfig = {
     passkeys: false,
     providers: [],
     self_hosted: true,
+    // The app-password walkthrough works on every deployment; Google sign-in
+    // for a new Gmail mailbox is only offered on a confirmed yes.
+    gmail_oauth_connect: false,
     // Unconfirmed billing keeps the subscription-based gates in place rather
     // than presenting an unreachable backend as an unlocked one.
     billing_enabled: true,

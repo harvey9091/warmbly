@@ -20,6 +20,11 @@ export default interface AuthConfig {
      *  of their own. */
     provider_labels?: Record<string, string>;
     self_hosted: boolean;
+    /** Whether a NEW Gmail mailbox may be connected with Google sign-in. Off,
+     *  the connect dialog walks through an app password over IMAP and SMTP
+     *  instead. Mailboxes already on Google sign-in are unaffected. Absent on
+     *  a backend that predates it, which reads as off. */
+    gmail_oauth_connect?: boolean;
     /** False when BILLING_PROVIDER=none: the backend unlocks every feature and
      *  the org must not be presented as being on a trial or free tier. */
     billing_enabled: boolean;

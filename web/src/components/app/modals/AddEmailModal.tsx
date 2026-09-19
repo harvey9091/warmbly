@@ -6,10 +6,16 @@
 // triptych.
 //
 // Flow:
-//   provider picker ──► gmail OAuth popup  ─┐
+//   provider picker ──► gmail app-password walkthrough ─► /emails/onboarding/smtp-imap
+//                  ──► gmail OAuth popup  ─┐   (only when gmail_oauth_connect is on)
 //                  ──► outlook OAuth popup ─┼─► /emails/onboarding/oauth/finish
 //                  ──► smtp/imap form ──────────► /emails/onboarding/smtp-imap
 //                  ──► CSV bulk import ─────────► /emails/onboarding/smtp-imap/bulk
+//
+// Gmail defaults to the app-password walkthrough: the deployment says whether
+// a NEW Gmail mailbox may use Google sign-in (gmail_oauth_connect on
+// /auth/config), and off is the default. Mailboxes already connected with
+// Google sign-in are untouched and still re-authorize from their drawer.
 //
 // Every path can run into the workspace's mailbox allowance; that answer
 // (code mailbox_allowance_reached) opens MailboxAllowanceDialog instead of a
@@ -24,7 +30,6 @@
 import React from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-    AlertTriangleIcon,
     ArrowLeftIcon,
     CheckIcon,
     ChevronRightIcon,
@@ -73,11 +78,11 @@ import useMailboxAllowance from "@/lib/api/hooks/app/emails/useMailboxAllowance"
 import { allowanceFull } from "@/lib/api/models/app/emails/MailboxAllowance";
 import type MailboxAllowance from "@/lib/api/models/app/emails/MailboxAllowance";
 import MailboxAllowanceDialog from "@/components/app/emails/MailboxAllowanceDialog";
-import GoogleOAuthNotReadyDialog from "@/components/app/emails/GoogleOAuthNotReadyDialog";
+import GmailAppPasswordPanel from "@/components/app/emails/GmailAppPasswordPanel";
 import BulkConnectPanel from "@/components/app/emails/BulkConnectPanel";
 import { DitherMeter, type DitherTone } from "@/components/ui/dither";
 
-type View = "pick" | "gmail" | "outlook" | "smtp_imap" | "bulk";
+type View = "pick" | "gmail" | "gmail_app_password" | "outlook" | "smtp_imap" | "bulk";
 
 /** The one answer every connect path shares: open the allowance dialog. */
 function isAllowanceError(e: unknown): boolean {
@@ -162,9 +167,10 @@ export default function AddEmailModal() {
     const allowance = useMailboxAllowance(user.addEmail);
     const [allowanceOpen, setAllowanceOpen] = React.useState(false);
     const [allowanceReached, setAllowanceReached] = React.useState(false);
-    // Why the Gmail row is marked red: Google sign-in is not through review
-    // for the Gmail scopes yet, so the picker points at SMTP / IMAP instead.
-    const [gmailWarningOpen, setGmailWarningOpen] = React.useState(false);
+    // Whether a new Gmail mailbox may use Google sign-in here. Anything but an
+    // explicit yes (an older backend, the unreachable fallback) takes the
+    // app-password walkthrough, which works on every deployment.
+    const gmailOAuth = useAuthConfig().config.gmail_oauth_connect === true;
     const openAllowance = React.useCallback((reached = false) => {
         setAllowanceReached(reached);
         setAllowanceOpen(true);
@@ -184,7 +190,6 @@ export default function AddEmailModal() {
             setOauthBusy(null);
             setNotConfigured(null);
             setAllowanceOpen(false);
-            setGmailWarningOpen(false);
             pendingState.current = null;
             pendingCloud.current = null;
         }
@@ -370,7 +375,7 @@ export default function AddEmailModal() {
                                             <PickProvider
                                                 onPick={setView}
                                                 viaCloud={viaCloud}
-                                                onGmailWarning={() => setGmailWarningOpen(true)}
+                                                gmailOAuth={gmailOAuth}
                                                 onAdopted={() => {
                                                     qc.invalidateQueries({ queryKey: ["emails", "list"] });
                                                     user.setAddEmail(false);
@@ -387,10 +392,18 @@ export default function AddEmailModal() {
                                                 busy={oauthBusy === "gmail"}
                                                 viaCloud={viaCloud}
                                                 onConnect={() => startOAuth("gmail")}
-                                                onWarning={() => setGmailWarningOpen(true)}
-                                                onUseSmtp={() => setView("smtp_imap")}
+                                                onUseAppPassword={() => setView("gmail_app_password")}
                                             />
                                         )
+                                    )}
+                                    {view === "gmail_app_password" && (
+                                        <GmailAppPasswordPanel
+                                            onDone={() => {
+                                                qc.invalidateQueries({ queryKey: ["emails", "list"] });
+                                                user.setAddEmail(false);
+                                            }}
+                                            onError={onConnectError}
+                                        />
                                     )}
                                     {view === "outlook" && (
                                         notConfigured === "outlook" ? (
@@ -426,14 +439,6 @@ export default function AddEmailModal() {
                             </AnimatePresence>
                         </div>
                     </motion.div>
-                    <GoogleOAuthNotReadyDialog
-                        open={gmailWarningOpen}
-                        onClose={() => setGmailWarningOpen(false)}
-                        onUseSmtp={() => {
-                            setGmailWarningOpen(false);
-                            setView("smtp_imap");
-                        }}
-                    />
                     <MailboxAllowanceDialog
                         open={allowanceOpen}
                         onClose={() => setAllowanceOpen(false)}
@@ -521,6 +526,7 @@ function Header({
     const sub: Record<View, string> = {
         pick: "Connect a sending account",
         gmail: "Gmail or Google Workspace",
+        gmail_app_password: "Gmail or Google Workspace",
         outlook: "Outlook or Microsoft 365",
         smtp_imap: "Any provider via SMTP / IMAP",
         bulk: "Many mailboxes from one CSV",
@@ -633,13 +639,14 @@ function ProviderNotConfigured({ provider, selfHosted }: { provider: OAuthProvid
 function PickProvider({
     onPick,
     viaCloud,
+    gmailOAuth,
     onAdopted,
-    onGmailWarning,
 }: {
     onPick: (v: View) => void;
     viaCloud: boolean;
+    /** Google sign-in is open to new mailboxes; otherwise the app-password walkthrough. */
+    gmailOAuth: boolean;
     onAdopted: () => void;
-    onGmailWarning: () => void;
 }) {
     const rows: Array<{
         key: View;
@@ -647,16 +654,20 @@ function PickProvider({
         title: string;
         sub: string;
         tone: "primary" | "neutral";
-        /** A red badge on the row, opening its own explanation. */
-        warn?: { label: string; onOpen: () => void };
+        /** A quiet badge after the title. */
+        badge?: string;
     }> = [
         {
-            key: "gmail",
+            key: gmailOAuth ? "gmail" : "gmail_app_password",
             icon: <Google className="w-5 h-5" />,
             title: "Gmail / Google Workspace",
-            sub: "Google sign-in is still in review. Connect Gmail over SMTP / IMAP for now.",
+            sub: gmailOAuth
+                ? viaCloud
+                    ? "Sign in through Warmbly Cloud. Warmup included, no OAuth app needed."
+                    : "OAuth via Google. Native sync for Gmail accounts."
+                : "With an app password, over IMAP and SMTP. About two minutes; we walk you through it.",
             tone: "primary",
-            warn: { label: "Not recommended", onOpen: onGmailWarning },
+            badge: gmailOAuth ? undefined : "Google sign-in coming soon",
         },
         {
             key: "outlook",
@@ -698,29 +709,13 @@ function PickProvider({
                     <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5 min-w-0">
                             <span className="text-[13px] font-medium text-slate-900 truncate">{r.title}</span>
-                            {r.warn && (
-                                <span
-                                    role="button"
-                                    tabIndex={0}
-                                    aria-label={`${r.warn.label}: why?`}
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        r.warn?.onOpen();
-                                    }}
-                                    onKeyDown={(e) => {
-                                        if (e.key !== "Enter" && e.key !== " ") return;
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        r.warn?.onOpen();
-                                    }}
-                                    className="shrink-0 h-[18px] px-1.5 rounded-full bg-rose-50 border border-rose-200 text-rose-700 text-[10px] font-medium inline-flex items-center gap-1 hover:bg-rose-100 transition-colors cursor-pointer"
-                                >
-                                    <AlertTriangleIcon className="w-2.5 h-2.5" />
-                                    {r.warn.label}
+                            {r.badge && (
+                                <span className="shrink-0 h-[18px] px-1.5 rounded-full bg-sky-50 border border-sky-200 text-sky-700 text-[10px] font-medium inline-flex items-center">
+                                    {r.badge}
                                 </span>
                             )}
                         </div>
-                        <div className={cn("text-[11.5px] truncate", r.warn ? "text-rose-600" : "text-slate-500")}>{r.sub}</div>
+                        <div className="text-[11.5px] text-slate-500 truncate">{r.sub}</div>
                     </div>
                     <ChevronRightIcon className="w-4 h-4 text-slate-300 shrink-0 group-hover:text-slate-500 group-hover:translate-x-0.5 transition-all" />
                 </motion.button>
@@ -789,16 +784,14 @@ function OAuthPanel({
     busy,
     viaCloud,
     onConnect,
-    onWarning,
-    onUseSmtp,
+    onUseAppPassword,
 }: {
     provider: OAuthProvider;
     busy: boolean;
     viaCloud: boolean;
     onConnect: () => void;
-    /** Present while this provider's sign-in is not recommended. */
-    onWarning?: () => void;
-    onUseSmtp?: () => void;
+    /** Gmail only: the same mailbox over IMAP and SMTP, for whoever prefers it. */
+    onUseAppPassword?: () => void;
 }) {
     const label = provider === "gmail" ? "Google" : "Microsoft";
     const Icon = provider === "gmail" ? Google : Outlook;
@@ -834,66 +827,33 @@ function OAuthPanel({
                 </ul>
             )}
 
-            {onWarning && (
-                <div className="rounded-md border border-rose-200 bg-rose-50 p-3">
-                    <div className="flex items-start gap-2.5">
-                        <AlertTriangleIcon className="w-4 h-4 text-rose-600 mt-0.5 shrink-0" />
-                        <div className="min-w-0">
-                            <p className="text-[12.5px] font-medium text-rose-900">
-                                {label} sign-in is not recommended yet
-                            </p>
-                            <p className="text-[12.5px] text-rose-800/90 mt-1">
-                                Our {label} app is still in review for the access Warmbly needs, so a
-                                mailbox connected this way can stop sending without warning, and may be
-                                disconnected later if the app runs out of capacity. Connect the same
-                                mailbox over SMTP and IMAP with an app password instead.
-                            </p>
-                            <div className="mt-2 flex items-center gap-2">
-                                {onUseSmtp && (
-                                    <button
-                                        type="button"
-                                        onClick={onUseSmtp}
-                                        className="h-7 px-2.5 rounded-md bg-rose-600 hover:bg-rose-700 text-white text-[12px] font-medium transition-colors"
-                                    >
-                                        Use SMTP / IMAP
-                                    </button>
-                                )}
-                                <button
-                                    type="button"
-                                    onClick={onWarning}
-                                    className="text-[12px] text-rose-800 underline hover:text-rose-900 transition-colors"
-                                >
-                                    How do I set that up?
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
             <motion.button
                 type="button"
                 onClick={onConnect}
                 disabled={busy}
                 whileTap={busy ? undefined : { scale: 0.985 }}
-                className={cn(
-                    "w-full h-9 rounded-md text-[12.5px] font-medium inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-60",
-                    onWarning
-                        ? "border border-slate-200 text-slate-600 hover:bg-slate-50"
-                        : "bg-slate-900 hover:bg-slate-800 text-white",
-                )}
+                className="w-full h-9 rounded-md text-[12.5px] font-medium inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-60 bg-slate-900 hover:bg-slate-800 text-white"
             >
                 {busy ? (
                     <Loader2Icon className="w-3.5 h-3.5 animate-spin" />
                 ) : (
                     <ShieldCheckIcon className="w-3.5 h-3.5" />
                 )}
-                {busy
-                    ? "Waiting for authorization…"
-                    : onWarning
-                      ? `Continue with ${label} anyway`
-                      : `Continue with ${label}`}
+                {busy ? "Waiting for authorization…" : `Continue with ${label}`}
             </motion.button>
+
+            {onUseAppPassword && (
+                <p className="text-[11.5px] text-slate-500 text-center">
+                    Prefer not to use Google sign-in?{" "}
+                    <button
+                        type="button"
+                        onClick={onUseAppPassword}
+                        className="text-sky-700 underline decoration-sky-300 hover:decoration-sky-600 transition-colors"
+                    >
+                        Connect it with an app password instead
+                    </button>
+                </p>
+            )}
         </div>
     );
 }

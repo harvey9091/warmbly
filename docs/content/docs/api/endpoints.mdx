@@ -399,6 +399,8 @@ These never accept an API key. They depend on a human-bound session: billing flo
 
 Alongside them, `api_url` is this API's own public base (for a copyable example that names the right server), and `brand` is who the deployment says it is: `name`, and `website_url`, `website_label`, `terms_url`, `privacy_url` and `support_email`, each omitted when unset. On a self-hosted instance that configured no `EMAIL_BRAND_*` only `name` is present, and a client should render no link at all rather than substituting one of its own. See [configuration](/development/configuration/).
 
+`GET /auth/config` also carries `gmail_oauth_connect` (boolean): whether a new Gmail mailbox may be connected with Google sign-in. It is `false` unless the deployment sets `BOX_GOOGLE_OAUTH_CONNECT=true`, and a client should then offer the app-password route (`POST /emails/onboarding/smtp-imap` against Gmail's servers) rather than start an OAuth round trip that returns `mailbox_gmail_oauth_disabled`. Mailboxes already connected with Google sign-in are unaffected either way.
+
 `GET /auth/config` also carries `billing_enabled` (boolean). It is `false` when the deployment runs with `BILLING_PROVIDER=none`, which is the self-host default: every feature is unlocked server-side, so the dashboard shows the workspace as self-hosted instead of on a free trial and hides the billing and referral pages. `self_hosted` alone does not imply this, because a self-hosted install may still run Stripe.
 - `POST /auth/setup` (first-run claim: exchanges the one-time token printed at boot for the owner account. Refused once any account exists)
 - `GET /auth/providers`, `POST /auth/apple`, `POST /auth/google` (native-app social sign-in)

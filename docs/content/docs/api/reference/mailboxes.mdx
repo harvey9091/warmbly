@@ -722,7 +722,7 @@ Begins an OAuth round trip for a Gmail or Outlook mailbox and returns the provid
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `provider` | string | yes | `gmail` or `outlook`. |
+| `provider` | string | yes | `gmail` or `outlook`. `gmail` is refused with `403` `mailbox_gmail_oauth_disabled` unless `GET /auth/config` reports `gmail_oauth_connect: true`; new Gmail mailboxes go through [Connect SMTP/IMAP](#connect-smtpimap) with an app password instead. Re-authorizing an existing Gmail mailbox is not gated. |
 
 ```json
 {
