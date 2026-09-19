@@ -726,8 +726,9 @@ installer-sha:
 
 # Everything CI runs against the installer: POSIX parse, shellcheck, --help,
 # --print-env, a compose file per answer shape, and the checksum.
-# Generate the CASA dependency-scan artifacts. Read-only; writes under
-# compliance/casa/artifacts/.
+# Generate the CASA dependency-scan artifacts. Read-only against the tree, and
+# it writes outside this repository on purpose: CASA_EVIDENCE_DIR, defaulting
+# to ~/warmbly-casa-private/casa/artifacts.
 casa-evidence:
 	./scripts/casa-evidence.sh
 

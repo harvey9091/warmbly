@@ -179,9 +179,11 @@ Do not:
 
 ## Security And Compliance Invariants
 
-Warmbly's Google OAuth client is assessed against **ADA CASA v2.1.1 at Assurance Level 1**, which maps to OWASP ASVS 4.0.3. The evidence pack is `compliance/casa/` and it is a claim about the code on `main`: a change that breaks one of the invariants below does not just introduce a bug, it makes a submitted statement untrue and puts the OAuth client's verification at risk. Treat them as constraints on every change, not as a checklist run before an audit.
+Warmbly's Google OAuth client is assessed against **ADA CASA v2.1.1 at Assurance Level 1**, which maps to OWASP ASVS 4.0.3. The evidence pack is a claim about the code on `main`: a change that breaks one of the invariants below does not just introduce a bug, it makes a submitted statement untrue and puts the OAuth client's verification at risk. Treat them as constraints on every change, not as a checklist run before an audit.
 
-Run `scripts/casa-evidence.sh` to regenerate the scanner artifacts. Update `compliance/casa/evidence.md` in the same change as any code that alters a control it cites.
+**The pack is not in this repository and must not be added to it.** It maps every control to the file that implements it and lists the advisories still open with the exact conditions under which each is reachable. That is a reconnaissance document for anyone attacking a self-hosted instance that has not updated, which is the same reason the disclosure rule below exists. It lives outside the tree, at `CASA_EVIDENCE_DIR` (default `~/warmbly-casa-private/casa`), and `make casa-evidence` refuses to write anywhere inside the repository.
+
+What stays here is this section: the invariants themselves, stated as what the code does rather than as what it would otherwise allow. When a change alters a control, update the pack in the same sitting, because nothing in CI can tell you the pack has gone stale.
 
 ### Disclosure: this repository is public and the product self-hosts
 
@@ -236,7 +238,7 @@ Everything else in section 3 of the evidence pack rests on this: no identifier f
 
 ### Dependencies and configuration
 
-- `scripts/casa-evidence.sh` runs `govulncheck`, the Node, Rust and Elixir audits and a Trivy scan. A reachable vulnerability with an upstream fix is fixed; one without gets a written justification in the evidence pack, not silence
+- `make casa-evidence` runs `govulncheck`, the Node, Rust and Elixir audits and a Trivy scan, writing outside the repository. A reachable vulnerability with an upstream fix is fixed; one without gets a written justification in the pack, not silence. Do not paste scanner output, an advisory id or a reachability note into this repository
 - no credential of any kind is committed. A node in the fleet holds no cloud credential: the privileged operations are brokered through the internal API
 - a new environment variable is documented in `docs/content/docs/development/configuration.mdx` in the same change
 
