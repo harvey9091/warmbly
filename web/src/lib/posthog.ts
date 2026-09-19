@@ -178,17 +178,26 @@ const NOISE = [
 // reached error tracking only by also escaping to the global rejection handler.
 const NOISE_TYPES = ["AuthError"];
 
-// A message that is an object's default toString carries nothing: no name, no
-// cause, no place. They arrive from browser extensions and from handlers that
-// concatenate a DOM Event into a string, they all fingerprint together, and
-// nobody can act on one. A frame would make it findable, so only the ones with
-// no stack at all are dropped.
+// An exception whose message is an object's default toString, with no stack and
+// no real Error behind it, carries nothing: no name, no cause, no place. They
+// arrive from extensions and from handlers that concatenate a DOM Event into a
+// string, and they all fingerprint together.
+//
+// All three conditions are required. `synthetic` marks a value PostHog wrapped
+// because it was thrown as something other than an Error, so anything we
+// construct ourselves is excluded even when its message also stringified an
+// object; and a single frame would make it findable, so a stack of any depth is
+// kept.
 function isUninformative(entry: Record<string, unknown>): boolean {
     const value = entry.value ?? entry.$exception_value;
-    if (typeof value !== "string" || !value.includes("[object ")) return false;
+    if (typeof value !== "string" || !DEFAULT_OBJECT_STRING.test(value)) return false;
+    const mechanism = entry.mechanism as { synthetic?: unknown } | undefined;
+    if (mechanism?.synthetic !== true) return false;
     const trace = entry.stacktrace as { frames?: unknown[] } | undefined;
     return !Array.isArray(trace?.frames) || trace.frames.length === 0;
 }
+
+const DEFAULT_OBJECT_STRING = /\[object [A-Z][A-Za-z]*\]/;
 
 function isNoise(properties: Properties): boolean {
     const exceptionList = properties.$exception_list;

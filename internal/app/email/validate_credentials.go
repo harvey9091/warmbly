@@ -2,9 +2,6 @@ package email
 
 import (
 	"context"
-	"errors"
-	"net"
-	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -69,12 +66,14 @@ func (s *emailService) ValidateCredentials(ctx context.Context, orgID uuid.UUID,
 	for {
 		msg, err := r.ReceiveMessage(subscribeContext)
 		if err != nil {
-			// A deadline reached while waiting is the mail host being slow, not
-			// this service being broken. go-redis pushes the context deadline
-			// down onto the socket, so it surfaces as a net timeout rather than
-			// context.DeadlineExceeded; matching only the latter is what sent
-			// every slow connect back as a 500.
-			if timedOut(err) {
+			// Ask the context, not the error. A deadline reached while
+			// waiting is the mail host being slow, not this service being
+			// broken, but go-redis pushes the deadline down onto the socket
+			// and it comes back as a net timeout rather than
+			// context.DeadlineExceeded. The context is the only thing that
+			// knows whose deadline it was: a socket timeout while it is still
+			// live is Redis failing and stays an internal error.
+			if subscribeContext.Err() != nil {
 				return errx.ErrEmailValidation
 			}
 			errs.CaptureException(err)
@@ -94,15 +93,3 @@ func (s *emailService) ValidateCredentials(ctx context.Context, orgID uuid.UUID,
 // deliberately longer than the worker's own deadline (config.EmailValidationBudget)
 // so a verdict produced right at that limit is still heard.
 const validationWait = 9 * time.Second
-
-// timedOut reports whether err is a deadline being reached rather than a real
-// failure. Three shapes mean the same thing here: the context's own sentinel,
-// the net/os deadline sentinel a socket read returns, and any net.Error that
-// says it timed out.
-func timedOut(err error) bool {
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
-		return true
-	}
-	var ne net.Error
-	return errors.As(err, &ne) && ne.Timeout()
-}
