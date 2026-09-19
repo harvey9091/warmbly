@@ -103,6 +103,13 @@ func TestDayWindow(t *testing.T) {
 			t.Fatalf("got %+v secs %d", w, secs)
 		}
 	})
+	t.Run("an end date later today ends the day there", func(t *testing.T) {
+		end := time.Date(2026, 9, 16, 15, 0, 0, 0, loc)
+		w, secs, closes := dayWindow(&models.Campaign{Timezone: tz, ScheduleWindows: nineToFive, EndDate: &end}, now)
+		if !w.OpenNow || w.MinutesLeft != 30 || secs != 30*60 || !closes.Equal(end) {
+			t.Fatalf("got %+v secs %d closes %v", w, secs, closes.In(loc))
+		}
+	})
 	t.Run("past the end date nothing is left", func(t *testing.T) {
 		end := time.Date(2026, 9, 15, 9, 0, 0, 0, loc)
 		w, secs, _ := dayWindow(&models.Campaign{Timezone: tz, ScheduleWindows: nineToFive, EndDate: &end}, now)

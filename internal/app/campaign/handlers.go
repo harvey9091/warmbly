@@ -1293,7 +1293,9 @@ func (s *campaignService) SendPlan(ctx context.Context, orgID uuid.UUID, campaig
 	if !ok {
 		return nil, errx.New(errx.Internal, "send planning is not available")
 	}
-	key := campaign.ID.String()
+	// Keyed on the campaign's own version, so an edit or a start/stop is
+	// answered fresh while two viewers of an unchanged campaign share a read.
+	key := campaign.ID.String() + "|" + campaign.Status + "|" + campaign.UpdatedAt.UTC().Format(time.RFC3339Nano)
 	if s.planCache != nil {
 		if plan, ok := s.planCache.get(key); ok {
 			return plan, nil

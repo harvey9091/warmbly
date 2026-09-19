@@ -35,7 +35,7 @@ const LIMIT_META: Record<SendLimitKind, LimitMeta> = {
     workspace_risk: {
         label: "Workspace sending posture",
         hint: "The workspace is restricted, so every mailbox sends a fraction of its cap.",
-        to: "/app/settings/deliverability",
+        to: "/app/deliverability",
     },
     domain_auth: {
         label: "Domain authentication failing",
