@@ -66,7 +66,7 @@ func (h *Handler) ApproveAgentDraft(c *gin.Context) {
 		return
 	}
 	if h.AIDraftRepo == nil {
-		errx.Handle(c, errx.New(errx.ServiceUnavailable, "the inbox agent is not configured"))
+		errx.Handle(c, errx.NewPublic(errx.ServiceUnavailable, "The inbox agent is not configured."))
 		return
 	}
 
@@ -156,7 +156,7 @@ func (h *Handler) DiscardAgentDraft(c *gin.Context) {
 		return
 	}
 	if h.AIDraftRepo == nil {
-		errx.Handle(c, errx.New(errx.ServiceUnavailable, "the inbox agent is not configured"))
+		errx.Handle(c, errx.NewPublic(errx.ServiceUnavailable, "The inbox agent is not configured."))
 		return
 	}
 	ok, err := h.AIDraftRepo.SetDraftStatus(c.Request.Context(), *orgID, draftID, models.AIDraftDiscarded)

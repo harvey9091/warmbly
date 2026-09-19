@@ -88,7 +88,7 @@ func (h *Handler) GenerateWriting(c *gin.Context) {
 
 	// Provider must be configured.
 	if h.WritingGenerator == nil {
-		errx.JSON(c, errx.New(errx.ServiceUnavailable, "AI writing assistant is not configured."))
+		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "AI writing assistant is not configured."))
 		return
 	}
 
@@ -149,10 +149,10 @@ func (h *Handler) GenerateWriting(c *gin.Context) {
 			}
 		}
 		if errors.Is(gerr, generation.ErrNotConfigured) {
-			errx.JSON(c, errx.New(errx.ServiceUnavailable, "AI writing assistant is not configured."))
+			errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "AI writing assistant is not configured."))
 			return
 		}
-		errx.JSON(c, errx.New(errx.ServiceUnavailable, "The writing assistant is temporarily unavailable. Your credit was not charged."))
+		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "The writing assistant is temporarily unavailable. Your credit was not charged."))
 		return
 	}
 

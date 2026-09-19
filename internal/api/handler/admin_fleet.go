@@ -19,7 +19,7 @@ import (
 // GET /admin/fleet/capacity
 func (h *Handler) AdminFleetCapacity(c *gin.Context) {
 	if h.AdminFleetRepo == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "fleet view is not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Fleet view is not available on this instance."))
 		return
 	}
 	rows, err := h.AdminFleetRepo.Capacity(c.Request.Context())
@@ -35,7 +35,7 @@ func (h *Handler) AdminFleetCapacity(c *gin.Context) {
 // GET /admin/fleet/decisions?kind=&worker_id=&limit=
 func (h *Handler) AdminFleetDecisions(c *gin.Context) {
 	if h.AdminFleetRepo == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "fleet view is not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Fleet view is not available on this instance."))
 		return
 	}
 	var workerID *uuid.UUID
@@ -69,7 +69,7 @@ func (h *Handler) AdminFleetDecisions(c *gin.Context) {
 // GET /admin/fleet/dedicated
 func (h *Handler) AdminFleetDedicated(c *gin.Context) {
 	if h.AdminFleetRepo == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "fleet view is not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Fleet view is not available on this instance."))
 		return
 	}
 	rows, err := h.AdminFleetRepo.DedicatedAssignments(c.Request.Context())
@@ -96,7 +96,7 @@ func (h *Handler) AdminFleetReleaseIsolatedEgress(c *gin.Context) {
 		return
 	}
 	if h.WorkerRepo == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "worker placement is not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Worker placement is not available on this instance."))
 		return
 	}
 	ctx := c.Request.Context()

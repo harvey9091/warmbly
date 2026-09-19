@@ -66,11 +66,11 @@ func (h *Handler) UploadEmailImage(c *gin.Context) {
 		return
 	}
 	if h.Storage == nil {
-		errx.JSON(c, errx.New(errx.ServiceUnavailable, "object storage not configured"))
+		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Object storage not configured."))
 		return
 	}
 	if h.EmailImageRepo == nil {
-		errx.JSON(c, errx.New(errx.ServiceUnavailable, "image library not available"))
+		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Image library not available."))
 		return
 	}
 
@@ -233,7 +233,7 @@ func (h *Handler) DeleteEmailImage(c *gin.Context) {
 		return
 	}
 	if h.EmailImageRepo == nil {
-		errx.JSON(c, errx.New(errx.ServiceUnavailable, "image library not available"))
+		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Image library not available."))
 		return
 	}
 	id, err := uuid.Parse(c.Param("id"))

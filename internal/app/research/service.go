@@ -94,7 +94,7 @@ func (s *service) ListRuns(ctx context.Context, orgID, contactID uuid.UUID, limi
 
 func (s *service) RunResearch(ctx context.Context, inv aitools.Invocation, contactID uuid.UUID, objective, idempotencyKey string) (*models.ContactResearchRun, *errx.Error) {
 	if s.provider == nil {
-		return nil, errx.New(errx.ServiceUnavailable, "AI research is not configured")
+		return nil, errx.NewPublic(errx.ServiceUnavailable, "AI research is not configured")
 	}
 	// Pre-check balance AND the abuse caps so an out-of-credits or rate-capped
 	// org never does free research work (the charge happens on save, after the

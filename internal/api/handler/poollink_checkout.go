@@ -54,7 +54,7 @@ func (h *Handler) PoolLinkOffer(c *gin.Context) {
 // would be the only thing deciding what the customer is charged.
 func (h *Handler) PoolLinkCheckout(c *gin.Context) {
 	if h.SubscriptionService == nil || h.StripeService == nil {
-		errx.JSON(c, errx.New(errx.ServiceUnavailable, "billing is not enabled on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Billing is not enabled on this instance."))
 		return
 	}
 	uid, err := uuid.Parse(c.GetString("user_id"))

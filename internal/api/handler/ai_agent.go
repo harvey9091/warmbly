@@ -49,7 +49,7 @@ func (h *Handler) jwtInvocation(c *gin.Context) (aitools.Invocation, *errx.Error
 // CreateAgentSession — POST /ai/sessions
 func (h *Handler) CreateAgentSession(c *gin.Context) {
 	if h.AIAgentService == nil {
-		errx.JSON(c, errx.New(errx.ServiceUnavailable, "the AI assistant is not configured"))
+		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "The AI assistant is not configured."))
 		return
 	}
 	inv, xerr := h.jwtInvocation(c)
@@ -74,7 +74,7 @@ func (h *Handler) CreateAgentSession(c *gin.Context) {
 // ListAgentSessions — GET /ai/sessions (cursor paginated, newest first)
 func (h *Handler) ListAgentSessions(c *gin.Context) {
 	if h.AIAgentService == nil {
-		errx.JSON(c, errx.New(errx.ServiceUnavailable, "the AI assistant is not configured"))
+		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "The AI assistant is not configured."))
 		return
 	}
 	inv, xerr := h.jwtInvocation(c)
@@ -113,7 +113,7 @@ func (h *Handler) ListAgentSessions(c *gin.Context) {
 // hydrated transcript (+ any pending approval) so a reopened tab rehydrates.
 func (h *Handler) AgentSessionMessages(c *gin.Context) {
 	if h.AIAgentService == nil {
-		errx.JSON(c, errx.New(errx.ServiceUnavailable, "the AI assistant is not configured"))
+		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "The AI assistant is not configured."))
 		return
 	}
 	inv, xerr := h.jwtInvocation(c)
@@ -148,7 +148,7 @@ func (h *Handler) AgentSessionMessages(c *gin.Context) {
 // transcript. Sessions are private to the member, so no extra permission gate.
 func (h *Handler) DeleteAgentSession(c *gin.Context) {
 	if h.AIAgentService == nil {
-		errx.JSON(c, errx.New(errx.ServiceUnavailable, "the AI assistant is not configured"))
+		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "The AI assistant is not configured."))
 		return
 	}
 	inv, xerr := h.jwtInvocation(c)
@@ -172,7 +172,7 @@ func (h *Handler) DeleteAgentSession(c *gin.Context) {
 // conversation history in this workspace.
 func (h *Handler) ClearAgentSessions(c *gin.Context) {
 	if h.AIAgentService == nil {
-		errx.JSON(c, errx.New(errx.ServiceUnavailable, "the AI assistant is not configured"))
+		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "The AI assistant is not configured."))
 		return
 	}
 	inv, xerr := h.jwtInvocation(c)
@@ -191,7 +191,7 @@ func (h *Handler) ClearAgentSessions(c *gin.Context) {
 // AgentMessage — POST /ai/sessions/:id/messages (SSE)
 func (h *Handler) AgentMessage(c *gin.Context) {
 	if h.AIAgentService == nil {
-		errx.JSON(c, errx.New(errx.ServiceUnavailable, "the AI assistant is not configured"))
+		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "The AI assistant is not configured."))
 		return
 	}
 	inv, xerr := h.jwtInvocation(c)
@@ -220,14 +220,14 @@ func (h *Handler) AgentMessage(c *gin.Context) {
 
 	emit := sseEmitter(c)
 	if serr := h.AIAgentService.RunMessage(c.Request.Context(), inv, sessionID, req.MessageID, req.Text, req.Page, req.Resource, emit); serr != nil {
-		emit(aiagent.StreamEvent{Type: "error", Code: string(codeIdentifier(serr)), Message: serr.Message})
+		emit(aiagent.StreamEvent{Type: "error", Code: string(codeIdentifier(serr)), Message: serr.UserMessage()})
 	}
 }
 
 // AgentApprove — POST /ai/sessions/:id/approve (SSE) resumes a paused run.
 func (h *Handler) AgentApprove(c *gin.Context) {
 	if h.AIAgentService == nil {
-		errx.JSON(c, errx.New(errx.ServiceUnavailable, "the AI assistant is not configured"))
+		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "The AI assistant is not configured."))
 		return
 	}
 	inv, xerr := h.jwtInvocation(c)
@@ -256,7 +256,7 @@ func (h *Handler) AgentApprove(c *gin.Context) {
 
 	emit := sseEmitter(c)
 	if serr := h.AIAgentService.Resume(c.Request.Context(), inv, sessionID, req.Decision, emit); serr != nil {
-		emit(aiagent.StreamEvent{Type: "error", Code: string(codeIdentifier(serr)), Message: serr.Message})
+		emit(aiagent.StreamEvent{Type: "error", Code: string(codeIdentifier(serr)), Message: serr.UserMessage()})
 	}
 }
 

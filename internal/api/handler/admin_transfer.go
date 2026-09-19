@@ -35,7 +35,7 @@ func (h *Handler) adminTransferOrg(c *gin.Context) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	if h.OrgTransferService == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "Workspace transfer is not available on this instance."))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Workspace transfer is not available on this instance."))
 		return uuid.Nil, false
 	}
 	return orgID, true

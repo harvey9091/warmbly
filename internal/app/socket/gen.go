@@ -26,9 +26,7 @@ func (s *socketService) GenerateWebsocketToken(ctx context.Context, userID uuid.
 		return "", errx.InternalError()
 	}
 
-	if err := s.saveToken(ctx, id, nonce, expiresAt); err != nil {
-		return "", err
-	}
+	s.saveToken(ctx, id, nonce, expiresAt)
 
 	return wsToken, nil
 }

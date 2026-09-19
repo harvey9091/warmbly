@@ -66,7 +66,7 @@ type fleetJoinResponse struct {
 // credentials yet — that is the whole point.
 func (h *Handler) FleetJoin(c *gin.Context) {
 	if h.FleetNodes == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "fleet enrolment is not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Fleet enrolment is not available on this instance."))
 		return
 	}
 	var req fleetJoinRequest
@@ -380,7 +380,7 @@ func renderNodeEnv(nodeID uuid.UUID, role models.NodeRole, region string) string
 // each is on, what it should be on, and what it is using.
 func (h *Handler) AdminFleetNodes(c *gin.Context) {
 	if h.FleetNodes == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "fleet enrolment is not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Fleet enrolment is not available on this instance."))
 		return
 	}
 	role := models.NodeRole(c.Query("role"))
@@ -401,7 +401,7 @@ func (h *Handler) AdminFleetNodes(c *gin.Context) {
 // once. Issuing replaces the previous one, which is also how it is revoked.
 func (h *Handler) AdminFleetIssueJoinToken(c *gin.Context) {
 	if h.FleetNodes == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "fleet enrolment is not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Fleet enrolment is not available on this instance."))
 		return
 	}
 	token, err := h.FleetNodes.IssueJoinToken(c.Request.Context())
@@ -488,7 +488,7 @@ func (h *Handler) AdminFleetReserveWorker(c *gin.Context) {
 		return
 	}
 	if h.WorkerRepo == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "worker placement is not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Worker placement is not available on this instance."))
 		return
 	}
 	var body reserveWorkerBody
@@ -551,7 +551,7 @@ func (h *Handler) AdminFleetDeleteNode(c *gin.Context) {
 		return
 	}
 	if h.FleetNodeRepo == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "fleet enrolment is not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Fleet enrolment is not available on this instance."))
 		return
 	}
 	if err := h.FleetNodeRepo.Delete(c.Request.Context(), id); err != nil {
@@ -582,7 +582,7 @@ func (h *Handler) AdminFleetPatchNode(c *gin.Context) {
 		return
 	}
 	if h.FleetNodeRepo == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "fleet enrolment is not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Fleet enrolment is not available on this instance."))
 		return
 	}
 	var body patchNodeBody
@@ -632,7 +632,7 @@ func (h *Handler) AdminFleetPatchNode(c *gin.Context) {
 // converge on.
 func (h *Handler) AdminFleetRelease(c *gin.Context) {
 	if h.FleetSettingsRepo == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "fleet enrolment is not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Fleet enrolment is not available on this instance."))
 		return
 	}
 	state, err := h.FleetSettingsRepo.GetRelease(c.Request.Context())
@@ -656,7 +656,7 @@ type setReleaseBody struct {
 // rollback.
 func (h *Handler) AdminFleetSetRelease(c *gin.Context) {
 	if h.FleetSettingsRepo == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "fleet enrolment is not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Fleet enrolment is not available on this instance."))
 		return
 	}
 	var body setReleaseBody

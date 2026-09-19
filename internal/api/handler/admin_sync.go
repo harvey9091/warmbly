@@ -19,7 +19,7 @@ const (
 // AdminSearchSync is GET /admin/sync: every mailbox's sync governor state.
 func (h *Handler) AdminSearchSync(c *gin.Context) {
 	if h.AdminSyncRepo == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "sync operations are not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Sync operations are not available on this instance."))
 		return
 	}
 	var search models.AdminSyncSearch
@@ -45,7 +45,7 @@ func (h *Handler) AdminSearchSync(c *gin.Context) {
 // AdminSyncClearThrottle is POST /admin/sync/:id/clear-throttle.
 func (h *Handler) AdminSyncClearThrottle(c *gin.Context) {
 	if h.AdminSyncRepo == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "sync operations are not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Sync operations are not available on this instance."))
 		return
 	}
 	id, err := uuid.Parse(c.Param("id"))
@@ -73,7 +73,7 @@ func (h *Handler) AdminSyncClearThrottle(c *gin.Context) {
 // AdminSyncRestartBackfill is POST /admin/sync/:id/restart-backfill.
 func (h *Handler) AdminSyncRestartBackfill(c *gin.Context) {
 	if h.AdminSyncRepo == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "sync operations are not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Sync operations are not available on this instance."))
 		return
 	}
 	id, err := uuid.Parse(c.Param("id"))

@@ -63,8 +63,13 @@ func (s *emailService) ValidateCredentials(ctx context.Context, orgID uuid.UUID,
 			if errors.Is(err, context.DeadlineExceeded) {
 				return errx.ErrEmailValidation
 			}
-			errs.CaptureException(err)
-			return errx.InternalError()
+			// Anything else is the channel the worker answers on, not the
+			// mailbox: a cache that timed out or refused the read says
+			// nothing about the credentials, and answering "Something went
+			// wrong" left the person who typed them with no idea whether
+			// they were wrong or whether we had simply not looked.
+			errs.CaptureException(err, errs.Tag("stage", "mailbox_validation_subscribe"))
+			return errx.ErrEmailValidationUnavailable
 		}
 
 		switch msg.Payload {

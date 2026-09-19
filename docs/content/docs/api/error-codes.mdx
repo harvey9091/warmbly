@@ -20,6 +20,8 @@ All errors follow this structure:
 
 `error` and `message` are for people. Client logic should use `code`, HTTP status, and endpoint-specific fields such as `retry_after`. Include `request_id` when contacting support.
 
+A `4xx` message names the specific thing to fix, so it is worth showing to whoever made the request. A `5xx` message is deliberately generic: a server-side fault has no fix the caller can apply, and the detail behind it stays in the server's own log, where it is recorded against the same `request_id` this response carries. Quote that id and an operator can read the exact failure. The exceptions are the coded conditions listed below (`mailbox_provider_not_configured` and friends), which are `5xx` responses a reader genuinely can act on and which say so in full.
+
 ## HTTP status codes
 
 ### Client errors (4xx)
@@ -274,7 +276,7 @@ Returned when an unexpected error occurs on the server.
 ```json
 {
   "error": "Internal Server Error",
-  "message": "Something went wrong.",
+  "message": "Something went wrong on our end. Try again in a moment. If it keeps happening, contact support with the request id.",
   "code": "internal_error",
   "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
 }
@@ -282,7 +284,7 @@ Returned when an unexpected error occurs on the server.
 
 **How to fix:**
 - Retry the request after a short delay
-- If persistent, contact support with request details
+- If persistent, contact support and quote `request_id`. It is the only thing that identifies this exact failure in the server's logs, where the underlying cause is recorded
 
 One `internal_error` variant is worth distinguishing. When an authentication endpoint cannot send its email, the message names that specifically rather than reporting a generic fault:
 
@@ -306,7 +308,7 @@ Returned when the service is temporarily unavailable.
 ```json
 {
   "error": "Service Unavailable",
-  "message": "service unavailable",
+  "message": "This part of Warmbly is temporarily unavailable. Nothing was changed. Try again in a moment.",
   "code": "service_unavailable",
   "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
 }
@@ -469,6 +471,56 @@ A `503` whose `code` is `mailbox_identity_unavailable` comes from `POST /emails/
 **How to fix:**
 - Retry. Placement happens within moments, so a second attempt usually succeeds
 - `GET /emails/{id}` reports the mailbox's `status`; an `inactive` mailbox is not placed on a worker at all and will keep refusing until it is reactivated
+
+#### `mailbox_validation_timeout`
+
+A `400` whose `code` is `mailbox_validation_timeout` comes from the SMTP and IMAP connect and credential-update paths. The credentials were sent to a worker and tried against the servers named, and no answer came back inside the check's deadline. It is not a refused password: the usual causes are a wrong host or port, a firewall between the worker and the server, or a mail server that is simply slow.
+
+```json
+{
+  "error": "Bad Request",
+  "message": "The mail server didn't answer in time, so the credentials could not be checked. Confirm the host, port and security settings, then try again.",
+  "code": "mailbox_validation_timeout",
+  "request_id": "0b7c6a5e-2f83-4e1a-9de4-1c72b8f9a340"
+}
+```
+
+**How to fix:**
+- Confirm the SMTP and IMAP host, port and security setting against the provider's own documentation
+- Retry. A slow server often answers on the second attempt
+
+#### `mailbox_validation_unavailable`
+
+A `503` whose `code` is `mailbox_validation_unavailable` means the check itself could not be run: the machine that tries credentials could not be reached, or the channel its answer comes back on was unavailable. Nothing is known about the credentials either way, and nothing was saved.
+
+```json
+{
+  "error": "Service Unavailable",
+  "message": "Warmbly couldn't check these credentials right now, so nothing was saved. Try again in a moment.",
+  "code": "mailbox_validation_unavailable",
+  "request_id": "9a1d3f27-64bb-4c0e-8a61-2f5b7c0e9d14"
+}
+```
+
+**How to fix:**
+- Retry. Nothing about the mailbox was changed, so the request is safe to repeat
+
+#### `passkey_unavailable`
+
+A `503` whose `code` is `passkey_unavailable` comes from the passkey registration and sign-in endpoints. A ceremony holds its challenge outside the browser for the few minutes between starting and finishing, and that store could not be written or read. The passkey and the account are both fine.
+
+```json
+{
+  "error": "Service Unavailable",
+  "message": "Passkey sign-in isn't available right now. Try again in a moment, or sign in with your password.",
+  "code": "passkey_unavailable",
+  "request_id": "3c8e0b14-7a52-4d9f-b0c3-6e1d29fa7b58"
+}
+```
+
+**How to fix:**
+- Retry the ceremony from the start
+- Sign in with a password meanwhile. Do not register a replacement passkey; the existing one is not the problem
 
 ## Error handling best practices
 

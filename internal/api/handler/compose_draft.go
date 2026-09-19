@@ -43,7 +43,7 @@ func (h *Handler) DraftCompose(c *gin.Context) {
 		return
 	}
 	if h.AIProvider == nil {
-		errx.JSON(c, errx.New(errx.ServiceUnavailable, "the AI assistant is not configured"))
+		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "The AI assistant is not configured."))
 		return
 	}
 	if allowed, xerr := h.FeatureGateService.CanUseUnibox(c.Request.Context(), *orgID); xerr != nil {
@@ -126,7 +126,7 @@ func (h *Handler) DraftCompose(c *gin.Context) {
 				remaining = bal
 			}
 		}
-		errx.JSON(c, errx.New(errx.ServiceUnavailable, "The email drafter is temporarily unavailable. Your credits were not charged."))
+		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "The email drafter is temporarily unavailable. Your credits were not charged."))
 		return
 	}
 

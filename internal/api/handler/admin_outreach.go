@@ -12,7 +12,7 @@ import (
 // AdminSendOutreach is POST /admin/outreach.
 func (h *Handler) AdminSendOutreach(c *gin.Context) {
 	if h.AdminOutreachService == nil {
-		errx.JSON(c, errx.New(errx.Internal, "admin outreach service not available"))
+		errx.JSON(c, errx.NewPublic(errx.Internal, "Admin outreach service not available."))
 		return
 	}
 	adminID := middleware.GetAdminUserID(c)
@@ -56,7 +56,7 @@ func (h *Handler) AdminSendOutreach(c *gin.Context) {
 // params; returns the standard {data, pagination} envelope.
 func (h *Handler) AdminListOutreach(c *gin.Context) {
 	if h.AdminOutreachService == nil {
-		errx.JSON(c, errx.New(errx.Internal, "admin outreach service not available"))
+		errx.JSON(c, errx.NewPublic(errx.Internal, "Admin outreach service not available."))
 		return
 	}
 	var search models.AdminOutreachSearch

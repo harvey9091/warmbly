@@ -81,7 +81,7 @@ func (h *Handler) AdminListOrgAPIKeys(c *gin.Context) {
 // AdminRevokeOrgAPIKey is DELETE /admin/organizations/:id/api-keys/:keyId.
 func (h *Handler) AdminRevokeOrgAPIKey(c *gin.Context) {
 	if h.APIKeyService == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "API keys are not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "API keys are not available on this instance"))
 		return
 	}
 	orgID, err := uuid.Parse(c.Param("id"))

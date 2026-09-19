@@ -47,7 +47,7 @@ func NewService(db *pgxpool.Pool) Service {
 
 func (s *service) Begin(ctx context.Context, orgID uuid.UUID, key, method, path, requestHash string) (*Record, State, *errx.Error) {
 	if s == nil || s.db == nil {
-		return nil, "", errx.New(errx.ServiceUnavailable, "idempotency service is not available")
+		return nil, "", errx.NewPublic(errx.ServiceUnavailable, "Idempotency service is not available.")
 	}
 
 	_, _ = s.db.Exec(ctx, `
@@ -86,7 +86,7 @@ func (s *service) Begin(ctx context.Context, orgID uuid.UUID, key, method, path,
 
 func (s *service) Complete(ctx context.Context, recordID uuid.UUID, statusCode int, responseBody []byte, contentType string) *errx.Error {
 	if s == nil || s.db == nil {
-		return errx.New(errx.ServiceUnavailable, "idempotency service is not available")
+		return errx.NewPublic(errx.ServiceUnavailable, "Idempotency service is not available.")
 	}
 	_, err := s.db.Exec(ctx, `
 		UPDATE api_idempotency_keys
