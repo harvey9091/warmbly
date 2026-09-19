@@ -39,3 +39,40 @@ func TestProcessShareLeavesARoomyServerAlone(t *testing.T) {
 		t.Fatalf("a 400-connection server should not constrain the default of %d, got %d", defaultMaxConns, got)
 	}
 }
+
+// pgxpool's ParseConfig fills MaxConns with max(4, NumCPU) before we see it,
+// so the `<= 0` guard this replaced never fired and defaultMaxConns was dead
+// code. Production ran at 48 per process, the host's core count, while the
+// constant and the docs both said 25.
+func TestPoolCeilingIgnoresTheHostsCoreCount(t *testing.T) {
+	t.Setenv("DB_MAX_CONNS", "")
+
+	const dsn = "postgres://u:p@host:5432/db?sslmode=require"
+	if got := poolCeiling(dsn, 48); got != defaultMaxConns {
+		t.Errorf("a 48-core host gave a ceiling of %d, want the default %d", got, defaultMaxConns)
+	}
+	if got := poolCeiling(dsn, 4); got != defaultMaxConns {
+		t.Errorf("a small host gave a ceiling of %d, want the default %d", got, defaultMaxConns)
+	}
+}
+
+// A DSN that names the setting means someone chose it, so it is kept.
+func TestPoolCeilingKeepsAnExplicitDSNSetting(t *testing.T) {
+	t.Setenv("DB_MAX_CONNS", "")
+
+	const dsn = "postgres://u:p@host:5432/db?pool_max_conns=40"
+	if got := poolCeiling(dsn, 40); got != 40 {
+		t.Errorf("ceiling = %d, want the 40 the DSN asked for", got)
+	}
+}
+
+func TestPoolCeilingLetsTheEnvironmentWin(t *testing.T) {
+	t.Setenv("DB_MAX_CONNS", "12")
+
+	if got := poolCeiling("postgres://u:p@host:5432/db?pool_max_conns=40", 40); got != 12 {
+		t.Errorf("ceiling = %d, want the environment's 12", got)
+	}
+	if got := poolCeiling("postgres://u:p@host:5432/db", 48); got != 12 {
+		t.Errorf("ceiling = %d, want the environment's 12", got)
+	}
+}

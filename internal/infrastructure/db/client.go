@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -21,16 +22,17 @@ const (
 	// backend (e.g. /auth/refresh blocks waiting for a connection, the
 	// frontend treats the resulting timeout as session expiry, user is
 	// kicked at the 10-minute refresh boundary). 25 leaves headroom even
-	// under bursty admin pages while staying well under postgres'
-	// default max_connections=100.
+	// under bursty admin pages. It is an upper bound and not a target:
+	// the clamp below lowers it to what the server can actually serve,
+	// and observed concurrency is a small fraction of either.
 	defaultMaxConns = int32(25)
 	defaultMinConns = int32(2)
-	// A pooled connection is never given back while it may still be reused,
-	// so the pool settles at its high-water mark and holds it. Half an hour
-	// of that put 40 idle connections on a 79-connection server for work
-	// that had finished minutes earlier. A minute is long enough to reuse a
-	// connection across one burst and short enough that the burst's peak is
-	// not still charged to us when the next service needs a slot.
+	// How long a connection may sit unused before the pool gives it back.
+	// Thirty minutes meant nothing was ever trimmed, so the pool kept every
+	// connection it had ever needed at once; on a 76-connection server two
+	// processes held 65 between them while exactly one was doing work. A
+	// minute keeps a connection across a burst and returns it before the next
+	// service needs the slot.
 	defaultMaxConnLifetime   = time.Hour
 	defaultMaxConnIdleTime   = time.Minute
 	defaultHealthCheckPeriod = time.Minute
@@ -73,12 +75,7 @@ func New(ctx context.Context, endpoint string) (*DB, error) {
 	// connection slots are reserved", which no amount of retrying fixes, so
 	// the size has to be tunable without a rebuild. A DSN that names
 	// pool_max_conns keeps it; DB_MAX_CONNS overrides both.
-	if dbConfig.MaxConns <= 0 {
-		dbConfig.MaxConns = defaultMaxConns
-	}
-	if n := envInt32("DB_MAX_CONNS"); n > 0 {
-		dbConfig.MaxConns = n
-	}
+	dbConfig.MaxConns = poolCeiling(endpoint, dbConfig.MaxConns)
 	dbConfig.MinConns = defaultMinConns
 	if n := envInt32("DB_MIN_CONNS"); n >= 0 && os.Getenv("DB_MIN_CONNS") != "" {
 		dbConfig.MinConns = n
@@ -122,6 +119,27 @@ func New(ctx context.Context, endpoint string) (*DB, error) {
 	return &DB{
 		Pool: conn,
 	}, nil
+}
+
+// poolCeiling is the pool size to ask for before the server is consulted.
+//
+// The default here was unreachable for as long as it has existed. ParseConfig
+// fills MaxConns with pgxpool's own default, max(4, NumCPU), so it is never
+// zero or less and the `<= 0` guard that was meant to apply `defaultMaxConns`
+// never fired once. On Railway's 48-core container hosts that quietly made the
+// real ceiling 48 per process, not the 25 the constant and the docs both
+// promised, and two of those against a 76-connection server is where the
+// exhaustion came from. A machine's core count says nothing about what the
+// database can serve, so it is honoured only when the DSN asks for it by name.
+func poolCeiling(endpoint string, parsed int32) int32 {
+	ceiling := parsed
+	if !strings.Contains(endpoint, "pool_max_conns") || ceiling <= 0 {
+		ceiling = defaultMaxConns
+	}
+	if n := envInt32("DB_MAX_CONNS"); n > 0 {
+		ceiling = n
+	}
+	return ceiling
 }
 
 // processShare is one process's cut of the connections the server leaves
