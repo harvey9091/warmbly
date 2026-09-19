@@ -136,7 +136,7 @@ var fixTools = map[models.AdvisorCategory][]string{
 // FixWithAgent resolves one finding by running a bounded agent against it.
 func (s *service) FixWithAgent(ctx context.Context, inv aitools.Invocation, id uuid.UUID) (*models.AdvisorAgentResult, *errx.Error) {
 	if s.agent == nil || s.toolList == nil {
-		return nil, errx.NewPublic(errx.ServiceUnavailable, "The AI assistant is not configured on this server.")
+		return nil, errx.New(errx.ServiceUnavailable, "the AI assistant is not configured on this server")
 	}
 	f, xerr := s.Get(ctx, inv.OrgID, id)
 	if xerr != nil {

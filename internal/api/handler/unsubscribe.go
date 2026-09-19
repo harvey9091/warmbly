@@ -229,6 +229,10 @@ func renderUnsubPage(c *gin.Context, status int, v unsubView) {
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Robots-Tag", "noindex")
 	c.Status(status)
+	// A static page with one form that posts back to this origin. No script,
+	// no images, nothing embedded, and it must not be framed: the whole page
+	// is a one-click state change.
+	c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	_ = unsubTemplate.Execute(c.Writer, v)
 }

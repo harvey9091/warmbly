@@ -1,0 +1,9 @@
+# Security response headers for the marketing site. Static pages, no
+# credentials, but the site serves install.sh and cli.sh, so framing and
+# content-type sniffing are both switched off.
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=()
+  Strict-Transport-Security: max-age=31536000; includeSubDomains

@@ -28,7 +28,7 @@ func (h *Handler) GetCreditBalance(c *gin.Context) {
 		return
 	}
 	if h.CreditService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Credits are not available."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "credits are not available"))
 		return
 	}
 
@@ -127,7 +127,9 @@ func (h *Handler) CreateCreditCheckoutSession(c *gin.Context) {
 	}
 
 	session, xerr := h.StripeService.CreateCreditCheckoutSession(
-		c.Request.Context(), uid, *orgID, pack.Key, pack.Credits, req.SuccessURL, req.CancelURL,
+		c.Request.Context(), uid, *orgID, pack.Key, pack.Credits,
+		billingReturnURL(req.SuccessURL, "/app/settings/billing?credits=done"),
+		billingReturnURL(req.CancelURL, "/app/settings/billing"),
 	)
 	if xerr != nil {
 		errx.JSON(c, xerr)
@@ -149,7 +151,7 @@ func (h *Handler) ListCreditTransactions(c *gin.Context) {
 		return
 	}
 	if h.CreditService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Credits are not available."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "credits are not available"))
 		return
 	}
 
@@ -198,7 +200,7 @@ func (h *Handler) GetCreditUsage(c *gin.Context) {
 		return
 	}
 	if h.CreditService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Credits are not available."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "credits are not available"))
 		return
 	}
 	days := 30
@@ -227,7 +229,7 @@ func (h *Handler) GetCreditSettings(c *gin.Context) {
 		return
 	}
 	if h.CreditService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Credits are not available."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "credits are not available"))
 		return
 	}
 	cfg, xerr := h.CreditService.GetSpendSettings(c.Request.Context(), *orgID)
@@ -247,7 +249,7 @@ func (h *Handler) UpdateCreditSettings(c *gin.Context) {
 		return
 	}
 	if h.CreditService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Credits are not available."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "credits are not available"))
 		return
 	}
 	var body struct {

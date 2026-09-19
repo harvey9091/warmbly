@@ -29,7 +29,7 @@ func (h *Handler) AdminGetOrgRisk(c *gin.Context) {
 		return
 	}
 	if h.OrgRiskService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Risk posture is not available on this instance."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "risk posture is not available on this instance"))
 		return
 	}
 	risk, xerr := h.OrgRiskService.Get(c.Request.Context(), orgID)
@@ -54,7 +54,7 @@ func (h *Handler) AdminSetOrgRiskOverride(c *gin.Context) {
 		return
 	}
 	if h.OrgRiskService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Risk posture is not available on this instance."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "risk posture is not available on this instance"))
 		return
 	}
 
@@ -98,7 +98,7 @@ func (h *Handler) AdminClearOrgRiskOverride(c *gin.Context) {
 		return
 	}
 	if h.OrgRiskService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Risk posture is not available on this instance."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "risk posture is not available on this instance"))
 		return
 	}
 
@@ -125,7 +125,7 @@ func (h *Handler) AdminClearOrgRiskSignal(c *gin.Context) {
 		return
 	}
 	if h.OrgRiskService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Risk posture is not available on this instance."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "risk posture is not available on this instance"))
 		return
 	}
 	key := strings.TrimSpace(c.Param("key"))

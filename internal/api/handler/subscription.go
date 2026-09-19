@@ -83,7 +83,12 @@ func (h *Handler) CreateCheckoutSession(c *gin.Context) {
 		return
 	}
 
-	session, errX := h.StripeService.CreateCheckoutSession(c.Request.Context(), uid, *orgID, req.PriceID, req.SuccessURL, req.CancelURL, req.DiscountCode)
+	// Pinned to this instance's dashboard: Stripe will redirect the customer
+	// to whatever is set here.
+	successURL := billingReturnURL(req.SuccessURL, "/app/settings/billing?checkout=done")
+	cancelURL := billingReturnURL(req.CancelURL, "/app/settings/billing")
+
+	session, errX := h.StripeService.CreateCheckoutSession(c.Request.Context(), uid, *orgID, req.PriceID, successURL, cancelURL, req.DiscountCode)
 	if errX != nil {
 		errx.JSON(c, errX)
 		return
@@ -122,7 +127,8 @@ func (h *Handler) CreateBillingPortalSession(c *gin.Context) {
 		return
 	}
 
-	portalURL, errX := h.StripeService.CreatePortalSession(c.Request.Context(), sub.StripeCustomerID, req.ReturnURL)
+	portalURL, errX := h.StripeService.CreatePortalSession(c.Request.Context(), sub.StripeCustomerID,
+		billingReturnURL(req.ReturnURL, "/app/settings/billing"))
 	if errX != nil {
 		errx.JSON(c, errX)
 		return
@@ -219,7 +225,7 @@ func (h *Handler) GetTrialStatus(c *gin.Context) {
 	}
 
 	if h.TrialService == nil {
-		errx.JSON(c, errx.NewPublic(errx.Internal, "Trial service not available."))
+		errx.JSON(c, errx.New(errx.Internal, "trial service not available"))
 		return
 	}
 
@@ -241,7 +247,7 @@ func (h *Handler) GetFeatureStatus(c *gin.Context) {
 	}
 
 	if h.FeatureGateService == nil {
-		errx.JSON(c, errx.NewPublic(errx.Internal, "Feature gate service not available."))
+		errx.JSON(c, errx.New(errx.Internal, "feature gate service not available"))
 		return
 	}
 

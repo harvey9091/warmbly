@@ -42,17 +42,48 @@ func (h *Handler) ServePublicObject(c *gin.Context) {
 	}
 	defer body.Close()
 
-	if ct := mime.TypeByExtension(filepath.Ext(key)); ct != "" {
+	// The Content-Type is derived from the key's extension, and every upload
+	// handler forces that extension from a server-side image allowlist. An
+	// extension outside the allowlist therefore means the key did not come from
+	// an upload handler, and the only safe thing to serve is a download.
+	ct := mime.TypeByExtension(filepath.Ext(key))
+	if ct != "" && servableInline[strings.ToLower(filepath.Ext(key))] {
 		c.Header("Content-Type", ct)
+		c.Header("Content-Disposition", "inline")
+	} else {
+		c.Header("Content-Type", "application/octet-stream")
+		c.Header("Content-Disposition", "attachment")
 	}
 	// These are user uploads served from our own origin, so the browser must
 	// not be free to decide they are something executable.
 	c.Header("X-Content-Type-Options", "nosniff")
+	// Belt and braces behind the extension allowlist: even if something
+	// script-capable reached a public key, this origin holds no session cookie
+	// and the sandbox denies it an origin to act in.
+	c.Header("Content-Security-Policy", "default-src 'none'; img-src 'self' data:; sandbox; frame-ancestors 'none'")
+	// These objects exist to be loaded from somewhere else: an email image is
+	// fetched by the recipient's mail client, an avatar by a page on another
+	// host. The API-wide same-site policy would block exactly that, so this
+	// route opts out. Safe because the objects are public by definition and the
+	// origin carries no cookie.
+	c.Header("Cross-Origin-Resource-Policy", "cross-origin")
 	// Keys are content-addressed (they carry an epoch suffix), so they're safe
 	// to cache immutably.
 	c.Header("Cache-Control", "public, max-age=31536000, immutable")
 	c.Status(http.StatusOK)
 	_, _ = io.Copy(c.Writer, body)
+}
+
+// servableInline is the set of extensions the upload handlers can produce. A
+// public object outside it is handed over as a download rather than rendered,
+// so a key that somehow carries .svg or .html cannot become script on this
+// origin.
+var servableInline = map[string]bool{
+	".png":  true,
+	".jpg":  true,
+	".jpeg": true,
+	".gif":  true,
+	".webp": true,
 }
 
 // isPublicKey guards the /public route to the key prefixes PutPublic writes, so

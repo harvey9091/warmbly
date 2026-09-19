@@ -1,8 +1,14 @@
-# Dependency vulnerability scan, deliberately not a PR gate: a CVE published
+# Dependency vulnerability scanning, deliberately not a PR gate: a CVE published
 # overnight is not actionable in whatever PR happens to trip it, so scanning
 # every PR just makes unrelated work go red. It runs on a schedule and when
 # dependency manifests change on main; a finding fails the run, which is the
 # signal to bump the dependency in its own PR.
+#
+# govulncheck is the one that matters most and was missing. Trivy does not
+# evaluate the Go standard library at all, so a toolchain carrying a critical
+# net/http advisory scanned clean. govulncheck covers the stdlib and proves
+# reachability through the call graph, which is also what lets a finding be
+# justified rather than merely bumped.
 name: Security
 
 on:
@@ -23,12 +29,34 @@ permissions:
   contents: read
 
 jobs:
+  govulncheck:
+    name: Go Vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The default build has no Kafka backend, so the Avro codec behind that
+      # build tag is never compiled and never scanned. Both are checked.
+      - name: Run govulncheck
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+          go run golang.org/x/vuln/cmd/govulncheck@latest -tags kafka ./...
+
   trivy:
     name: Dependency Scan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      # ignore-unfixed is deliberately NOT set. An advisory with no upstream fix
+      # is exactly the case that needs a human decision (upgrade, work around,
+      # or write down why it is not reachable); hiding it meant the scan was
+      # green while four such advisories were live.
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -36,4 +64,33 @@ jobs:
           scan-ref: "."
           severity: "CRITICAL,HIGH"
           exit-code: "1"
-          ignore-unfixed: true
+          trivyignores: ".trivyignore"
+
+  node:
+    name: Node Dependencies
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tree: [web, admin, site, docs, forms]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-pnpm
+        with:
+          working-directory: ${{ matrix.tree }}
+      - name: Audit ${{ matrix.tree }}
+        working-directory: ${{ matrix.tree }}
+        # Production dependencies only: a devDependency advisory cannot be
+        # reached by anything a visitor can send, and gating releases on the
+        # transitive dependencies of eslint is how a scanner gets ignored.
+        run: pnpm audit --audit-level=high --prod
+
+  rust:
+    name: Rust Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: tracking

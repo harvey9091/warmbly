@@ -79,6 +79,10 @@ func NewCRMRepository(db *pgxpool.Pool) CRMRepository {
 // =====================
 
 func (r *crmRepository) CreateNote(ctx context.Context, orgID, contactID, userID uuid.UUID, content string) (*models.ContactNote, error) {
+	if err := r.verifyRefs(ctx, orgID, crmRefs{ContactID: &contactID}); err != nil {
+		return nil, err
+	}
+
 	query := `
 		INSERT INTO contact_notes (contact_id, organization_id, user_id, content)
 		VALUES ($1, $2, $3, $4)
@@ -330,7 +334,7 @@ func (r *crmRepository) GetPipeline(ctx context.Context, orgID, pipelineID uuid.
 		SELECT ps.id, ps.pipeline_id, ps.name, ps.color, ps.position, ps.created_at, ps.updated_at,
 		       COUNT(d.id) AS deal_count
 		FROM pipeline_stages ps
-		LEFT JOIN deals d ON d.stage_id = ps.id AND d.status = 'open'
+		LEFT JOIN deals d ON d.stage_id = ps.id AND d.pipeline_id = ps.pipeline_id AND d.status = 'open'
 		WHERE ps.pipeline_id = $1
 		GROUP BY ps.id
 		ORDER BY ps.position ASC
@@ -405,7 +409,7 @@ func (r *crmRepository) ListPipelines(ctx context.Context, orgID uuid.UUID) ([]m
 		SELECT ps.id, ps.pipeline_id, ps.name, ps.color, ps.position, ps.created_at, ps.updated_at,
 		       COUNT(d.id) AS deal_count
 		FROM pipeline_stages ps
-		LEFT JOIN deals d ON d.stage_id = ps.id AND d.status = 'open'
+		LEFT JOIN deals d ON d.stage_id = ps.id AND d.pipeline_id = ps.pipeline_id AND d.status = 'open'
 		WHERE ps.pipeline_id = ANY($1)
 		GROUP BY ps.id
 		ORDER BY ps.position ASC
@@ -554,11 +558,70 @@ func (r *crmRepository) DeleteStage(ctx context.Context, orgID, stageID uuid.UUI
 	return nil
 }
 
+// crmRefs names the foreign rows a deal, task or note can point at. Every one
+// of them arrives in the request body, and the read path joins them back onto
+// the row and returns their fields, so each has to be proven to live in the
+// caller's organization before it is stored. The joins carry the tenant
+// predicate as well: a stored reference and a read of it are two separate
+// chances to get this wrong.
+type crmRefs struct {
+	PipelineID      *uuid.UUID
+	StageID         *uuid.UUID
+	ContactID       *uuid.UUID
+	DealID          *uuid.UUID
+	AssignedTo      *uuid.UUID
+	AssignedTeamID  *uuid.UUID
+	CampaignID      *uuid.UUID
+	SourceMailboxID *uuid.UUID
+}
+
+// verifyRefs answers ErrNotFound for a reference outside the organization, so a
+// probe cannot tell an id that exists elsewhere from one that exists nowhere.
+func (r *crmRepository) verifyRefs(ctx context.Context, orgID uuid.UUID, refs crmRefs) error {
+	checks := []struct {
+		id  *uuid.UUID
+		sql string
+	}{
+		{refs.PipelineID, `SELECT EXISTS(SELECT 1 FROM pipelines WHERE id = $1 AND organization_id = $2)`},
+		{refs.StageID, `SELECT EXISTS(SELECT 1 FROM pipeline_stages ps JOIN pipelines p ON p.id = ps.pipeline_id WHERE ps.id = $1 AND p.organization_id = $2)`},
+		{refs.ContactID, `SELECT EXISTS(SELECT 1 FROM contacts WHERE id = $1 AND organization_id = $2)`},
+		{refs.DealID, `SELECT EXISTS(SELECT 1 FROM deals WHERE id = $1 AND organization_id = $2)`},
+		{refs.AssignedTo, `SELECT EXISTS(SELECT 1 FROM organization_members WHERE user_id = $1 AND organization_id = $2)`},
+		{refs.AssignedTeamID, `SELECT EXISTS(SELECT 1 FROM teams WHERE id = $1 AND organization_id = $2)`},
+		{refs.CampaignID, `SELECT EXISTS(SELECT 1 FROM campaigns WHERE id = $1 AND organization_id = $2)`},
+		{refs.SourceMailboxID, `SELECT EXISTS(SELECT 1 FROM email_accounts WHERE id = $1 AND organization_id = $2)`},
+	}
+	for _, c := range checks {
+		if c.id == nil || *c.id == uuid.Nil {
+			continue
+		}
+		var ok bool
+		if err := r.db.QueryRow(ctx, c.sql, *c.id, orgID).Scan(&ok); err != nil {
+			return err
+		}
+		if !ok {
+			return errx.ErrNotFound
+		}
+	}
+	return nil
+}
+
 // =====================
 // Deals
 // =====================
 
 func (r *crmRepository) CreateDeal(ctx context.Context, orgID uuid.UUID, data *models.CreateDeal) (*models.Deal, error) {
+	if err := r.verifyRefs(ctx, orgID, crmRefs{
+		PipelineID:      &data.PipelineID,
+		StageID:         &data.StageID,
+		ContactID:       data.ContactID,
+		AssignedTo:      data.AssignedTo,
+		CampaignID:      data.CampaignID,
+		SourceMailboxID: data.SourceMailboxID,
+	}); err != nil {
+		return nil, err
+	}
+
 	currency := data.Currency
 	if currency == "" {
 		currency = "USD"
@@ -682,6 +745,14 @@ func (r *crmRepository) ListDeals(ctx context.Context, orgID uuid.UUID, pipeline
 }
 
 func (r *crmRepository) UpdateDeal(ctx context.Context, orgID, dealID uuid.UUID, data *models.UpdateDeal) (*models.Deal, error) {
+	if err := r.verifyRefs(ctx, orgID, crmRefs{
+		StageID:    data.StageID,
+		ContactID:  data.ContactID,
+		AssignedTo: data.AssignedTo,
+	}); err != nil {
+		return nil, err
+	}
+
 	setClauses := []string{}
 	args := []any{orgID, dealID}
 	argPos := 3
@@ -927,9 +998,9 @@ func (r *crmRepository) SearchDeals(ctx context.Context, orgID uuid.UUID, filter
 		       ps.name, ps.color, ps.position,
 		       cam.name
 		FROM deals d
-		LEFT JOIN contacts co ON co.id = d.contact_id
-		LEFT JOIN pipeline_stages ps ON ps.id = d.stage_id
-		LEFT JOIN campaigns cam ON cam.id = d.campaign_id
+		LEFT JOIN contacts co ON co.id = d.contact_id AND co.organization_id = d.organization_id
+		LEFT JOIN pipeline_stages ps ON ps.id = d.stage_id AND ps.pipeline_id = d.pipeline_id
+		LEFT JOIN campaigns cam ON cam.id = d.campaign_id AND cam.organization_id = d.organization_id
 		WHERE %s
 		ORDER BY %s %s NULLS LAST, d.id DESC
 		LIMIT $%d OFFSET $%d
@@ -1069,6 +1140,15 @@ func (r *crmRepository) DealsSummary(ctx context.Context, orgID uuid.UUID, filte
 // =====================
 
 func (r *crmRepository) CreateCRMTask(ctx context.Context, orgID, userID uuid.UUID, data *models.CreateCRMTask) (*models.CRMTask, error) {
+	if err := r.verifyRefs(ctx, orgID, crmRefs{
+		ContactID:      data.ContactID,
+		DealID:         data.DealID,
+		AssignedTo:     data.AssignedTo,
+		AssignedTeamID: data.AssignedTeamID,
+	}); err != nil {
+		return nil, err
+	}
+
 	priority := data.Priority
 	if priority == "" {
 		priority = "medium"
@@ -1558,6 +1638,13 @@ func (r *crmRepository) BulkUpdateCRMTasks(ctx context.Context, orgID uuid.UUID,
 }
 
 func (r *crmRepository) UpdateCRMTask(ctx context.Context, orgID, taskID uuid.UUID, data *models.UpdateCRMTask) (*models.CRMTask, error) {
+	if err := r.verifyRefs(ctx, orgID, crmRefs{
+		AssignedTo:     data.AssignedTo,
+		AssignedTeamID: data.AssignedTeamID,
+	}); err != nil {
+		return nil, err
+	}
+
 	setClauses := []string{}
 	args := []any{orgID, taskID}
 	argPos := 3

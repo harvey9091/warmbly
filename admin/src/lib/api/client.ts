@@ -126,18 +126,11 @@ export async function Request<T>(config: AuthRequestConfig): Promise<T> {
                 clearToken();
                 throw new SessionExpiredError();
             }
-            // `message` is the sentence the API wrote about this specific
-            // failure; `error` is only the HTTP class it belongs to. Preferring
-            // `error` meant every toast in the admin panel read "Internal
-            // Server Error" or "Bad Request" while the reason sat unread one
-            // field away. A body that is not an object at all (a proxy's HTML
-            // page, an empty 504) falls through to the axios message.
-            const raw = err.response?.data;
-            const body = (raw && typeof raw === "object" ? raw : {}) as { error?: string; message?: string };
+            const body = (err.response?.data ?? {}) as { error?: string; message?: string };
             const failure = new APIError(
-                body.message || body.error || err.message || "Request failed",
+                body.error || body.message || err.message || "Request failed",
                 status,
-                raw,
+                err.response?.data,
             );
             noteFailure(config, failure);
             throw failure;

@@ -97,7 +97,7 @@ func (h *Handler) UploadCampaignAttachment(c *gin.Context) {
 		return
 	}
 	if h.Storage == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Object storage not configured."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "object storage not configured"))
 		return
 	}
 

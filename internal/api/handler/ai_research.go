@@ -40,7 +40,7 @@ func (h *Handler) aiActorInvocation(c *gin.Context) (aitools.Invocation, *errx.E
 // ResearchContact — POST /contacts/:id/research (sync)
 func (h *Handler) ResearchContact(c *gin.Context) {
 	if h.ResearchService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "AI research is not configured"))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "AI research is not configured"))
 		return
 	}
 	inv, xerr := h.aiActorInvocation(c)
@@ -70,7 +70,7 @@ func (h *Handler) ResearchContact(c *gin.Context) {
 // ListContactResearch — GET /contacts/:id/research
 func (h *Handler) ListContactResearch(c *gin.Context) {
 	if h.ResearchService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "AI research is not configured"))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "AI research is not configured"))
 		return
 	}
 	orgID := middleware.GetOrganizationID(c)
@@ -99,7 +99,7 @@ func (h *Handler) ListContactResearch(c *gin.Context) {
 // BatchResearch — POST /contacts/research/batch
 func (h *Handler) BatchResearch(c *gin.Context) {
 	if h.ResearchService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "AI research is not configured"))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "AI research is not configured"))
 		return
 	}
 	inv, xerr := h.aiActorInvocation(c)

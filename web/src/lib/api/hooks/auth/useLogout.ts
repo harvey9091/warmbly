@@ -1,7 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import logout from "../../client/auth/logout";
-import { clearTokens } from "@/lib/auth";
-import { useAppStore } from "@/stores";
+import { clearClientSession } from "@/lib/session";
 
 // Single source of truth for "log this user out fully". Order matters:
 //
@@ -32,19 +31,8 @@ export default function useLogout() {
                 // the backend hiccuped.
             }
         },
-        onSettled: () => {
-            clearTokens();
-            queryClient.clear();
-
-            const store = useAppStore.getState();
-            store.logout();
-            store.setOrganizations([]);
-            store.setCurrentOrganization(null);
-
-            // Drop persisted slices (currentOrganization, theme, etc.).
-            // Theme will re-hydrate from the system preference on next
-            // mount, which is the right default for a fresh session.
-            useAppStore.persist.clearStorage();
-        },
+        // Shared with the session-expiry paths, so signing out and being signed
+        // out leave the browser in the same state.
+        onSettled: () => clearClientSession(queryClient),
     });
 }

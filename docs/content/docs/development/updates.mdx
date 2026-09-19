@@ -51,6 +51,31 @@ A build that carries no version (an image built without the build arguments, rep
 
 The version comes from the binary itself: the Dockerfiles and `make up` stamp the tag, commit and build time in (`internal/version`), CI does the same for published images, and `warmblyctl status` prints it as the first line.
 
+## Before updating past this release
+
+Two boot-time requirements were added, and an instance that does not meet them
+will restart-loop after the pull rather than starting with a warning. Both are
+worth checking before you press the button.
+
+- **`AUTH_SECRET` must be at least 32 characters.** It signs every session
+  token, and a shorter key can be recovered offline from any token the instance
+  has issued. The realtime service applies the same floor to the same value
+  (`JWT_SECRET`). Generate one with `make gen-key`, or any 32-plus-character
+  random string, and set it in the install's `.env`. **Changing it signs
+  everybody out**, which is the intended effect and is a good moment to do it.
+- **Administrators need two-factor authentication.** Every admin route now
+  refuses a session that did not present a second factor. Enrol at least one
+  administrator under **Settings > Security** in the dashboard *before*
+  updating, or the admin panel is unreachable until someone does. The dashboard
+  itself is unaffected, so enrolling afterwards still works; it is just a worse
+  moment to discover it.
+
+Check the first one with:
+
+```bash
+awk -F= '/^AUTH_SECRET=/{print length($2)" characters"}' /opt/warmbly/.env
+```
+
 ## Update and restart
 
 The button appears when the updater is reachable and something newer exists. It needs the `manage_settings` admin permission, and every press is an audit row (`upgrade` on `instance`).

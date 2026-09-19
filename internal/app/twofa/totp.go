@@ -59,21 +59,37 @@ func hotp(secret string, counter uint64) (string, error) {
 // ValidateCode checks a 6-digit code against the secret, allowing ±1 step of
 // clock skew. Constant-time compare on each candidate.
 func ValidateCode(secret, code string) bool {
+	_, ok := ValidateCodeStep(secret, code)
+	return ok
+}
+
+// ValidateCodeStep is ValidateCode plus the time step the code matched.
+//
+// The caller needs the step to refuse a replay: a code stays valid across its
+// own 30-second window and one step either side, so without recording which
+// step was spent the same six digits work for up to 90 seconds. RFC 6238
+// section 5.2 requires exactly one acceptance per step.
+//
+// Candidates are tried oldest first so a code presented inside the overlap
+// resolves to the earliest step it is valid for, which is the conservative
+// choice: it retires that step and everything before it.
+func ValidateCodeStep(secret, code string) (uint64, bool) {
 	code = strings.TrimSpace(code)
 	if len(code) != totpDigits {
-		return false
+		return 0, false
 	}
 	step := uint64(time.Now().Unix()) / totpPeriod
 	for i := -totpSkew; i <= totpSkew; i++ {
-		expected, err := hotp(secret, uint64(int64(step)+int64(i)))
+		candidate := uint64(int64(step) + int64(i))
+		expected, err := hotp(secret, candidate)
 		if err != nil {
-			return false
+			return 0, false
 		}
 		if subtle.ConstantTimeCompare([]byte(expected), []byte(code)) == 1 {
-			return true
+			return candidate, true
 		}
 	}
-	return false
+	return 0, false
 }
 
 // OtpauthURI builds the otpauth://totp provisioning URI an authenticator scans.

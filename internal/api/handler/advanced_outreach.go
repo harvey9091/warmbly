@@ -55,10 +55,29 @@ func (h *Handler) UpdateOutreachSettings(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-func (h *Handler) GetCampaignAdvancedSettings(c *gin.Context) {
+// ownedCampaign resolves the :id campaign for the advanced-outreach routes and
+// proves it belongs to the caller's organization. The route carries only a
+// campaign id, so this is the only thing that ties the request to a tenant:
+// every handler here must go through it rather than parsing the param itself.
+func (h *Handler) ownedCampaign(c *gin.Context) (uuid.UUID, *errx.Error) {
 	campaignID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		errx.JSON(c, errx.ErrUuid)
+		return uuid.Nil, errx.ErrUuid
+	}
+	orgID := middleware.GetOrganizationID(c)
+	if orgID == nil {
+		return uuid.Nil, errx.New(errx.BadRequest, "no organization selected")
+	}
+	if _, xerr := h.CampaignService.Get(c.Request.Context(), orgID.String(), campaignID.String()); xerr != nil {
+		return uuid.Nil, xerr
+	}
+	return campaignID, nil
+}
+
+func (h *Handler) GetCampaignAdvancedSettings(c *gin.Context) {
+	campaignID, cerr := h.ownedCampaign(c)
+	if cerr != nil {
+		errx.JSON(c, cerr)
 		return
 	}
 	settings, xerr := h.AdvancedService.GetCampaignSettings(c.Request.Context(), campaignID)
@@ -70,9 +89,9 @@ func (h *Handler) GetCampaignAdvancedSettings(c *gin.Context) {
 }
 
 func (h *Handler) UpdateCampaignAdvancedSettings(c *gin.Context) {
-	campaignID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		errx.JSON(c, errx.ErrUuid)
+	campaignID, cerr := h.ownedCampaign(c)
+	if cerr != nil {
+		errx.JSON(c, cerr)
 		return
 	}
 	var req models.UpsertOutreachSettingsRequest
@@ -94,9 +113,9 @@ func (h *Handler) UpdateCampaignAdvancedSettings(c *gin.Context) {
 }
 
 func (h *Handler) ListCampaignABVariants(c *gin.Context) {
-	campaignID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		errx.JSON(c, errx.ErrUuid)
+	campaignID, cerr := h.ownedCampaign(c)
+	if cerr != nil {
+		errx.JSON(c, cerr)
 		return
 	}
 	variants, xerr := h.AdvancedService.ListABVariants(c.Request.Context(), campaignID)
@@ -108,9 +127,9 @@ func (h *Handler) ListCampaignABVariants(c *gin.Context) {
 }
 
 func (h *Handler) CreateCampaignABVariant(c *gin.Context) {
-	campaignID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		errx.JSON(c, errx.ErrUuid)
+	campaignID, cerr := h.ownedCampaign(c)
+	if cerr != nil {
+		errx.JSON(c, cerr)
 		return
 	}
 	var req models.CreateCampaignABVariantRequest
@@ -135,9 +154,9 @@ func (h *Handler) CreateCampaignABVariant(c *gin.Context) {
 }
 
 func (h *Handler) UpdateCampaignABVariant(c *gin.Context) {
-	campaignID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		errx.JSON(c, errx.ErrUuid)
+	campaignID, cerr := h.ownedCampaign(c)
+	if cerr != nil {
+		errx.JSON(c, cerr)
 		return
 	}
 	variantID, err := uuid.Parse(c.Param("variantId"))
@@ -165,9 +184,9 @@ func (h *Handler) UpdateCampaignABVariant(c *gin.Context) {
 }
 
 func (h *Handler) DeleteCampaignABVariant(c *gin.Context) {
-	campaignID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		errx.JSON(c, errx.ErrUuid)
+	campaignID, cerr := h.ownedCampaign(c)
+	if cerr != nil {
+		errx.JSON(c, cerr)
 		return
 	}
 	variantID, err := uuid.Parse(c.Param("variantId"))

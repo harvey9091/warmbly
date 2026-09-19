@@ -67,10 +67,11 @@ func (s *emailNotificationService) Send(ctx context.Context, to, cc, bcc []strin
 
 	_, err := s.Client.SendEmail(ctx, input)
 	if err != nil {
-		return reportSendFailure(err, "send")
+		errs.CaptureException(err)
+		return err
 	}
 
-	return nil
+	return err
 }
 
 // SendOutreach is Send with an explicit Reply-To. SES exposes
@@ -99,7 +100,8 @@ func (s *emailNotificationService) SendOutreach(ctx context.Context, to []string
 
 	_, err := s.Client.SendEmail(ctx, input)
 	if err != nil {
-		return reportSendFailure(err, "outreach")
+		errs.CaptureException(err)
+		return err
 	}
 	return nil
 }

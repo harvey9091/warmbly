@@ -5,7 +5,7 @@
 #
 # Distroless-style: the CLI is a static binary that talks to one HTTPS API, so
 # the runtime needs certificates, timezone data and nothing else.
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 ARG TARGETOS
 ARG TARGETARCH

@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"os"
 	"strings"
@@ -55,6 +56,11 @@ type AuthConfig struct {
 	WebAuthnRPOrigins     []string
 }
 
+// MinAuthSecretLength is the floor for AUTH_SECRET. HS256 keys shorter than
+// the 256-bit hash output are brute-forceable offline from any token the
+// service has ever issued.
+const MinAuthSecretLength = 32
+
 func (c *Config) LoadAuthConfig(ctx context.Context) (*AuthConfig, error) {
 	// Social sign-in (Google/Apple) and captcha (Turnstile) are optional: a
 	// self-hosted install running only email+password / passkeys needs none of
@@ -76,6 +82,17 @@ func (c *Config) LoadAuthConfig(ctx context.Context) (*AuthConfig, error) {
 	authSecret, err := c.GetSecret(ctx, "AUTH_SECRET", "auth_secret")
 	if err != nil {
 		return nil, err
+	}
+	// HS256 signs every session, refresh, websocket, reset and challenge token
+	// with this one value, and RFC 7518 section 3.2 requires a key at least as
+	// long as the hash output. Presence was the only check, so a deployment
+	// could sign its whole auth system with a ten-character string. The
+	// realtime service applies the same floor to JWT_SECRET, which is this
+	// same value.
+	if len(authSecret) < MinAuthSecretLength {
+		return nil, fmt.Errorf(
+			"AUTH_SECRET must be at least %d characters (it signs every session token); generate one with: make gen-key",
+			MinAuthSecretLength)
 	}
 
 	turnstileSecret := c.GetSecretOptional(ctx, "TURNSTILE_SECRET", "turnstile/secret", "")

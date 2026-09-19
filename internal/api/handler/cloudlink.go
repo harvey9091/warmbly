@@ -14,7 +14,7 @@ import (
 
 func (h *Handler) cloudLinkReady(c *gin.Context) bool {
 	if h.CloudLinkService == nil {
-		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Cloud link is not enabled on this instance."))
+		errx.JSON(c, errx.New(errx.NotImplemented, "cloud link is not enabled on this instance"))
 		return false
 	}
 	return true

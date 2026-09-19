@@ -15,9 +15,20 @@ import (
 
 type TokenService interface {
 	GenerateToken(userID, sessionID uuid.UUID, email, nonce string, issuedAt, expiresAt time.Time) (string, error)
+	// GenerateTokenFor mints a token for a named purpose (see the Purpose*
+	// constants). Every verifier requires the purpose it expects, so a token
+	// minted for one flow cannot be spent on another.
+	GenerateTokenFor(purpose string, userID, sessionID uuid.UUID, email, nonce string, issuedAt, expiresAt time.Time) (string, error)
 	VerifyToken(tokenStr string) (*TokenClaims, *errx.Error)
+	// VerifyTokenFor also requires the token to have been minted for this
+	// purpose, so one flow's token cannot be spent on another.
+	VerifyTokenFor(purpose, tokenStr string) (*TokenClaims, *errx.Error)
 	GenerateSession(ctx context.Context, userID uuid.UUID, email, ipaddr, userAgent, authProvider string) (*models.Token, *errx.Error)
 	GenerateSessionWithOrg(ctx context.Context, userID uuid.UUID, email, ipaddr, userAgent, authProvider string, orgID *uuid.UUID) (*models.Token, *errx.Error)
+	// GenerateMFASession is GenerateSession for a sign-in that presented a
+	// second factor. The flag is recorded on the session so a later request can
+	// require it, which is what the admin panel does.
+	GenerateMFASession(ctx context.Context, userID uuid.UUID, email, ipaddr, userAgent, authProvider string) (*models.Token, *errx.Error)
 	WireSignInAlerter(a SignInAlerter)
 	GetSession(ctx context.Context, sessionID uuid.UUID) (*models.Session, *errx.Error)
 	ValidateAccessToken(ctx context.Context, accessToken string) (*models.Session, *errx.Error)
@@ -30,6 +41,9 @@ type TokenService interface {
 	ListSessions(ctx context.Context, userID, currentSessionID uuid.UUID) ([]SessionView, *errx.Error)
 	RevokeSessionByID(ctx context.Context, userID, sessionID, currentSessionID uuid.UUID) *errx.Error
 	RevokeOtherSessions(ctx context.Context, userID, currentSessionID uuid.UUID) *errx.Error
+	// StampReauth records that this session just re-proved the account holder,
+	// which is what RequireFreshAuth checks before a sensitive change.
+	StampReauth(ctx context.Context, sessionID uuid.UUID) *errx.Error
 
 	// Organization switching
 	SwitchOrganization(ctx context.Context, sessionID uuid.UUID, orgID *uuid.UUID) *errx.Error

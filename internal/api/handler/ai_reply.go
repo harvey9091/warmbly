@@ -37,7 +37,7 @@ func (h *Handler) DraftReply(c *gin.Context) {
 		return
 	}
 	if h.AIProvider == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "The AI assistant is not configured."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "the AI assistant is not configured"))
 		return
 	}
 
@@ -127,7 +127,7 @@ func (h *Handler) DraftReply(c *gin.Context) {
 				remaining = bal
 			}
 		}
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "The reply drafter is temporarily unavailable. Your credits were not charged."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "The reply drafter is temporarily unavailable. Your credits were not charged."))
 		return
 	}
 

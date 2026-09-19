@@ -525,12 +525,9 @@ function bulkRevocationNote(providers: Set<string>): string {
 }
 
 // removeErrorMessage pulls the API's own explanation out of a failed request.
-// The client's interceptor has already flattened the axios error into an
-// AppError, so the message sits at the top; reading `response.data` here found
-// nothing and every refusal showed as "couldn't be disconnected".
 function removeErrorMessage(err: unknown): string | undefined {
-    const message = (err as AppError | undefined)?.message;
-    return message || undefined;
+    const e = err as { response?: { data?: { message?: string } } };
+    return e?.response?.data?.message;
 }
 
 function MailboxRow({

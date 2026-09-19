@@ -5,7 +5,7 @@
 # containers. It needs git and the docker CLI with the compose plugin, and the
 # docker socket mounted at runtime (see the updater service in
 # docker-compose.yml). Builder runs on $BUILDPLATFORM and cross-compiles.
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 ARG TARGETOS TARGETARCH
 ARG VERSION="" COMMIT="" BUILT_AT=""

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/app/token"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/observability/errs"
@@ -32,7 +33,7 @@ func (s *authService) GenerateLoginSession(ctx context.Context, userID uuid.UUID
 		return "", err
 	}
 
-	sessionToken, err := s.tokenService.GenerateToken(userID, sessID, "", "", issuedAt, expiresAt)
+	sessionToken, err := s.tokenService.GenerateTokenFor(token.PurposeLoginCode, userID, sessID, "", "", issuedAt, expiresAt)
 	if err != nil {
 		errs.CaptureException(err)
 		return "", errx.InternalError()

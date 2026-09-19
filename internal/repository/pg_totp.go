@@ -20,6 +20,10 @@ type TOTPRepository interface {
 	InsertRecoveryCodes(ctx context.Context, userID uuid.UUID, hashes []string) error
 	ListUnusedRecoveryCodes(ctx context.Context, userID uuid.UUID) ([]models.RecoveryCode, error)
 	ConsumeRecoveryCode(ctx context.Context, codeID uuid.UUID) error
+	// ConsumeTOTPStep records that this time step has been spent, and reports
+	// whether it was still available. It is compare-and-swap so two requests
+	// racing with the same code cannot both win.
+	ConsumeTOTPStep(ctx context.Context, userID uuid.UUID, step uint64) (bool, error)
 }
 
 type totpRepository struct {
@@ -127,4 +131,19 @@ func (r *totpRepository) ConsumeRecoveryCode(ctx context.Context, codeID uuid.UU
 		return errors.New("recovery code already used")
 	}
 	return nil
+}
+
+// ConsumeTOTPStep retires a TOTP time step for a user.
+//
+// The guard is in the WHERE clause rather than a read-then-write, so two
+// sign-ins presenting the same code at the same moment cannot both pass: only
+// the statement that actually updates a row returns true.
+func (r *totpRepository) ConsumeTOTPStep(ctx context.Context, userID uuid.UUID, step uint64) (bool, error) {
+	tag, err := r.db.Exec(ctx,
+		`UPDATE user_totp_settings SET last_used_step = $2 WHERE user_id = $1 AND last_used_step < $2`,
+		userID, int64(step))
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
 }

@@ -25,7 +25,7 @@ type adminManagedPlanRequest struct {
 // one (an internal or partner plan), so the picker needs the full list.
 func (h *Handler) AdminListPlans(c *gin.Context) {
 	if h.SubscriptionService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Plans are not available on this instance."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "plans are not available on this instance"))
 		return
 	}
 	plans, xerr := h.SubscriptionService.ListPlans(c.Request.Context(), false)
@@ -44,7 +44,7 @@ func (h *Handler) AdminGetOrgManagedPlan(c *gin.Context) {
 		return
 	}
 	if h.OrganizationService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Organizations are not available on this instance."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "organizations are not available on this instance"))
 		return
 	}
 	managed, xerr := h.OrganizationService.GetManagedPlan(c.Request.Context(), orgID)
@@ -67,7 +67,7 @@ func (h *Handler) AdminGrantOrgManagedPlan(c *gin.Context) {
 		return
 	}
 	if h.OrganizationService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Organizations are not available on this instance."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "organizations are not available on this instance"))
 		return
 	}
 
@@ -113,7 +113,7 @@ func (h *Handler) AdminRevokeOrgManagedPlan(c *gin.Context) {
 		return
 	}
 	if h.OrganizationService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Organizations are not available on this instance."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "organizations are not available on this instance"))
 		return
 	}
 

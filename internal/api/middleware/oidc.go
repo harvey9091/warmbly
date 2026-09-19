@@ -18,6 +18,11 @@ type OidcHandler struct {
 	ServiceAccount string
 	KeySet         keyfunc.Keyfunc
 	AppEnv         string
+	// Audience is this instance's public URL, which Cloud Tasks puts in the
+	// token it mints for the webhook. Without it any token that service
+	// account holds for any audience is accepted here. Empty leaves the check
+	// off, for a deployment that cannot name its own URL.
+	Audience string
 }
 
 func (h *OidcHandler) Middleware() gin.HandlerFunc {
@@ -43,7 +48,16 @@ func (h *OidcHandler) Middleware() gin.HandlerFunc {
 
 		tokenStr := strings.TrimPrefix(auth, "Bearer ")
 
-		token, err := jwt.Parse(tokenStr, h.KeySet.Keyfunc, jwt.WithLeeway(10*time.Second))
+		opts := []jwt.ParserOption{
+			jwt.WithLeeway(10 * time.Second),
+			jwt.WithValidMethods([]string{"RS256"}),
+			jwt.WithExpirationRequired(),
+		}
+		if h.Audience != "" {
+			opts = append(opts, jwt.WithAudience(h.Audience))
+		}
+
+		token, err := jwt.Parse(tokenStr, h.KeySet.Keyfunc, opts...)
 		if err != nil {
 			errx.Handle(c, errx.ErrForbidden)
 			return

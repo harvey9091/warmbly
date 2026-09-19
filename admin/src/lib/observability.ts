@@ -88,7 +88,13 @@ export function initErrorReporting(): void {
             .then((Sentry) => {
                 Sentry.init({
                     dsn: SENTRY_DSN,
-                    sendDefaultPii: true,
+                    // Off deliberately. The user id, email and name are
+                    // attached below through setUser, which is the identity an
+                    // exception needs. sendDefaultPii adds request headers,
+                    // cookies and bodies on top of that, and an Authorization
+                    // header in a crash report is a session handed to whoever
+                    // can read the project.
+                    sendDefaultPii: false,
                     environment: SENTRY_ENVIRONMENT,
                     // Empty is omitted rather than sent: an event tagged with
                     // the empty release matches no uploaded source map and

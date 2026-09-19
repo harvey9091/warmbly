@@ -124,7 +124,7 @@ func (h *Handler) InternalSubmitForm(c *gin.Context) {
 		}
 		// Message only: the errx prefix ("Bad Request (400):") is for logs,
 		// not for a visitor's inline error.
-		c.JSON(http.StatusBadRequest, formwire.SubmitError{Error: "form_submit_failed", Message: xerr.UserMessage()})
+		c.JSON(http.StatusBadRequest, formwire.SubmitError{Error: "form_submit_failed", Message: xerr.Message})
 		return
 	}
 	c.JSON(http.StatusOK, formwire.SubmitResult{Message: res.Message, RedirectURL: res.RedirectURL})

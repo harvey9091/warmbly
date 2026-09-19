@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"github.com/warmbly/warmbly/internal/app/authrisk"
 	"time"
 
@@ -31,10 +32,20 @@ func (s *authService) LoginStart(ctx context.Context, data *AuthData, ipaddr, us
 	// this string, so it is folded once here rather than at each of them.
 	data.Email = normalizeEmail(data.Email)
 
+	// Spent budgets are refused before the hash comparison, so a guesser past
+	// the limit cannot even measure argon2's timing.
+	if s.loginFailureExceeded(ctx, data.Email) {
+		return nil, errx.ErrAuthLimit
+	}
+
 	uid, err := s.authRepository.IsValidCredentials(ctx, data.Email, data.Password)
 	if err != nil {
+		if errors.Is(err, errx.ErrCredentials) {
+			s.recordLoginFailure(ctx, data.Email)
+		}
 		return nil, err
 	}
+	s.clearLoginFailures(ctx, data.Email)
 
 	// The emailed code is a step in the login, not a second factor: NIST
 	// SP 800-63B and OWASP ASVS both decline to count email as one. When it is
@@ -101,7 +112,7 @@ func (s *authService) LoginStart(ctx context.Context, data *AuthData, ipaddr, us
 		AnomalyReason: verdict.Reason,
 	}
 
-	sessionToken, xerr := s.tokenService.GenerateToken(uid, sessionID, "", nonce, issuedAt, expiresAt)
+	sessionToken, xerr := s.tokenService.GenerateTokenFor(token.PurposeLoginCode, uid, sessionID, "", nonce, issuedAt, expiresAt)
 	if xerr != nil {
 		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
@@ -149,7 +160,7 @@ func (s *authService) loginCodeRequired(ctx context.Context, userID uuid.UUID, u
 }
 
 func (s *authService) LoginConfirm(ctx context.Context, data *ConfirmData, session, ipaddr string, userAgent string) (*models.LoginResult, *errx.Error) {
-	atoken, err := s.tokenService.VerifyToken(session)
+	atoken, err := s.tokenService.VerifyTokenFor(token.PurposeLoginCode, session)
 	if err != nil {
 		return nil, err
 	}

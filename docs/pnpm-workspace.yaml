@@ -19,3 +19,8 @@ overrides:
   postcss: ^8.5.23
   # Clear CVE-2026-67213 (DoS via infinite loop) in the transitive nanoid.
   nanoid: ^3.3.17
+  # Clear GHSA-w3rx-r6r6-pgpr and GHSA-5p2g-fcmc-qvqq in the image-size that
+  # fumadocs-core pulls in. Build-time only on repo-authored MDX, but the docs
+  # site is in scope for the dependency scan and an unjustified high finding is
+  # the same amount of work to explain as to fix.
+  image-size: ^2.0.3

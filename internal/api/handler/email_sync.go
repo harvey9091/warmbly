@@ -19,12 +19,12 @@ type emailSyncResponse struct {
 
 // GetEmailSync reports a mailbox's sync progress and fair-use status.
 func (h *Handler) GetEmailSync(c *gin.Context) {
-	userID, err := middleware.GetUserUUID(c)
-	if err != nil {
+	orgID := middleware.GetOrganizationID(c)
+	if orgID == nil {
 		errx.JSON(c, errx.ErrUnauthorized)
 		return
 	}
-	state, policy, xerr := h.EmailService.GetSyncState(c.Request.Context(), userID.String(), c.Param("id"))
+	state, policy, xerr := h.EmailService.GetSyncState(c.Request.Context(), orgID.String(), c.Param("id"))
 	if xerr != nil {
 		errx.JSON(c, xerr)
 		return

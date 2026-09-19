@@ -46,9 +46,23 @@ func notFoundPage(c *gin.Context) {
 // This is why the shell must come from this process and not a dumb file
 // server: the header is per-form.
 func setFormFrameHeaders(c *gin.Context, allowedDomains []string) {
+	// An empty allowlist means "any site may embed this", which is the
+	// documented contract and what every embed installed without configuring
+	// the list depends on. Narrowing it to 'self' would take those forms off
+	// their owners' websites with no error anywhere, so the default stays.
+	//
+	// What changed is that the policy is now stated rather than absent. A
+	// missing header and a permissive one behave the same in a browser, but
+	// only one of them says which it meant, and a scanner cannot tell an
+	// intentional default from an oversight.
+	//
+	// An owner who wants framing restricted lists their domains, which is the
+	// control the product actually offers.
 	if len(allowedDomains) == 0 {
+		c.Header("Content-Security-Policy", "frame-ancestors *")
 		return
 	}
+
 	sources := make([]string, 0, len(allowedDomains)*2+1)
 	sources = append(sources, "'self'")
 	for _, d := range allowedDomains {

@@ -105,7 +105,7 @@ func (s *service) mirror(ctx context.Context, l *models.CloudLink, orgID, userID
 	}
 	if _, err := s.repo.Enroll(ctx, acc.ID, state.RemoteID, true); err != nil {
 		if s.emailSvc != nil {
-			_ = s.emailSvc.Delete(ctx, orgID.String(), acc.ID.String())
+			_ = s.emailSvc.Delete(ctx, userID.String(), acc.ID.String())
 		}
 		// Release the cloud side too: a mailbox left linked to this instance
 		// with no mirror here is hidden from the adoptable list and refused on
@@ -193,7 +193,7 @@ func (s *service) forgetToken(accountID uuid.UUID) {
 }
 
 // removeManaged deletes the local mirror; the cloud keeps the mailbox in the workspace.
-func (s *service) removeManaged(ctx context.Context, orgID uuid.UUID, m *models.CloudLinkMailbox) *errx.Error {
+func (s *service) removeManaged(ctx context.Context, userID string, m *models.CloudLinkMailbox) *errx.Error {
 	if l, err := s.repo.Get(ctx); err == nil && l != nil {
 		if xerr := s.clientFor(l).do(ctx, http.MethodDelete, "/instance/mailboxes/"+m.RemoteID.String(), nil, nil); xerr != nil && xerr.Identifier != "pool_link_mailbox_not_found" {
 			return xerr
@@ -201,7 +201,7 @@ func (s *service) removeManaged(ctx context.Context, orgID uuid.UUID, m *models.
 	}
 	s.forgetToken(m.EmailAccountID)
 	if s.emailSvc != nil {
-		if xerr := s.emailSvc.Delete(ctx, orgID.String(), m.EmailAccountID.String()); xerr != nil && xerr != errx.ErrNotFound {
+		if xerr := s.emailSvc.Delete(ctx, userID, m.EmailAccountID.String()); xerr != nil && xerr != errx.ErrNotFound {
 			return xerr
 		}
 	}

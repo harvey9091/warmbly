@@ -64,6 +64,15 @@ type InstanceSettings interface {
 
 type AuthService interface {
 	LoginStart(ctx context.Context, data *AuthData, ipaddr, userAgent string) (*models.AuthSession, *errx.Error)
+	// PasswordHashFor returns the stored argon2 hash, or empty for an account
+	// that has no password (passkey or SSO only). Used by the re-auth endpoint
+	// to confirm the account holder without starting a new login.
+	PasswordHashFor(ctx context.Context, userID uuid.UUID) (string, *errx.Error)
+	// The re-authentication endpoint's per-account budget. It checks a
+	// password, so it needs the same brake the login path has.
+	ReauthFailureExceeded(ctx context.Context, userID uuid.UUID) bool
+	RecordReauthFailure(ctx context.Context, userID uuid.UUID)
+	ClearReauthFailures(ctx context.Context, userID uuid.UUID)
 	LoginConfirm(ctx context.Context, data *ConfirmData, session, ipaddr, userAgent string) (*models.LoginResult, *errx.Error)
 	// WireTwoFA attaches the 2FA challenger (post-construction; nil = 2FA off).
 	WireTwoFA(t TwoFAChallenger)

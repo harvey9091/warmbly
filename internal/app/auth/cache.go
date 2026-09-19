@@ -32,6 +32,22 @@ func getPasswordResetLimitKey(email string) string {
 	return "password_reset_limit:" + crypt.SHA256(email)
 }
 
+// getLoginFailureKey counts wrong passwords for one address. Keyed on the
+// address rather than the user id because the lookup that would resolve the id
+// is the thing being throttled, and a miss must cost the guesser the same as a
+// hit.
+func getLoginFailureKey(email string) string {
+	return "login_fail:" + crypt.SHA256(email)
+}
+
+// getReauthFailureKey counts failed confirmations for one account. The
+// re-authentication endpoint checks a password, so without its own budget it is
+// a second, unthrottled place to guess one: the per-IP limiter allows a few
+// hundred an hour and the per-account login counter does not see this path.
+func getReauthFailureKey(userID uuid.UUID) string {
+	return "reauth_fail:" + userID.String()
+}
+
 func getLoginSessionKey(sessionID uuid.UUID) string {
 	return "login_sess:" + sessionID.String()
 }
@@ -258,4 +274,79 @@ func (s *authService) deletePasswordResetSession(ctx context.Context, sessionID 
 	}
 
 	return nil
+}
+
+// loginFailureExceeded reports whether this address has spent its hourly budget
+// of wrong passwords. It fails OPEN on a cache error: the limiter is a brake on
+// guessing, and a Redis outage must not lock every customer out of their own
+// account.
+func (s *authService) loginFailureExceeded(ctx context.Context, email string) bool {
+	count, err := s.cache.Get(ctx, getLoginFailureKey(email)).Int64()
+	if err != nil {
+		if !errors.Is(err, redis.Nil) {
+			errs.CaptureException(err)
+		}
+		return false
+	}
+	return count >= LoginFailureLimit
+}
+
+// recordLoginFailure charges one wrong password to the address.
+func (s *authService) recordLoginFailure(ctx context.Context, email string) {
+	key := getLoginFailureKey(email)
+	count, err := s.cache.Incr(ctx, key).Result()
+	if err != nil {
+		errs.CaptureException(err)
+		return
+	}
+	if count == 1 {
+		if err := s.cache.Expire(ctx, key, LoginFailureTTL).Err(); err != nil {
+			errs.CaptureException(err)
+		}
+	}
+}
+
+// clearLoginFailures forgives the count once the right password arrives, so a
+// person who mistypes a few times and then gets it right starts clean.
+func (s *authService) clearLoginFailures(ctx context.Context, email string) {
+	if err := s.cache.Del(ctx, getLoginFailureKey(email)).Err(); err != nil {
+		errs.CaptureException(err)
+	}
+}
+
+// ReauthFailureExceeded reports whether this account has spent its budget of
+// failed confirmations. Fails open on a cache error, like the login counter:
+// the budget is a brake on guessing, and a Redis outage must not stop someone
+// confirming their own change.
+func (s *authService) ReauthFailureExceeded(ctx context.Context, userID uuid.UUID) bool {
+	count, err := s.cache.Get(ctx, getReauthFailureKey(userID)).Int64()
+	if err != nil {
+		if !errors.Is(err, redis.Nil) {
+			errs.CaptureException(err)
+		}
+		return false
+	}
+	return count >= LoginFailureLimit
+}
+
+// RecordReauthFailure charges one failed confirmation to the account.
+func (s *authService) RecordReauthFailure(ctx context.Context, userID uuid.UUID) {
+	key := getReauthFailureKey(userID)
+	count, err := s.cache.Incr(ctx, key).Result()
+	if err != nil {
+		errs.CaptureException(err)
+		return
+	}
+	if count == 1 {
+		if err := s.cache.Expire(ctx, key, LoginFailureTTL).Err(); err != nil {
+			errs.CaptureException(err)
+		}
+	}
+}
+
+// ClearReauthFailures forgives the count once a confirmation succeeds.
+func (s *authService) ClearReauthFailures(ctx context.Context, userID uuid.UUID) {
+	if err := s.cache.Del(ctx, getReauthFailureKey(userID)).Err(); err != nil {
+		errs.CaptureException(err)
+	}
 }

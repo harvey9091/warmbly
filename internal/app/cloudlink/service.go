@@ -310,9 +310,9 @@ func (s *service) Disconnect(ctx context.Context) *errx.Error {
 		if s.emailSvc == nil {
 			continue
 		}
-		if acc, xerr := s.emails.GetByID(ctx, m.EmailAccountID); xerr == nil && acc != nil && acc.OrganizationID != nil {
+		if acc, xerr := s.emails.GetByID(ctx, m.EmailAccountID); xerr == nil {
 			s.forgetToken(m.EmailAccountID)
-			_ = s.emailSvc.Delete(ctx, acc.OrganizationID.String(), acc.ID.String())
+			_ = s.emailSvc.Delete(ctx, acc.UserID, acc.ID.String())
 		}
 	}
 	if err := s.repo.UnenrollAll(ctx); err != nil {
@@ -483,7 +483,8 @@ func (s *service) Enroll(ctx context.Context, orgID, accountID uuid.UUID) (*mode
 }
 
 func (s *service) Unenroll(ctx context.Context, orgID, accountID uuid.UUID) *errx.Error {
-	if _, xerr := s.ownedAccount(ctx, orgID, accountID); xerr != nil {
+	acc, xerr := s.ownedAccount(ctx, orgID, accountID)
+	if xerr != nil {
 		return xerr
 	}
 	m, err := s.repo.GetByAccount(ctx, accountID)
@@ -494,7 +495,7 @@ func (s *service) Unenroll(ctx context.Context, orgID, accountID uuid.UUID) *err
 		return nil
 	}
 	if m.Managed {
-		return s.removeManaged(ctx, orgID, m)
+		return s.removeManaged(ctx, acc.UserID, m)
 	}
 	// Local row first, so a failed cloud call can be retried from a consistent
 	// state instead of leaving the mailbox with no warmup anywhere.

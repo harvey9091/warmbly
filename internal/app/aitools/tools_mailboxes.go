@@ -290,7 +290,7 @@ func (d Deps) disconnectMailbox(ctx context.Context, inv Invocation, args json.R
 	if err != nil {
 		return "", err
 	}
-	if xerr := d.Emails.Delete(ctx, inv.OrgID.String(), in.EmailAccountID); xerr != nil {
+	if xerr := d.Emails.Delete(ctx, inv.UserID.String(), in.EmailAccountID); xerr != nil {
 		return "", fromErrx(xerr)
 	}
 	d.logAudit(ctx, inv, models.AuditActionDisconnect, models.AuditEntityEmailAccount, &aid, nil)

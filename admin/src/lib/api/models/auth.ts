@@ -68,5 +68,9 @@ export interface AdminProfile {
     is_admin?: boolean;
     // Bitmask, not a list: the backend serializes models.AdminPermission (uint32).
     admin_permissions?: number;
+    // Whether the session making the request presented a second factor. Admin
+    // routes require it, so the guard reads this to explain a refusal instead
+    // of letting the first data call 403.
+    session_mfa_verified?: boolean;
     [k: string]: unknown;
 }

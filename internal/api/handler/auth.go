@@ -162,6 +162,12 @@ func (h *Handler) GetUser(c *gin.Context) {
 	// Scoped to the session's current organization, not the caller: labels
 	// are workspace assets, so a teammate must see what the owner created
 	// (issue #436). A session with no workspace selected gets empty lists.
+	// Admin routes require a second factor, so the panel has to be able to say
+	// so before it makes a call that 403s.
+	if sess := middleware.GetSession(c); sess != nil {
+		u.SessionMFAVerified = sess.MFAVerified
+	}
+
 	u.Folders, u.Tags, u.Categories = []models.Group{}, []models.Group{}, []models.Group{}
 	if orgID := middleware.GetOrganizationID(c); orgID != nil {
 		if folders, ferr := h.FolderService.List(ctx, *orgID); ferr == nil {

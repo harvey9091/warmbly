@@ -54,7 +54,38 @@ export const saveTokens = (data: Record<string, unknown>) => {
   }
 }
 
+// Everything written to browser storage that belongs to the signed-in person
+// rather than to the browser. Prefix-matched because the keys embed ids.
+//
+// Reply drafts are the reason this exists: a draft holds the full body,
+// subject and recipients of an unsent email, keyed by user, org and thread, and
+// it survived signing out on a shared machine. Column widths and dismissed
+// banners are deliberately not here; they are not the user's data.
+const SESSION_SCOPED_KEY_PREFIXES = [
+  "warmbly-reply-draft:",
+];
+
+const SESSION_SCOPED_KEYS = [
+  "sso_binding",
+];
+
+// clearTokens ends the client's half of the session: the tokens, and the
+// content those tokens were used to fetch. Called from logout and from every
+// path that discovers the session is gone, so neither leaves the other behind.
 export const clearTokens = () => {
   TOKENS.forEach((k) => localStorage.removeItem(k));
+  SESSION_SCOPED_KEYS.forEach((k) => {
+    localStorage.removeItem(k);
+    sessionStorage.removeItem(k);
+  });
+
+  // Collect first, then remove: removing while iterating shifts the indices.
+  const stale: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && SESSION_SCOPED_KEY_PREFIXES.some((p) => key.startsWith(p))) stale.push(key);
+  }
+  stale.forEach((k) => localStorage.removeItem(k));
+
   setToken(null);
 }

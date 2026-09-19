@@ -9,6 +9,14 @@ The admin panel is the operator's view of an instance: every worker, user, organ
 
 The panel runs on `:5174` in the default stack (`http://localhost:5174` on a stock install, or the host you proxied to it). Sign in with the same account as the dashboard. The first owner holds every admin bit from the moment they claim the instance, and `warmblyctl user create --admin` creates a further account that already holds them. A page the account has no bit for says which bit it needs instead of rendering.
 
+<Callout type="warn" title="Two-factor authentication is required">
+Every admin route refuses a session that did not present a second factor. Turn on 2FA or add a passkey under **Settings > Security** in the dashboard, then sign in again; the panel says so rather than failing silently.
+
+The check is on the session, not on enrolment, so switching 2FA on does not upgrade the session you are already holding. Sign out and back in.
+
+This is deliberate and not configurable. An administrative interface reachable from the internet is the one account where a stolen password should not be enough, and it is what the App Defense Alliance CASA assessment requires of any such interface.
+</Callout>
+
 The old paths still redirect, so a bookmark or a link in an older version of these docs lands on the right tab.
 
 ## Command palette

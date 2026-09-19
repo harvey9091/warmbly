@@ -2,66 +2,45 @@ package crypt
 
 import "testing"
 
-func TestIsValidUUID(t *testing.T) {
-	tests := []struct {
-		input string
-		want  bool
+func TestCheckPassword(t *testing.T) {
+	cases := []struct {
+		name     string
+		password string
+		want     PasswordRejection
 	}{
-		// Valid UUIDs (v1, v4, etc.)
-		{"550e8400-e29b-41d4-a716-446655440000", true},
-		{"123e4567-e89b-12d3-a456-426614174000", true},
-
-		// Invalid: wrong format or missing parts
-		{"550e8400e29b41d4a716446655440000", false},      // missing dashes
-		{"550e8400-e29b-41d4-a716-44665544000", false},   // too short
-		{"550e8400-e29b-41d4-a716-4466554400000", false}, // too long
-		{"zzze8400-e29b-41d4-a716-446655440000", false},  // invalid hex
-		{"", false},           // empty string
-		{"not-a-uuid", false}, // random string
+		{"too short", "Sh0rt!", PasswordTooShort},
+		{"exactly at the floor", "Xj7!qm2Z", PasswordOK},
+		{"a long passphrase", "correct horse battery staple", PasswordOK},
+		{"breached", "password123", PasswordBreached},
+		{"breached, recased", "PassWord123", PasswordBreached},
+		{"breached, all caps", "QWERTY123", PasswordBreached},
+		{"over the ceiling", string(make([]byte, 129)), PasswordTooLong},
 	}
-
-	for _, tt := range tests {
-		got := IsValidUUID(tt.input)
-		if got != tt.want {
-			t.Errorf("IsValidUUID(%q) = %v, want %v", tt.input, got, tt.want)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := CheckPassword(tc.password); got != tc.want {
+				t.Fatalf("CheckPassword(%q) = %v, want %v", tc.password, got, tc.want)
+			}
+		})
 	}
 }
 
-func TestIsValidHexColor(t *testing.T) {
-	tests := []struct {
-		input string
-		want  bool
-	}{
-		// ✅ Valid short hex codes
-		{"#000", true},
-		{"#fff", true},
-		{"#abc", true},
-		{"#ABC", true},
-
-		// ✅ Valid long hex codes
-		{"#000000", true},
-		{"#FFFFFF", true},
-		{"#123456", true},
-		{"#AaBbCc", true},
-
-		// ❌ Invalid ones
-		{"000000", false},
-		{"#12", false},
-		{"#1234", false},
-		{"#12345", false},
-		{"#1234567", false},
-		{"#ZZZ", false},
-		{"#12G", false},
-		{"#123456789", false},
-		{"#", false},
-		{"", false},
+// The denylist is only worth carrying if it is actually populated: an empty or
+// truncated data file would make every password acceptable and nothing else
+// would notice.
+func TestBreachedListIsLoaded(t *testing.T) {
+	breachedOnce.Do(loadBreached)
+	if len(breachedSet) < 40000 {
+		t.Fatalf("breached list holds %d entries, expected the full NCSC set", len(breachedSet))
 	}
-
-	for _, tt := range tests {
-		got := IsValidHexColor(tt.input)
-		if got != tt.want {
-			t.Errorf("IsValidHexColor(%q) = %v, want %v", tt.input, got, tt.want)
+	for _, p := range []string{"password123", "qwerty123", "letmein1"} {
+		if !IsBreachedPassword(p) {
+			t.Errorf("%q should be in the breached list", p)
 		}
+	}
+	// A password nobody has leaked must not be refused, or the control is just
+	// an outage.
+	if IsBreachedPassword("Xj7!qm2Zp9wLv4-unique") {
+		t.Error("a random passphrase must not be treated as breached")
 	}
 }

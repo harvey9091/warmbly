@@ -732,7 +732,7 @@ func main() {
 		creditAutoTopUpAttemptRepository := repository.NewCreditAutoTopUpAttemptRepository(primaryDB)
 		aiSettingsRepository = repository.NewAISettingsRepository(primaryDB)
 		creditService = credits.NewService(creditRepository, aiSettingsRepository, cache)
-		webhookRepository := repository.NewWebhookRepository(primaryDB.Pool)
+		webhookRepository := repository.NewWebhookRepositorySealed(primaryDB.Pool, credEncrypter)
 		webhookService := webhook.NewService(webhookRepository)
 		webhookServiceForHandler = webhookService
 		webhookRepoForHandler = webhookRepository
@@ -820,6 +820,16 @@ func main() {
 
 		tokenService = token.NewService(primaryDB, tokenRepostory, cache, geoloc, authCfg.AuthSecret)
 		userService = user.NewService(userRepostory, cache)
+
+		// A login ban has to end the sessions the person already holds, or it
+		// does nothing until their tokens expire twelve hours later. Wired here
+		// rather than at construction because the admin service is built before
+		// the token service exists.
+		if withRevoker, ok := adminService.(interface {
+			WithSessionRevoker(admin.SessionRevoker)
+		}); ok && adminService != nil {
+			withRevoker.WithSessionRevoker(tokenService)
+		}
 
 		// Organization-wide audit trail (who did what, when, from where).
 		auditRepository := repository.NewAuditRepository(primaryDB.Pool)

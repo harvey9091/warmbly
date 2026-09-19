@@ -387,7 +387,7 @@ func (s *service) RequestImport(
 		key := uploadObjectKey(orgID, uuid.New())
 		if err := s.blobs.Put(ctx, key, io.NewSectionReader(archive, 0, size), "application/zip"); err != nil {
 			errs.CaptureException(err)
-			return nil, errx.NewPublic(errx.Internal, "The archive could not be stored for import.")
+			return nil, errx.New(errx.Internal, "The archive could not be stored for import.")
 		}
 		job.ArchiveKey = &key
 	}

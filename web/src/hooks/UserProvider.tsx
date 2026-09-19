@@ -1,3 +1,4 @@
+import { clearClientSession } from "@/lib/session";
 import React, { useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { UserContext } from './context/user';
@@ -10,7 +11,6 @@ import useTimezones from '@/lib/api/hooks/app/useTimezones';
 import type { AppError } from '@/lib/api/client/normalizeError';
 import { AuthError } from '@/lib/errors/auth';
 import { Navigate } from 'react-router-dom';
-import { clearTokens } from '@/lib/auth';
 import type Access from '@/lib/api/models/app/admin/Access';
 import type Timezone from '@/lib/api/models/app/Timezone';
 import type User from '@/lib/api/models/auth/User';
@@ -68,7 +68,9 @@ export const UserProvider = ({ children }: { children: React.ReactNode }) => {
     }, [queryClient]);
 
     if (error?.redirect) {
-        clearTokens();
+        // Same teardown as an explicit sign-out: being signed out must not
+        // leave the previous person's drafts and workspace selection behind.
+        clearClientSession(queryClient);
         return <Navigate to="/auth/login" replace />;
     }
 

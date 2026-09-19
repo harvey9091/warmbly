@@ -80,8 +80,6 @@ At defaults a mailbox sends 10 on day one, 11 the next, and levels off at 40 aft
 
 Four things shape the real daily number: sends are spread across your warmup hours with jitter, the target is capped by how many eligible partners exist, a mailbox whose health drops gets reduced volume and wider spacing until it recovers, and a recent spam placement holds the ramp where it is.
 
-The target is checked twice: when the next send is placed, and again as it goes out. A signal that lowers the day's number while a send is already waiting (a spam placement, a health band, partners leaving the pool) holds that send rather than letting it go out over the new number, and the mailbox picks up again at its next opening. A cut can still land below what the mailbox has already sent that day, and the drawer shows that honestly; what it cannot do is add to the excess.
-
 ### Holding the ramp on an early signal
 
 If any warmup email lands in a recipient's spam folder, that mailbox stops climbing immediately:
@@ -106,7 +104,7 @@ Real inboxes reply, so a configurable share of the time a mailbox answers an exi
 
 Replies thread properly with a real `Re:` subject and `In-Reply-To` header, and candidates must be between 45 minutes and seven days old, so nothing is answered instantly or revived indefinitely.
 
-Receiving warmup mail can also prompt an answer directly. When a verified warmup email arrives, the recipient sometimes points its next scheduled send back at whoever wrote, 25 minutes to 5 hours later and inside its own warmup hours. That is a re-pointing, not extra work: each mailbox has one warmup send queued at a time, so a reply-back moves that send earlier and aims it, and can never push a send the mailbox had already planned sooner. If the send it moved was parked for tomorrow because today's target is spent, the day's cap still holds: the answer waits for the next opening and keeps its aim. The chance is the recipient's own reply rate, drawn once when the reply is scheduled rather than again when it sends, and it stops before a thread reaches its message cap so replies cannot answer replies indefinitely.
+Receiving warmup mail can also prompt an answer directly. When a verified warmup email arrives, the recipient sometimes points its next scheduled send back at whoever wrote, 25 minutes to 5 hours later and inside its own warmup hours. That is a re-pointing, not extra work: each mailbox has one warmup send queued at a time, so a reply-back moves that send earlier and aims it, and can never push a send the mailbox had already planned sooner. The chance is the recipient's own reply rate, drawn once when the reply is scheduled rather than again when it sends, and it stops before a thread reaches its message cap so replies cannot answer replies indefinitely.
 
 Timing imitates people throughout: sends come in bursts and lulls rather than a fixed rhythm, never land on round clock marks, and opens happen on a natural delay during the recipient's waking hours. No mailbox in the pool reads mail at 3am or reacts within seconds.
 

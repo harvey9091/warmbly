@@ -33,7 +33,7 @@ const advisorReadMaxAge = 30 * time.Minute
 // advisorOrg resolves the caller's org, or writes the error.
 func (h *Handler) advisorOrg(c *gin.Context) (uuid.UUID, bool) {
 	if h.AdvisorService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "The Advisor is not configured on this server."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "the Advisor is not configured on this server"))
 		return uuid.Nil, false
 	}
 	orgID := middleware.GetOrganizationID(c)
@@ -140,7 +140,7 @@ func (h *Handler) RefreshAdvisor(c *gin.Context) {
 // request is safe without an idempotency key.
 func (h *Handler) ApplyAdvisorFinding(c *gin.Context) {
 	if h.AdvisorService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "The Advisor is not configured on this server."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "the Advisor is not configured on this server"))
 		return
 	}
 	inv, xerr := h.jwtInvocation(c)
@@ -169,7 +169,7 @@ func (h *Handler) ApplyAdvisorFinding(c *gin.Context) {
 // and reports what it actually called rather than only what it says it did.
 func (h *Handler) AgentFixAdvisorFinding(c *gin.Context) {
 	if h.AdvisorService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "The Advisor is not configured on this server."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "the Advisor is not configured on this server"))
 		return
 	}
 	inv, xerr := h.jwtInvocation(c)
@@ -194,7 +194,7 @@ func (h *Handler) AgentFixAdvisorFinding(c *gin.Context) {
 // UndoAdvisorFinding — POST /advisor/recommendations/:id/undo
 func (h *Handler) UndoAdvisorFinding(c *gin.Context) {
 	if h.AdvisorService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "The Advisor is not configured on this server."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "the Advisor is not configured on this server"))
 		return
 	}
 	inv, xerr := h.jwtInvocation(c)

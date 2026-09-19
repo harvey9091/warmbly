@@ -30,7 +30,7 @@ RUN --mount=type=secret,id=posthog_cli_api_key,required=false \
         pnpm sourcemaps:posthog; \
     fi
 
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 ARG TARGETOS TARGETARCH
 # Build identity shown in the admin panel; see internal/version.

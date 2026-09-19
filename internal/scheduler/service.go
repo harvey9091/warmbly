@@ -16,10 +16,6 @@ import (
 type SchedulerService interface {
 	// Warmup scheduling
 	CalculateNextWarmupTime(ctx context.Context, accountID uuid.UUID) (time.Time, error)
-	// WarmupDailyBudget is today's warmup target and what has gone out against
-	// it, read again at send time so a target cut after the send was placed
-	// still holds.
-	WarmupDailyBudget(ctx context.Context, accountID uuid.UUID) (WarmupBudget, error)
 
 	// Campaign scheduling
 	CalculateNextCampaignTime(ctx context.Context, campaignID uuid.UUID) (time.Time, *repository.ContactSequencePair, uuid.UUID, error)

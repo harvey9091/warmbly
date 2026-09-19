@@ -92,7 +92,7 @@ func (h *Handler) AdminCreateTester(c *gin.Context) {
 		return
 	}
 	if h.UserRepo == nil || h.OrganizationService == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Account creation is not available on this instance."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "account creation is not available on this instance"))
 		return
 	}
 
@@ -202,7 +202,7 @@ func (h *Handler) undoHalfMadeTester(c *gin.Context, userID uuid.UUID, cause *er
 // is the set an operator needs to review and prune.
 func (h *Handler) AdminListTesters(c *gin.Context) {
 	if h.UserRepo == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Accounts are not available on this instance."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "accounts are not available on this instance"))
 		return
 	}
 	list, err := h.UserRepo.ListLoginCodeExempt(c.Request.Context())
@@ -227,7 +227,7 @@ func (h *Handler) AdminRevokeTester(c *gin.Context) {
 		return
 	}
 	if h.UserRepo == nil {
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "Accounts are not available on this instance."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "accounts are not available on this instance"))
 		return
 	}
 	if err := h.UserRepo.SetLoginCodeExempt(c.Request.Context(), userID, false, "", nil); err != nil {

@@ -484,6 +484,10 @@ func (h *Handler) UniboxReply(c *gin.Context) {
 		errx.Handle(c, errx.ErrUuid)
 		return
 	}
+	if xerr := mailboxAllowed(c, accountID); xerr != nil {
+		errx.Handle(c, xerr)
+		return
+	}
 
 	// The composer only knows the provider thread id, but a thread id is
 	// meaningless outside the sending mailbox: the recipient's client threads

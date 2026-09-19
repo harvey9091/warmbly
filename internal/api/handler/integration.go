@@ -183,7 +183,7 @@ func (h *Handler) StartIntegrationOAuth(c *gin.Context) {
 	resp, err := h.IntegrationService.OAuthStart(c.Request.Context(), orgID, userID, provider, p.Label)
 	if err != nil {
 		if errors.Is(err, integration.ErrOAuthNotConfigured) {
-			errx.JSON(c, errx.NewPublic(errx.NotImplemented, "This provider isn't available yet — OAuth credentials are not configured on the server."))
+			errx.JSON(c, errx.New(errx.NotImplemented, "This provider isn't available yet — OAuth credentials are not configured on the server."))
 			return
 		}
 		errx.JSON(c, errx.New(errx.BadRequest, err.Error()))
@@ -249,6 +249,12 @@ func (h *Handler) IntegrationOAuthCallback(c *gin.Context) {
 	}
 	// json.Marshal escapes <, >, & so the blob is safe to inline in <script>.
 	blob, _ := json.Marshal(payload)
+	// The message carries a live authorization code, so it is addressed to this
+	// instance's dashboard origin rather than "*": a page that opens this popup
+	// must not be able to read the code out of it. Falling back to "*" when the
+	// origin is unconfigured would reinstate exactly that, so an unconfigured
+	// origin delivers nothing instead.
+	originBlob, _ := json.Marshal(callbackTargetOrigin())
 	html := `<!doctype html><html><head><meta charset="utf-8"><title>Connecting…</title></head>
 <body style="font-family:system-ui;background:#f8fafc;color:#0f172a;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
 <div style="text-align:center">
@@ -257,11 +263,19 @@ func (h *Handler) IntegrationOAuthCallback(c *gin.Context) {
 <script>
 (function(){
   var msg = ` + string(blob) + `;
-  try { if (window.opener) { window.opener.postMessage(msg, "*"); } } catch (e) {}
+  var origin = ` + string(originBlob) + `;
+  try { if (window.opener && origin) { window.opener.postMessage(msg, origin); } } catch (e) {}
   setTimeout(function(){ window.close(); }, 300);
 })();
 </script>
 </body></html>`
+	// This page is one inline script that hands the code to the opener and
+	// closes. It loads nothing and submits nothing, so the policy says so;
+	// 'unsafe-inline' covers the script that is the page itself.
+	// Cross-Origin-Opener-Policy is relaxed here because talking to the
+	// opener is the whole job, and the message is addressed to one origin.
+	c.Header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+	c.Header("Cross-Origin-Opener-Policy", "unsafe-none")
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.String(http.StatusOK, html)
 }

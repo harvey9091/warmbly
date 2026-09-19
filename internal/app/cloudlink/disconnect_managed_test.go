@@ -45,12 +45,12 @@ type revokingEmails struct {
 	refused *[]*errx.Error
 }
 
-func (s revokingEmails) Delete(ctx context.Context, orgID, accountID string) *errx.Error {
+func (s revokingEmails) Delete(ctx context.Context, userID, accountID string) *errx.Error {
 	if xerr := s.svc.RevokeForDelete(ctx, s.org, uuid.MustParse(accountID)); xerr != nil {
 		*s.refused = append(*s.refused, xerr)
 		return xerr
 	}
-	return s.stubEmailDeletes.Delete(ctx, orgID, accountID)
+	return s.stubEmailDeletes.Delete(ctx, userID, accountID)
 }
 
 // Disconnect revokes the instance before it deletes the managed mirrors, so the

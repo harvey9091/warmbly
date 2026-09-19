@@ -95,7 +95,7 @@ type ContactRepository interface {
 
 	// GetDetail supports user-only reads with nil orgID and skips organization-scoped joins.
 	GetDetail(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, contactID uuid.UUID) (*models.ContactDetail, *errx.Error)
-	ListSentEmails(ctx context.Context, userID, contactID uuid.UUID, limit int, beforeSentAt *time.Time, beforeTaskID *uuid.UUID) (*models.ContactSentEmailsResult, *errx.Error)
+	ListSentEmails(ctx context.Context, orgID, contactID uuid.UUID, limit int, beforeSentAt *time.Time, beforeTaskID *uuid.UUID) (*models.ContactSentEmailsResult, *errx.Error)
 	// ListTimeline is always scoped to the selected organization.
 	ListTimeline(ctx context.Context, orgID, contactID uuid.UUID, limit int, cursor *models.ContactTimelineKey) (*models.ContactTimelineResult, *errx.Error)
 	// ListCampaignStates returns the contact's campaigns with their flow,
@@ -3309,20 +3309,22 @@ func (r *contactRepository) GetDetail(ctx context.Context, userID uuid.UUID, org
 // pagination on (created_at, task_id) so we can scroll through the
 // full history without blowing up offset.
 //
-// We deliberately scope by the contact's owning user via the
-// campaign join — this keeps multi-tenant safety even though the
-// tasks table itself has no user_id column.
+// We deliberately scope by the owning organization via the campaign join —
+// this keeps multi-tenant safety even though the tasks table itself has no
+// organization_id column. It was the campaign's user_id until the rest of the
+// contact 360 moved to org scope, which both showed one member their own sends
+// only and, for someone in two workspaces, mixed the other one's in.
 //
 // opened_at is a person's open, as it is in campaign analytics and the
 // contact's engagement summary: a fetch by a mail client's prefetch or a
 // security gateway is reported separately as machine_opened_at, so this list
 // never claims a recipient read mail they never opened (issue #392).
-func (r *contactRepository) ListSentEmails(ctx context.Context, userID, contactID uuid.UUID, limit int, beforeSentAt *time.Time, beforeTaskID *uuid.UUID) (*models.ContactSentEmailsResult, *errx.Error) {
+func (r *contactRepository) ListSentEmails(ctx context.Context, orgID, contactID uuid.UUID, limit int, beforeSentAt *time.Time, beforeTaskID *uuid.UUID) (*models.ContactSentEmailsResult, *errx.Error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
 
-	args := []any{userID, contactID}
+	args := []any{orgID, contactID}
 	cursorClause := ""
 	if beforeSentAt != nil && beforeTaskID != nil {
 		cursorClause = "AND (t.created_at, t.id) < ($3, $4)"
@@ -3351,7 +3353,7 @@ func (r *contactRepository) ListSentEmails(ctx context.Context, userID, contactI
 			  AND ccp.contact_id  = ct.contact_id
 			  AND ccp.sequence_id = ct.sequence_id
 		WHERE ct.contact_id = $2
-		  AND cam.user_id   = $1
+		  AND cam.organization_id = $1
 		  %s
 		ORDER BY t.created_at DESC, t.id DESC
 		LIMIT $%d

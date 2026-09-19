@@ -21,6 +21,7 @@ type SessionView struct {
 	Country      string    `json:"location_country"`
 	CountryCode  string    `json:"country_code"`
 	AuthProvider string    `json:"auth_provider"`
+	MFAVerified  bool      `json:"mfa_verified"`
 	CreatedAt    time.Time `json:"created_at"`
 	LastActiveAt time.Time `json:"last_active_at"`
 }
@@ -40,6 +41,7 @@ func toSessionView(sess *models.Session, currentID uuid.UUID) SessionView {
 		Country:      sess.LocationCountry,
 		CountryCode:  sess.LocationCountryCode,
 		AuthProvider: sess.AuthProvider,
+		MFAVerified:  sess.MFAVerified,
 		CreatedAt:    sess.CreatedAt,
 		LastActiveAt: lastActive,
 	}

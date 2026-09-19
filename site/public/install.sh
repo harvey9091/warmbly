@@ -1017,7 +1017,10 @@ derive() {
             URL_APP="https://$H_APP"; URL_API="https://$H_API"; URL_ADMIN="https://$H_ADMIN"
             URL_WS="wss://$H_WS/socket/websocket"
             TRACKING_DOMAIN="$H_TRACK"; FORMS_DOMAIN="$H_FORMS"
-            PHX_HOST="$H_WS"; CHECK_ORIGIN=true
+            PHX_HOST="$H_WS"
+            # The origins a browser connects FROM, which are the dashboard and
+            # the admin panel, not this service's own host.
+            CHECK_ORIGIN_HOSTS="$URL_APP,$URL_ADMIN"
             # Caddy sits on the same compose network, so the private ranges are
             # the honest answer here rather than a single container address that
             # changes on every recreate.
@@ -1034,7 +1037,7 @@ derive() {
             TRACKING_DOMAIN="${WARMBLY_TRACKING_DOMAIN:-track.$HOSTNAME_ANSWER}"
             FORMS_DOMAIN="${WARMBLY_FORMS_DOMAIN:-forms.$HOSTNAME_ANSWER}"
             PHX_HOST=$(printf '%s' "$URL_WS" | sed -e 's|^wss\{0,1\}://||' -e 's|/.*$||')
-            CHECK_ORIGIN=true
+            CHECK_ORIGIN_HOSTS="$URL_APP,$URL_ADMIN"
             TRUSTED="$PROXY_CIDRS"
             BIND="127.0.0.1:"
             ;;
@@ -1047,7 +1050,10 @@ derive() {
             TRACKING_DOMAIN="$HOSTNAME_ANSWER:$PORT_TRACKING"
             FORMS_DOMAIN="$HOSTNAME_ANSWER:$PORT_FORMS"
             PHX_HOST="$HOSTNAME_ANSWER"
-            CHECK_ORIGIN=false
+            # Plain HTTP on a LAN: the origin is whatever host the person typed,
+            # which this install cannot know, so the check stays off. The socket
+            # still requires a short-lived ticket, which is the actual control.
+            CHECK_ORIGIN_HOSTS=""
             # Nothing in front, so nothing may set X-Forwarded-For. Trusting a
             # proxy that is not there is how a rate limit gets bypassed.
             TRUSTED=""
@@ -1113,7 +1119,7 @@ API_PUBLIC_URL=$URL_API
 CORS_ALLOW_ORIGINS=$CORS
 WEBSOCKET_URL=$URL_WS
 PHX_HOST=$PHX_HOST
-CHECK_ORIGIN=$CHECK_ORIGIN
+CHECK_ORIGIN_HOSTS=$CHECK_ORIGIN_HOSTS
 # Unset means campaign mail ships with no open pixel and unwrapped links. A
 # workspace that verifies its own domain against this one also serves its
 # recipients' unsubscribe link there; otherwise it stays on API_PUBLIC_URL.
@@ -1566,33 +1572,52 @@ render_caddyfile() {
 	}
 }
 
+# Applied to every site below. HSTS is set here rather than per service
+# because Caddy is the only thing terminating TLS: whatever it proxies to
+# speaks plain HTTP on the compose network and cannot know the request
+# arrived over TLS. Server header removed so the version is not advertised.
+(warmbly_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}
+
 $H_APP {
+	import warmbly_headers
 	reverse_proxy web:80
 }
 
 $H_ADMIN {
+	import warmbly_headers
 	reverse_proxy admin:80
 }
 
 $H_API {
+	import warmbly_headers
 	reverse_proxy backend:8080
 }
 CADDYFILE
     [ "$WANT_REALTIME" = 1 ] && cat <<CADDYFILE
 
 $H_WS {
+	import warmbly_headers
 	reverse_proxy realtime:4000
 }
 CADDYFILE
     [ "$WANT_TRACKING" = 1 ] && cat <<CADDYFILE
 
 $H_TRACK {
+	import warmbly_headers
 	reverse_proxy tracking:3000
 }
 CADDYFILE
     [ "$WANT_FORMS" = 1 ] && cat <<CADDYFILE
 
 $H_FORMS {
+	import warmbly_headers
 	reverse_proxy forms:8090
 }
 CADDYFILE
@@ -1617,6 +1642,7 @@ render_caddy_custom_domains() {
 # obtains the certificate on the first request, after /tls/authorize confirms
 # this instance has verified the name.
 https:// {
+	import warmbly_headers
 	tls {
 		on_demand
 	}

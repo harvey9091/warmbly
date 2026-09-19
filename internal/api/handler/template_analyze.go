@@ -132,7 +132,7 @@ func (h *Handler) AnalyzeTemplateContent(c *gin.Context) {
 				"The spam analyzer is temporarily unavailable, and the credits it reserved could not be returned automatically. Contact support and they will be refunded."))
 			return
 		}
-		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "The spam analyzer is temporarily unavailable. Your credits were not charged."))
+		errx.JSON(c, errx.New(errx.ServiceUnavailable, "The spam analyzer is temporarily unavailable. Your credits were not charged."))
 		return
 	}
 

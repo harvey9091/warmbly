@@ -1,0 +1,60 @@
+# Log sample: a login request
+
+For CASA test case 6.5.1, which asks for a sample of the log produced during a
+login and during a payment.
+
+## What the access logger records
+
+Source: internal/api/middleware/request_log.go
+
+    [GIN] 2026/09/19 - 14:03:11 | 200 |  421.832511ms |    203.0.113.42 | POST    "/v1/auth/login"
+    [GIN] 2026/09/19 - 14:03:29 | 200 |   38.114201ms |    203.0.113.42 | POST    "/v1/auth/login/confirm"
+    [GIN] 2026/09/19 - 14:03:29 | 200 |   12.445910ms |    203.0.113.42 | GET     "/v1/auth/me"
+
+Six fields: timestamp, status, latency, client IP, method, and the matched
+path. No headers, no request body, no response body, and no query string.
+
+The query string is deliberately excluded. gin's stock logger prints the full
+request URI, and several routes carry a one-time credential there because the
+provider or the mail client puts it there: the OAuth `code` and `state` on the
+callback bouncers, the invitation token on the preview lookup, the socket ticket,
+the form prefill ticket. Those would otherwise reach stdout, the container log
+and whatever aggregates it.
+
+The password itself never reaches the logger at all: it is in the JSON body,
+which the logger does not read.
+
+## The rest of a login
+
+Nothing else is written for a successful login. A failure writes one structured
+line naming the outcome, not the credential:
+
+    {"level":"warn","event":"login_failed","reason":"credentials","ip":"203.0.113.42","time":"2026-09-19T14:03:11Z"}
+
+Anomalous sign-ins are recorded against the account for review, with the
+location and device, never the password or the emailed code.
+
+## Payment
+
+Warmbly never receives payment details. Checkout and the billing portal are
+hosted by Stripe; the browser goes to Stripe's domain and returns. No card
+number, CVV or expiry field exists anywhere in this codebase, so no log line can
+contain one. What is logged is the Stripe session or subscription identifier:
+
+    [GIN] 2026/09/19 - 14:07:02 | 200 |  310.776120ms |    203.0.113.42 | POST    "/v1/subscription/checkout"
+    {"level":"info","event":"checkout_session_created","org_id":"6f1d...","stripe_session_id":"cs_test_a1B2...","time":"2026-09-19T14:07:02Z"}
+
+## Session tokens
+
+No session token is logged in any form. CASA permits a hashed one; Warmbly logs
+none at all. API keys are stored and looked up as SHA-256, and the API key usage
+log records the key's database id, never the key.
+
+## Error reporting
+
+Sentry's SendDefaultPII is off in all three initializations, so request headers,
+cookies and bodies are not attached to an event. The user id, email and name are
+attached deliberately through setUser, which is the identity an exception needs.
+
+Browser session replay masks password inputs and every one-time code entry
+field, and console capture is off.

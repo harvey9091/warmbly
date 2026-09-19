@@ -1307,6 +1307,14 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 	}
 
 	// 2. Ordered candidate contacts + their last-sent step (with engagement) + sent set.
+	//
+	// args carries the query's bound parameters. The custom-field key is one of
+	// them: it is the only part of this ORDER BY that comes from a customer, so
+	// it is bound rather than written into the SQL text. This query runs on the
+	// scheduler rather than in a request, which is the worst place to learn that
+	// an identifier was not what it claimed.
+	args := []any{campaignID, config.CampaignSendMaxAttempts}
+
 	var contactOrder string
 	switch orderBy {
 	case "email":
@@ -1315,7 +1323,8 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 		contactOrder = "c.first_name, c.last_name"
 	case "custom_field":
 		if orderField != "" {
-			contactOrder = "c.custom_fields->>'" + orderField + "'"
+			args = append(args, orderField)
+			contactOrder = fmt.Sprintf("c.custom_fields->>$%d", len(args))
 		} else {
 			contactOrder = "c.created_at"
 		}
@@ -1385,7 +1394,7 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 		ORDER BY ` + orderPrefix + contactOrder + ` ` + dir + `
 	`
 
-	rows, err := r.db.Query(ctx, query, campaignID, config.CampaignSendMaxAttempts)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, nil, false, err
 	}

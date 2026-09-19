@@ -16,7 +16,7 @@ import (
 
 func (h *Handler) cliAuthReady(c *gin.Context) bool {
 	if h.CLIAuthService == nil {
-		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "CLI sign-in is not enabled on this instance"))
+		errx.JSON(c, errx.New(errx.NotImplemented, "CLI sign-in is not enabled on this instance"))
 		return false
 	}
 	return true

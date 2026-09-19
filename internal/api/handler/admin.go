@@ -377,7 +377,7 @@ func (h *Handler) AdminListWarmupPools(c *gin.Context) {
 // AdminGetWarmupHealthSummary returns an aggregate health overview of all warmup pools
 func (h *Handler) AdminGetWarmupHealthSummary(c *gin.Context) {
 	if h.WarmupService == nil {
-		errx.JSON(c, errx.NewPublic(errx.Internal, "Warmup service not available."))
+		errx.JSON(c, errx.New(errx.Internal, "warmup service not available"))
 		return
 	}
 	summary, xerr := h.WarmupService.GetPoolHealthSummary(c.Request.Context())

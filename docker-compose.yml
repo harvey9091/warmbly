@@ -590,8 +590,14 @@ services:
       JWT_SECRET: ${AUTH_SECRET:-local-dev-auth-secret-minimum-32-characters-long}
       SECRET_KEY_BASE: ${SECRET_KEY_BASE:-local-development-secret-key-base-minimum-64-characters-for-phoenix}
       PUBSUB_ENABLED: ${PUBSUB_ENABLED:-false}
-      # Behind a reverse proxy set CHECK_ORIGIN=true once PHX_HOST matches the
-      # public websocket hostname.
+      # The origins a browser connects FROM, comma separated, e.g.
+      # "https://app.example.com,https://admin.example.com". Not this service's
+      # own host: the browser's Origin on a websocket upgrade is the dashboard's.
+      # Empty leaves the check off, which is right for a LAN install where the
+      # origin is whatever host was typed; the socket still requires a
+      # short-lived ticket either way.
+      CHECK_ORIGIN_HOSTS: ${CHECK_ORIGIN_HOSTS:-}
+      # Legacy host-based form, consulted only when CHECK_ORIGIN_HOSTS is empty.
       CHECK_ORIGIN: ${CHECK_ORIGIN:-false}
       # The environment label events are tagged with, matching every other
       # service in this file.

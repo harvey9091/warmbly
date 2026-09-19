@@ -3,7 +3,7 @@
 # CGO-free by default (NATS + JSON). Build with --build-arg GO_TAGS=kafka to
 # include the Kafka backend (adds librdkafka + CGO). See backend.Dockerfile.
 # Builder runs on $BUILDPLATFORM and cross-compiles to $TARGETARCH (no QEMU).
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 ARG GO_TAGS=""
 ARG TARGETOS TARGETARCH

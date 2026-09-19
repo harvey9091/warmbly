@@ -58,17 +58,23 @@ func (s *emailService) OAuthReauth(ctx context.Context, userID string, orgID *uu
 		return nil, errx.InternalError()
 	}
 
+	// PKCE, same as the first-connect path: the verifier never leaves the
+	// server, so an intercepted code is not redeemable.
+	verifier := oauth2.GenerateVerifier()
+
 	if xerr := s.saveOnboardingState(ctx, state, &models.EmailOnboardingState{
 		UserID:         userID,
 		OrganizationID: orgID,
 		Provider:       string(provider),
 		Nonce:          state,
 		EmailAccountID: &accountID,
+		CodeVerifier:   verifier,
 	}); xerr != nil {
 		return nil, xerr
 	}
 
-	url := cfg.AuthCodeURL(state, authCodeOptions(provider, account.Email)...)
+	opts := append(authCodeOptions(provider, account.Email), oauth2.S256ChallengeOption(verifier))
+	url := cfg.AuthCodeURL(state, opts...)
 	return &models.EmailOnboardingStartResponse{URL: url, State: state}, nil
 }
 

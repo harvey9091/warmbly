@@ -261,8 +261,8 @@ func (s *Service) Claim(ctx context.Context, token, address, password, firstName
 	if perr != nil {
 		return nil, errx.ErrEmail
 	}
-	if !crypt.ValidatePassword(password) {
-		return nil, errx.ErrPassword
+	if perr := crypt.PasswordError(password); perr != nil {
+		return nil, perr
 	}
 
 	// Refuse on an instance that already has accounts, even with a valid
