@@ -159,7 +159,7 @@ func TestLiveDisablingAMailboxRemovesItFromItsWorker(t *testing.T) {
 func TestLiveDeletingAMailboxRemovesItFromItsWorkerFirst(t *testing.T) {
 	f := newRemovalLiveFixture(t)
 
-	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr != nil {
+	if xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String()); xerr != nil {
 		t.Fatalf("delete: %v", xerr)
 	}
 
@@ -199,10 +199,10 @@ func TestLiveDeleteThatMatchesNoRowRefundsNothing(t *testing.T) {
 	}
 }
 
-// The lookup that finds the mailbox is deliberately unscoped, so ownership is
-// checked in the service. A teammate's user id must not delete this mailbox or
-// publish a removal for it.
-func TestLiveDeleteRefusesAMailboxTheCallerDoesNotOwn(t *testing.T) {
+// The lookup that finds the mailbox is deliberately unscoped, so the workspace
+// is checked in the service. Another workspace's id must not delete this
+// mailbox or publish a removal for it.
+func TestLiveDeleteRefusesAMailboxOfAnotherWorkspace(t *testing.T) {
 	f := newRemovalLiveFixture(t)
 
 	if xerr := f.svc.Delete(context.Background(), uuid.New().String(), f.mailbox.String()); xerr != errx.ErrNotFound {
@@ -222,7 +222,7 @@ func TestLiveDeleteKeepsEverythingWhenTheWorkerCannotBeTold(t *testing.T) {
 	f := newRemovalLiveFixture(t)
 	f.pub.removeErr = errBusDown
 
-	xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String())
+	xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String())
 	if xerr == nil || xerr.Code != errx.ServiceUnavailable {
 		t.Fatalf("error = %v, want a 503 so the client retries", xerr)
 	}
@@ -259,7 +259,7 @@ func TestLiveDeletingAMailboxWithScheduledWork(t *testing.T) {
 		t.Fatalf("fixture admin action: %v", err)
 	}
 
-	if xerr := f.svc.Delete(ctx, f.user.String(), f.mailbox.String()); xerr != nil {
+	if xerr := f.svc.Delete(ctx, f.org.String(), f.mailbox.String()); xerr != nil {
 		t.Fatalf("disconnecting a mailbox that has scheduled work failed: %v", xerr)
 	}
 	if f.mailboxExists(t) {
