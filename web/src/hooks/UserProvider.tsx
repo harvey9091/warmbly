@@ -1,4 +1,5 @@
 import { clearClientSession } from "@/lib/session";
+import { SESSION_ENDED_EVENT } from "@/lib/auth";
 import React, { useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { UserContext } from './context/user';
@@ -38,6 +39,16 @@ export const UserProvider = ({ children }: { children: React.ReactNode }) => {
         };
     }, [user.data]);
 
+    // The api client ends a session from outside React, and the three queries
+    // below are cached and never poll, so without this the tokens went and the
+    // app stayed put on a page it could no longer authenticate.
+    const [sessionEnded, setSessionEnded] = React.useState(false);
+    React.useEffect(() => {
+        const ended = () => setSessionEnded(true);
+        window.addEventListener(SESSION_ENDED_EVENT, ended);
+        return () => window.removeEventListener(SESSION_ENDED_EVENT, ended);
+    }, []);
+
     const error = useMemo(() => {
         const errs = [user.error, access.error, timezones.error].filter(Boolean);
         for (const err of errs) {
@@ -67,7 +78,7 @@ export const UserProvider = ({ children }: { children: React.ReactNode }) => {
         ));
     }, [queryClient]);
 
-    if (error?.redirect) {
+    if (sessionEnded || error?.redirect) {
         // Same teardown as an explicit sign-out: being signed out must not
         // leave the previous person's drafts and workspace selection behind.
         clearClientSession(queryClient);

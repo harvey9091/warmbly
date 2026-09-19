@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import type SocketProviderProps from "@/lib/socket/models/SocketProviderProps";
 import getSocket from '@/lib/api/client/app/socket/getSocket';
 import type { AppError } from '@/lib/api/client/normalizeError';
+import { AuthError } from '@/lib/errors/auth';
 import { useAppStore } from '@/stores';
 import {
     SocketContext,
@@ -718,6 +719,15 @@ export default function SocketProvider({
             // copies of the same failure from a single tab, which buries every
             // other error in the project. The attempt counter resets on a
             // successful open, so each outage still reports itself once.
+            // No credentials is not a network problem, and the backoff cannot
+            // mend it: the handshake needs a token the client no longer has,
+            // so every retry throws the same AuthError. Left running it filed
+            // one unhandled exception every few seconds for the life of the
+            // tab. Stand down and let the session-ended redirect take over.
+            if (err instanceof AuthError) {
+                console.warn('[WS] No session; stopping reconnects -', err.message);
+                return;
+            }
             if (!error.status || error.status === 401) {
                 console.warn('[WS] Init failed, retrying -', detail);
             } else if (reconnectAttemptRef.current === 0) {
