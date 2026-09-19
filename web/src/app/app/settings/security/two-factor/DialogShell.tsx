@@ -32,7 +32,9 @@ export default function DialogShell({
     React.useEffect(() => {
         const opener = document.activeElement as HTMLElement | null;
         const card = cardRef.current;
-        if (card && !card.contains(document.activeElement)) card.focus();
+        if (card && !card.contains(document.activeElement)) {
+            (card.querySelector<HTMLElement>("input:not([disabled])") ?? card).focus();
+        }
         const onTab = (e: KeyboardEvent) => {
             if (e.key !== "Tab" || !cardRef.current) return;
             const items = Array.from(

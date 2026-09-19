@@ -336,8 +336,18 @@ func (s *authService) ReserveReauthAttempt(ctx context.Context, userID uuid.UUID
 // ReleaseReauthAttempt refunds a reserved attempt that ended before any
 // credential was compared.
 func (s *authService) ReleaseReauthAttempt(ctx context.Context, userID uuid.UUID) {
-	if err := s.cache.Decr(ctx, getReauthFailureKey(userID)).Err(); err != nil {
+	key := getReauthFailureKey(userID)
+	n, err := s.cache.Decr(ctx, key).Result()
+	if err != nil {
 		errs.CaptureException(err)
+		return
+	}
+	// A key that expired in between comes back from DECR with no TTL; drop it
+	// so the budget cannot be left without an expiry.
+	if n <= 0 {
+		if err := s.cache.Del(ctx, key).Err(); err != nil {
+			errs.CaptureException(err)
+		}
 	}
 }
 
