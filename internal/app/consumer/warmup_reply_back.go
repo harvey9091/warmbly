@@ -20,7 +20,9 @@ const (
 
 // scheduleWarmupReplyBack occasionally points the RECIPIENT's next warmup send
 // back at the sender. It re-points an already-pending task and only ever pulls
-// it earlier, so budgets and health gating are untouched.
+// it earlier; health gating is untouched, and a send pulled into a day that is
+// already spent is held to the next opening by the send-time budget check,
+// aim intact.
 func (s *JobsService) scheduleWarmupReplyBack(ctx context.Context, token *models.WarmupToken, recipientAccountID uuid.UUID) {
 	if s.TaskRepo == nil || s.EmailRepository == nil || token == nil {
 		return

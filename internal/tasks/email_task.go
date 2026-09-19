@@ -14,6 +14,7 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/repository"
+	"github.com/warmbly/warmbly/internal/scheduler"
 	"github.com/warmbly/warmbly/internal/tasks/proto"
 )
 
@@ -185,7 +186,12 @@ func (s *tasksService) HandleEmailTask(task *proto.ProcessTask) *errx.Error {
 	// same domains, so leaving it running would keep spending the reputation
 	// the suspension exists to protect.
 	if s.orgBlocksSending(ctx, account.OrganizationID) {
-		_ = s.taskRepo.UpdateTaskStatus(ctx, taskID, "skipped_org_suspended")
+		// Discarding this error hid a status the enum did not have for months,
+		// with the task left pending for the dispatcher to fire again.
+		if err := s.taskRepo.UpdateTaskStatus(ctx, taskID, "skipped_org_suspended"); err != nil {
+			errs.CaptureException(err)
+			return errx.InternalError()
+		}
 		executionStatus = "completed"
 		return nil
 	}
@@ -205,6 +211,53 @@ func (s *tasksService) HandleEmailTask(task *proto.ProcessTask) *errx.Error {
 			executionStatus = "completed"
 			return nil
 		}
+	}
+
+	// STEP 3.8: Today's target, read again now rather than trusted from when
+	// this send was placed. The scheduler counts the day only when it places
+	// the NEXT send, so a placement recorded in between cut the target for the
+	// drawer and the scheduler but not for the send already waiting, and the
+	// mailbox ended the day one over its own cut number (#592). A reply-back
+	// pulled forward from tomorrow lands here too.
+	//
+	// The aim is read first: it is what makes the successor still a reply, and
+	// the read is cheap next to being wrong about it.
+	var aim *uuid.UUID
+	if warmupTask, aimErr := s.taskRepo.GetWarmupTask(ctx, taskID); aimErr != nil {
+		log.Warn().Err(aimErr).Str("task_id", taskID.String()).Msg("warmup task aim unreadable; a held reply-back would go out as a fresh message")
+	} else if warmupTask != nil {
+		aim = warmupTask.TargetAccountID
+	}
+
+	budget, budgetErr := s.scheduler.WarmupDailyBudget(ctx, account.ID)
+	switch {
+	case budgetErr != nil:
+		// Not knowing how many have gone out today is exactly when a send must
+		// not go out: failing open here would reopen #592 whenever the database
+		// is struggling. The task is still pending, so this retries. That covers
+		// ErrWarmupNotEnabled too, which a failed campaign read can produce: if
+		// the mailbox really stopped warming, the retry's own check above winds
+		// the chain down.
+		if !errors.Is(budgetErr, scheduler.ErrWarmupNotEnabled) {
+			errs.CaptureException(budgetErr)
+		}
+		return errx.InternalError()
+	case budget.Reached():
+		log.Info().
+			Str("task_id", taskID.String()).
+			Str("email_account_id", account.ID.String()).
+			Int("sent_today", budget.Sent).
+			Int("target", budget.Target).
+			Msg("warmup send skipped: today's target is already reached")
+		// Acknowledged only once the task is marked, or the row stays pending
+		// and blocks the successor this chain needs.
+		if err := s.taskRepo.UpdateTaskStatus(ctx, taskID, "skipped_daily_limit"); err != nil {
+			errs.CaptureException(err)
+			return errx.InternalError()
+		}
+		s.rescheduleWarmupAfterCap(ctx, account.ID, aim)
+		executionStatus = "completed"
+		return nil
 	}
 
 	// STEP 4: Mark task as active (with advisory lock)
@@ -841,8 +894,30 @@ func (s *tasksService) EnsureWarmupScheduled(ctx context.Context, accountID uuid
 	return s.createWarmupTask(ctx, accountID, nextTime)
 }
 
-// createWarmupTask creates a new warmup task in GCP Cloud Tasks
+// rescheduleWarmupAfterCap parks the chain at the scheduler's next slot, which
+// is tomorrow's opening once today is spent. A send that was aimed at one
+// partner (a reply-back) keeps its aim, so the answer goes out first thing
+// rather than being lost to the cap. A failure here is logged rather than
+// returned: the task is already marked, and the reconciler re-seeds a mailbox
+// that ends up with no pending task.
+func (s *tasksService) rescheduleWarmupAfterCap(ctx context.Context, accountID uuid.UUID, aim *uuid.UUID) {
+	nextTime, err := s.scheduler.CalculateNextWarmupTime(ctx, accountID)
+	if err != nil {
+		nextTime = warmupPartnerRecheckTime()
+	}
+	if err := s.createWarmupTaskAimedAt(ctx, accountID, nextTime, aim); err != nil {
+		log.Warn().Err(err).Str("email_account_id", accountID.String()).Msg("Failed to reschedule warmup task after the daily target")
+	}
+}
+
+// createWarmupTask creates the mailbox's next warmup wakeup.
 func (s *tasksService) createWarmupTask(ctx context.Context, accountID uuid.UUID, scheduleTime time.Time) error {
+	return s.createWarmupTaskAimedAt(ctx, accountID, scheduleTime, nil)
+}
+
+// createWarmupTaskAimedAt is createWarmupTask with the send pointed at one
+// partner, the way a reply-back points it.
+func (s *tasksService) createWarmupTaskAimedAt(ctx context.Context, accountID uuid.UUID, scheduleTime time.Time, target *uuid.UUID) error {
 	// Create task in database
 	newTaskID := uuid.New()
 	newTask := &Task{
@@ -855,7 +930,8 @@ func (s *tasksService) createWarmupTask(ctx context.Context, accountID uuid.UUID
 
 	// Create warmup task entry
 	warmupTask := &WarmupTask{
-		TaskID: newTaskID,
+		TaskID:          newTaskID,
+		TargetAccountID: target,
 	}
 
 	created, err := s.taskRepo.CreateWarmupTaskWithLock(ctx, newTask, warmupTask)
