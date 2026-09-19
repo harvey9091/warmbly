@@ -642,7 +642,7 @@ Auth: **Scope** `WRITE_EMAILS` · **Org permission** `manage_emails`
 
 `DELETE /emails/:id`
 
-Disconnects and deletes a mailbox. It is removed from all warmup pools and an account-disconnected event fans out.
+Disconnects and deletes a mailbox. It is removed from all warmup pools and an account-disconnected event fans out. The mailbox is looked up in the caller's workspace, so any member with `manage_emails` (or a key with `WRITE_EMAILS`) can delete any mailbox the workspace holds, not only the member who connected it; a mailbox in another workspace answers `404`.
 
 Nothing is removed unless the two steps that cannot be repaired afterwards succeed first: the machine syncing the mailbox is told to drop it, and the mailbox's [Warmbly Cloud](/guides/warmbly-cloud/) link is released, which takes an enrolled mailbox's stored credentials out of the pool and returns a cloud-managed mirror to the cloud workspace. A failure at either point puts the mailbox back as it was and is safe to retry. If the record itself then fails to delete, the mailbox remains but its link is already released, so its warmup moves back to this instance until the delete is retried.
 

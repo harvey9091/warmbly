@@ -174,7 +174,7 @@ func (s *service) connectBrokered(ctx context.Context, st brokerState, code stri
 	}
 	remoteID := uuid.New()
 	if err := s.repo.EnrollMailbox(ctx, &models.PoolLinkMailbox{InstanceID: inst.ID, RemoteID: remoteID, EmailAccountID: acc.ID, Managed: true}); err != nil {
-		_ = s.emailSvc.Delete(ctx, userID, acc.ID.String())
+		_ = s.emailSvc.Delete(ctx, orgID.String(), acc.ID.String())
 		return uuid.Nil, errx.InternalError()
 	}
 	s.startWarmup(ctx, userID, acc.ID)

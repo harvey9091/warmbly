@@ -183,18 +183,19 @@ func TestLiveDeletingAMailboxRemovesItFromItsWorkerFirst(t *testing.T) {
 
 // The refund shares the delete's transaction, so a delete that matches no row
 // must leave the worker's capacity exactly as it was. Driven through the
-// repository, because the service refuses a foreign owner before it gets here.
+// repository, because the service refuses a mailbox outside the caller's
+// workspace before it gets here.
 func TestLiveDeleteThatMatchesNoRowRefundsNothing(t *testing.T) {
 	f := newRemovalLiveFixture(t)
 
-	if xerr := f.svc.emailRepository.Delete(context.Background(), uuid.New().String(), f.mailbox.String(), 1); xerr != errx.ErrNotFound {
+	if xerr := f.svc.emailRepository.Delete(context.Background(), uuid.New().String(), 1); xerr != errx.ErrNotFound {
 		t.Fatalf("error = %v, want not found", xerr)
 	}
 	if count, score := f.workerLoad(t); count != 1 || score != 1 {
 		t.Errorf("capacity was refunded for a mailbox that was not deleted: account_count=%d load_score=%v", count, score)
 	}
 	if !f.mailboxExists(t) {
-		t.Error("the mailbox was deleted by a caller that does not own it")
+		t.Error("a delete of an unknown id removed a different mailbox")
 	}
 }
 

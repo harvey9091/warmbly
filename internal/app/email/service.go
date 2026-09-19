@@ -60,7 +60,7 @@ type EmailService interface {
 	// lift the cold-send and warmup gate, so it sits behind the write
 	// permission while CheckDomainAuth stays readable.
 	RefreshDomainAuth(ctx context.Context, orgID, emailAccountID string) (*dnsauth.Result, *errx.Error)
-	Delete(ctx context.Context, userID, emailAccountID string) *errx.Error
+	Delete(ctx context.Context, orgID, emailAccountID string) *errx.Error
 
 	// GetSendIdentity reports which addresses the mailbox's provider will let
 	// it send as, which one is in use, and where the stored signature came
