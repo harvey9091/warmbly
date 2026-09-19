@@ -22,24 +22,21 @@ type stubEmailRepo struct {
 	workerErr   *errx.Error
 	updateErr   *errx.Error
 	statusSet   []string
+	statusFor   []uuid.UUID
 	updateCalls int
 	workerCalls int
 }
 
-func (s *stubEmailRepo) Update(ctx context.Context, userID, emailAccountID string, udata *models.UpdateEmail) (*models.Email, *errx.Error) {
+// SetStatus takes the mailbox id and nothing else. The old path went through
+// the organization-scoped Update and was handed a user id for that argument,
+// so it matched no row; the stub took a string and could not tell the two
+// apart, which is why the tests stayed green while production never
+// deactivated anything. Recording the id makes that failure visible here.
+func (s *stubEmailRepo) SetStatus(ctx context.Context, emailAccountID uuid.UUID, status string) *errx.Error {
 	s.updateCalls++
-	if udata.Status != nil {
-		s.statusSet = append(s.statusSet, *udata.Status)
-	}
-	if s.updateErr != nil {
-		return nil, s.updateErr
-	}
-	// Deliberately mirrors the real repository: its RETURNING list carries the
-	// mailbox as the dashboard sees it and no worker assignment. Reading
-	// WorkerID off this row is what made the removal unreachable the first
-	// time, so the stub must keep lying about it in exactly the same way.
-	id, _ := uuid.Parse(emailAccountID)
-	return &models.Email{ID: id, Status: "inactive"}, nil
+	s.statusSet = append(s.statusSet, status)
+	s.statusFor = append(s.statusFor, emailAccountID)
+	return s.updateErr
 }
 
 func (s *stubEmailRepo) GetWorkerID(ctx context.Context, emailAccountID uuid.UUID) (*uuid.UUID, *errx.Error) {
@@ -308,5 +305,30 @@ func TestHandlersRejectAMalformedEventBeforeDeactivating(t *testing.T) {
 	}
 	if repo.updateCalls != 0 || len(pub.removed) != 0 {
 		t.Errorf("acted on a malformed event: %d updates, %d removals", repo.updateCalls, len(pub.removed))
+	}
+}
+
+// The bug this guards: deactivation went through the organization-scoped
+// Update and was handed the owner's USER id for the tenant argument, so the
+// WHERE matched nothing and every attempt returned "Resource not found". The
+// mailbox stayed active, the worker kept syncing it, and an Outlook account
+// with dead credentials re-authenticated every few minutes for days, filing a
+// report each time. Nothing failed loudly; the status simply never changed.
+func TestDeactivateAccountWritesTheStatusAgainstTheMailboxNotItsOwner(t *testing.T) {
+	workerID := uuid.New()
+	userID := uuid.New()
+	emailID := uuid.New()
+	s, repo, _ := newDeactivationFixture(&workerID)
+
+	s.deactivateAccount(context.Background(), userID, emailID)
+
+	if len(repo.statusFor) != 1 {
+		t.Fatalf("status written %d times, want once", len(repo.statusFor))
+	}
+	if repo.statusFor[0] != emailID {
+		t.Errorf("status written against %s, want the mailbox %s", repo.statusFor[0], emailID)
+	}
+	if repo.statusFor[0] == userID {
+		t.Error("status written against the owner's id; that matches no mailbox row")
 	}
 }

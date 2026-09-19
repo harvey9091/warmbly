@@ -117,12 +117,22 @@ type MailError struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// Error names the failure, not the error object.
+//
+// It used to read "Email (<uuid>): ...", where the uuid was this struct's own
+// ID and not a mailbox at all. Every other "Email (%s)" in the codebase is a
+// mailbox id, so the message invited exactly one reading and it was wrong; the
+// sentinels are package-level, so their ID is minted once at init and looks
+// reassuringly stable while naming nothing. An hour went into looking up a
+// mailbox that had never existed. The code is what a reader actually wants,
+// and it groups these usefully in error tracking. The ID stays on the struct
+// for anyone who needs it.
 func (e *MailError) Error() string {
-	return fmt.Sprintf("Email (%s): %s", e.ID, e.Message)
+	return fmt.Sprintf("mail %s: %s", e.Code, e.Message)
 }
 
 func (e *MailError) Unwrap() error {
-	return fmt.Errorf("Email (%s): %s", e.ID, e.Message)
+	return fmt.Errorf("mail %s: %s", e.Code, e.Message)
 }
 
 func MError(eType MailErrorType, code MailErrorCode, message string, resolveMethod MailErrorResolveMethod) *MailError {
