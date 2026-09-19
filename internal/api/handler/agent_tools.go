@@ -50,7 +50,7 @@ func (h *Handler) agentToolInvocation(c *gin.Context) (aitools.Invocation, *errx
 // array or inside a Hermes <tools> block.
 func (h *Handler) ListAgentTools(c *gin.Context) {
 	if h.AITools == nil {
-		errx.JSON(c, errx.New(errx.ServiceUnavailable, "AI tools are not available"))
+		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "AI tools are not available"))
 		return
 	}
 	inv, xerr := h.agentToolInvocation(c)
@@ -102,7 +102,7 @@ func (h *Handler) ListAgentTools(c *gin.Context) {
 // tool returned JSON (they all do today) and as a string otherwise.
 func (h *Handler) CallAgentTool(c *gin.Context) {
 	if h.AITools == nil {
-		errx.JSON(c, errx.New(errx.ServiceUnavailable, "AI tools are not available"))
+		errx.JSON(c, errx.NewPublic(errx.ServiceUnavailable, "AI tools are not available"))
 		return
 	}
 	inv, xerr := h.agentToolInvocation(c)

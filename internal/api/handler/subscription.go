@@ -219,7 +219,7 @@ func (h *Handler) GetTrialStatus(c *gin.Context) {
 	}
 
 	if h.TrialService == nil {
-		errx.JSON(c, errx.New(errx.Internal, "trial service not available"))
+		errx.JSON(c, errx.NewPublic(errx.Internal, "Trial service not available."))
 		return
 	}
 
@@ -241,7 +241,7 @@ func (h *Handler) GetFeatureStatus(c *gin.Context) {
 	}
 
 	if h.FeatureGateService == nil {
-		errx.JSON(c, errx.New(errx.Internal, "feature gate service not available"))
+		errx.JSON(c, errx.NewPublic(errx.Internal, "Feature gate service not available."))
 		return
 	}
 

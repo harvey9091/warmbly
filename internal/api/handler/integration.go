@@ -183,7 +183,7 @@ func (h *Handler) StartIntegrationOAuth(c *gin.Context) {
 	resp, err := h.IntegrationService.OAuthStart(c.Request.Context(), orgID, userID, provider, p.Label)
 	if err != nil {
 		if errors.Is(err, integration.ErrOAuthNotConfigured) {
-			errx.JSON(c, errx.New(errx.NotImplemented, "This provider isn't available yet — OAuth credentials are not configured on the server."))
+			errx.JSON(c, errx.NewPublic(errx.NotImplemented, "This provider isn't available yet — OAuth credentials are not configured on the server."))
 			return
 		}
 		errx.JSON(c, errx.New(errx.BadRequest, err.Error()))

@@ -97,8 +97,8 @@ type publisher struct {
 	codec         codec.Codec
 	cipherService cipher.CipherService
 
-	// Last time a publish failure on each topic was reported. See
-	// reportPublishFailure.
+	// Last time a failure was reported for each topic and stage. See
+	// reportTopicFailure.
 	failuresMu  sync.Mutex
 	lastFailure map[string]time.Time
 }
@@ -372,25 +372,35 @@ func (p *publisher) PublishEmailValidation(ctx context.Context, workerID string,
 	return p.publish(kafka.GetWorkerTopic(workerID), body.OrgID.String(), workerEvent)
 }
 
-// publishFailureInterval is how often one topic's publish failure is reported.
-// A topic the broker persistently refuses (a missing ACL, a name it will not
+// publishFailureInterval is how often one topic's failure is reported. A topic
+// the broker persistently refuses (a missing ACL, a name it will not
 // auto-create) fails on every message, and reporting each one buried every
 // other issue under hundreds of copies of the same sentence.
 const publishFailureInterval = 5 * time.Minute
 
-// reportPublishFailure reports at most one failure per topic per interval. The
-// caller still gets the error, so nothing downstream changes.
-func (p *publisher) reportPublishFailure(topic string, err error) {
+// reportTopicFailure reports at most one failure per topic per stage per
+// interval. The caller still gets the error, so nothing downstream changes.
+//
+// Serialization is throttled on the same terms as the publish it precedes,
+// because it fails on the same terms: a schema the registry will not accept
+// under a topic's subject is refused for every event on that topic, for as
+// long as the two disagree. One afternoon of that filed 19,190 copies of one
+// sentence naming two worker topics.
+func (p *publisher) reportTopicFailure(stage, topic string, err error) {
 	now := time.Now()
+	key := stage + "\x00" + topic
 	p.failuresMu.Lock()
-	last, seen := p.lastFailure[topic]
+	last, seen := p.lastFailure[key]
 	if seen && now.Sub(last) < publishFailureInterval {
 		p.failuresMu.Unlock()
 		return
 	}
-	p.lastFailure[topic] = now
+	p.lastFailure[key] = now
 	p.failuresMu.Unlock()
-	errs.CaptureException(fmt.Errorf("failed to publish event: %w", err))
+	errs.CaptureException(fmt.Errorf("failed to %s event for topic %s: %w", stage, topic, err),
+		errs.Tag("bus.topic", topic),
+		errs.Tag("bus.stage", stage),
+	)
 }
 
 // publish serializes (via codec) and publishes (via bus) an event.
@@ -408,13 +418,13 @@ func (p *publisher) publish(topic, key string, event interface{}) error {
 	ctx := context.Background()
 	data, err := p.codec.Serialize(ctx, topic, event)
 	if err != nil {
-		errs.CaptureException(fmt.Errorf("failed to serialize event: %w", err))
+		p.reportTopicFailure("serialize", topic, err)
 		return err
 	}
 	if err := p.bus.Publish(ctx, topic, key, data); err != nil {
 		// A bus closed under us is shutdown, not a fault worth an issue.
 		if !errors.Is(err, eventbus.ErrBusClosed) {
-			p.reportPublishFailure(topic, err)
+			p.reportTopicFailure("publish", topic, err)
 		}
 		return err
 	}

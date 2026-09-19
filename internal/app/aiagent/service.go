@@ -326,7 +326,7 @@ var (
 
 func (s *service) RunMessage(ctx context.Context, inv aitools.Invocation, sessionID uuid.UUID, messageID, text, page, resource string, emit func(StreamEvent)) *errx.Error {
 	if s.provider == nil {
-		return errx.New(errx.ServiceUnavailable, "the AI assistant is not configured")
+		return errx.NewPublic(errx.ServiceUnavailable, "The AI assistant is not configured.")
 	}
 	owner := s.sessionScope(ctx, inv.OrgID, inv.UserID, sessionID)
 	sess, err := s.repo.GetSession(ctx, inv.OrgID, owner, sessionID)

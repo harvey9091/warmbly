@@ -403,7 +403,7 @@ func (s *stripeService) CreateCreditCheckoutSession(ctx context.Context, userID,
 		priceID = s.cfg.CreditPackPriceIDs[packKey]
 	}
 	if priceID == "" {
-		return nil, errx.New(errx.ServiceUnavailable, "credit packs are not configured")
+		return nil, errx.NewPublic(errx.ServiceUnavailable, "Credit packs are not configured.")
 	}
 
 	sub, err := s.subRepo.GetByOrganizationID(ctx, orgID)

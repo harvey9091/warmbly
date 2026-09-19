@@ -15,10 +15,21 @@ import (
 	"time"
 )
 
+// Repeat suppression (repeat.go) is process-wide, so one test reporting the
+// same error as another would be silenced by it. Every test below starts from
+// an empty table.
+func freshReports(t *testing.T) {
+	t.Helper()
+	repeatMu.Lock()
+	repeats = map[string]*repeatState{}
+	repeatMu.Unlock()
+}
+
 // A deployment that configured no backend is the self-host default, so that
 // path has to keep working on its own: the event reaches the process log and
 // nothing leaves the machine.
 func TestNoBackendReportsToTheLog(t *testing.T) {
+	freshReports(t)
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
@@ -53,6 +64,7 @@ func TestNoBackendReportsToTheLog(t *testing.T) {
 // so an event that carries the error anywhere else is an event that never
 // becomes an issue.
 func TestPostHogPostsAnException(t *testing.T) {
+	freshReports(t)
 	bodies := make(chan string, 4)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -108,6 +120,7 @@ func TestPostHogPostsAnException(t *testing.T) {
 // told about, so a cancelled context must not reach a backend at all. A
 // deadline this process set still must.
 func TestCancelledWorkIsNotReported(t *testing.T) {
+	freshReports(t)
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
@@ -131,5 +144,95 @@ func TestCancelledWorkIsNotReported(t *testing.T) {
 	CaptureException(fmt.Errorf("queryrow failed: %w", context.DeadlineExceeded))
 	if !strings.Contains(buf.String(), "[issue-local]") {
 		t.Error("a deadline this process set and blew through was dropped as if the caller had gone away")
+	}
+}
+
+// One fault that recurs is one thing to fix. A schema the registry refused
+// filed 19,190 events in three hours and a cache provider over its request
+// quota filed 2,815 in five, and in both cases every other issue in the
+// project was pushed off the first page while nothing was learned after the
+// first copy. So the second sighting is counted rather than sent, and the
+// report that ends the silence says how many it stands for.
+func TestARecurringFaultReportsOnce(t *testing.T) {
+	freshReports(t)
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	if err := Init(Config{Service: "backend", Environment: "dev"}); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	for i := 0; i < 50; i++ {
+		CaptureException(fmt.Errorf("register w.%d-value: schema registry refused", i))
+	}
+	if got := strings.Count(buf.String(), "[issue-local]"); got != 1 {
+		t.Fatalf("reported %d times, want 1", got)
+	}
+
+	// A different fault is a different thing to fix and is never held back by
+	// one that happens to be recurring.
+	CaptureException(errors.New("the mail server closed the connection"))
+	if got := strings.Count(buf.String(), "[issue-local]"); got != 2 {
+		t.Fatalf("a distinct fault was suppressed: %d reports", got)
+	}
+}
+
+// The window is what makes the suppression temporary rather than permanent: a
+// fault still recurring after it reports again, carrying what it stood for.
+func TestSuppressionEndsWithTheWindow(t *testing.T) {
+	freshReports(t)
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	if err := Init(Config{Service: "backend", Environment: "dev"}); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	err := errors.New("redis: max requests limit exceeded")
+	CaptureException(err)
+	CaptureException(err)
+	CaptureException(err)
+
+	// Age the streak past the window rather than waiting it out.
+	repeatMu.Lock()
+	for _, state := range repeats {
+		state.reportedAt = state.reportedAt.Add(-repeatWindow - time.Second)
+	}
+	repeatMu.Unlock()
+
+	var sc scope
+	if !admit(&sc, fingerprintError(err)) {
+		t.Fatal("a fault still recurring after the window stayed suppressed")
+	}
+	if sc.extra["repeat.suppressed"] != 2 {
+		t.Fatalf("suppressed count = %v, want 2", sc.extra["repeat.suppressed"])
+	}
+}
+
+// The last thing a process says before it exits is exempt: a crash loop
+// restarting every few seconds would otherwise report its first boot failure
+// and go quiet through every one after it.
+func TestAFatalIsNeverSuppressed(t *testing.T) {
+	freshReports(t)
+	var sc scope
+	Always()(&sc)
+	key := fingerprintError(errors.New("boot failed"))
+	if !admit(&sc, key) || !admit(&sc, key) {
+		t.Fatal("an always-report event was suppressed")
+	}
+}
+
+// The key collapses the ids and addresses that differ between sightings of one
+// fault, and keeps apart two faults that differ in anything else.
+func TestFingerprintGroupsOneFaultAndSeparatesTwo(t *testing.T) {
+	a := fingerprintError(fmt.Errorf("mailbox 7c2f1f0e-1111-4a1b-8f01-000000000001 could not be reached"))
+	b := fingerprintError(fmt.Errorf("mailbox 9d3a2b1c-2222-4c2d-9e02-000000000002 could not be reached"))
+	if a != b {
+		t.Fatalf("one fault split by its ids:\n%s\n%s", a, b)
+	}
+	if a == fingerprintError(fmt.Errorf("mailbox 7c2f1f0e-1111-4a1b-8f01-000000000001 refused the password")) {
+		t.Fatal("two faults collapsed into one key")
 	}
 }

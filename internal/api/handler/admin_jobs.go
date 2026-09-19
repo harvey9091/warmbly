@@ -18,7 +18,7 @@ const scheduledJobEntity models.AuditEntityType = "scheduled_job"
 // AdminListJobs lists every registered background loop.
 func (h *Handler) AdminListJobs(c *gin.Context) {
 	if h.JobRuns == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "job registry is not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Job registry is not available on this instance."))
 		return
 	}
 	jobs, err := h.JobRuns.List(c.Request.Context())
@@ -35,7 +35,7 @@ func (h *Handler) AdminListJobs(c *gin.Context) {
 // AdminRunJob asks the loop that owns the job to run at its next poll.
 func (h *Handler) AdminRunJob(c *gin.Context) {
 	if h.JobRuns == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "job registry is not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Job registry is not available on this instance."))
 		return
 	}
 	name := c.Param("name")

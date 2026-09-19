@@ -40,7 +40,7 @@ func parseBoundedLimit(s string, def, max int) int {
 
 func (h *Handler) adminSendsReady(c *gin.Context) bool {
 	if h.AdminSendsRepo == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "send operations are not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Send operations are not available on this instance."))
 		return false
 	}
 	return true
@@ -89,7 +89,7 @@ func (h *Handler) AdminReplayDeadLetter(c *gin.Context) {
 		return
 	}
 	if h.AdvancedService == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "dead letter replay is not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Dead letter replay is not available on this instance."))
 		return
 	}
 	id, err := uuid.Parse(c.Param("id"))
@@ -152,7 +152,7 @@ func (h *Handler) AdminWebhookHealth(c *gin.Context) {
 // AdminWebhookReclaim re-queues deliveries stranded in_flight past the lease.
 func (h *Handler) AdminWebhookReclaim(c *gin.Context) {
 	if h.WebhookRepo == nil {
-		errx.JSON(c, errx.New(errx.NotImplemented, "webhook delivery is not available on this instance"))
+		errx.JSON(c, errx.NewPublic(errx.NotImplemented, "Webhook delivery is not available on this instance."))
 		return
 	}
 	n, err := h.WebhookRepo.ReclaimStuckDeliveries(c.Request.Context(), webhookDeliveryLease)

@@ -102,6 +102,9 @@ type Option func(*scope)
 type scope struct {
 	tags  map[string]string
 	extra map[string]any
+	// always sends the event even when the same fault has just been reported.
+	// See repeat.go.
+	always bool
 }
 
 // Tag adds an indexed key/value pair, searchable and groupable.
@@ -125,6 +128,13 @@ func Extra(key string, value any) Option {
 	}
 }
 
+// Always exempts one event from the repeat suppression in repeat.go. Use it
+// where every occurrence is its own fact rather than another sighting of one
+// fault: the last error before a process exits, and nothing else so far.
+func Always() Option {
+	return func(s *scope) { s.always = true }
+}
+
 // event is one report on its way to every enabled backend.
 type event struct {
 	ctx context.Context
@@ -140,7 +150,11 @@ func CaptureException(err error, opts ...Option) {
 	if err == nil || abandoned(err) {
 		return
 	}
-	report(event{err: err, scope: build(opts)})
+	sc := build(opts)
+	if !admit(&sc, fingerprintError(err)) {
+		return
+	}
+	report(event{err: err, scope: sc})
 }
 
 // CaptureExceptionContext reports err on the reporting state carried by ctx
@@ -149,7 +163,11 @@ func CaptureExceptionContext(ctx context.Context, err error, opts ...Option) {
 	if err == nil || abandoned(err) {
 		return
 	}
-	report(event{ctx: ctx, err: err, scope: build(opts)})
+	sc := build(opts)
+	if !admit(&sc, fingerprintError(err)) {
+		return
+	}
+	report(event{ctx: ctx, err: err, scope: sc})
 }
 
 // abandoned reports whether err says the caller stopped waiting, rather than
@@ -172,7 +190,11 @@ func CaptureMessage(message string, opts ...Option) {
 	if message == "" {
 		return
 	}
-	report(event{message: message, scope: build(opts)})
+	sc := build(opts)
+	if !admit(&sc, shapeOf(message)) {
+		return
+	}
+	report(event{message: message, scope: sc})
 }
 
 // CaptureMessageContext is CaptureMessage on ctx's reporting state.
@@ -180,7 +202,11 @@ func CaptureMessageContext(ctx context.Context, message string, opts ...Option) 
 	if message == "" {
 		return
 	}
-	report(event{ctx: ctx, message: message, scope: build(opts)})
+	sc := build(opts)
+	if !admit(&sc, shapeOf(message)) {
+		return
+	}
+	report(event{ctx: ctx, message: message, scope: sc})
 }
 
 // fatalFlushTimeout is how long a process about to exit waits for its last
@@ -192,7 +218,10 @@ const fatalFlushTimeout = 2 * time.Second
 // in the background and os.Exit does not wait for them, so a boot failure, the
 // error most worth having, was the one that never arrived.
 func CaptureFatal(err error, opts ...Option) {
-	CaptureException(err, opts...)
+	// Always: the process is about to exit, so this is the last thing it will
+	// say. A crash loop restarting every few seconds would otherwise report
+	// its first boot failure and stay silent through every one after it.
+	CaptureException(err, append(opts, Always())...)
 	Flush(fatalFlushTimeout)
 }
 

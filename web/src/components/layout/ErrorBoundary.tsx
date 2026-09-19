@@ -72,7 +72,7 @@ function BoundaryFallback({ error, info, reset }: { error: Error; info: React.Er
                 </span>
                 <div className="h-4 w-px bg-slate-200" />
                 <span className="text-[12.5px] text-slate-600 truncate">
-                    {error.message || "Something broke while rendering this page"}
+                    This page couldn't be displayed. Your data is safe.
                 </span>
                 <div className="ml-auto flex items-center gap-1.5">
                     <button
@@ -96,23 +96,37 @@ function BoundaryFallback({ error, info, reset }: { error: Error; info: React.Er
                     <div className="flex items-center gap-2 mb-3">
                         <AlertTriangleIcon className="w-3.5 h-3.5 text-red-500 shrink-0" />
                         <span className="text-[12.5px] font-semibold text-slate-900">
-                            {error.name || "Error"}
+                            Something went wrong while drawing this page
                         </span>
                     </div>
-                    <p className="text-[12px] text-slate-700 mb-4 leading-relaxed">
-                        {error.message || "No message provided."}
+                    {/* A render fault has no fix the reader can apply, and the
+                        exception's own text ("Cannot read properties of
+                        undefined") describes our bug in our words. So the panel
+                        says what is true of their work and what to try, and the
+                        exact error stays one click away under Stack for anyone
+                        who wants it. It has already been reported either way. */}
+                    <p className="text-[12px] text-slate-700 mb-2 leading-relaxed">
+                        Nothing you were working on was lost, and the rest of Warmbly is unaffected.
+                        Retry redraws this page; if it keeps failing, go back and open it again.
                     </p>
-                    {(error.stack || info?.componentStack) && (
-                        <details className="border border-slate-200 rounded-md bg-slate-50 overflow-hidden">
-                            <summary className="px-3 py-2 text-[11px] font-medium text-slate-700 cursor-pointer hover:bg-slate-100 transition-colors">
-                                Stack
-                            </summary>
-                            <pre className="px-3 py-3 text-[10.5px] font-mono text-slate-700 leading-relaxed overflow-x-auto whitespace-pre-wrap border-t border-slate-200">
-                                {error.stack || ""}
-                                {info?.componentStack ? `\n\nComponent stack:${info.componentStack}` : ""}
-                            </pre>
-                        </details>
-                    )}
+                    <p className="text-[12px] text-slate-500 mb-4 leading-relaxed">
+                        The fault was reported to our team automatically.
+                    </p>
+                    <details className="border border-slate-200 rounded-md bg-slate-50 overflow-hidden">
+                        <summary className="px-3 py-2 text-[11px] font-medium text-slate-700 cursor-pointer hover:bg-slate-100 transition-colors">
+                            Stack
+                        </summary>
+                        <pre className="px-3 py-3 text-[10.5px] font-mono text-slate-700 leading-relaxed overflow-x-auto whitespace-pre-wrap border-t border-slate-200">
+                            {/* A stack normally opens with "Name: message", but
+                                not in every browser, so the pair is printed
+                                whenever the stack does not carry it. It is the
+                                one thing worth copying. */}
+                            {error.stack?.startsWith(error.name)
+                                ? error.stack
+                                : `${error.name || "Error"}: ${error.message || "no message"}\n${error.stack || ""}`}
+                            {info?.componentStack ? `\n\nComponent stack:${info.componentStack}` : ""}
+                        </pre>
+                    </details>
                 </div>
             </div>
         </div>
