@@ -231,15 +231,16 @@ func (s *tasksService) HandleEmailTask(task *proto.ProcessTask) *errx.Error {
 
 	budget, budgetErr := s.scheduler.WarmupDailyBudget(ctx, account.ID)
 	switch {
-	case errors.Is(budgetErr, scheduler.ErrWarmupNotEnabled):
-		// The mailbox stopped warming between this handler's own state check
-		// and now (a campaign ended mid-tick). Benign: the send was already
-		// cleared, and the chain winds down on the next pass.
 	case budgetErr != nil:
 		// Not knowing how many have gone out today is exactly when a send must
 		// not go out: failing open here would reopen #592 whenever the database
-		// is struggling. The task is still pending, so this retries.
-		errs.CaptureException(budgetErr)
+		// is struggling. The task is still pending, so this retries. That covers
+		// ErrWarmupNotEnabled too, which a failed campaign read can produce: if
+		// the mailbox really stopped warming, the retry's own check above winds
+		// the chain down.
+		if !errors.Is(budgetErr, scheduler.ErrWarmupNotEnabled) {
+			errs.CaptureException(budgetErr)
+		}
 		return errx.InternalError()
 	case budget.Reached():
 		log.Info().

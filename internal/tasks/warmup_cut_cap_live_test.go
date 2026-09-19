@@ -199,28 +199,40 @@ func (f *capFixture) budget(t *testing.T) scheduler.WarmupBudget {
 // broken, which is what a database blip looks like at that moment.
 type budgetFailingScheduler struct {
 	scheduler.SchedulerService
+	err error
 }
 
-func (budgetFailingScheduler) WarmupDailyBudget(context.Context, uuid.UUID) (scheduler.WarmupBudget, error) {
-	return scheduler.WarmupBudget{}, errors.New("budget read failed")
+func (s budgetFailingScheduler) WarmupDailyBudget(context.Context, uuid.UUID) (scheduler.WarmupBudget, error) {
+	return scheduler.WarmupBudget{}, s.err
 }
 
 // Not knowing the day's count is exactly when a send must not go out: failing
-// open there would reopen the bug whenever the database is struggling.
+// open there would reopen the bug whenever the database is struggling. A failed
+// campaign read surfaces as "not warming", so that sentinel holds the send too.
 func TestLiveWarmupUnreadableBudgetHoldsTheSendForRetry(t *testing.T) {
-	f := newCapFixture(t)
-	f.sentToday(t, 8)
-	task := f.pending(t, time.Now())
-	f.svc.scheduler = budgetFailingScheduler{f.svc.scheduler}
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"read failed", errors.New("budget read failed")},
+		{"campaign read failed and reported not warming", scheduler.ErrWarmupNotEnabled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCapFixture(t)
+			f.sentToday(t, 8)
+			task := f.pending(t, time.Now())
+			f.svc.scheduler = budgetFailingScheduler{SchedulerService: f.svc.scheduler, err: tc.err}
 
-	if xerr := f.svc.HandleEmailTask(&proto.ProcessTask{TaskId: task.String()}); xerr == nil {
-		t.Fatal("an unreadable budget was reported as success; the task would be acknowledged and never retried")
-	}
-	if f.sender.sent != 0 {
-		t.Fatalf("%d send(s) dispatched without knowing today's count", f.sender.sent)
-	}
-	if got := f.status(t, task); got != "pending" {
-		t.Fatalf("task status = %q, want pending so the retry picks it up", got)
+			if xerr := f.svc.HandleEmailTask(&proto.ProcessTask{TaskId: task.String()}); xerr == nil {
+				t.Fatal("an unreadable budget was reported as success; the task would be acknowledged and never retried")
+			}
+			if f.sender.sent != 0 {
+				t.Fatalf("%d send(s) dispatched without knowing today's count", f.sender.sent)
+			}
+			if got := f.status(t, task); got != "pending" {
+				t.Fatalf("task status = %q, want pending so the retry picks it up", got)
+			}
+		})
 	}
 }
 
@@ -325,5 +337,56 @@ func TestLiveWarmupSuspendedWorkspaceMarksTheTask(t *testing.T) {
 	}
 	if got := f.status(t, task); got != "skipped_org_suspended" {
 		t.Fatalf("task status = %q, want skipped_org_suspended", got)
+	}
+}
+
+// statusFailingRepo is the real repository with one status write refused,
+// which is what a database blip looks like at that write.
+type statusFailingRepo struct {
+	repository.TaskRepository
+	refuse string
+}
+
+func (r statusFailingRepo) UpdateTaskStatus(ctx context.Context, taskID uuid.UUID, status string) error {
+	if status == r.refuse {
+		return errors.New("status write failed")
+	}
+	return r.TaskRepository.UpdateTaskStatus(ctx, taskID, status)
+}
+
+// A hold whose status write fails must not be reported as handled: the row
+// stays pending, and acknowledging it would leave it blocking the successor
+// until the overdue sweep. Discarding this error is what hid a status the enum
+// did not carry for months.
+func TestLiveWarmupHoldIsNotAcknowledgedUntilTheTaskIsMarked(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  string
+		arrange func(t *testing.T, f *capFixture)
+	}{
+		{"daily target reached", "skipped_daily_limit", func(t *testing.T, f *capFixture) {
+			f.sentToday(t, 10)
+		}},
+		{"workspace suspended", "skipped_org_suspended", func(t *testing.T, f *capFixture) {
+			f.exec(t, `UPDATE organizations SET risk_state = 'suspended' WHERE id = $1`, f.org)
+			f.svc.orgRiskRepo = repository.NewOrgRiskRepository(liveCampaignDB(t))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCapFixture(t)
+			tc.arrange(t, f)
+			task := f.pending(t, time.Now())
+			f.svc.taskRepo = statusFailingRepo{TaskRepository: f.svc.taskRepo, refuse: tc.status}
+
+			if xerr := f.svc.HandleEmailTask(&proto.ProcessTask{TaskId: task.String()}); xerr == nil {
+				t.Fatal("the hold was reported as handled although its status write failed")
+			}
+			if f.sender.sent != 0 {
+				t.Fatalf("%d send(s) dispatched", f.sender.sent)
+			}
+			if got := f.status(t, task); got != "pending" {
+				t.Fatalf("task status = %q, want pending so the retry picks it up", got)
+			}
+		})
 	}
 }
