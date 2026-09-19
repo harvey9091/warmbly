@@ -3,80 +3,129 @@ import Layout from '../layouts/Layout.astro';
 import HeroAtmosphere from '../components/HeroAtmosphere.astro';
 import Cloud from '../components/Cloud.astro';
 import Icon from '../components/Icon.astro';
-import CTA from '../components/CTA.astro';
 
-// Mirrors web/src/lib/plans.ts
+// Mirrors web/src/lib/plans.ts and the pricing panel on index.astro.
 const plans = [
   {
     name: 'Starter',
-    price: 29,
-    annual: 23,
+    price: '$29',
+    annual: '$23',
     summary: 'For small teams getting started with cold outreach.',
     sendsPerDay: 150,
     href: 'https://app.warmbly.com/register?plan=starter',
-    cta: 'Choose plan',
+    cta: 'Start free',
     highlight: false,
+    // Annual is 20% off, so the yearly saving is (monthly - annual) * 12.
+    save: '$72',
+    // Log-scaled so 150 -> 15,000 stays legible as a bar.
+    meter: 47,
+    // Daily volume is the headline number on the card, so it is deliberately
+    // not repeated as a bullet here.
     features: [
-      'Unlimited mailboxes',
       'Unlimited warmup',
-      '150 emails / day',
-      'Unified inbox · reply detection',
-      'Sequences with branching',
+      'Unlimited mailboxes',
+      'Unified inbox with reply detection',
+      'Sequences that stop on reply',
+      'Inbox placement monitoring',
     ],
   },
   {
     name: 'Grow',
-    price: 89,
-    annual: 71,
+    price: '$89',
+    annual: '$71',
     summary: 'For teams scaling outreach across multiple senders.',
     sendsPerDay: 3000,
     href: 'https://app.warmbly.com/register?plan=grow',
-    cta: 'Choose plan',
+    cta: 'Start free',
     highlight: false,
+    save: '$216',
+    meter: 76,
     features: [
       'Everything in Starter',
-      '3,000 emails / day',
-      'CRM · pipelines · deals · tasks',
-      'API & HMAC-signed webhooks',
+      'CRM with pipelines and deals',
+      'A/B variants per step',
+      'Bulk contact import',
+      'API and signed webhooks',
       'Custom tracking domain',
     ],
   },
   {
     name: 'Business',
-    price: 329,
-    annual: 263,
+    price: '$329',
+    annual: '$263',
     summary: 'For established teams with serious sending volume.',
     sendsPerDay: 15000,
     href: 'https://app.warmbly.com/register?plan=business',
-    cta: 'Choose plan',
+    cta: 'Start free',
     highlight: true,
+    save: '$792',
+    meter: 91,
+    // Not an IP product: the plan reserves the address the mailboxes sign IN
+    // from (plan.IsolatedEgress()), which is what earns sign-in trust and keeps
+    // a noisy neighbour from triggering a shared per-IP auth throttle.
     features: [
       'Everything in Grow',
-      '15,000 emails / day',
-      // Not an IP product: the mechanism is a worker machine bound to one org,
-      // and what it buys is reputation isolation. index.astro words it the same.
-      'Sending kept apart from other customers',
-      'Team roles + audit log',
+      'Your mailboxes sign in from an address no one else uses',
+      'Team roles and permissions',
+      'Full audit log',
       'Priority support',
     ],
   },
   {
     name: 'Enterprise',
-    price: null,
-    annual: null,
+    price: 'Custom',
+    annual: 'Custom',
     summary: 'Custom volume and dedicated support.',
     sendsPerDay: Infinity,
     href: '/contact/?topic=sales',
     cta: 'Talk to sales',
     highlight: false,
+    save: '',
+    meter: 100,
     features: [
       'Everything in Business',
-      '15,000+ emails / day',
-      'SSO / SAML · SCIM',
-      'Custom contract',
-      'Dedicated CSM + SLA',
+      'Custom volume and contract',
+      'BYOK encryption · SSO / SAML',
+      'Custom data residency',
+      'Dedicated CSM and SLA',
     ],
   },
+];
+
+// The self-hosted warmup pool link, priced apart from the platform.
+const poolTiers = [
+  {
+    name: 'Free',
+    price: '$0',
+    cadence: 'forever',
+    summary: 'Up to 10 mailboxes warming with the free tier of the pool.',
+    highlight: false,
+    features: [
+      'Partners drawn from other free mailboxes',
+      'No card, no time limit',
+      'Unenroll any mailbox any time',
+    ],
+  },
+  {
+    name: 'Premium',
+    price: '$15',
+    cadence: '/ month · or $144 a year',
+    summary: 'Unlimited mailboxes in the premium pool, served first.',
+    highlight: true,
+    features: [
+      'Unlimited mailboxes',
+      'Premium pool: proven paying mailboxes as partners',
+      'Better deliverability: spam rescue, replies, placement tracking',
+      'Priority service, always served first',
+    ],
+  },
+];
+
+const selfHostFacts = [
+  { value: '$0',        label: 'To self-host' },
+  { value: 'Unlimited', label: 'Mailboxes' },
+  { value: '1',         label: 'Command to install' },
+  { value: '10',        label: 'Free pool mailboxes' },
 ];
 
 const everyPlan = [
@@ -126,6 +175,8 @@ const matrix = [
 ];
 
 const headers = ['Starter', 'Grow', 'Business', 'Enterprise'];
+
+const gh = '<path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.8 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.4-2.3 1.2-3.2-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2 1-.3 2-.4 3-.4s2 .1 3 .4c2.3-1.5 3.3-1.2 3.3-1.2.7 1.6.2 2.9.1 3.1.8.8 1.2 1.9 1.2 3.2 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.5 4.6-1.5 7.8-5.8 7.8-10.9C23.5 5.7 18.3.5 12 .5z"/>';
 ---
 <Layout
   title="Pricing - Unlimited Mailboxes & Warmup | Warmbly"
@@ -133,17 +184,19 @@ const headers = ['Starter', 'Grow', 'Business', 'Enterprise'];
 >
   <!-- ============================================================
        HERO — same HeroAtmosphere as home, pricing-specific copy
-              + toggle. Cards drop dramatically into white below.
+              + toggle. The plan panel floats over the sky-to-white
+              boundary below, the same way the home page does it.
   ============================================================ -->
   <section class="relative isolate overflow-hidden">
     <HeroAtmosphere />
 
-    <div class="container-page relative pt-16 md:pt-24 pb-40 md:pb-52 text-center">
+    <div class="container-page relative pt-16 md:pt-24 pb-44 md:pb-52 text-center">
       <div class="inline-flex items-center gap-2 h-7 pl-1 pr-3 rounded-full bg-white/15 backdrop-blur ring-1 ring-white/25 text-[12px] text-white/95 shadow-[0_4px_14px_-4px_rgba(0,0,0,0.25)]">
         <span class="inline-flex items-center h-5 px-1.5 rounded-full text-[10.5px] font-semibold uppercase tracking-[0.06em] bg-white text-[color:var(--sky-6)]">
           Free to self-host
         </span>
-        Link your instance when Warmbly Cloud launches and we run the warmup · every hosted workspace starts free
+        <span class="hidden sm:inline">Every hosted workspace starts free · link your own instance for warmup</span>
+        <span class="sm:hidden">Every hosted workspace starts free</span>
       </div>
 
       <h1 class="mt-8 md:mt-10 text-[44px] sm:text-6xl md:text-[72px] lg:text-[80px] font-semibold tracking-[-0.04em] leading-[0.98] text-white max-w-4xl mx-auto">
@@ -154,159 +207,288 @@ const headers = ['Starter', 'Grow', 'Business', 'Enterprise'];
         Pay for the daily send volume you actually use. Unlimited mailboxes, unlimited warmup, on every paid plan.
       </p>
 
-      <!-- Toggle with sliding indicator -->
-      <div class="mt-9 relative inline-flex items-center p-1 rounded-full bg-white/10 backdrop-blur ring-1 ring-white/25 shadow-[0_4px_14px_-4px_rgba(0,0,0,0.2)]" data-billing-toggle>
-        <span class="billing-indicator absolute top-1 bottom-1 rounded-full bg-white shadow-[0_2px_8px_-2px_rgba(0,0,0,0.2)] transition-all duration-[400ms] ease-[cubic-bezier(0.4,0,0.2,1)] pointer-events-none" style="width: 0; opacity: 0;"></span>
-        <button type="button" data-billing="monthly" class="billing-btn relative z-10 h-9 px-5 rounded-full text-[13px] font-medium transition-colors duration-200 text-white/65 hover:text-white">
-          Monthly
-        </button>
-        <button type="button" data-billing="annual" class="billing-btn relative z-10 h-9 px-5 rounded-full text-[13px] font-medium transition-colors duration-200 text-[color:var(--sky-7)]" aria-pressed="true">
-          Annual <span class="ml-1 text-[10.5px] font-semibold opacity-85">−20%</span>
-        </button>
+      <!-- Translucent toggle that reads as a control panel sitting on the sky. -->
+      <div class="mt-9 inline-flex items-center gap-3" data-billing-toggle>
+        <div class="relative inline-flex items-center p-1 rounded-full bg-white/10 backdrop-blur ring-1 ring-white/25 text-[13px] font-medium shadow-[0_4px_14px_-4px_rgba(0,0,0,0.25)]">
+          <span class="billing-indicator absolute top-1 bottom-1 rounded-full bg-white transition-all duration-[350ms] ease-[cubic-bezier(0.22,1,0.36,1)] pointer-events-none" style="width: 0; opacity: 0; box-shadow: 0 6px 18px -4px rgba(0,0,0,0.25);"></span>
+          <button type="button" data-billing="monthly" class="billing-btn relative z-10 h-9 px-5 rounded-full min-w-[112px] transition-colors duration-200 text-white/70 hover:text-white">
+            Monthly
+          </button>
+          <button type="button" data-billing="annual" class="billing-btn relative z-10 h-9 px-5 rounded-full min-w-[112px] transition-colors duration-200 text-[color:var(--sky-5)]" aria-pressed="true">
+            Annual
+          </button>
+        </div>
+        <span class="inline-flex items-center h-7 px-2.5 rounded-full text-[11.5px] font-semibold bg-white/10 backdrop-blur text-white border border-white/30">
+          Save 20%
+        </span>
       </div>
     </div>
   </section>
 
   <!-- ============================================================
-       PLAN GRID — overlaps the sky hero dramatically
+       PLAN PANEL — one surface, four joined columns, pulled up
+       over the hero. Same anatomy as the home page pricing panel.
   ============================================================ -->
-  <section class="relative -mt-32 md:-mt-40 pb-20 md:pb-28 z-10">
+  <section class="relative -mt-32 md:-mt-40 pb-16 md:pb-20 z-10">
     <div class="container-page">
-      <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-5 items-stretch">
-        {plans.map((p) => (
-          <div class={`relative rounded-[18px] flex flex-col p-7 lg:p-8 bg-white transition-all ${
-            p.highlight
-              ? ''
-              : 'ring-1 ring-[color:var(--border)] shadow-[0_24px_48px_-20px_rgba(15,23,42,0.18),0_4px_12px_-6px_rgba(15,23,42,0.06)]'
-          }`}
-          style={p.highlight ? 'box-shadow: 0 0 0 2px #0284c7, 0 30px 60px -25px rgba(2,132,199,0.35), 0 8px 24px -12px rgba(2,132,199,0.15);' : ''}>
+      <!-- The featured plan is marked by a tint and a top accent rule rather
+           than by elevation, so the row stays a single connected surface. -->
+      <div class="rounded-[14px] bg-white ring-1 ring-[color:var(--border)] overflow-hidden shadow-[0_18px_50px_-28px_rgba(15,23,42,0.32)]">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+          {plans.map((p, idx) => (
+            <div
+              class:list={[
+                'relative flex flex-col p-6 border-[color:var(--border)]',
+                p.highlight && 'bg-[color:var(--surface-2)]',
+                idx === 0 ? ''
+                  : idx === 1 ? 'border-t sm:border-t-0 sm:border-l'
+                  : idx === 2 ? 'border-t lg:border-t-0 lg:border-l'
+                  : 'border-t lg:border-t-0 sm:border-l',
+              ]}
+            >
+              {p.highlight && (
+                <span class="absolute inset-x-0 top-0 h-[3px] bg-[color:var(--brand)]"></span>
+              )}
 
-            {p.highlight && (
-              <>
-                <div class="absolute inset-0 rounded-[18px] overflow-hidden pointer-events-none">
-                  <div class="absolute inset-x-0 top-0 h-[160px]" style="background: linear-gradient(180deg, rgba(186,230,253,0.6) 0%, rgba(240,249,255,0) 100%);"></div>
+              <div class="relative flex flex-col h-full">
+                <div class="flex items-center justify-between gap-2 h-6">
+                  <h2 class={`text-[13px] font-semibold uppercase tracking-[0.12em] ${p.highlight ? 'text-[color:var(--brand)]' : 'text-heading'}`}>{p.name}</h2>
+                  {p.highlight && (
+                    <span class="inline-flex items-center h-[22px] px-2 rounded-full text-[9.5px] font-semibold uppercase tracking-[0.10em] bg-[color:var(--brand)] text-white shadow-[0_4px_12px_-2px_rgba(2,132,199,0.55)] whitespace-nowrap">
+                      Most popular
+                    </span>
+                  )}
                 </div>
-                <div class="absolute -top-3 left-1/2 -translate-x-1/2 inline-flex items-center h-6 px-3 rounded-full text-[10px] font-semibold uppercase tracking-[0.14em] font-mono bg-[color:var(--sky-6)] text-white shadow-[0_4px_14px_-2px_rgba(2,132,199,0.5)] z-10">
-                  Most popular
-                </div>
-              </>
-            )}
+                <p class="mt-2 text-[12.5px] text-muted-foreground leading-snug min-h-[36px]">{p.summary}</p>
 
-            <div class="relative text-[11px] uppercase tracking-[0.18em] font-mono font-semibold mb-2 text-[color:var(--sky-6)]">
-              {p.name}
-            </div>
-            <p class="text-[13.5px] leading-relaxed h-[42px] text-foreground/70">
-              {p.summary}
-            </p>
-
-            <div class="mt-6 h-[62px] flex items-baseline gap-1.5">
-              {p.price !== null ? (
-                <>
-                  <span class="text-[48px] font-semibold tracking-[-0.035em] leading-none text-heading flex items-baseline">
-                    <span class="text-[28px] mr-0.5 text-foreground/55 font-medium">$</span>
+                <div class="mt-5 flex items-baseline gap-2">
+                  <span class="text-[44px] font-semibold tracking-[-0.04em] text-heading leading-none flex items-baseline">
                     <span class="plan-price relative inline-block overflow-hidden h-[44px] align-baseline" data-monthly={p.price} data-annual={p.annual}>
-                      <span class="plan-price-inner block leading-[44px] transition-transform duration-[350ms] ease-[cubic-bezier(0.34,1.56,0.64,1)]" style="transform: translateY(0)">{p.annual}</span>
+                      <span class="plan-price-inner block leading-[44px]" style="transform: translateY(0)">{p.annual}</span>
                     </span>
                   </span>
-                  <span class="text-[13.5px] text-foreground/60 ml-1">/ mo</span>
-                </>
-              ) : (
-                <span class="text-[44px] font-semibold tracking-[-0.035em] leading-none text-heading">
-                  Custom
-                </span>
-              )}
-            </div>
-            <div class="mt-1 text-[11.5px] font-mono text-foreground/50">
-              {p.price !== null ? (
-                <span class="plan-note" data-monthly-note="billed monthly · cancel anytime" data-annual-note="billed annually · 20% off">billed annually · 20% off</span>
-              ) : (
-                'volume-based · contact sales'
-              )}
-            </div>
+                  {p.save && (
+                    <span class="plan-swap text-[15px] text-muted-foreground/60 line-through" data-monthly="" data-annual={p.price}>{p.price}</span>
+                  )}
+                </div>
+                <p class="mt-2 text-[11.5px] text-muted-foreground">
+                  {p.save ? (
+                    <span class="cadence" data-monthly="/ month · billed monthly" data-annual="/ month · billed yearly">/ month · billed yearly</span>
+                  ) : (
+                    <span>volume-based · contact sales</span>
+                  )}
+                </p>
+                {/* Rendered even when empty so every card's CTA sits on the
+                    same line; Enterprise has no yearly saving to show. */}
+                <p class="mt-1.5 h-[18px]">
+                  {p.save && (
+                    <span
+                      class="plan-swap inline-flex items-center px-1.5 py-0.5 rounded text-[10.5px] font-semibold bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+                      data-monthly=""
+                      data-annual={`Save ${p.save} a year`}
+                    >Save {p.save} a year</span>
+                  )}
+                </p>
 
-            <a
-              href={p.href}
-              class={`plan-cta mt-7 inline-flex h-11 px-4 items-center justify-center w-full rounded-[10px] text-[14px] font-semibold transition-all duration-200 ease-out ${
-                p.highlight
-                  ? 'bg-[color:var(--sky-6)] text-white shadow-[0_4px_14px_-2px_rgba(2,132,199,0.4)] hover:bg-[#075985] hover:shadow-[0_8px_22px_-4px_rgba(2,132,199,0.55)] hover:-translate-y-0.5'
-                  : 'bg-foreground text-background hover:bg-[#1f2937] hover:-translate-y-0.5 hover:shadow-[0_6px_18px_-4px_rgba(15,23,42,0.25)]'
-              }`}
-            >
-              {p.cta}
-            </a>
-
-            <div class="mt-7 pt-7 border-t border-[color:var(--border)] flex-1">
-              <ul class="space-y-3">
-                {p.features.map((f) => (
-                  <li class="text-[13.5px] flex items-start gap-2.5 text-foreground/85">
-                    <span class="shrink-0 mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-[color:var(--sky-1)] text-[color:var(--sky-6)]">
-                      <svg width="9" height="9" viewBox="0 0 12 12" fill="none"><path d="M2 6l2.5 2.5L10 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                {/* Daily send volume, the thing each tier actually buys. */}
+                <div class="mt-5">
+                  <div class="flex items-baseline justify-between text-[11px] mb-1.5">
+                    <span class="font-mono text-heading">
+                      {p.sendsPerDay === Infinity ? '15,000+' : p.sendsPerDay.toLocaleString()}
                     </span>
-                    <span>{f}</span>
-                  </li>
-                ))}
-              </ul>
+                    <span class="text-muted-foreground">sends / day</span>
+                  </div>
+                  <div class={`h-1 rounded-full overflow-hidden ${p.highlight ? 'bg-white' : 'bg-[color:var(--surface-2)]'}`}>
+                    <span
+                      class={`block h-full rounded-full ${p.highlight ? 'bg-[color:var(--brand)]' : 'bg-[color:var(--border-strong)]'}`}
+                      style={`width:${p.meter}%`}
+                    ></span>
+                  </div>
+                </div>
+
+                <a
+                  href={p.href}
+                  class={`mt-6 inline-flex h-11 px-4 items-center justify-center w-full rounded-[10px] text-[14px] font-medium transition-colors ${
+                    p.highlight
+                      ? 'bg-[color:var(--brand)] text-white hover:bg-[color:var(--brand-strong)] shadow-[0_10px_24px_-10px_rgba(2,132,199,0.65)]'
+                      : 'bg-foreground text-background hover:bg-foreground/85'
+                  }`}
+                >
+                  {p.cta}
+                </a>
+
+                <div class="my-5 h-px bg-[color:var(--border)]"></div>
+                <ul class="space-y-2.5 text-[13px] text-foreground/90">
+                  {p.features.map((f) => (
+                    <li class="flex items-start gap-2">
+                      <span class={`mt-[3px] shrink-0 w-4 h-4 rounded-full inline-flex items-center justify-center ${p.highlight ? 'bg-[color:var(--brand)] text-white' : 'bg-[color:var(--surface-2)] text-foreground/55'}`}>
+                        <Icon name="check" size={10} strokeWidth={2.5} />
+                      </span>
+                      <span>{f}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
+          ))}
+        </div>
+
+        <!-- The free workspace as a slim row on the same surface: it is real
+             and it is how most people start, but it is not a sending tier. -->
+        <div class="border-t border-[color:var(--border)] bg-[color:var(--surface-2)]/60 px-6 py-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-6">
+          <div class="flex items-center gap-3 shrink-0">
+            <span class="text-[13px] font-semibold uppercase tracking-[0.12em] text-heading">Free</span>
+            <span class="text-[22px] font-semibold tracking-[-0.03em] leading-none text-heading">$0</span>
           </div>
-        ))}
+          <p class="text-[12.5px] text-muted-foreground leading-snug sm:flex-1">
+            A hosted workspace with up to 10 mailboxes and warmup. No card, no time limit. Sending, the inbox and CRM unlock when you pick a plan.
+          </p>
+          <a href="https://app.warmbly.com/register" class="inline-flex items-center gap-1 text-[13px] font-medium text-[color:var(--brand)] hover:text-[color:var(--brand-strong)] whitespace-nowrap">
+            Start free <Icon name="arrowRight" size={12} />
+          </a>
+        </div>
       </div>
 
-      <p class="mt-9 text-center text-[13.5px] text-foreground/65 max-w-2xl mx-auto leading-relaxed">
+      <p class="mt-8 text-center text-[12.5px] text-muted-foreground/85 max-w-2xl mx-auto leading-relaxed">
         Applicable taxes are calculated from your billing address and shown before you pay. Where supported, business buyers can add their legal name and tax ID at checkout.
-      </p>
-
-      <p class="mt-4 text-center text-[13.5px] text-foreground/65 max-w-2xl mx-auto leading-relaxed">
-        Rather run it yourself? Self-hosting is free, forever. Once Warmbly Cloud launches, link your instance and we run the
-        warmup for your mailboxes in the shared pool, free for up to 10 mailboxes and $15 a month for unlimited.
-        Everything else, sending, inbox, campaigns and data, stays on your server.
       </p>
     </div>
   </section>
 
   <!-- ============================================================
-       SELF-HOSTED — free platform, pool link priced separately
+       SELF-HOSTED — free platform, pool link priced separately.
+       Copy on the left; on the right a panel with the same anatomy
+       as the plan panel: two joined pool tiers over an install
+       terminal, so the whole page reads as one pricing system.
   ============================================================ -->
-  <section class="relative py-16 md:py-20 border-t border-[color:var(--border)]">
-    <div class="container-page">
-      <div class="relative rounded-[18px] bg-white ring-1 ring-[color:var(--border)] shadow-[var(--shadow-sm)] overflow-hidden">
-        <div class="grid lg:grid-cols-12 gap-8 p-6 md:p-10 items-center">
-          <div class="lg:col-span-7">
-            <div class="text-[10.5px] uppercase tracking-[0.18em] font-mono text-muted-foreground">Self-hosted</div>
-            <h2 class="mt-3 text-[28px] md:text-[40px] font-semibold tracking-[-0.025em] leading-[1.06] text-heading">
-              Free to run. We handle the warmup.
-            </h2>
-            <p class="mt-4 text-[15px] text-foreground/70 leading-relaxed max-w-xl">
-              The whole platform is Apache 2.0 and costs nothing to self-host. When Warmbly Cloud launches, link your instance
-              from Settings and the mailboxes you choose warm up in the shared pool, with thousands of real mailboxes sending,
-              replying and rescuing from spam, while campaigns, contacts and inbox never leave your server.
-            </p>
-            <ul class="mt-6 grid sm:grid-cols-2 gap-x-6 gap-y-2.5 text-[13.5px] text-foreground/80">
-              <li class="flex items-start gap-2"><span class="mt-[7px] w-1.5 h-1.5 rounded-full bg-[color:var(--brand)] shrink-0"></span>Unlimited mailboxes, campaigns and contacts on your instance</li>
-              <li class="flex items-start gap-2"><span class="mt-[7px] w-1.5 h-1.5 rounded-full bg-[color:var(--brand)] shrink-0"></span>Link in about a minute with a one-time code</li>
-              <li class="flex items-start gap-2"><span class="mt-[7px] w-1.5 h-1.5 rounded-full bg-[color:var(--brand)] shrink-0"></span>Only the mailbox credential travels, encrypted, for warmup</li>
-              <li class="flex items-start gap-2"><span class="mt-[7px] w-1.5 h-1.5 rounded-full bg-[color:var(--brand)] shrink-0"></span>Unenroll or disconnect any time; the cloud forgets it immediately</li>
-            </ul>
-          </div>
-          <div class="lg:col-span-5">
-            <div class="grid sm:grid-cols-2 lg:grid-cols-1 gap-3">
-              <div class="rounded-[14px] ring-1 ring-[color:var(--border)] p-5">
-                <div class="text-[12px] font-medium text-muted-foreground">Warmup pool · Free</div>
-                <div class="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-heading">$0</div>
-                <div class="mt-1 text-[13px] text-foreground/70">Up to 10 mailboxes warming in the pool.</div>
-              </div>
-              <div class="rounded-[14px] ring-2 ring-[color:var(--brand)]/40 p-5 bg-[color:var(--brand-soft)]/40">
-                <div class="text-[12px] font-medium text-muted-foreground">Warmup pool · Unlimited</div>
-                <div class="mt-1 text-[30px] font-semibold tracking-[-0.03em] text-heading">$15<span class="text-[14px] font-medium text-muted-foreground"> / month</span></div>
-                <div class="mt-1 text-[13px] text-foreground/70">Unlimited mailboxes, paid tier partners first.</div>
-              </div>
+  <section class="relative py-20 md:py-28 border-t border-[color:var(--border)] overflow-hidden">
+    <div class="absolute -top-6 right-[-90px] w-[300px] opacity-25 pointer-events-none cloud-drift cloud-2" style="mix-blend-mode: multiply;">
+      <Cloud variant={4} opacity={0.6} />
+    </div>
+    <div class="container-page relative grid lg:grid-cols-12 gap-10 lg:gap-14 items-center">
+      <div class="lg:col-span-5">
+        <a
+          href="https://github.com/warmbly/warmbly"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="inline-flex items-center gap-2 h-7 pl-2.5 pr-1.5 rounded-full bg-white ring-1 ring-[color:var(--border)] text-[12px] font-medium text-heading shadow-[0_2px_10px_-4px_rgba(15,23,42,0.2)] hover:ring-[color:var(--border-strong)] transition-colors"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" set:html={gh}></svg>
+          Self-hosted
+          <span class="inline-flex items-center h-[18px] px-1.5 rounded-full text-[9.5px] font-semibold uppercase tracking-[0.06em] bg-[color:var(--brand-soft)] text-[color:var(--brand-strong)]">Apache 2.0</span>
+        </a>
+
+        <h2 class="mt-5 text-[32px] md:text-[44px] font-semibold tracking-[-0.03em] leading-[1.04] text-heading">
+          Free to run.<br/>We handle the warmup.
+        </h2>
+        <p class="mt-4 text-[15px] text-foreground/75 leading-relaxed max-w-xl">
+          The whole platform costs nothing to self-host. When Warmbly Cloud launches, link your instance from Settings and the
+          mailboxes you choose warm up in the shared pool, with thousands of real mailboxes sending, replying and rescuing from spam.
+          Campaigns, contacts and inbox never leave your server.
+        </p>
+
+        <div class="mt-8 grid grid-cols-2 sm:grid-cols-4 gap-y-5">
+          {selfHostFacts.map((f, i) => (
+            <div class:list={['pr-4', i > 0 && 'sm:border-l sm:border-[color:var(--border)] sm:pl-4']}>
+              <div class="text-[22px] font-semibold tracking-[-0.02em] leading-none text-heading">{f.value}</div>
+              <div class="mt-1.5 text-[10px] uppercase tracking-[0.14em] font-mono text-muted-foreground">{f.label}</div>
             </div>
-            <div class="mt-4 flex flex-wrap gap-3">
-              <a href="https://app.warmbly.com" class="inline-flex h-10 px-4 items-center gap-2 rounded-[10px] text-[13.5px] font-medium bg-foreground text-background hover:bg-foreground/85 transition-colors">
-                Join the cloud waitlist
-              </a>
-              <a href="https://github.com/warmbly/warmbly" target="_blank" rel="noopener noreferrer" class="inline-flex h-10 px-4 items-center rounded-[10px] text-[13.5px] font-medium text-heading bg-white ring-1 ring-[color:var(--border)] hover:ring-[color:var(--border-strong)] transition-colors">
-                Self-host guide
-              </a>
+          ))}
+        </div>
+
+        <ul class="mt-8 space-y-2.5 text-[13.5px] text-foreground/85">
+          <li class="flex items-start gap-2.5">
+            <span class="mt-[3px] shrink-0 w-4 h-4 rounded-full inline-flex items-center justify-center bg-[color:var(--brand-soft)] text-[color:var(--brand-strong)]"><Icon name="check" size={10} strokeWidth={2.5} /></span>
+            Link in about a minute with a one-time code
+          </li>
+          <li class="flex items-start gap-2.5">
+            <span class="mt-[3px] shrink-0 w-4 h-4 rounded-full inline-flex items-center justify-center bg-[color:var(--brand-soft)] text-[color:var(--brand-strong)]"><Icon name="check" size={10} strokeWidth={2.5} /></span>
+            Only the mailbox credential travels, encrypted, for warmup
+          </li>
+          <li class="flex items-start gap-2.5">
+            <span class="mt-[3px] shrink-0 w-4 h-4 rounded-full inline-flex items-center justify-center bg-[color:var(--brand-soft)] text-[color:var(--brand-strong)]"><Icon name="check" size={10} strokeWidth={2.5} /></span>
+            Unenroll or disconnect any time; the cloud forgets it immediately
+          </li>
+        </ul>
+
+        <div class="mt-8 flex flex-wrap items-center gap-3">
+          <a href="https://app.warmbly.com" class="inline-flex h-11 px-5 items-center gap-2 rounded-[10px] text-[14px] font-medium bg-foreground text-background hover:bg-foreground/85 transition-colors">
+            Join the cloud waitlist <Icon name="arrowRight" size={14} />
+          </a>
+          <a href="https://docs.warmbly.com/development/install/" class="inline-flex h-11 px-5 items-center rounded-[10px] text-[14px] font-medium text-heading bg-white ring-1 ring-[color:var(--border)] hover:ring-[color:var(--border-strong)] transition-colors">
+            Self-host guide
+          </a>
+        </div>
+      </div>
+
+      <div class="lg:col-span-7">
+        <div class="rounded-[14px] bg-white ring-1 ring-[color:var(--border)] overflow-hidden shadow-[0_18px_50px_-28px_rgba(15,23,42,0.32)]">
+          <div class="px-6 py-4 border-b border-[color:var(--border)] flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+            <div>
+              <div class="text-[10.5px] uppercase tracking-[0.18em] font-mono text-muted-foreground">Warmup pool link</div>
+              <div class="mt-1 text-[14px] font-semibold text-heading">Free to start. Pay for the premium pool and better deliverability.</div>
+            </div>
+            <span class="inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full text-[10.5px] font-semibold bg-[color:var(--brand-soft)] text-[color:var(--brand-strong)] whitespace-nowrap">
+              <span class="w-1.5 h-1.5 rounded-full bg-[color:var(--brand)]"></span>
+              Arrives with Warmbly Cloud
+            </span>
+          </div>
+
+          <div class="grid sm:grid-cols-2">
+            {poolTiers.map((t, idx) => (
+              <div
+                class:list={[
+                  'relative flex flex-col p-6 border-[color:var(--border)]',
+                  t.highlight && 'bg-[color:var(--surface-2)]',
+                  idx > 0 && 'border-t sm:border-t-0 sm:border-l',
+                ]}
+              >
+                {t.highlight && (
+                  <span class="absolute inset-x-0 top-0 h-[3px] bg-[color:var(--brand)]"></span>
+                )}
+                <div class="flex items-center justify-between gap-2 h-6">
+                  <h3 class={`text-[13px] font-semibold uppercase tracking-[0.12em] ${t.highlight ? 'text-[color:var(--brand)]' : 'text-heading'}`}>{t.name}</h3>
+                  {t.highlight && (
+                    <span class="inline-flex items-center h-[22px] px-2 rounded-full text-[9.5px] font-semibold uppercase tracking-[0.10em] bg-[color:var(--brand)] text-white shadow-[0_4px_12px_-2px_rgba(2,132,199,0.55)] whitespace-nowrap">
+                      Recommended
+                    </span>
+                  )}
+                </div>
+                <p class="mt-2 text-[12.5px] text-muted-foreground leading-snug min-h-[36px]">{t.summary}</p>
+                <div class="mt-4 flex items-baseline gap-2">
+                  <span class="text-[36px] font-semibold tracking-[-0.04em] text-heading leading-none">{t.price}</span>
+                  <span class="text-[11.5px] text-muted-foreground">{t.cadence}</span>
+                </div>
+                <div class="my-5 h-px bg-[color:var(--border)]"></div>
+                <ul class="space-y-2.5 text-[13px] text-foreground/90">
+                  {t.features.map((f) => (
+                    <li class="flex items-start gap-2">
+                      <span class={`mt-[3px] shrink-0 w-4 h-4 rounded-full inline-flex items-center justify-center ${t.highlight ? 'bg-[color:var(--brand)] text-white' : 'bg-[color:var(--surface-2)] text-foreground/55'}`}>
+                        <Icon name="check" size={10} strokeWidth={2.5} />
+                      </span>
+                      <span>{f}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+
+          <!-- The install itself: one command, no clone, no compiler. -->
+          <div class="bg-[#0b1120] border-t border-white/10">
+            <div class="flex items-center gap-1.5 px-4 h-8 border-b border-white/[0.06] bg-white/[0.03]">
+              <span class="w-2 h-2 rounded-full bg-[#ff5f57]"></span>
+              <span class="w-2 h-2 rounded-full bg-[#febc2e]"></span>
+              <span class="w-2 h-2 rounded-full bg-[#28c840]"></span>
+              <span class="ml-2 text-[10px] font-mono text-white/35">self-host</span>
+              <span class="ml-auto text-[10px] font-mono text-white/35">no clone · no compiler</span>
+            </div>
+            <div class="px-4 py-3.5 font-mono text-[12px] leading-[1.9] overflow-x-auto">
+              <div class="whitespace-nowrap"><span class="text-sky-400">$</span><span class="text-white/90"> curl -fsSL https://warmbly.com/install.sh | sh</span></div>
+              <div class="inline-flex items-center gap-2 text-emerald-300 whitespace-nowrap">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                <span>Dashboard on http://localhost:8080 · link it from Settings</span>
+              </div>
             </div>
           </div>
         </div>
@@ -424,7 +606,7 @@ const headers = ['Starter', 'Grow', 'Business', 'Enterprise'];
           ['Do you charge per email sent?',  'No. Each plan includes a fixed daily send budget. Unused volume does not carry over.'],
           ['Is warmup metered separately?',  'No. Warmup is unlimited on every hosted plan and runs against the premium pool.'],
           ['Is there really no mailbox limit?', 'Mailboxes are unlimited on every paid plan under fair use: one mailbox for every send a day your plan includes, so Grow holds 3,000 and Business holds 15,000. That is far more than safe sending ever needs. Need more? Ask from the connect dialog and we usually answer within a business day. Connect them one at a time or import thousands from a CSV.'],
-          ['What does self-hosting cost?',   'Nothing. The platform is Apache 2.0 and free to run on your own servers, with unlimited mailboxes. The only paid part is the warmup pool link: free for 10 mailboxes, $15 a month for unlimited.'],
+          ['What does self-hosting cost?',   'Nothing. The platform is Apache 2.0 and free to run on your own servers, with unlimited mailboxes. The only paid part is the warmup pool link: free for 10 mailboxes in the free tier, $15 a month for unlimited mailboxes in the premium pool, where partners are proven paying mailboxes and deliverability is better.'],
           ['Can a self-hosted instance use the warmup pool?', 'Yes, once Warmbly Cloud launches. Open Settings, Warmbly Cloud on your instance, approve the code here, and pick the mailboxes to enroll. Warmbly runs their warmup in the shared pool; sending, contacts and inbox stay on your server.'],
           ['Is there a per-seat charge?',    'No. Add as many teammates as you want. Roles and audit log unlock on Business.'],
           ['Annual billing?',                'Yes, with 20% off. Toggle is at the top of this page.'],
@@ -515,7 +697,6 @@ const headers = ['Starter', 'Grow', 'Business', 'Enterprise'];
       if (!toggle) return;
       const buttons   = toggle.querySelectorAll('.billing-btn');
       const indicator = toggle.querySelector('.billing-indicator');
-      const prices    = document.querySelectorAll('.plan-price');
       let current = 'annual';
 
       // Position the sliding indicator under the active button
@@ -523,10 +704,8 @@ const headers = ['Starter', 'Grow', 'Business', 'Enterprise'];
         const btn = toggle.querySelector(`[data-billing="${mode}"]`);
         if (!btn || !indicator) return;
         if (!animate) indicator.style.transition = 'none';
-        const rect = btn.getBoundingClientRect();
-        const parentRect = toggle.getBoundingClientRect();
-        indicator.style.width   = rect.width + 'px';
-        indicator.style.left    = (rect.left - parentRect.left) + 'px';
+        indicator.style.width   = btn.offsetWidth + 'px';
+        indicator.style.left    = btn.offsetLeft + 'px';
         indicator.style.opacity = '1';
         if (!animate) {
           // Restore transition next frame
@@ -536,24 +715,23 @@ const headers = ['Starter', 'Grow', 'Business', 'Enterprise'];
         }
       }
 
-      // Smooth slide-up swap for a price digit
+      // Slide-up swap on a single price number. Phase 1 lifts and fades
+      // the old value out; phase 2 drops the new value in from below with
+      // a subtle overshoot. Same motion as the home page panel.
       function animatePrice(el, newValue) {
         const inner = el.querySelector('.plan-price-inner');
         if (!inner) return;
         if (inner.textContent === newValue) return;
 
-        // Phase 1: slide current value up and out, fade
         inner.style.transition = 'transform 220ms cubic-bezier(0.4,0,0.2,1), opacity 220ms cubic-bezier(0.4,0,0.2,1)';
         inner.style.transform  = 'translateY(-100%)';
         inner.style.opacity    = '0';
 
         setTimeout(() => {
-          // Swap text and drop it in from below
           inner.style.transition = 'none';
           inner.style.transform  = 'translateY(100%)';
           inner.textContent      = newValue;
-          // Force reflow
-          inner.offsetHeight;
+          inner.offsetHeight; // reflow
           inner.style.transition = 'transform 320ms cubic-bezier(0.34,1.56,0.64,1), opacity 220ms ease-out';
           inner.style.transform  = 'translateY(0)';
           inner.style.opacity    = '1';
@@ -564,38 +742,47 @@ const headers = ['Starter', 'Grow', 'Business', 'Enterprise'];
         if (mode === current) return;
         current = mode;
 
-        // Toggle button text colors
+        // Active button reads as sky-dark on the white pill thumb;
+        // inactive reads as soft white on the translucent track.
         buttons.forEach((b) => {
           const active = b.getAttribute('data-billing') === mode;
           if (active) {
-            b.classList.add('text-[color:var(--sky-7)]');
-            b.classList.remove('text-white/65', 'hover:text-white');
+            b.classList.add('text-[color:var(--sky-5)]');
+            b.classList.remove('text-white/70', 'hover:text-white');
             b.setAttribute('aria-pressed', 'true');
           } else {
-            b.classList.remove('text-[color:var(--sky-7)]');
-            b.classList.add('text-white/65', 'hover:text-white');
+            b.classList.remove('text-[color:var(--sky-5)]');
+            b.classList.add('text-white/70', 'hover:text-white');
             b.removeAttribute('aria-pressed');
           }
         });
 
         moveIndicator(mode);
 
-        // Animate each price
-        prices.forEach((p) => {
-          const m = p.getAttribute('data-monthly');
-          const a = p.getAttribute('data-annual');
-          animatePrice(p, mode === 'annual' ? a : m);
+        document.querySelectorAll('.plan-price').forEach((el) => {
+          const next = el.getAttribute(`data-${mode}`) || '';
+          if (!next) return;
+          animatePrice(el, next);
         });
 
-        // Animate the small note line with a subtle fade
-        document.querySelectorAll('.plan-note').forEach((n) => {
-          const m = n.getAttribute('data-monthly-note');
-          const a = n.getAttribute('data-annual-note');
-          n.style.transition = 'opacity 180ms ease-out';
-          n.style.opacity    = '0';
+        // Struck monthly price and the yearly-saving badge. These are empty
+        // on monthly, so an empty value has to clear them rather than be
+        // treated as "nothing to do".
+        document.querySelectorAll('.plan-swap').forEach((el) => {
+          const next = el.getAttribute(`data-${mode}`) || '';
+          el.textContent = next;
+          el.classList.toggle('hidden', next === '');
+        });
+
+        // Cadence text gets a soft fade-swap so it never just snaps.
+        document.querySelectorAll('.cadence').forEach((el) => {
+          const next = el.getAttribute(`data-${mode}`) || '';
+          if (!next) return;
+          el.style.transition = 'opacity 180ms ease-out';
+          el.style.opacity    = '0';
           setTimeout(() => {
-            n.textContent  = mode === 'annual' ? a : m;
-            n.style.opacity = '1';
+            el.textContent  = next;
+            el.style.opacity = '1';
           }, 180);
         });
       }
