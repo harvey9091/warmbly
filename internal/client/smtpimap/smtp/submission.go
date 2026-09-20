@@ -50,8 +50,10 @@ var dialTCP = func(ctx context.Context, local *net.TCPAddr, addr string) (net.Co
 // as well, in parallel after a head start, and whichever connects first is
 // used: a port that stays silent is a network in the way, not the server,
 // and hosts that block outbound 465 mostly leave 587 open. A refused port or
-// a name that does not resolve comes back at once and is not retried. When
-// nothing connects the error is 465's own.
+// a name that does not resolve is an answer: one that arrives before 587 is
+// dialled is returned at once; one that arrives later leaves 587 to finish,
+// and a 587 that connects is used. When nothing connects the error is 465's
+// own.
 func DialSubmission(ctx context.Context, local *net.TCPAddr, host string, port int, security string) (Dialed, error) {
 	resolved := models.ResolveSMTPSecurity(security, port)
 	if resolved != models.MailSecurityTLS || port != PortSMTPS {

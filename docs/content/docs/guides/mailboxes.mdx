@@ -53,7 +53,7 @@ Each side also has a **security** setting, which is what decides how the connect
 | STARTTLS | Connects in the clear, then upgrades in place before anything sensitive is sent | SMTP `587` or `2525`, IMAP `143` |
 | None | No encryption. Only offered for a mail server on the same machine as the worker | SMTP `1025`, IMAP `1143` |
 
-If port 465 never answers (many hosting networks block outbound 465 while 587 stays open), the worker dials 587 with STARTTLS on the same server alongside it and uses whichever connects first. A connect that succeeds that way is stored with port 587 and STARTTLS, and the mailbox settings show that. A server that refuses the connection or a name that does not resolve is reported as is, because 587 would fail the same way.
+If port 465 never answers (many hosting networks block outbound 465 while 587 stays open), the worker dials 587 with STARTTLS on the same server alongside it and uses whichever connects first. A connect that succeeds that way is stored with port 587 and STARTTLS, and the mailbox settings show that. A refusal or a name that does not resolve is an answer from the network, not silence: one that arrives before 587 has been dialled is reported as is, and the fallback is only for a port that never answers.
 
 The form picks TLS or STARTTLS from the port as you type, so standard setups need no thought. It never picks **None**, on any port: dropping encryption is always something you ask for. Change the mode yourself when your server is unusual: any port from 1 to 65535 works, so a submission relay on `2525` or IMAP on a custom port is fine as long as the security setting matches what the server actually speaks.
 
