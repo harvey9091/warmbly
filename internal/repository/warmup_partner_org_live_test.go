@@ -342,8 +342,9 @@ func TestLiveWarmupPartnerCandidatesCarryReciprocityAndHonourTheCap(t *testing.T
 		t.Fatalf("own-tier partner carries origin %q in pool %q", c.Origin, c.PoolType)
 	}
 
-	// Fill the sibling's inbound cap for today; it drops out of every draw.
-	capToday := models.WarmupPartnerCandidate{}.InboundDailyCap(config.WarmupInboundDailyFloor, config.WarmupInboundDailyCeiling, config.WarmupInboundDailyMultiple)
+	// Fill the sibling's inbound cap for today (it sends nothing, so the
+	// floor); it drops out of every draw.
+	capToday := config.WarmupInboundDailyFloor
 	for i := 0; i < capToday; i++ {
 		f.received(t, f.sibling, f.outside, time.Now().Add(-time.Minute))
 	}
@@ -366,6 +367,19 @@ func TestLiveWarmupPartnerCandidatesCarryReciprocityAndHonourTheCap(t *testing.T
 	}
 	if _, ok := candidateByID(cands, f.sibling); !ok {
 		t.Fatal("yesterday's arrivals kept a mailbox out of today's draw")
+	}
+
+	// Mail dispatched to it today counts before it is verified, so senders
+	// deciding at the same moment cannot all pick the one inbox.
+	for i := 0; i < capToday; i++ {
+		other.warmed(t, f.sibling)
+	}
+	cands, err = repo.WarmupPartnerCandidates(ctx, "premium", f.sender)
+	if err != nil {
+		t.Fatalf("WarmupPartnerCandidates: %v", err)
+	}
+	if _, ok := candidateByID(cands, f.sibling); ok {
+		t.Fatalf("a mailbox with %d sends dispatched to it today is still offered", capToday)
 	}
 }
 

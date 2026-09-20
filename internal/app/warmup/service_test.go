@@ -220,16 +220,35 @@ func TestEvaluateMetricsTamperingBlockLapses(t *testing.T) {
 	}
 }
 
-// The tampering watch does not hide a worse rate band, and a rate watch is
-// not hidden by it either.
+// The rate bands and the tampering band are judged apart and the more severe
+// finding is kept, whichever side it comes from.
 func TestEvaluateMetricsTamperingCombinesWithRates(t *testing.T) {
-	now := time.Now()
-	decision := evaluateMetrics(&models.WarmupHealthMetrics{DeletionsLast7d: 1, SentLast7d: 20, SpamPlacementRate: 40}, now)
-	if decision.State != models.WarmupHealthBlocked {
-		t.Fatalf("one deletion masked a placement block: %s", decision.State)
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	block := now.Add(warmupBlockDuration)
+	cases := []struct {
+		name    string
+		metrics models.WarmupHealthMetrics
+		want    models.WarmupHealthState
+		until   *time.Time
+	}{
+		{"one deletion does not mask a placement block", models.WarmupHealthMetrics{DeletionsLast7d: 1, SentLast7d: 20, SpamPlacementRate: 40}, models.WarmupHealthBlocked, &block},
+		{"a placement watch does not mask a tampering quarantine", models.WarmupHealthMetrics{DeletionsLast7d: 2, SentLast7d: 20, SpamPlacementRate: 10}, models.WarmupHealthQuarantined, nil},
+		{"a complaint-rate quarantine does not mask a tampering block", models.WarmupHealthMetrics{DeletionsLast7d: 4, DeliveredLast30d: 100, ComplaintRate: complaintRateQuarantinePct}, models.WarmupHealthBlocked, &block},
+		{"a bounce-rate quarantine does not mask a tampering block", models.WarmupHealthMetrics{SpamFlagsLast7d: 2, DeliveredLast30d: 100, BounceRate: bounceRateQuarantinePct}, models.WarmupHealthBlocked, &block},
+		{"a warmup-complaint quarantine does not mask a tampering block", models.WarmupHealthMetrics{DeletionsLast7d: 4, SentLast7d: 20, WarmupComplaintRate: warmupComplaintQuarantinePct}, models.WarmupHealthBlocked, &block},
+		{"a placement throttle does not mask a tampering quarantine", models.WarmupHealthMetrics{DeletionsLast7d: 2, SentLast7d: 20, SpamPlacementRate: spamPlacementThrottlePct}, models.WarmupHealthQuarantined, nil},
+		{"a longer rate block outlasts a tampering block", models.WarmupHealthMetrics{DeletionsLast7d: 4, SentLast7d: 20, SpamPlacementRate: 80}, models.WarmupHealthBlocked, func() *time.Time { u := now.Add(warmupCatastrophicBlock); return &u }()},
 	}
-	decision = evaluateMetrics(&models.WarmupHealthMetrics{DeletionsLast7d: 2, SentLast7d: 20, SpamPlacementRate: 10}, now)
-	if decision.State != models.WarmupHealthQuarantined {
-		t.Fatalf("a placement watch masked a tampering quarantine: %s", decision.State)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := tc.metrics
+			decision := evaluateMetrics(&m, now)
+			if decision.State != tc.want {
+				t.Fatalf("state = %s, want %s (reason %q)", decision.State, tc.want, decision.Reason)
+			}
+			if tc.until != nil && (decision.BlockedUntil == nil || !decision.BlockedUntil.Equal(*tc.until)) {
+				t.Fatalf("blocked until %v, want %s", decision.BlockedUntil, tc.until)
+			}
+		})
 	}
 }

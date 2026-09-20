@@ -168,7 +168,9 @@ type WarmupPartnerCandidate struct {
 	Origin   WarmupPartnerOrigin
 	// Sent7d and Received7d are the candidate's verified warmup sends and
 	// arrivals over the last seven days, so the draw can favour an inbox that
-	// gives more than it gets.
+	// gives more than it gets. The inbound cap that keeps a candidate out of
+	// the set for the day is applied in the repository, before any count or
+	// sample is taken.
 	Sent7d     int
 	Received7d int
 }
@@ -186,22 +188,6 @@ func (c WarmupPartnerCandidate) Starvation() float64 {
 		return 0
 	}
 	return float64(c.Sent7d-c.Received7d) / float64(c.Sent7d)
-}
-
-// InboundDailyCap is how much verified warmup mail this inbox may receive in
-// a day: about twice what it sends, floored for a quiet or recipient-only
-// mailbox and capped so a thin tier is never flooded once the pool starts
-// paying it back.
-func (c WarmupPartnerCandidate) InboundDailyCap(floor, ceiling, multiple int) int {
-	perDay := (c.Sent7d + 6) / 7
-	cap := perDay * multiple
-	if cap < floor {
-		cap = floor
-	}
-	if cap > ceiling {
-		cap = ceiling
-	}
-	return cap
 }
 
 type WarmupHealthState string

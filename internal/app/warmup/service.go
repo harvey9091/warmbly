@@ -635,7 +635,75 @@ type evaluationDecision struct {
 	Score        float64
 }
 
+// evaluateMetrics is the rate bands and the tampering band judged apart, with
+// the more severe finding kept, so a seven-day rate quarantine can never hide
+// a thirty-day tampering block or the other way round.
 func evaluateMetrics(metrics *models.WarmupHealthMetrics, now time.Time) evaluationDecision {
+	return moreSevere(evaluateRateBands(metrics, now), evaluateTampering(metrics, now))
+}
+
+// healthSeverity orders the bands; ties go to the later term.
+func healthSeverity(state models.WarmupHealthState) int {
+	switch state {
+	case models.WarmupHealthWatch:
+		return 1
+	case models.WarmupHealthThrottled:
+		return 2
+	case models.WarmupHealthQuarantined:
+		return 3
+	case models.WarmupHealthBlocked:
+		return 4
+	}
+	return 0
+}
+
+func moreSevere(a, b evaluationDecision) evaluationDecision {
+	sa, sb := healthSeverity(a.State), healthSeverity(b.State)
+	switch {
+	case sb > sa:
+		return b
+	case sa > sb:
+		return a
+	case a.BlockedUntil != nil && b.BlockedUntil != nil && b.BlockedUntil.After(*a.BlockedUntil):
+		return b
+	}
+	return a
+}
+
+// evaluateTampering needs no sample: each strike is one deliberate act on mail
+// the mailbox verifiably received. A single deletion only warns, because the
+// most likely cause is someone tidying the folder by hand.
+func evaluateTampering(metrics *models.WarmupHealthMetrics, now time.Time) evaluationDecision {
+	strikes := metrics.TamperingStrikes()
+	score := maxFloat(float64(strikes)*10, metrics.SpamPlacementRate)
+	switch {
+	case strikes >= tamperingBlockStrikes:
+		until := now.Add(warmupBlockDuration)
+		return evaluationDecision{
+			State:        models.WarmupHealthBlocked,
+			BlockedUntil: &until,
+			Reason:       "Blocked from warmup: " + tamperingSummary(metrics) + " in the last 7 days. Warmup mail has to be left where it is filed. You can appeal this from your dashboard.",
+			Score:        score,
+		}
+	case strikes >= tamperingQuarantineStrikes:
+		until := now.Add(warmupQuarantineDuration)
+		return evaluationDecision{
+			State:        models.WarmupHealthQuarantined,
+			BlockedUntil: &until,
+			Reason:       "Paused from warmup: " + tamperingSummary(metrics) + " in the last 7 days. Warmup mail has to be left where it is filed.",
+			Score:        score,
+		}
+	case strikes >= tamperingWatchStrikes:
+		return evaluationDecision{
+			State:  models.WarmupHealthWatch,
+			Reason: "A warmup email was " + tamperingVerb(tamperingKind(metrics)) + ". Leave warmup mail where it is filed; a second one within 7 days pauses warmup.",
+			Score:  score,
+		}
+	}
+	return evaluationDecision{State: models.WarmupHealthHealthy, Score: metrics.SpamPlacementRate}
+}
+
+func evaluateRateBands(metrics *models.WarmupHealthMetrics, now time.Time) evaluationDecision {
 	decision := evaluationDecision{
 		State: models.WarmupHealthHealthy,
 		Score: metrics.SpamPlacementRate,
@@ -719,39 +787,6 @@ func evaluateMetrics(metrics *models.WarmupHealthMetrics, now time.Time) evaluat
 					State:  models.WarmupHealthWatch,
 					Reason: fmt.Sprintf("warmup user-complaint rate %.2f%% in watch band", metrics.WarmupComplaintRate),
 					Score:  maxFloat(metrics.WarmupComplaintRate*10, metrics.SpamPlacementRate),
-				}
-			}
-		}
-	}
-
-	// Tampering needs no sample: each strike is one deliberate act on mail the
-	// mailbox verifiably received. A single deletion only warns, because the
-	// most likely cause is someone tidying the folder by hand.
-	if strikes := metrics.TamperingStrikes(); strikes >= tamperingWatchStrikes {
-		harm := tamperingSummary(metrics)
-		switch {
-		case strikes >= tamperingBlockStrikes:
-			until := now.Add(warmupBlockDuration)
-			return evaluationDecision{
-				State:        models.WarmupHealthBlocked,
-				BlockedUntil: &until,
-				Reason:       "Blocked from warmup: " + harm + " in the last 7 days. Warmup mail has to be left where it is filed. You can appeal this from your dashboard.",
-				Score:        maxFloat(float64(strikes)*10, metrics.SpamPlacementRate),
-			}
-		case strikes >= tamperingQuarantineStrikes:
-			until := now.Add(warmupQuarantineDuration)
-			return evaluationDecision{
-				State:        models.WarmupHealthQuarantined,
-				BlockedUntil: &until,
-				Reason:       "Paused from warmup: " + harm + " in the last 7 days. Warmup mail has to be left where it is filed.",
-				Score:        maxFloat(float64(strikes)*10, metrics.SpamPlacementRate),
-			}
-		default:
-			if decision.State == models.WarmupHealthHealthy {
-				decision = evaluationDecision{
-					State:  models.WarmupHealthWatch,
-					Reason: "A warmup email was " + tamperingVerb(tamperingKind(metrics)) + ". Leave warmup mail where it is filed; a second one within 7 days pauses warmup.",
-					Score:  maxFloat(float64(strikes)*10, metrics.SpamPlacementRate),
 				}
 			}
 		}

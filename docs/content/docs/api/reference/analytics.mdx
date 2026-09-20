@@ -490,7 +490,7 @@ Returns the detailed status for one email account: a combined health score (fold
 
 The three `partner_*_7d` counters are the distinct partners reached by confirmed warmup sends over the last seven days: mailboxes, their domains, and the workspaces behind them. Failed and still-pending attempts do not count. `partner_organizations_7d` of `1` over a full week means the mailbox is only warming inside one workspace, which is expected on a self-hosted instance that is not linked to Warmbly Cloud and worth investigating anywhere else.
 
-`received_7d` and `senders_7d` are the other direction over the same window: verified warmup arrivals and the distinct partners they came from. Only mail the mailbox's own sync verified counts. A mailbox with many partners on the sending side and few on the receiving side is being written to less than it writes; the pool favours it on every draw until the two even out.
+`received_7d` and `senders_7d` are the other direction over the same window: verified warmup arrivals and the distinct partners they came from. Only mail that the mailbox's own sync verifies counts. A mailbox with many partners on the sending side and few on the receiving side is being written to less than it writes; the pool favours it on every draw until the two even out.
 
 ## Get usage overview
 

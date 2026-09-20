@@ -64,7 +64,8 @@ func (r *analyticsRepository) GetWarmupStats(ctx context.Context, orgID uuid.UUI
 	// Sends come from the daily plan rows, arrivals from the verified receipts,
 	// joined both ways so a day the mailbox was written to but did not send
 	// still shows what came in. Receipts are bucketed on the UTC day, which is
-	// the day the plan rows are keyed on.
+	// the day the plan rows are keyed on, and bounded by the UTC instants the
+	// caller passes rather than a session-timezone date cast.
 	query := `
 		WITH sent AS (
 			SELECT
@@ -87,8 +88,8 @@ func (r *analyticsRepository) GetWarmupStats(ctx context.Context, orgID uuid.UUI
 			FROM warmup_received wr
 			JOIN email_accounts ea ON ea.id = wr.email_account_id
 			WHERE ea.organization_id = $1
-			  AND wr.created_at >= $2::date
-			  AND wr.created_at < ($3::date + interval '1 day')
+			  AND wr.created_at >= $2::timestamptz
+			  AND wr.created_at < ($3::timestamptz + interval '1 day')
 			  AND ($4::uuid IS NULL OR wr.email_account_id = $4)
 			GROUP BY 1
 		)

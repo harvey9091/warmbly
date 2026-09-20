@@ -24,29 +24,6 @@ func TestWarmupPartnerCandidateStarvation(t *testing.T) {
 	}
 }
 
-// The cap follows what the inbox sends, between a floor and a ceiling.
-func TestWarmupPartnerCandidateInboundDailyCap(t *testing.T) {
-	const floor, ceiling, multiple = 10, 60, 2
-	cases := []struct {
-		name string
-		sent int
-		want int
-	}{
-		{"a recipient-only mailbox gets the floor", 0, 10},
-		{"a light sender is floored too", 21, 10},
-		{"twice the daily sends", 56, 16},
-		{"a heavy sender meets the ceiling", 280, 60},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			c := WarmupPartnerCandidate{Sent7d: tc.sent}
-			if got := c.InboundDailyCap(floor, ceiling, multiple); got != tc.want {
-				t.Fatalf("InboundDailyCap(%d) = %d, want %d", tc.sent, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestWarmupPoolReturnsToMirrorsTheBorrow(t *testing.T) {
 	for _, pool := range []string{"free", "premium"} {
 		borrowFrom, borrows := WarmupPoolBorrowsFrom(pool)
