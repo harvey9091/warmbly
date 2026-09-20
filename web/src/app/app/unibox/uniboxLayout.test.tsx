@@ -103,7 +103,7 @@ async function drag(fromX: number, toX: number) {
 
 async function openThread(subject: string) {
     await act(async () => {
-        fireEvent.click(screen.getByText(subject).closest("button")!);
+        fireEvent.click(screen.getByText(subject).closest('[role="button"]')!);
     });
     await settle();
 }

@@ -8140,7 +8140,7 @@
       "get": {
         "operationId": "unibox_list",
         "summary": "List incoming mail",
-        "description": "Org-wide inbox list, collapsed to one row per thread (newest message), with filtering and cursor pagination. Excludes snoozed threads unless `snoozed=true`, and the `spam` and `trash` folders unless `folder` selects one of them.",
+        "description": "Org-wide inbox list, collapsed to one row per thread (newest message), with filtering and cursor pagination. Excludes snoozed threads unless `snoozed=true`, and the `spam`, `trash` and `archive` folders unless `folder` selects one of them or `include_archived=true` is passed.",
         "tags": [
           "unibox"
         ],
@@ -8192,7 +8192,7 @@
             "name": "folder",
             "in": "query",
             "required": false,
-            "description": "Canonical folder scope. Omit for every folder except `spam` and `trash`.",
+            "description": "Canonical folder scope. Omit for every working folder: `spam`, `trash` and `archive` stay out.",
             "schema": {
               "type": "string",
               "enum": [
@@ -8203,6 +8203,15 @@
                 "spam",
                 "trash"
               ]
+            }
+          },
+          {
+            "name": "include_archived",
+            "in": "query",
+            "required": false,
+            "description": "`true` puts archived conversations back into the result, which is what the All mail view does. Ignored when `folder` is set.",
+            "schema": {
+              "type": "boolean"
             }
           },
           {
@@ -8218,7 +8227,7 @@
             "name": "awaiting_reply",
             "in": "query",
             "required": false,
-            "description": "`true` returns only threads whose latest message was sent by you.",
+            "description": "`true` returns only threads whose latest message was sent by one of your mailboxes.",
             "schema": {
               "type": "boolean"
             }
@@ -8751,7 +8760,7 @@
       "patch": {
         "operationId": "unibox_mark_seen",
         "summary": "Mark messages seen",
-        "description": "Marks a batch of messages as read or unread, org-wide. Up to 500 ids per call.",
+        "description": "Marks messages as read or unread, org-wide. Name them with `email_ids`, whole conversations with `thread_ids`, or sweep a folder with `folder`. Up to 500 ids of each per call.",
         "tags": [
           "unibox"
         ],
@@ -8832,8 +8841,8 @@
     "/unibox/folder": {
       "patch": {
         "operationId": "unibox_move_folder",
-        "summary": "Move messages between folders",
-        "description": "Re-files a batch of messages into Inbox, Archive or Trash, org-wide. Up to 500 ids per call.\n\nThis is a move in Warmbly only. The copy at the mail provider stays where it is, and a later sync will not undo the move: Warmbly tracks the provider's own placement separately and follows it only when the provider itself moves the message. `sent`, `drafts` and `spam` are placements the provider reaches, so they are rejected here with a `400`.",
+        "summary": "Move conversations between folders",
+        "description": "Re-files messages into Inbox, Archive or Trash, org-wide. Name them with `email_ids`, whole conversations with `thread_ids`, or both; up to 500 of each. Prefer `thread_ids`: filing part of a conversation leaves it listed.\n\nThis is a move in Warmbly only. The copy at the mail provider stays where it is, and a later sync will not undo the move: Warmbly tracks the provider's own placement separately and follows it only when the provider itself moves the message. `sent`, `drafts` and `spam` are placements the provider reaches, so they are rejected here with a `400`.",
         "tags": [
           "unibox"
         ],
@@ -9063,8 +9072,8 @@
     "/unibox/snooze": {
       "post": {
         "operationId": "unibox_snooze",
-        "summary": "Snooze a thread",
-        "description": "Hides a thread from your inbox until `snoozed_until` passes. Upsert semantics: a second call on the same thread updates the time in place.",
+        "summary": "Snooze one or more threads",
+        "description": "Hides threads from your inbox until `snoozed_until` passes. Upsert semantics: a second call on the same thread updates the time in place. A request naming one thread answers with that row; one naming several answers with `data`.",
         "tags": [
           "unibox"
         ],
@@ -9143,8 +9152,8 @@
       },
       "delete": {
         "operationId": "unibox_unsnooze",
-        "summary": "Unsnooze a thread",
-        "description": "Un-snoozes a thread immediately. Idempotent: deleting a snooze that does not exist still succeeds with 204.",
+        "summary": "Unsnooze one or more threads",
+        "description": "Un-snoozes threads immediately. Idempotent: deleting a snooze that does not exist still succeeds with 204.",
         "tags": [
           "unibox"
         ],
@@ -9158,7 +9167,7 @@
             "name": "thread_id",
             "in": "query",
             "required": true,
-            "description": "The thread to un-snooze.",
+            "description": "The thread to un-snooze, or a comma-separated list of them.",
             "schema": {
               "type": "string"
             }
@@ -26192,7 +26201,7 @@
       },
       "UniboxMarkSeenRequest": {
         "type": "object",
-        "description": "Also the echoed response body. Send one of `email_ids` or `folder`, not both.",
+        "description": "Also the echoed response body. Name the messages with `email_ids`, whole conversations with `thread_ids`, or both. `folder` sweeps one folder instead and cannot be combined with either.",
         "properties": {
           "email_ids": {
             "type": "array",
@@ -26202,6 +26211,14 @@
             },
             "maxItems": 500,
             "description": "Message UUIDs to update (max 500)."
+          },
+          "thread_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "description": "Thread ids whose every message to update (max 500). Use the `thread_id` of a list row, or its `id` for mail that has none."
           },
           "folder": {
             "type": "string",
@@ -26223,9 +26240,8 @@
       },
       "UniboxMoveFolderRequest": {
         "type": "object",
-        "description": "Also the echoed response body.",
+        "description": "Also the echoed response body. Name the messages with `email_ids`, whole conversations with `thread_ids`, or both. Prefer `thread_ids`: filing part of a conversation leaves it listed, because a thread shows wherever any message of it still sits.",
         "required": [
-          "email_ids",
           "folder"
         ],
         "properties": {
@@ -26237,6 +26253,14 @@
             },
             "maxItems": 500,
             "description": "Message UUIDs to move (max 500)."
+          },
+          "thread_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "description": "Thread ids whose every message to re-file (max 500). Use the `thread_id` of a list row, or its `id` for mail that has none."
           },
           "folder": {
             "type": "string",
@@ -26348,7 +26372,6 @@
       "UniboxSnoozeRequest": {
         "type": "object",
         "required": [
-          "thread_id",
           "snoozed_until"
         ],
         "properties": {
@@ -26356,12 +26379,21 @@
             "type": "string",
             "description": "The thread to snooze."
           },
+          "thread_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "description": "Threads to snooze (max 500), for filing a whole selection in one call."
+          },
           "snoozed_until": {
             "type": "string",
             "format": "date-time",
             "description": "RFC 3339 timestamp to un-hide the thread."
           }
-        }
+        },
+        "description": "Name one conversation with `thread_id` or up to 500 with `thread_ids`. The single form answers with the snooze row; the bulk form answers with `data`."
       },
       "UniboxSnooze": {
         "type": "object",

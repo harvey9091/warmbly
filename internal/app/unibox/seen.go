@@ -21,14 +21,14 @@ func (s *uniboxService) MarkSeen(ctx context.Context, userID, emailID uuid.UUID,
 }
 
 func (s *uniboxService) MarkSeenBulk(ctx context.Context, orgID uuid.UUID, data *models.MarkSeen) (*models.MarkSeen, *errx.Error) {
-	if len(data.EmailIDs) > 500 {
+	if len(data.EmailIDs) > 500 || len(data.ThreadIDs) > 500 {
 		return nil, errx.ErrSeenMax
 	}
 
 	// A folder sweep and an id list are different requests; refuse the
 	// ambiguous combination instead of guessing which one was meant.
 	if data.Folder != "" {
-		if len(data.EmailIDs) > 0 {
+		if len(data.EmailIDs) > 0 || len(data.ThreadIDs) > 0 {
 			return nil, errx.ErrSeenFolderAndIDs
 		}
 		if !models.ValidFolder(data.Folder) {
@@ -43,10 +43,24 @@ func (s *uniboxService) MarkSeenBulk(ctx context.Context, orgID uuid.UUID, data 
 		return data, nil
 	}
 
-	changed, err := s.uniboxRepository.MarkSeenBulk(ctx, orgID, data.EmailIDs, data.Seen)
-	if err != nil {
-		errs.CaptureException(err)
-		return nil, errx.InternalError()
+	// Conversations and ids can arrive together: the list marks a row read by
+	// thread, the reader marks the messages it has open by id.
+	var changed []uuid.UUID
+	if len(data.ThreadIDs) > 0 {
+		byThread, err := s.uniboxRepository.MarkSeenByThreads(ctx, orgID, data.ThreadIDs, data.Seen)
+		if err != nil {
+			errs.CaptureException(err)
+			return nil, errx.InternalError()
+		}
+		changed = append(changed, byThread...)
+	}
+	if len(data.EmailIDs) > 0 {
+		byID, err := s.uniboxRepository.MarkSeenBulk(ctx, orgID, data.EmailIDs, data.Seen)
+		if err != nil {
+			errs.CaptureException(err)
+			return nil, errx.InternalError()
+		}
+		changed = append(changed, byID...)
 	}
 	s.relaySeen(ctx, orgID, changed)
 
@@ -139,13 +153,19 @@ func (s *uniboxService) publishSeenRelay(ctx context.Context, orgID uuid.UUID, c
 // Store-side only: the provider copy stays where it is, and provider_folder is
 // left alone so the sync can still tell a real provider move from a flag scan.
 func (s *uniboxService) MoveFolderBulk(ctx context.Context, orgID uuid.UUID, data *models.MoveFolder) (*models.MoveFolder, *errx.Error) {
-	if len(data.EmailIDs) > 500 {
+	if len(data.EmailIDs) > 500 || len(data.ThreadIDs) > 500 {
 		return nil, errx.ErrSeenMax
 	}
 	// Only the three a user can file into. sent/drafts/spam are verdicts the
 	// provider reaches, and accepting them here would let a caller forge one.
 	if !models.FilableFolder(data.Folder) {
 		return nil, errx.ErrUniboxFilableFolder
+	}
+	// Filing by conversation is what the list rows use; the reader still names
+	// the messages it has loaded.
+	if err := s.uniboxRepository.MoveThreadsToFolder(ctx, orgID, data.ThreadIDs, data.Folder); err != nil {
+		errs.CaptureException(err)
+		return nil, errx.InternalError()
 	}
 	if err := s.uniboxRepository.MoveToFolderBulk(ctx, orgID, data.EmailIDs, data.Folder); err != nil {
 		errs.CaptureException(err)

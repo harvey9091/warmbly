@@ -13,6 +13,8 @@ import React from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { PanelLeftIcon, PenLineIcon, SearchIcon } from "lucide-react";
 import { ConversationItem } from "./ConversationItem";
+import { SelectionBar } from "./SelectionBar";
+import { useConversationActions } from "@/hooks/useConversationActions";
 import useUniboxSearch from "@/lib/api/hooks/app/unibox/useUniboxSearch";
 import { useShortcutActions } from "@/hooks/useShortcutActions";
 import useDebouncedValue from "@/hooks/useDebouncedValue";
@@ -111,6 +113,84 @@ export function ConversationList({
   const emails = q.emails;
   const totalShown = emails.length;
   const activeFilters = countUserFilters(params, baseParams);
+
+  // ── Multi-select ───────────────────────────────────────────────
+  // Thread ids, not row indexes: the list re-orders under a refetch, and an
+  // index would then name a different conversation than the one ticked.
+  const actions = useConversationActions();
+  const [picked, setPicked] = React.useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+  // `selectMode` is the touch entry point, where there is no hover to reveal a
+  // checkbox with. It stays on after the last row is unticked, so unticking
+  // one by mistake does not take every box off screen.
+  const [selectMode, setSelectMode] = React.useState(false);
+  // A new scope is a new set of rows; carrying a selection across would apply
+  // an action to conversations the user can no longer see.
+  const [pickedScope, setPickedScope] = React.useState(scopeKey);
+  if (pickedScope !== scopeKey) {
+    setPickedScope(scopeKey);
+    setPicked(new Set<string>());
+    setSelectMode(false);
+  }
+
+  const rowKey = React.useCallback(
+    (row: (typeof emails)[number]) => row.thread_id || row.id,
+    [],
+  );
+  // What the bar acts on: only rows still on screen. A conversation that has
+  // left the list (filed by a teammate, snoozed, filtered out) must not be
+  // counted, or the bar promises an action on something nobody can see.
+  const selectedIds = React.useMemo(
+    () => emails.map(rowKey).filter((id) => picked.has(id)),
+    [emails, picked, rowKey],
+  );
+  const allSelected = emails.length > 0 && selectedIds.length === emails.length;
+  const selecting = selectMode || selectedIds.length > 0;
+  const clearSelection = React.useCallback(() => {
+    setPicked(new Set<string>());
+    setSelectMode(false);
+  }, []);
+
+  // Shift extends from the last row ticked, the way a file list does.
+  const lastPicked = React.useRef<string | null>(null);
+  const toggleSelect = React.useCallback(
+    (threadId: string, next: boolean, extend: boolean) => {
+      // Read the anchor before the updater, not inside it. React may defer an
+      // updater to render time, by which point the assignment below has
+      // already moved the anchor onto the row being clicked, and a shift-click
+      // would extend a range from a row to itself.
+      const anchor = lastPicked.current;
+      setPicked((prev) => {
+        const out = new Set(prev);
+        const from = anchor ? emails.findIndex((r) => rowKey(r) === anchor) : -1;
+        const to = emails.findIndex((r) => rowKey(r) === threadId);
+        if (extend && from >= 0 && to >= 0) {
+          const [lo, hi] = from < to ? [from, to] : [to, from];
+          for (let i = lo; i <= hi; i++) {
+            if (next) out.add(rowKey(emails[i]));
+            else out.delete(rowKey(emails[i]));
+          }
+        } else if (next) {
+          out.add(threadId);
+        } else {
+          out.delete(threadId);
+        }
+        return out;
+      });
+      lastPicked.current = threadId;
+    },
+    [emails, rowKey],
+  );
+
+  const toggleAll = React.useCallback(() => {
+    setPicked((prev) => {
+      const everything = emails.map(rowKey);
+      const all = everything.length > 0 && everything.every((id) => prev.has(id));
+      return all ? new Set<string>() : new Set(everything);
+    });
+    lastPicked.current = null;
+  }, [emails, rowKey]);
 
   // A search or filter change keeps the previous rows on screen while
   // the new ones load (placeholderData). That is the moment to show progress:
@@ -229,9 +309,33 @@ export function ConversationList({
         if (currentIndex() < 0) selectRow(emails[0]);
       },
       listDeselect: () => {
+        // The ticks are the innermost thing Escape can clear: taking the open
+        // conversation away first would leave a selection bar with no obvious
+        // way to dismiss it.
+        if (selecting) {
+          clearSelection();
+          return;
+        }
         if (!selectedThreadId) return;
         setSelectedThreadId(null);
         setSelectedAccountId(null);
+      },
+      listToggleSelect: () => {
+        const row = emails[currentIndex()];
+        if (!row) return;
+        const id = rowKey(row);
+        toggleSelect(id, !picked.has(id), false);
+      },
+      listArchive: () => {
+        // The ticked rows when there are any, otherwise the focused one.
+        const target = selectedIds.length > 0 ? selectedIds : [];
+        if (target.length === 0) {
+          const row = emails[currentIndex()];
+          if (!row) return;
+          void actions.file([rowKey(row)], "archive");
+          return;
+        }
+        void actions.file(target, "archive").finally(clearSelection);
       },
       focusSearch: () => searchRef.current?.focus(),
     },
@@ -240,6 +344,9 @@ export function ConversationList({
   );
 
   const filtering = activeFilters > 0 || !!search.trim();
+  const rowScope = scopeKey.startsWith("folder:")
+    ? scopeKey.slice("folder:".length)
+    : scopeKey;
 
   return (
     <div className="relative flex flex-col h-full bg-white">
@@ -270,6 +377,29 @@ export function ConversationList({
           </span>
         )}
         <span className="flex-1" />
+        {/* Select is the touch entry point into multi-select; on a pointer
+            device hovering a row already shows its box, but the control is
+            kept everywhere so the feature is discoverable at all. */}
+        {selecting ? (
+          <label className="h-7 px-2 rounded-md inline-flex items-center gap-1.5 text-[11.5px] text-slate-600 hover:bg-slate-100 cursor-pointer transition-colors shrink-0">
+            <input
+              type="checkbox"
+              className="w-3.5 h-3.5 rounded accent-sky-600"
+              checked={allSelected}
+              onChange={toggleAll}
+              aria-label={allSelected ? "Deselect all" : "Select all loaded"}
+            />
+            All
+          </label>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setSelectMode(true)}
+            className="h-7 px-2 rounded-md text-[11.5px] text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors shrink-0"
+          >
+            Select
+          </button>
+        )}
         <UniboxFilterButton
           params={params}
           base={baseParams}
@@ -406,6 +536,13 @@ export function ConversationList({
                       style={{ overflow: "hidden" }}
                     >
                       <ConversationItem
+                        // The row's actions read the scope: Archive and Trash
+                        // offer the way back rather than the way out.
+                        scope={rowScope}
+                        selected={picked.has(e.thread_id || e.id)}
+                        selecting={selecting}
+                        onToggleSelect={toggleSelect}
+                        actions={actions}
                         email={{
                           id: e.id,
                           from: e.from_addr?.[0] ?? "",
@@ -454,6 +591,12 @@ export function ConversationList({
         )}
       </div>
 
+      <SelectionBar
+        threadIds={selectedIds}
+        actions={actions}
+        scope={rowScope}
+        onClear={clearSelection}
+      />
     </div>
   );
 }

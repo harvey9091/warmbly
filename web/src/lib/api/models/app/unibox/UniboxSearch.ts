@@ -53,10 +53,17 @@ export interface UniboxSearchParams {
    */
   snoozed?: true | "any";
   /**
-   * Folder scope. Undefined = every folder except spam and trash (the
-   * combined view never shows junk).
+   * Folder scope. Undefined = every working folder: spam, trash and archive
+   * all stay out, so filing a conversation takes it out of every view the
+   * workspace reads from and not only the Inbox folder.
    */
   folder?: UniboxFolder;
+  /**
+   * Put filed conversations back into an unscoped list. Only "All mail" and
+   * reference reads (the composer's history panel) ask for it; a working view
+   * that included archived mail would make Archive look like it did nothing.
+   */
+  includeArchived?: boolean;
   /** Awaiting reply: threads where the last message was from us. */
   awaitingReply?: boolean;
   /** Agent drafts: threads with a pending inbox-agent reply draft. */

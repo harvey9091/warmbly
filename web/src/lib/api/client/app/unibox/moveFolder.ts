@@ -7,11 +7,23 @@ export type FilableFolder = "inbox" | "archive" | "trash";
 // PATCH /unibox/folder re-files messages. Archive in the thread header is
 // "archive", Delete is "trash", Move to inbox is "inbox". Store-side only: the
 // provider copy stays put, and the sync knows not to undo it.
-export default async function moveFolder(data: { ids: string[]; folder: FilableFolder }): Promise<void> {
+//
+// Address it by thread wherever the caller has one. A list row knows its
+// conversation and not the message ids inside it, and filing part of a
+// conversation leaves it in the view it was filed out of.
+export default async function moveFolder(data: {
+    ids?: string[];
+    threadIds?: string[];
+    folder: FilableFolder;
+}): Promise<void> {
     return await Request<void>({
         method: "PATCH",
         url: `/unibox/folder`,
-        data: { email_ids: data.ids, folder: data.folder },
+        data: {
+            email_ids: data.ids ?? [],
+            thread_ids: data.threadIds ?? [],
+            folder: data.folder,
+        },
         authorization: true,
     })
 }

@@ -87,7 +87,7 @@ describe("unibox scroll position", SUITE, () => {
         await scrollTo(1200);
 
         await act(async () => {
-            fireEvent.click(screen.getByText("Subject 4").closest("button")!);
+            fireEvent.click(screen.getByText("Subject 4").closest('[role="button"]')!);
         });
         await settle();
 
@@ -108,7 +108,7 @@ describe("unibox scroll position", SUITE, () => {
         await settle();
 
         await act(async () => {
-            fireEvent.click(screen.getByText("Subject 2").closest("button")!);
+            fireEvent.click(screen.getByText("Subject 2").closest('[role="button"]')!);
         });
         await settle();
 
@@ -126,7 +126,7 @@ describe("unibox scroll position", SUITE, () => {
         await scrollTo(700);
 
         await act(async () => {
-            fireEvent.click(screen.getByText("Subject 3").closest("button")!);
+            fireEvent.click(screen.getByText("Subject 3").closest('[role="button"]')!);
         });
         await settle();
         scroller().scrollTop = 0;

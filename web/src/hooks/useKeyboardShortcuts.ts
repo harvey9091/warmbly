@@ -185,6 +185,22 @@ export const globalShortcuts: GlobalShortcut[] = [
     run: () => shortcutAction('listDeselect')?.(),
   },
   {
+    keys: ['x'],
+    description: 'Select / deselect the focused row',
+    group: 'list',
+    needs: 'listToggleSelect',
+    match: plain('x'),
+    run: () => shortcutAction('listToggleSelect')?.(),
+  },
+  {
+    keys: ['e'],
+    description: 'Archive the selection',
+    group: 'list',
+    needs: 'listArchive',
+    match: plain('e'),
+    run: () => shortcutAction('listArchive')?.(),
+  },
+  {
     keys: ['c'],
     description: 'Label the open conversation',
     group: 'list',

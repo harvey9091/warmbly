@@ -43,9 +43,9 @@ import ContactContextPanel from "./ContactContextPanel";
 import { CategoryChip } from "@/components/app/contacts/CategoryPicker";
 import useThread from "@/lib/api/hooks/app/unibox/useThread";
 import useMarkSeen from "@/lib/api/hooks/app/unibox/useMarkSeen";
-import useMoveFolder from "@/lib/api/hooks/app/unibox/useMoveFolder";
-import { removeThreadsFromLists } from "@/lib/api/hooks/app/unibox/listCache";
-import moveFolderRequest, { type FilableFolder } from "@/lib/api/client/app/unibox/moveFolder";
+import { useConversationActions } from "@/hooks/useConversationActions";
+import { SNOOZE_PRESETS, offsetHours } from "@/lib/unibox/snooze";
+import type { FilableFolder } from "@/lib/api/client/app/unibox/moveFolder";
 import { bareEmail, nameFromAddr, wrappedEmail } from "@/lib/helper/emailAddress";
 import useThreadLabels from "@/lib/api/hooks/app/unibox/useThreadLabels";
 import useThreadScheduled from "@/lib/api/hooks/app/unibox/useThreadScheduled";
@@ -64,10 +64,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import {
-  snoozeThread,
-  unsnoozeThread,
-} from "@/lib/api/client/app/unibox/snoozeThread";
 import type UniboxEmail from "@/lib/api/models/app/unibox/UniboxEmail";
 import type UniboxScheduledItem from "@/lib/api/models/app/unibox/UniboxScheduled";
 import type { UniboxThreadMessage } from "@/lib/api/models/app/unibox/UniboxThread";
@@ -90,47 +86,6 @@ function toUniboxEmail(m: UniboxThreadMessage): UniboxEmail {
     thread_id: m.thread_id,
     account_id: m.email_id,
   };
-}
-
-// Filing copy, per destination. "Deleted" is deliberately not said anywhere:
-// the message is moved to Trash here and still sits in the mail client.
-const FILE_COPY: Record<FilableFolder, { done: string; failed: string }> = {
-  archive: { done: "Archived", failed: "Couldn't archive" },
-  trash: { done: "Moved to Trash", failed: "Couldn't move to Trash" },
-  inbox: { done: "Moved to Inbox", failed: "Couldn't move to Inbox" },
-};
-
-const SNOOZE_PRESETS: { label: string; until: () => Date }[] = [
-  { label: "In 1 hour", until: () => offsetHours(1) },
-  { label: "In 3 hours", until: () => offsetHours(3) },
-  { label: "Tomorrow 9:00", until: () => atHour(1, 9) },
-  { label: "Monday 9:00", until: () => nextMonday9() },
-  { label: "Next week", until: () => offsetDays(7) },
-];
-
-function offsetHours(h: number): Date {
-  const d = new Date();
-  d.setHours(d.getHours() + h);
-  return d;
-}
-function offsetDays(d: number): Date {
-  const x = new Date();
-  x.setDate(x.getDate() + d);
-  return x;
-}
-function atHour(dayOffset: number, hour: number): Date {
-  const d = new Date();
-  d.setDate(d.getDate() + dayOffset);
-  d.setHours(hour, 0, 0, 0);
-  return d;
-}
-function nextMonday9(): Date {
-  const d = new Date();
-  const dow = d.getDay();
-  const delta = (1 - dow + 7) % 7 || 7;
-  d.setDate(d.getDate() + delta);
-  d.setHours(9, 0, 0, 0);
-  return d;
 }
 
 // Local datetime → ISO string. The native <input type="datetime-local">
@@ -282,64 +237,29 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
       .filter((m) => !m.seen)
       .map((m) => m.id);
     if (unseenIds.length === 0) return;
-    markSeenMutate({ ids: unseenIds, threadId });
+    markSeenMutate({ ids: unseenIds, threadIds: [threadId] });
   }, [threadId, q.data, markSeenMutate]);
 
   // Header actions. Each one closes the thread: the effect above would
   // otherwise re-mark an "unread" thread as seen on the next refetch, and a
   // filed thread has left the list the reader is looking at.
-  const moveFolder = useMoveFolder();
+  const actions = useConversationActions();
   const setSelectedThreadId = useAppStore((s) => s.setSelectedThreadId);
   const threadIds = () => (q.data?.data ?? []).map((m) => m.id);
   const markUnread = () => {
-    markSeenMutate({ ids: threadIds(), seen: false, threadId });
+    markSeenMutate({ ids: threadIds(), seen: false, threadIds: [threadId] });
     setSelectedThreadId(null);
-  };
-
-  // One click and the conversation is gone from the list, so the way back
-  // belongs on screen; the Trash scope's Move to inbox is the slow path. This
-  // pane has already closed by the time Undo is clicked, so it calls the
-  // endpoint directly: react-query drops an unmounted observer's callbacks,
-  // and the invalidation is the whole point.
-  const offerUndo = (message: string, ids: string[]) => {
-    toast((t) => (
-      <span className="flex items-center gap-3 text-[12.5px] text-slate-700">
-        {message}
-        <button
-          type="button"
-          onClick={() => {
-            toast.dismiss(t.id);
-            moveFolderRequest({ ids, folder: "inbox" })
-              .then(() => {
-                queryClient.invalidateQueries({ queryKey: ["unibox"] });
-                toast.success("Moved back to Inbox");
-              })
-              .catch(() => toast.error("Couldn't undo"));
-          }}
-          className="h-6 px-2 rounded-md border border-slate-200 hover:border-slate-300 text-[11.5px] font-medium text-sky-700 hover:bg-sky-50 transition-colors"
-        >
-          Undo
-        </button>
-      </span>
-    ));
   };
 
   // Filing is store-side: the message keeps its place at the provider, and
   // the sync knows not to undo this (migration 000146).
   // The row leaves the list and the reader closes at once; the request runs
   // behind the toast, and a failure re-reads the list, which brings it back.
+  // The copy, the undo and the cache handling are shared with the list row.
   const fileThread = async (folder: FilableFolder) => {
-    const ids = threadIds();
-    if (ids.length === 0 || moveFolder.isPending) return;
-    const copy = FILE_COPY[folder];
+    if (actions.filing) return;
     setSelectedThreadId(null);
-    try {
-      await moveFolder.mutateAsync({ ids, folder, threadId });
-      if (folder === "inbox") toast.success(copy.done);
-      else offerUndo(copy.done, ids);
-    } catch {
-      toast.error(copy.failed);
-    }
+    await actions.file([threadId], folder, threadIds());
   };
 
   // Restoring is only offered where the user can see what they are restoring.
@@ -347,33 +267,16 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
   const filed = urlScope === "trash" || urlScope === "archive";
 
   const snooze = useMutation({
-    mutationFn: (until: Date) =>
-      snoozeThread({ thread_id: threadId, snoozed_until: until.toISOString() }),
-    // Gone from the list the moment it is snoozed; the refetch confirms it.
-    onMutate: () => removeThreadsFromLists(queryClient, [threadId]),
-    onSuccess: () => {
-      toast.success("Snoozed");
-      queryClient.invalidateQueries({ queryKey: ["unibox", "search"] });
-      queryClient.invalidateQueries({ queryKey: ["unibox", "overview"] });
-      queryClient.invalidateQueries({ queryKey: ["unibox", "unseen-count"] });
+    mutationFn: (until: Date) => actions.snooze([threadId], until),
+    onSettled: () => {
       setSnoozeOpen(false);
       setCustomMode(false);
-    },
-    onError: () => {
-      toast.error("Couldn't snooze this thread");
-      queryClient.invalidateQueries({ queryKey: ["unibox", "search"] });
     },
   });
 
   const unsnooze = useMutation({
-    mutationFn: () => unsnoozeThread(threadId),
-    onSuccess: () => {
-      toast.success("Un-snoozed");
-      queryClient.invalidateQueries({ queryKey: ["unibox", "search"] });
-      queryClient.invalidateQueries({ queryKey: ["unibox", "overview"] });
-      setSnoozeOpen(false);
-    },
-    onError: () => toast.error("Couldn't un-snooze"),
+    mutationFn: () => actions.unsnooze([threadId]),
+    onSettled: () => setSnoozeOpen(false),
   });
 
   // Built once per fetch, not once per render. Every consumer holds these
@@ -595,14 +498,14 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
               <IconAction
                 label="Move to inbox"
                 icon={<InboxIcon className="w-[15px] h-[15px]" />}
-                disabled={moveFolder.isPending}
+                disabled={actions.filing}
                 onClick={() => fileThread("inbox")}
               />
             ) : (
               <IconAction
                 label="Archive thread"
                 icon={<ArchiveIcon className="w-[15px] h-[15px]" />}
-                disabled={moveFolder.isPending}
+                disabled={actions.filing}
                 onClick={() => fileThread("archive")}
               />
             )}
@@ -611,7 +514,7 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
                 label="Delete thread"
                 danger
                 icon={<TrashIcon className="w-[15px] h-[15px]" />}
-                disabled={moveFolder.isPending}
+                disabled={actions.filing}
                 onClick={() => fileThread("trash")}
               />
             )}
@@ -655,7 +558,7 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
               {filed ? (
                 <PopoverMenuItem
                   icon={<InboxIcon className="w-3.5 h-3.5" />}
-                  disabled={moveFolder.isPending}
+                  disabled={actions.filing}
                   onSelect={() => fileThread("inbox")}
                 >
                   Move to inbox
@@ -663,7 +566,7 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
               ) : (
                 <PopoverMenuItem
                   icon={<ArchiveIcon className="w-3.5 h-3.5" />}
-                  disabled={moveFolder.isPending}
+                  disabled={actions.filing}
                   onSelect={() => fileThread("archive")}
                 >
                   Archive thread
@@ -673,7 +576,7 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
                 <PopoverMenuItem
                   danger
                   icon={<TrashIcon className="w-3.5 h-3.5" />}
-                  disabled={moveFolder.isPending}
+                  disabled={actions.filing}
                   onSelect={() => fileThread("trash")}
                 >
                   Delete thread
