@@ -426,7 +426,7 @@ func main() {
 	tagCategories := repository.NewTagCategoryStore(primaryDB.Pool)
 	inboxTagRepo := repository.NewInboxTagRepository(primaryDB.Pool)
 	var tagAsker inboxtag.Asker
-	classify := config.InboxTaggingEnabled()
+	classify := config.InboxTaggingEnabled() && typeSafeClient != nil
 	if classify {
 		tagAsker = inboxtag.NewAsker(typeSafeClient)
 		log.Printf("automatic inbox tagging enabled (model %s)", inboxtag.Model)

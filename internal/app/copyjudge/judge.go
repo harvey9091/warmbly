@@ -179,11 +179,15 @@ func Text(body string) string {
 	return body
 }
 
+// cacheVersion is bumped whenever a question, rubric or threshold changes, so
+// unchanged copy is not served a verdict from the previous policy.
+const cacheVersion = "copyjudge-v1"
+
 // ContentHash identifies one piece of copy for caching. Trimmed, not
 // normalized further: a rewrite is a new judgment, a stray trailing newline is
 // not.
 func ContentHash(subject, body string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(subject) + "\x00" + strings.TrimSpace(body)))
+	sum := sha256.Sum256([]byte(cacheVersion + "\x00" + strings.TrimSpace(subject) + "\x00" + strings.TrimSpace(body)))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -207,19 +211,19 @@ func Judge(ctx context.Context, asker typesafe.Asker, subject, body string) (*Ve
 		return nil, errors.New("copyjudge: empty response")
 	}
 
-	readsAs, err := answer(resp, qReadsAs)
+	readsAs, err := answer(resp, qReadsAs, typesafe.QuestionScore, len(readsAsLevels))
 	if err != nil {
 		return nil, err
 	}
-	personal, err := answer(resp, qPersonalization)
+	personal, err := answer(resp, qPersonalization, typesafe.QuestionScore, len(personalizationLevels))
 	if err != nil {
 		return nil, err
 	}
-	ask, err := answer(resp, qAsk)
+	ask, err := answer(resp, qAsk, typesafe.QuestionChoice, 0)
 	if err != nil {
 		return nil, err
 	}
-	spam, err := answer(resp, qSpamClaim)
+	spam, err := answer(resp, qSpamClaim, typesafe.QuestionNoul, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -238,10 +242,31 @@ func Judge(ctx context.Context, asker typesafe.Asker, subject, body string) (*Ve
 	}, nil
 }
 
-func answer(resp *typesafe.Response, id string) (typesafe.Answer, error) {
+// answer reads one answer and refuses a shape the question did not ask for:
+// a wrong type, a score off its rubric, or a probability outside 0..1 would
+// otherwise reach the verdict as a plausible-looking zero.
+func answer(resp *typesafe.Response, id, wantType string, levels int) (typesafe.Answer, error) {
 	a, ok := resp.Answers[id]
 	if !ok {
 		return typesafe.Answer{}, fmt.Errorf("copyjudge: no answer for %q", id)
+	}
+	if a.Type != "" && a.Type != wantType {
+		return typesafe.Answer{}, fmt.Errorf("copyjudge: %q answered as %s, want %s", id, a.Type, wantType)
+	}
+	unit := func(v float64) bool { return v >= 0 && v <= 1 }
+	switch wantType {
+	case typesafe.QuestionNoul:
+		if !unit(a.Noul) {
+			return typesafe.Answer{}, fmt.Errorf("copyjudge: %q noul %v out of range", id, a.Noul)
+		}
+	case typesafe.QuestionScore:
+		if a.Score < 0 || a.Score > float64(levels-1) || !unit(a.Confidence) {
+			return typesafe.Answer{}, fmt.Errorf("copyjudge: %q score %v off its rubric", id, a.Score)
+		}
+	case typesafe.QuestionChoice:
+		if a.Choice == "" || !unit(a.Confidence) {
+			return typesafe.Answer{}, fmt.Errorf("copyjudge: %q has no usable choice", id)
+		}
 	}
 	return a, nil
 }

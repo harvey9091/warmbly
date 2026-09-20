@@ -159,6 +159,13 @@ function FindingRow({ finding }: { finding: SpamFinding }) {
 // Thresholds mirror the backend policy (internal/app/copyjudge): a spam claim
 // counts from 0.7, and a three-level scale splits at thirds.
 const SPAM_CLAIM_AT = 0.7;
+const BULK_AT = 0.75;
+const JUDGMENT_CONF_FLOOR = 0.7;
+
+// Mirrors copyjudge.Verdict.ReadsAsBulk on the backend.
+function readsAsBulk(j: { reads_as: number; spam_claim: number; confidence: number }): boolean {
+    return (j.reads_as >= BULK_AT && j.confidence >= JUDGMENT_CONF_FLOOR) || j.spam_claim >= SPAM_CLAIM_AT;
+}
 
 function readsAsLabel(v: number): { label: string; tone: DitherTone; text: string } {
     if (v < 1 / 3) return { label: "Personal note", tone: "emerald", text: "text-emerald-600" };
@@ -524,7 +531,7 @@ export default function ContentScore({
                     ) : (
                         // Silent when the judgment already says otherwise: an
                         // all-clear under a bulk-mail reading contradicts it.
-                        !(analysis.judgment && analysis.judgment.spam_claim >= SPAM_CLAIM_AT) && (
+                        !(analysis.judgment && readsAsBulk(analysis.judgment)) && (
                             <p className="mt-2 inline-flex items-center gap-1.5 text-[11.5px] text-emerald-600">
                                 <ShieldCheckIcon className="w-3.5 h-3.5" /> Nothing in this copy stood out as spammy.
                             </p>

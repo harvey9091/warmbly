@@ -25,13 +25,17 @@ const copyJudgeTimeout = 10 * time.Second
 // campaign, from the cache where it can and from TypeSafe where it must. It
 // never fails the evaluation: a judge that is down leaves steps unjudged, and
 // the detectors that read a verdict stay silent on those.
-func (s *service) judgeCopy(ctx context.Context, snapshot *repository.AdvisorSnapshot) {
+//
+// It returns the steps that ended the run without a verdict (the cap, or a
+// judge that is down), so Evaluate can keep their existing findings open
+// rather than resolving them for lack of an answer.
+func (s *service) judgeCopy(ctx context.Context, snapshot *repository.AdvisorSnapshot) []uuid.UUID {
 	if s.judge == nil || s.judgeCache == nil {
-		return
+		return nil
 	}
 	steps := emailSteps(snapshot)
 	if len(steps) == 0 {
-		return
+		return nil
 	}
 	verdicts := make(map[uuid.UUID]copyjudge.Verdict, len(steps))
 	fresh := 0
@@ -76,4 +80,27 @@ func (s *service) judgeCopy(ctx context.Context, snapshot *repository.AdvisorSna
 		log.Printf("advisor: copy judgment cap of %d reached for org %s; the rest are judged next run", maxCopyJudgmentsPerRun, snapshot.OrganizationID)
 	}
 	snapshot.CopyJudgments = verdicts
+
+	var unjudged []uuid.UUID
+	for _, sc := range steps {
+		if _, ok := verdicts[sc.step.ID]; !ok {
+			unjudged = append(unjudged, sc.step.ID)
+		}
+	}
+	return unjudged
+}
+
+// judgmentFindingKeys are the detectors that read a copy verdict. A step with
+// no verdict this run keeps whichever of these it already had.
+var judgmentFindingKeys = []string{"copy_reads_as_bulk", "copy_no_clear_ask"}
+
+// keepUnjudged is the fingerprints ResolveMissing must leave alone.
+func keepUnjudged(steps []uuid.UUID) []string {
+	out := make([]string, 0, len(steps)*len(judgmentFindingKeys))
+	for _, id := range steps {
+		for _, key := range judgmentFindingKeys {
+			out = append(out, key+"|step:"+id.String())
+		}
+	}
+	return out
 }

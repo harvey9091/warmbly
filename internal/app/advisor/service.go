@@ -188,10 +188,12 @@ func (s *service) Evaluate(ctx context.Context, orgID uuid.UUID, trigger string)
 	if s.domainAuth != nil {
 		snapshot.DomainAuthEnforced, snapshot.DomainAuthGrace = s.domainAuth.DomainAuth(ctx)
 	}
-	s.judgeCopy(ctx, snapshot)
+	unjudged := s.judgeCopy(ctx, snapshot)
 	findings := Detect(snapshot, settings)
 
-	keep := make([]string, 0, len(findings))
+	// A step the judge did not reach this run is not a step whose copy got
+	// better; its judgment findings stay open until it is read again.
+	keep := keepUnjudged(unjudged)
 	stored := make([]*models.AdvisorFinding, 0, len(findings))
 	newCount := 0
 	for _, f := range findings {

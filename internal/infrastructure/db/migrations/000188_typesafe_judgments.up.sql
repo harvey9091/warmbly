@@ -10,9 +10,11 @@ ALTER TABLE public.inbox_tag_results
 -- A hold written from a classified reply is its own source, so a member's own
 -- pause and an out-of-office hold are never mistaken for it.
 ALTER TABLE public.campaign_leads DROP CONSTRAINT IF EXISTS campaign_leads_pause_source_check;
+-- NOT VALID: campaign_leads is large, and a validating ADD CONSTRAINT scans it
+-- under a lock that blocks writes. 000189 validates it in its own transaction.
 ALTER TABLE public.campaign_leads
     ADD CONSTRAINT campaign_leads_pause_source_check
-    CHECK (pause_source IS NULL OR pause_source IN ('manual', 'out_of_office', 'inbox_tagging'));
+    CHECK (pause_source IS NULL OR pause_source IN ('manual', 'out_of_office', 'inbox_tagging')) NOT VALID;
 
 -- The classified intent of the contact's reply (agreed, wants_pricing,
 -- not_now, ...), next to the coarse reply_class the branch conditions already
@@ -45,4 +47,4 @@ ALTER TABLE public.form_submissions
 ALTER TABLE public.form_submissions DROP CONSTRAINT IF EXISTS form_submissions_triage_check;
 ALTER TABLE public.form_submissions
     ADD CONSTRAINT form_submissions_triage_check
-    CHECK (triage IN ('', 'buyer', 'vendor', 'job_seeker', 'other', 'junk'));
+    CHECK (triage IN ('', 'buyer', 'vendor', 'job_seeker', 'other', 'junk')) NOT VALID;
