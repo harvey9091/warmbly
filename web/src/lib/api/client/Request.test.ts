@@ -78,6 +78,32 @@ describe("Request", () => {
         expect(result.label).toBe("2026-09-17");
     });
 
+    // A tab whose token went away in another tab keeps every page it rendered
+    // mounted and every poll on them running. Each poll lands here, and until
+    // this said so the app stayed on a page it could not authenticate and threw
+    // one unhandled AuthError a minute for as long as the tab was open.
+    it("ends the session when there is no token at all", async () => {
+        vi.mocked(getToken).mockReturnValue(null);
+
+        await expect(
+            Request({ method: "GET", url: "/emails", authorization: true }),
+        ).rejects.toBeInstanceOf(AuthError);
+
+        expect(endedSessions).toBe(1);
+        expect(Client.request).not.toHaveBeenCalled();
+    });
+
+    // An unauthorized call is how the login and registration pages talk to the
+    // API, and none of them has a session to end.
+    it("leaves an unauthorized call alone when there is no token", async () => {
+        vi.mocked(getToken).mockReturnValue(null);
+        vi.mocked(Client.request).mockResolvedValue({ data: { ok: true } });
+
+        await expect(Request({ method: "POST", url: "/auth/login" })).resolves.toEqual({ ok: true });
+
+        expect(endedSessions).toBe(0);
+    });
+
     // The database ran out of connection slots, /auth/refresh answered 500 for
     // about a minute, and everyone whose access token expired in that minute
     // was signed out and could not get back in: the refresh token the server

@@ -1,5 +1,7 @@
 import { clearClientSession } from "@/lib/session";
 import { SESSION_ENDED_EVENT } from "@/lib/auth";
+import { TOKEN_KEY } from "@/lib/information";
+import getToken from "@/lib/helper/getToken";
 import React, { useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { UserContext } from './context/user';
@@ -46,7 +48,20 @@ export const UserProvider = ({ children }: { children: React.ReactNode }) => {
     React.useEffect(() => {
         const ended = () => setSessionEnded(true);
         window.addEventListener(SESSION_ENDED_EVENT, ended);
-        return () => window.removeEventListener(SESSION_ENDED_EVENT, ended);
+        // Signing out in one tab takes the token away from all of them, and the
+        // event above is dispatched only in the tab that did it. The storage
+        // event fires only in the others, which is exactly the set left holding
+        // a rendered app it can no longer authenticate. A null key is storage
+        // being cleared wholesale.
+        const stored = (e: StorageEvent) => {
+            if (e.key !== null && e.key !== TOKEN_KEY) return;
+            if (!getToken()) setSessionEnded(true);
+        };
+        window.addEventListener("storage", stored);
+        return () => {
+            window.removeEventListener(SESSION_ENDED_EVENT, ended);
+            window.removeEventListener("storage", stored);
+        };
     }, []);
 
     const error = useMemo(() => {
