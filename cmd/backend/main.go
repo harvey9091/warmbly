@@ -398,27 +398,16 @@ func main() {
 			log.Fatal(err)
 		}
 
-		// A database the operator pointed us at is fetched once, when nothing is
-		// at the path yet. Failing to get one costs city labels and nothing else,
-		// so it is reported and stepped over.
-		if fetched, ferr := geo.Ensure(ctx, geoPath, cfg.LoadGeoDBURL(ctx)); ferr != nil {
-			log.Printf("GeoIP download failed: %v", ferr)
-		} else if fetched {
-			log.Printf("GeoIP database downloaded to %s.", geoPath)
-		}
-
 		// GeoIP is optional everywhere. It only labels session and audit records
 		// with a city, so a missing database is a cosmetic loss, not a reason to
 		// refuse to start: requiring a MaxMind licence to run APP_ENV=prod made
 		// self-hosting depend on an account nobody asked for.
-		var geoloc *geo.Client
-		geoloc, err = geo.New(geoPath)
-		if err != nil {
-			log.Printf("GeoIP database not found at %s; location lookups are disabled.", geoPath)
-			// geo.New returns a nil client on error; fall back to a usable,
-			// geo-disabled client so downstream callers never deref nil.
-			geoloc, _ = geo.New("")
-		}
+		//
+		// Nothing waits for it. The client starts answering Unknown and the
+		// database is swapped in when it lands, so a slow mirror costs city
+		// labels rather than the deploy's health check.
+		geoloc, _ := geo.New("")
+		geo.Start(ctx, geoloc, geoPath, cfg.LoadGeoDBURL(ctx))
 
 		s3, err := storage.NewFromEnv(ctx, awscfg, "main")
 		if err != nil {

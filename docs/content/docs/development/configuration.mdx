@@ -382,7 +382,9 @@ Any URL serving a MaxMind-format database works, and the shape is read from the 
 
 Two things to know:
 
-- **A file that is already there is never replaced.** The download only happens when `GEODB_PATH` holds nothing, so a mounted database, a volume that survived a restart, and a copy you dropped in by hand all win. On a host with no persistent disk that means one download per start; on a host with one, the first start only.
+- **Nothing waits for it.** The service starts with location lookups answering `Unknown` and picks the database up when it arrives, so a mirror that is slow or gone costs city labels rather than a deploy's health check.
+- **A file that is already there is kept until it goes stale.** A database less than seven days old is used as it is, with no request at all, so a mounted copy, a volume that survived a restart and a copy you dropped in by hand all win. Past seven days the file is revalidated with `If-Modified-Since`, which normally answers `304 Not Modified`, costs nothing and does not count against MaxMind's daily allowance; only a genuinely newer database is downloaded. With no URL set nothing is ever requested and the file is yours alone.
+- **A refused download is retried.** Four attempts with a growing wait, obeying a `Retry-After` when the server sends one. A throttled or briefly unreachable mirror used to cost that container its geo data for the whole of its life, because the fetch ran once at boot and never again. A refusal that will repeat, such as a bad licence key or a name that does not resolve, is not retried.
 - **A download that is not a database is thrown away, not installed.** An expired licence key returns an error page, and storing that would disable location lookups permanently, because the next start would find a file and not retry. The bytes are opened before they are put in place, and a failure leaves the path empty and one line in the log.
 - **Plain `http` is refused for a URL carrying a credential**, in the query or the userinfo, because it would put the licence key on the wire in the clear. An `http` mirror with nothing secret in its URL is allowed, and a redirect from `https` down to `http` is refused either way.
 
@@ -391,6 +393,28 @@ These URLs carry the account's credential, in the userinfo above and in the quer
 </Callout>
 
 The tracking service is the exception to the path: it holds its ASN database in memory and never writes it out, so `TRACKING_SCANNER_ASN_DB_URL` works on its own and `TRACKING_SCANNER_ASN_DB` can stay unset.
+
+### Mirror the databases rather than pulling from MaxMind
+
+A GeoLite2 account is allowed 30 direct downloads per 24 hours and answers `429` past that; a paid GeoIP account gets 2,000. Each consumer boot fetches GeoLite2-City and each tracking boot fetches GeoLite2-ASN, so a release costs two downloads and a restart loop costs one per restart. That is a ceiling you can reach on a busy day, and reaching it is worse than a failed download: a container that starts into a `429` has no geo data until it is replaced.
+
+Point the URLs at your own copy instead. `.github/workflows/geoip-mirror.yml` runs on Tuesdays and Fridays, which is MaxMind's own publish cadence, downloads both editions once and uploads them to a private bucket. The whole fleet then reads from there, and MaxMind sees two requests a week however often you deploy. An intra-region pull of a 60 MB file is also a second or two rather than however long MaxMind takes.
+
+It needs these repository settings, and skips itself when `MAXMIND_ACCOUNT_ID` is unset so a fork never fails on it:
+
+| Setting | Kind | Meaning |
+| --- | --- | --- |
+| `MAXMIND_ACCOUNT_ID` | variable | The numeric account id |
+| `MAXMIND_LICENSE_KEY` | secret | A licence key for that account |
+| `GEOIP_MIRROR_BUCKET` | variable | Bucket the copies are written to |
+| `GEOIP_MIRROR_REGION` | variable | Its region |
+| `GEOIP_MIRROR_PREFIX` | variable | Key prefix, including the trailing slash |
+| `GEOIP_MIRROR_AWS_ACCESS_KEY_ID` | secret | Credentials that may write that prefix, and nothing else |
+| `GEOIP_MIRROR_AWS_SECRET_ACCESS_KEY` | secret | |
+
+Then set `GEODB_URL` and `TRACKING_SCANNER_ASN_DB_URL` to the mirrored objects. Both accept a credential in the userinfo or the query, so a presigned URL or an object under a non-guessable key works without the services holding bucket credentials. Only the mirror job holds the MaxMind licence key, which is the other reason to prefer this: the key stops being deployment configuration on several services and becomes one repository secret.
+
+Keep the copies private. GeoLite2 may not be redistributed, which is also why nothing is ever baked into the published images. If you would rather have no account at all, DB-IP's Lite databases are CC-BY 4.0 and need none.
 
 ## Workers
 

@@ -554,17 +554,12 @@ func main() {
 	// (Avro on Kafka, JSON on NATS).
 	// GeoIP is optional here as on the backend: it only turns an open or
 	// click's source network into a country and city on the logs.
+	// Nothing waits for the database: opens and clicks are recorded either way
+	// and only their country and city label depends on it, so a mirror that is
+	// slow or gone must not delay this service coming up.
 	geoPath, _ := cfg.LoadGeoDBPath(ctx)
-	if fetched, ferr := geo.Ensure(ctx, geoPath, cfg.LoadGeoDBURL(ctx)); ferr != nil {
-		log.Printf("GeoIP download failed: %v", ferr)
-	} else if fetched {
-		log.Printf("GeoIP database downloaded to %s.", geoPath)
-	}
-	geoloc, gerr := geo.New(geoPath)
-	if gerr != nil {
-		log.Printf("GeoIP database not found at %s; engagement locations are disabled.", geoPath)
-		geoloc, _ = geo.New("")
-	}
+	geoloc, _ := geo.New("")
+	geo.Start(ctx, geoloc, geoPath, cfg.LoadGeoDBURL(ctx))
 	if trackingCfg, terr := cfg.LoadTrackingConsumerConfig(ctx); terr != nil {
 		log.Println("tracking consumer config unavailable; opens/clicks not consumed:", terr)
 	} else if trackingConsumer, terr := jobs.NewTrackingConsumer(
