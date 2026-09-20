@@ -350,12 +350,9 @@ func validateSMTPIMAPInput(data *models.NewSMTPIMAPAccount) *errx.Error {
 	return validateMailSecurity(data.SMTP, data.IMAP)
 }
 
-// normalizeMailPasswords strips what a copy and paste adds, on every path a
-// password arrives by (the form, the CSV import, the API, a re-auth). Google
-// prints an app password as four groups of four letters and accepts it
-// without the spaces, so on its hosts every whitespace goes; elsewhere only
-// the edges are trimmed, because a space inside a password is a character
-// the server expects.
+// normalizeMailPasswords drops every space from a Google app password (Google
+// prints them in groups of four) and trims only the edges elsewhere, where an
+// inner space can be part of the password.
 func normalizeMailPasswords(services ...*models.Service) {
 	for _, svc := range services {
 		if svc == nil {

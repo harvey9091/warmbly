@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/smtp"
 	"net/textproto"
+	"strings"
 	"time"
 
 	"github.com/warmbly/warmbly/internal/client/netbind"
@@ -51,11 +52,9 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 		return probeFailText(models.MailProbeCleartext, "unencrypted SMTP is only allowed to a loopback host on a self-hosted instance")
 	}
 	implicitTLS := resolved == models.MailSecurityTLS
-	if implicitTLS {
-		conn, err = netbind.TLSDialer(nil, tlsConf).DialContext(ctx, "tcp", addr)
-	} else {
-		conn, err = netbind.Dialer(nil).DialContext(ctx, "tcp", addr)
-	}
+	// TCP first and TLS second, like the IMAP probe, so a port that answers
+	// and then fails the handshake reads as a TLS problem, not as unreachable.
+	conn, err = netbind.Dialer(nil).DialContext(ctx, "tcp", addr)
 	// A bad host is ordinary user input, not an exceptional case: dial failed
 	// means conn is nil, and closing it would panic this goroutine and take
 	// the whole worker down with it.
@@ -63,11 +62,7 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 		if err == nil {
 			err = errors.New("dial returned no connection")
 		}
-		res := probeFail(ctx, dialReason(err), err)
-		if res.Reason != models.MailProbeTLS {
-			res.Detail = dialDetail(err)
-		}
-		return res
+		return probeFail(ctx, models.MailProbeUnreachable, err)
 	}
 	defer conn.Close()
 	if resolved == models.MailSecurityNone && !netbind.LoopbackPeer(conn) {
@@ -83,12 +78,24 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 	if err := conn.SetDeadline(deadline); err != nil {
 		return probeFail(ctx, models.MailProbeProtocol, err)
 	}
+	if implicitTLS {
+		tlsConn := tls.Client(conn, tlsConf)
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			return probeFail(ctx, models.MailProbeTLS, err)
+		}
+		conn = tlsConn
+	}
 
 	c, err := smtp.NewClient(conn, host)
 	if err != nil {
 		return probeFail(ctx, models.MailProbeProtocol, err)
 	}
 	defer c.Close()
+	// Explicit EHLO: Extension() swallows a failed greeting exchange and then
+	// reports no AUTH, which read as a mailbox with nothing to verify.
+	if err := c.Hello(ehloName(user)); err != nil {
+		return probeFail(ctx, models.MailProbeProtocol, err)
+	}
 
 	if !implicitTLS && resolved != models.MailSecurityNone {
 		// TLS stays mandatory, with the same dev-only escape hatch the send
@@ -151,4 +158,12 @@ func smtpAuthReason(err error) string {
 	default:
 		return models.MailProbeTemporary
 	}
+}
+
+// ehloName announces the sender's own domain, as the send path does.
+func ehloName(user string) string {
+	if at := strings.LastIndexByte(user, '@'); at >= 0 && at < len(user)-1 {
+		return user[at+1:]
+	}
+	return "localhost"
 }

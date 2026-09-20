@@ -104,7 +104,7 @@ func (s *emailService) ValidateCredentials(ctx context.Context, orgID uuid.UUID,
 	}
 }
 
-// validationWait is how long the caller waits for a worker's verdict. It is
-// deliberately longer than the worker's own deadline (worker.probeBudget)
-// so a verdict produced right at that limit is still heard.
-const validationWait = 9 * time.Second
+// validationWait is how long the caller waits for a worker's verdict. It
+// covers worker.validationBudget plus worker.replyBudget with room for the
+// bus both ways, so a verdict produced at the worker's limit is still heard.
+const validationWait = 14 * time.Second

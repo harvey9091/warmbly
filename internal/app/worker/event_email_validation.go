@@ -11,25 +11,15 @@ import (
 	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
-// validationBudget bounds everything before the reply: unsealing the
-// credentials and the two dials. The backend waits validationWait (9s) from
-// before it publishes the job, so this plus replyBudget has to fit inside
-// that with room for the bus; a verdict published after the backend has
-// stopped listening lands nowhere.
+// validationBudget bounds unsealing plus both dials. With replyBudget it must
+// sit well inside the backend's validationWait, which starts before publish.
 const validationBudget = 7 * time.Second
 
-// probeBudget bounds the two live dials within validationBudget. It starts
-// after the credentials are unsealed, so a cold key cache cannot eat the time
-// a slow mail host needs and turn a correct password into a refusal. The
-// reply below must be publishable after it runs out, so the dials get their
-// own context rather than sharing the handler's: a mail host slow enough to
-// use the whole budget used to leave no context left to answer on, and the
-// verdict was dropped on the floor.
+// probeBudget bounds the two dials, and starts only once the credentials are
+// unsealed so a cold key cache cannot turn a slow host into a refusal.
 const probeBudget = 5 * time.Second
 
-// replyBudget is the separate, short budget for publishing the verdict. It is
-// derived from the incoming context, not from the probe one, so an exhausted
-// probe deadline cannot cancel the answer.
+// replyBudget publishes the verdict on a context the probe deadline cannot cancel.
 const replyBudget = 3 * time.Second
 
 func (w *WorkerService) HandleEmailValidation(parent context.Context, data models.EventWorkerEmailValidation) error {

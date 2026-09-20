@@ -178,6 +178,22 @@ func TestVerifySMTP_Classifies(t *testing.T) {
 			t.Fatalf("got %+v, want protocol", res)
 		}
 	})
+	t.Run("a server that hangs up leaks no socket address", func(t *testing.T) {
+		host, port := fakeServer(t, func(conn net.Conn) {
+			r := bufio.NewReader(conn)
+			_, _ = conn.Write([]byte("220 fake ESMTP\r\n"))
+			_, _ = r.ReadString('\n') // EHLO, then hang up
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		res := VerifySMTP(ctx, host, port, "user", "pass", models.MailSecurityNone)
+		if res.OK || res.Reason == models.MailProbeAuthRefused {
+			t.Fatalf("got %+v", res)
+		}
+		if strings.Contains(res.Detail, "127.0.0.1") || strings.Contains(res.Detail, "->") {
+			t.Fatalf("detail %q leaks a socket address", res.Detail)
+		}
+	})
 	t.Run("4xx is temporary", func(t *testing.T) {
 		host, port := fakeServer(t, smtpRefusing("454 4.7.0 Too many login attempts, please try again later"))
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

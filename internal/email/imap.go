@@ -35,9 +35,7 @@ func VerifyImap(ctx context.Context, host string, port int, user, pass, security
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		res := probeFail(ctx, models.MailProbeUnreachable, err)
-		res.Detail = dialDetail(err)
-		return res
+		return probeFail(ctx, models.MailProbeUnreachable, err)
 	}
 	defer conn.Close()
 	if resolved == models.MailSecurityNone && !netbind.LoopbackPeer(conn) {
@@ -88,10 +86,8 @@ func VerifyImap(ctx context.Context, host string, port int, user, pass, security
 
 	select {
 	case err := <-done:
-		// Classify before the LOGOUT goes out, and do not wait for its
-		// answer: a server that answers LOGIN and then goes quiet would
-		// otherwise run out the deadline and turn a refusal into a timeout.
-		// The deferred Close ends the connection either way.
+		// Classified before LOGOUT, which is not waited for: a server that
+		// goes quiet after LOGIN would otherwise turn a refusal into a timeout.
 		res := probeOK()
 		if err != nil {
 			res = probeFail(ctx, imapLoginReason(err), err)

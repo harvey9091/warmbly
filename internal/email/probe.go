@@ -2,15 +2,16 @@ package email
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
+	"io"
 	"net"
+	"net/textproto"
 	"os"
 	"strings"
 	"syscall"
 	"unicode"
 
+	"github.com/emersion/go-imap/v2"
 	"github.com/warmbly/warmbly/internal/models"
 )
 
@@ -29,20 +30,32 @@ func (r ProbeResult) Leg() models.EmailValidationLeg {
 
 func probeOK() ProbeResult { return ProbeResult{OK: true} }
 
-// probeFail classifies err. A deadline anywhere wins over the given reason,
-// because a server that never answered has not refused anything.
+// probeFail classifies err. A deadline wins over the given reason, because a
+// server that never answered has not refused anything; a reply that did
+// arrive keeps its reason even if the deadline passed while reading it.
 func probeFail(ctx context.Context, reason string, err error) ProbeResult {
-	if timedOut(ctx, err) {
+	if !isServerReply(err) && timedOut(ctx, err) {
 		reason = models.MailProbeTimeout
 	}
-	return ProbeResult{Reason: reason, Detail: probeDetail(err)}
+	detail := probeDetail(err)
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		detail = netDetail(err)
+	}
+	return ProbeResult{Reason: reason, Detail: detail}
 }
 
-// dialDetail describes a failed connection in closed words. A dial error
-// names both ends of the socket when the worker binds a local address, and
-// the worker's address is not the customer's to see; what they need is
-// whether the name resolved and whether the port answered.
-func dialDetail(err error) string {
+// isServerReply reports whether err is the server's own tagged answer.
+func isServerReply(err error) bool {
+	var te *textproto.Error
+	var ie *imap.Error
+	return errors.As(err, &te) || errors.As(err, &ie)
+}
+
+// netDetail describes a socket failure in closed words. A net.OpError names
+// both ends of the socket when the worker binds a local address, and the
+// worker's address is not the customer's to see.
+func netDetail(err error) string {
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
 		if dnsErr.IsNotFound {
@@ -55,14 +68,14 @@ func dialDetail(err error) string {
 		return "the port refused the connection"
 	case errors.Is(err, syscall.EHOSTUNREACH), errors.Is(err, syscall.ENETUNREACH):
 		return "the host is not reachable from the worker's network"
-	case errors.Is(err, syscall.ECONNRESET):
-		return "the connection was reset"
+	case errors.Is(err, syscall.ECONNRESET), errors.Is(err, syscall.EPIPE), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return "the server closed the connection"
 	}
 	var ne net.Error
 	if errors.As(err, &ne) && ne.Timeout() {
 		return "the connection timed out"
 	}
-	return "the connection could not be opened"
+	return "the connection failed"
 }
 
 func probeFailText(reason, detail string) ProbeResult {
@@ -82,30 +95,6 @@ func timedOut(ctx context.Context, err error) bool {
 		return true
 	}
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded)
-}
-
-// dialReason separates a failed handshake from a failed connection: an implicit
-// TLS dial returns both through one error.
-func dialReason(err error) string {
-	if isTLSError(err) {
-		return models.MailProbeTLS
-	}
-	return models.MailProbeUnreachable
-}
-
-func isTLSError(err error) bool {
-	var certErr *tls.CertificateVerificationError
-	var hdrErr tls.RecordHeaderError
-	var alert tls.AlertError
-	var unknownCA x509.UnknownAuthorityError
-	var hostErr x509.HostnameError
-	var invalid x509.CertificateInvalidError
-	switch {
-	case errors.As(err, &certErr), errors.As(err, &hdrErr), errors.As(err, &alert),
-		errors.As(err, &unknownCA), errors.As(err, &hostErr), errors.As(err, &invalid):
-		return true
-	}
-	return err != nil && strings.HasPrefix(err.Error(), "tls:")
 }
 
 // probeDetail flattens an error into one printable line, capped, so a server
