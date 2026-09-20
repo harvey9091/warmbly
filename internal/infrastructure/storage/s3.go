@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"os"
+	"sync/atomic"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -14,6 +15,9 @@ type Client struct {
 	// PutPublic (needed for MinIO / R2 / self-hosted S3 that don't serve at
 	// s3.amazonaws.com). Empty falls back to the AWS virtual-hosted URL.
 	PublicBaseURL string
+	// aclRefused latches once the store has told us it does not do object
+	// ACLs, so only the first public write of the process pays to find out.
+	aclRefused atomic.Bool
 	*s3.Client
 }
 

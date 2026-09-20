@@ -28,6 +28,20 @@ const (
 	cliAuthIPWindow       = 15 * time.Minute
 	cliAuthIPDefaultLimit = 500
 
+	// Minting a passkey login challenge gets its own budget too, and for the
+	// same reason.
+	//
+	// The sign-in page asks for one on load, before anyone has typed anything:
+	// one for the passkey button and one for the email field's autofill. On the
+	// shared auth budget that is the page spending an office's allowance by
+	// being opened, and thirty loads from one NAT lock that address out of
+	// password sign-in, registration and password reset for the rest of the
+	// window. A challenge is unguessable, single-use and proves nothing, so it
+	// does not belong in the budget that bounds password guessing.
+	// /passkey/login/finish stays there, because that one is an attempt.
+	passkeyIPWindow       = 15 * time.Minute
+	passkeyIPDefaultLimit = 300
+
 	// The remaining public routes (unsubscribe, invitation preview, fleet
 	// enrolment, the analytics proxy) carry their authorization in a
 	// high-entropy token rather than a session, so this budget is not what
@@ -56,6 +70,14 @@ func (h *Handler) PublicIPRateLimitMiddleware() gin.HandlerFunc {
 func (h *Handler) CLIAuthIPRateLimitMiddleware() gin.HandlerFunc {
 	return h.ipRateLimiter("cli_auth_ip:", cliAuthIPDefaultLimit, "CLI_AUTH_IP_RATE_LIMIT", cliAuthIPWindow,
 		"Too many CLI sign-in requests from this address. Try again later.", false)
+}
+
+// PasskeyChallengeIPRateLimitMiddleware throttles the discoverable-login
+// challenge per source IP, on a key of its own so a sign-in page that asks for
+// one on every load cannot lock the same address out of signing in at all.
+func (h *Handler) PasskeyChallengeIPRateLimitMiddleware() gin.HandlerFunc {
+	return h.ipRateLimiter("passkey_ip:", passkeyIPDefaultLimit, "PASSKEY_IP_RATE_LIMIT", passkeyIPWindow,
+		"Too many passkey sign-in requests from this address. Try again later.", false)
 }
 
 // AuthIPRateLimitMiddleware throttles the public /auth group per source IP.

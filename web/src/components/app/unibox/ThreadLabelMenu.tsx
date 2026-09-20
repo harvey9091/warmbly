@@ -20,6 +20,7 @@ import useCreateCategory from "@/lib/api/hooks/app/categories/useCreateCategory"
 import useThreadLabels from "@/lib/api/hooks/app/unibox/useThreadLabels";
 import useSetThreadLabels from "@/lib/api/hooks/app/unibox/useSetThreadLabels";
 import { TagMeaningTooltip } from "@/components/ui/tag-meaning-tooltip";
+import { errorMessage } from "@/lib/errors/message";
 
 interface Props {
   threadId: string;
@@ -76,7 +77,7 @@ export function ThreadLabelMenu({ threadId, open, onOpenChange }: Props) {
       setQuery("");
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to create category",
+        errorMessage(err, "Failed to create category"),
       );
     }
   };
