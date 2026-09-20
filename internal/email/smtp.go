@@ -3,19 +3,27 @@ package email
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net"
 	"net/smtp"
+	"net/textproto"
+	"time"
 
 	"github.com/warmbly/warmbly/internal/client/netbind"
 	wsmtp "github.com/warmbly/warmbly/internal/client/smtpimap/smtp"
 	"github.com/warmbly/warmbly/internal/models"
 )
 
+// probeConversation bounds the SMTP conversation when the context carries no
+// deadline of its own.
+const probeConversation = 10 * time.Second
+
 // VerifySMTP probes a mailbox's SMTP credentials the same way the send path
 // connects: the caller's security mode decides implicit TLS versus STARTTLS,
 // and any port is accepted. security may be empty, in which case the port
-// convention decides.
-func VerifySMTP(ctx context.Context, host string, port int, user, pass, security string) bool {
+// convention decides. The result says why a probe failed, so a refused
+// password and an unreachable host are not reported as the same thing.
+func VerifySMTP(ctx context.Context, host string, port int, user, pass, security string) ProbeResult {
 	// Brackets belong to the address, not to the host, and JoinHostPort is
 	// what puts them back for an IPv6 literal.
 	host = models.NormalizeMailHost(host)
@@ -40,7 +48,7 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 	// safely fails at connect, where the user is standing in front of the
 	// form, rather than at the first send.
 	if resolved == models.MailSecurityNone && !models.CleartextMailAllowed(host) {
-		return false
+		return probeFailText(models.MailProbeCleartext, "unencrypted SMTP is only allowed to a loopback host on a self-hosted instance")
 	}
 	implicitTLS := resolved == models.MailSecurityTLS
 	if implicitTLS {
@@ -52,16 +60,29 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 	// means conn is nil, and closing it would panic this goroutine and take
 	// the whole worker down with it.
 	if err != nil || conn == nil {
-		return false
+		if err == nil {
+			err = errors.New("dial returned no connection")
+		}
+		return probeFail(ctx, dialReason(err), err)
 	}
 	defer conn.Close()
 	if resolved == models.MailSecurityNone && !netbind.LoopbackPeer(conn) {
-		return false
+		return probeFailText(models.MailProbeCleartext, "the host did not resolve to this machine")
+	}
+	// The greeting, EHLO and STARTTLS read with no deadline of their own, so a
+	// server that accepts and never speaks would park this goroutine, and the
+	// handler waiting on it, for good.
+	deadline := time.Now().Add(probeConversation)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return probeFail(ctx, models.MailProbeProtocol, err)
 	}
 
 	c, err := smtp.NewClient(conn, host)
 	if err != nil {
-		return false
+		return probeFail(ctx, models.MailProbeProtocol, err)
 	}
 	defer c.Close()
 
@@ -70,10 +91,10 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 		// path uses for the local no-STARTTLS sink.
 		if ok, _ := c.Extension("STARTTLS"); ok {
 			if err := c.StartTLS(tlsConf); err != nil {
-				return false
+				return probeFail(ctx, models.MailProbeTLS, err)
 			}
 		} else if !netbind.InsecureTLS() {
-			return false
+			return probeFailText(models.MailProbeTLS, "the server offers no STARTTLS on this port")
 		}
 	}
 
@@ -82,12 +103,12 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 	// with PLAIN alone rejected mailboxes whose credentials were correct.
 	auth, aerr := wsmtp.NegotiateAuth(c, user, pass, host)
 	if aerr != nil {
-		return false
+		return probeFail(ctx, models.MailProbeProtocol, aerr)
 	}
 	if auth == nil {
 		// No AUTH offered at all: nothing to verify, and the send path will
 		// not authenticate either.
-		return true
+		return probeOK()
 	}
 
 	done := make(chan error, 1)
@@ -95,8 +116,28 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 
 	select {
 	case err := <-done:
-		return err == nil
+		if err == nil {
+			return probeOK()
+		}
+		return probeFail(ctx, smtpAuthReason(err), err)
 	case <-ctx.Done():
-		return false
+		return probeFail(ctx, models.MailProbeTimeout, ctx.Err())
 	}
+}
+
+// smtpAuthReason reads an AUTH refusal by its reply code: a 5xx is the server's
+// answer to the credentials, a 4xx asks to come back later, and anything else
+// is the conversation breaking.
+func smtpAuthReason(err error) string {
+	var te *textproto.Error
+	if !errors.As(err, &te) {
+		if errors.Is(err, wsmtp.ErrSMTPCleartextAuth) {
+			return models.MailProbeCleartext
+		}
+		return models.MailProbeProtocol
+	}
+	if te.Code >= 500 {
+		return models.MailProbeAuthRefused
+	}
+	return models.MailProbeTemporary
 }

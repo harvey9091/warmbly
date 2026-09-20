@@ -74,7 +74,7 @@ Warmbly signs in with whichever method your server offers, preferring CRAM-MD5, 
 Choose **Add account**, then **Gmail / Google Workspace**. The dialog walks through three steps, and the only things you type are the address and the app password; the server settings are Gmail's own and are filled in for you.
 
 1. **Turn on 2-Step Verification** on the Google account, under [Google Account, Security](https://myaccount.google.com/security). Google only offers app passwords once it is on, and only alongside a second-step method other than a security key (a phone prompt, an authenticator app or a text message). Already on? Continue.
-2. **Create an app password** at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords): name it Warmbly, press **Create**, and copy the 16 characters. Google shows them once; the spaces between the groups do not matter, the dialog drops them.
+2. **Create an app password** at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords): name it Warmbly, press **Create**, and copy the 16 characters. Google shows them once; the spaces between the groups do not matter, Warmbly drops them wherever the password arrives (the dialog, the CSV import, the API).
 3. **Connect**: enter your name, the full address (including `@gmail.com` or your Workspace domain) and the app password. Warmbly checks it against Google before saving anything.
 
 The settings the dialog uses, in case you connect the same mailbox through **Other (SMTP / IMAP)** or the [CSV import](#connecting-many-mailboxes-at-once):
@@ -89,7 +89,7 @@ The username is the full address on both. The password is the app password, neve
 On Google Workspace the administrator decides. They can switch IMAP off for the organization under **Apps**, **Google Workspace**, **Gmail**, **End user access**, and control app passwords under **Security**, **Authentication**, **2-Step Verification**, where **Allow users to generate app passwords** is the setting and enforcing security keys as the only second step removes them regardless. Some accounts cannot have an app password at all: enrolling in Google's [Advanced Protection Program](https://landing.google.com/advancedprotection/) revokes them and hides the page. Ask the administrator to allow app passwords for the mailboxes you send from.
 
 <Callout type="warn" title="Authentication runs on connect">
-  Credentials and both connections are validated when you add the account, so wrong settings fail immediately rather than silently at send time. Tokens and credentials are sealed with envelope encryption before they touch storage.
+  Credentials and both connections are validated when you add the account, so wrong settings fail immediately rather than silently at send time. When the check fails, the message says which server (SMTP or IMAP) failed and quotes its reply, so a refused password, an unreachable host and a failed secure connection each read differently. Tokens and credentials are sealed with envelope encryption before they touch storage.
 </Callout>
 
 ### Local mail relays (Proton Bridge)
