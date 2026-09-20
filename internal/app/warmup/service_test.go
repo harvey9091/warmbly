@@ -169,3 +169,67 @@ func TestEvaluateMetricsIgnoresSmallSamples(t *testing.T) {
 		t.Fatalf("expected no block, got %#v", decision.BlockedUntil)
 	}
 }
+
+// Harm to received warmup mail climbs a ladder rather than blocking on the
+// first event: one deletion is housekeeping until proven otherwise (#635).
+func TestEvaluateMetricsTamperingLadder(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name        string
+		deletions   int
+		spamFlags   int
+		wantState   models.WarmupHealthState
+		wantBlocked time.Duration
+	}{
+		{"nothing", 0, 0, models.WarmupHealthHealthy, 0},
+		{"one deletion warns", 1, 0, models.WarmupHealthWatch, 0},
+		{"two deletions pause", 2, 0, models.WarmupHealthQuarantined, warmupQuarantineDuration},
+		{"one spam flag pauses", 0, 1, models.WarmupHealthQuarantined, warmupQuarantineDuration},
+		{"four deletions block", 4, 0, models.WarmupHealthBlocked, warmupBlockDuration},
+		{"two spam flags block", 0, 2, models.WarmupHealthBlocked, warmupBlockDuration},
+		{"a flag and two deletions block", 2, 1, models.WarmupHealthBlocked, warmupBlockDuration},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			decision := evaluateMetrics(&models.WarmupHealthMetrics{DeletionsLast7d: tc.deletions, SpamFlagsLast7d: tc.spamFlags}, now)
+			if decision.State != tc.wantState {
+				t.Fatalf("state = %s, want %s (reason %q)", decision.State, tc.wantState, decision.Reason)
+			}
+			if tc.wantBlocked == 0 {
+				if decision.BlockedUntil != nil {
+					t.Fatalf("a %s carries a term: %v", tc.wantState, decision.BlockedUntil)
+				}
+				return
+			}
+			if decision.BlockedUntil == nil || !decision.BlockedUntil.Equal(now.Add(tc.wantBlocked)) {
+				t.Fatalf("blocked until %v, want %s", decision.BlockedUntil, now.Add(tc.wantBlocked))
+			}
+			if decision.Reason == "" {
+				t.Fatal("a tampering decision carries no reason for the owner")
+			}
+		})
+	}
+}
+
+// A tampering block never requires review: it lapses like every other band,
+// so an accidental run of deletions is not permanent.
+func TestEvaluateMetricsTamperingBlockLapses(t *testing.T) {
+	decision := evaluateMetrics(&models.WarmupHealthMetrics{DeletionsLast7d: 6}, time.Now())
+	if decision.State != models.WarmupHealthBlocked || decision.BlockedUntil == nil {
+		t.Fatalf("decision = %+v, want a block with a term", decision)
+	}
+}
+
+// The tampering watch does not hide a worse rate band, and a rate watch is
+// not hidden by it either.
+func TestEvaluateMetricsTamperingCombinesWithRates(t *testing.T) {
+	now := time.Now()
+	decision := evaluateMetrics(&models.WarmupHealthMetrics{DeletionsLast7d: 1, SentLast7d: 20, SpamPlacementRate: 40}, now)
+	if decision.State != models.WarmupHealthBlocked {
+		t.Fatalf("one deletion masked a placement block: %s", decision.State)
+	}
+	decision = evaluateMetrics(&models.WarmupHealthMetrics{DeletionsLast7d: 2, SentLast7d: 20, SpamPlacementRate: 10}, now)
+	if decision.State != models.WarmupHealthQuarantined {
+		t.Fatalf("a placement watch masked a tampering quarantine: %s", decision.State)
+	}
+}

@@ -12,9 +12,9 @@ import (
 // HandleRemoveEmail processes a message removal observed during mailbox sync.
 //
 // Tampering protection: if the removed message was a warmup email (tracked in
-// warmup_received), the recipient deleted pool warmup mail — that harms the
-// pool, so we record a tampering strike against the mailbox and ban it from
-// warmup once the threshold is crossed. The owner can appeal.
+// warmup_received), the recipient deleted pool warmup mail. That is recorded
+// as a strike and the health bands decide: one deletion warns, more pauses or
+// blocks. The owner can appeal a block.
 //
 // It also drops the local unibox entry for the removed message (best-effort).
 func (s *JobsService) HandleRemoveEmail(ctx context.Context, e *models.JobEventRemoveEmail) error {

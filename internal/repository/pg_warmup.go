@@ -727,12 +727,17 @@ func (r *warmupRepository) HealthMetricCounts(ctx context.Context, accountID uui
 			  JOIN tasks t ON t.id = de.task_id
 			  WHERE t.email_account_id = $1 AND de.created_at >= $3 AND de.event_type IN ('complaint', 'bounce')),
 			(SELECT COUNT(*) FROM tasks
-			  WHERE email_account_id = $1 AND status = 'completed' AND completed_at >= $3)
+			  WHERE email_account_id = $1 AND status = 'completed' AND completed_at >= $3),
+			(SELECT COUNT(*) FILTER (WHERE kind = 'deletion') FROM warmup_tampering_events
+			  WHERE email_account_id = $1 AND created_at >= $2),
+			(SELECT COUNT(*) FILTER (WHERE kind = 'spam_flag') FROM warmup_tampering_events
+			  WHERE email_account_id = $1 AND created_at >= $2)
 	`
 	var c models.WarmupHealthCounts
 	err := r.db.QueryRow(ctx, query, accountID, since7d, since30d).Scan(
 		&c.SentLast7d, &c.SpamPlacementsLast7d, &c.UserComplaintsLast7d,
-		&c.ComplaintsLast30d, &c.BouncesLast30d, &c.DeliveredLast30d)
+		&c.ComplaintsLast30d, &c.BouncesLast30d, &c.DeliveredLast30d,
+		&c.DeletionsLast7d, &c.SpamFlagsLast7d)
 	return c, err
 }
 

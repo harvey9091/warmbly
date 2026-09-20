@@ -179,6 +179,8 @@ Shared pools only work if participants behave, so every mailbox is judged on rat
 
 Quarantined and blocked mailboxes are selected as neither sender nor recipient. Mail arriving in a mailbox is never held against it: every warmup message carries a single-use token bound to its recipient, so a token cannot be replayed or redirected, and one that lands where it does not belong is simply filed as ordinary mail.
 
+What a mailbox does to warmup mail it received is held against it, on a ladder rather than at once. Deleting a warmup email counts as one strike and marking one as spam counts as two, over the last seven days. One strike puts the mailbox on watch with the reason shown in its drawer, two pause it from the pool for seven days, and four block it for thirty. So tidying the Warmbly folder by hand once is a warning, not a ban, while flagging pool mail as spam twice is a block. A mailbox's own filing is never counted: Warmbly moving a warmup email into its folder, marking it read or rescuing it from spam is the platform acting, not the owner.
+
 <Callout type="warn" title="Acting early protects everyone">
   Warmbly intervenes well before providers would penalize a mailbox. One landing in spam a large share of the time is already dangerous to the pool, so it is throttled or removed rather than left collecting negative signals.
 </Callout>
