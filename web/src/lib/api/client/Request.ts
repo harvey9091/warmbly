@@ -7,7 +7,7 @@ import refreshTokenFn from "./auth/refreshToken";
 import setToken from "@/lib/helper/setToken";
 import reviveDates from "@/lib/helper/reviveDates";
 import type { AppError } from "./normalizeError";
-import { endSession } from "@/lib/auth";
+import { announceSessionEnded, endSession } from "@/lib/auth";
 import type Token from "@/lib/api/models/auth/Token";
 
 interface AuthRequestConfig extends AxiosRequestConfig {
@@ -77,6 +77,13 @@ function refusedRefresh(err: unknown): boolean {
 async function ensureValidToken(): Promise<Token> {
     const token = getToken();
     if (!token) {
+        // The token can go away without this tab being the one that dropped it:
+        // a sign-out in another tab, storage cleared, a session ended while
+        // this tab was in the background. Every page it has rendered is still
+        // mounted and every poll on them still runs, so without saying so here
+        // the polls throw this once a minute for the life of the tab and
+        // nothing ever navigates.
+        announceSessionEnded();
         throw noToken();
     }
 

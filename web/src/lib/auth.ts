@@ -100,12 +100,20 @@ export const clearTokens = () => {
 // was open.
 export const SESSION_ENDED_EVENT = "warmbly:session-ended";
 
+// announceSessionEnded says the session is over without touching storage.
+// Separate from endSession because the "there is no token at all" path has
+// nothing to clear, and clearing there would take the SSO binding and the
+// reply drafts with it on a path that also runs before anyone has signed in.
+export const announceSessionEnded = () => {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(SESSION_ENDED_EVENT));
+  }
+};
+
 // endSession ends the session and says so. Use it wherever the server has
 // refused the credentials; clearTokens alone is for a sign-out that already
 // owns the navigation.
 export const endSession = () => {
   clearTokens();
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new Event(SESSION_ENDED_EVENT));
-  }
+  announceSessionEnded();
 };
