@@ -48,6 +48,11 @@ func TestVerifySMTP_UnreachableHost(t *testing.T) {
 			if res.Reason != models.MailProbeUnreachable {
 				t.Fatalf("reason = %q (%s), want unreachable", res.Reason, res.Detail)
 			}
+			// The detail is a closed sentence: a raw dial error names the
+			// worker's own bound address alongside the peer.
+			if strings.Contains(res.Detail, "dial tcp") || strings.Contains(res.Detail, "127.0.0.1") {
+				t.Fatalf("detail %q leaks the dial error", res.Detail)
+			}
 		})
 	}
 }
@@ -155,6 +160,24 @@ func TestVerifySMTP_Classifies(t *testing.T) {
 			t.Fatalf("detail %q should carry the server's reply", res.Detail)
 		}
 	})
+	t.Run("534 is auth_refused too", func(t *testing.T) {
+		host, port := fakeServer(t, smtpRefusing("534 5.7.9 Application-specific password required"))
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		res := VerifySMTP(ctx, host, port, "user", "pass", models.MailSecurityNone)
+		if res.OK || res.Reason != models.MailProbeAuthRefused {
+			t.Fatalf("got %+v, want auth_refused", res)
+		}
+	})
+	t.Run("other 5xx is the conversation, not the password", func(t *testing.T) {
+		host, port := fakeServer(t, smtpRefusing("504 5.7.4 Unrecognized authentication type"))
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		res := VerifySMTP(ctx, host, port, "user", "pass", models.MailSecurityNone)
+		if res.OK || res.Reason != models.MailProbeProtocol {
+			t.Fatalf("got %+v, want protocol", res)
+		}
+	})
 	t.Run("4xx is temporary", func(t *testing.T) {
 		host, port := fakeServer(t, smtpRefusing("454 4.7.0 Too many login attempts, please try again later"))
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -221,6 +244,42 @@ func TestVerifyImap_Classifies(t *testing.T) {
 		}
 		if !strings.Contains(res.Detail, "Invalid credentials") {
 			t.Fatalf("detail %q should carry the server's reply", res.Detail)
+		}
+	})
+	t.Run("BAD is the conversation, not the password", func(t *testing.T) {
+		host, port := fakeServer(t, imapRefusing("BAD Invalid command"))
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		res := VerifyImap(ctx, host, port, "user", "pass", models.MailSecurityNone)
+		if res.OK || res.Reason != models.MailProbeProtocol {
+			t.Fatalf("got %+v, want protocol", res)
+		}
+	})
+	t.Run("refusal is classified before logout, even if logout is never answered", func(t *testing.T) {
+		host, port := fakeServer(t, func(conn net.Conn) {
+			r := bufio.NewReader(conn)
+			_, _ = conn.Write([]byte("* OK fake ready\r\n"))
+			for {
+				line, err := r.ReadString('\n')
+				if err != nil {
+					return
+				}
+				f := strings.Fields(line)
+				if len(f) >= 2 && strings.EqualFold(f[1], "LOGIN") {
+					_, _ = conn.Write([]byte(f[0] + " NO [AUTHENTICATIONFAILED] Invalid credentials (Failure)\r\n"))
+				}
+				// Everything else, LOGOUT included, is left unanswered.
+			}
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		res := VerifyImap(ctx, host, port, "user", "pass", models.MailSecurityNone)
+		if res.OK || res.Reason != models.MailProbeAuthRefused {
+			t.Fatalf("got %+v, want auth_refused", res)
+		}
+		if time.Since(start) > time.Second {
+			t.Fatal("the probe waited for a LOGOUT answer")
 		}
 	})
 	t.Run("UNAVAILABLE is temporary", func(t *testing.T) {

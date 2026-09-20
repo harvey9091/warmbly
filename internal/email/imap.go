@@ -35,7 +35,9 @@ func VerifyImap(ctx context.Context, host string, port int, user, pass, security
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return probeFail(ctx, models.MailProbeUnreachable, err)
+		res := probeFail(ctx, models.MailProbeUnreachable, err)
+		res.Detail = dialDetail(err)
+		return res
 	}
 	defer conn.Close()
 	if resolved == models.MailSecurityNone && !netbind.LoopbackPeer(conn) {
@@ -86,31 +88,41 @@ func VerifyImap(ctx context.Context, host string, port int, user, pass, security
 
 	select {
 	case err := <-done:
-		_ = c.Logout().Wait()
-		if err == nil {
-			return probeOK()
+		// Classify before the LOGOUT goes out, and do not wait for its
+		// answer: a server that answers LOGIN and then goes quiet would
+		// otherwise run out the deadline and turn a refusal into a timeout.
+		// The deferred Close ends the connection either way.
+		res := probeOK()
+		if err != nil {
+			res = probeFail(ctx, imapLoginReason(err), err)
 		}
-		return probeFail(ctx, imapLoginReason(err), err)
+		c.Logout()
+		return res
 	case <-ctx.Done():
-		// No logout: the server has not answered the login, and waiting for
-		// it to answer that would run out the socket deadline instead.
 		return probeFail(ctx, models.MailProbeTimeout, ctx.Err())
 	}
 }
 
-// imapLoginReason reads a LOGIN refusal. A status response is the server's
-// answer to the credentials; anything else is the conversation breaking.
+// imapLoginReason reads a LOGIN refusal. Only a tagged NO answers the
+// credentials (AUTHENTICATIONFAILED, or Google's bare [ALERT] asking for an
+// app password or a browser sign-in); a BAD is a command the server did not
+// accept, and the codes that ask for a retry are temporary.
 func imapLoginReason(err error) string {
 	var ierr *imap.Error
 	if !errors.As(err, &ierr) {
 		return models.MailProbeProtocol
 	}
+	switch ierr.Type {
+	case imap.StatusResponseTypeBad:
+		return models.MailProbeProtocol
+	case imap.StatusResponseTypeBye:
+		return models.MailProbeTemporary
+	}
 	switch ierr.Code {
 	case imap.ResponseCodeUnavailable, imap.ResponseCodeLimit, imap.ResponseCodeInUse:
 		return models.MailProbeTemporary
-	}
-	if ierr.Type == imap.StatusResponseTypeBye {
-		return models.MailProbeTemporary
+	case imap.ResponseCodePrivacyRequired:
+		return models.MailProbeProtocol
 	}
 	return models.MailProbeAuthRefused
 }

@@ -89,7 +89,7 @@ The username is the full address on both. The password is the app password, neve
 On Google Workspace the administrator decides. They can switch IMAP off for the organization under **Apps**, **Google Workspace**, **Gmail**, **End user access**, and control app passwords under **Security**, **Authentication**, **2-Step Verification**, where **Allow users to generate app passwords** is the setting and enforcing security keys as the only second step removes them regardless. Some accounts cannot have an app password at all: enrolling in Google's [Advanced Protection Program](https://landing.google.com/advancedprotection/) revokes them and hides the page. Ask the administrator to allow app passwords for the mailboxes you send from.
 
 <Callout type="warn" title="Authentication runs on connect">
-  Credentials and both connections are validated when you add the account, so wrong settings fail immediately rather than silently at send time. When the check fails, the message says which server (SMTP or IMAP) failed and quotes its reply, so a refused password, an unreachable host and a failed secure connection each read differently. Tokens and credentials are sealed with envelope encryption before they touch storage.
+  Credentials and both connections are validated when you add the account, so wrong settings fail immediately rather than silently at send time. When the check fails, the message says which server (SMTP or IMAP) failed and why, quoting the server's reply when there is one, so a refused password, an unreachable host and a failed secure connection each read differently. Tokens and credentials are sealed with envelope encryption before they touch storage.
 </Callout>
 
 ### Local mail relays (Proton Bridge)

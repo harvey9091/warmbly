@@ -63,7 +63,11 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 		if err == nil {
 			err = errors.New("dial returned no connection")
 		}
-		return probeFail(ctx, dialReason(err), err)
+		res := probeFail(ctx, dialReason(err), err)
+		if res.Reason != models.MailProbeTLS {
+			res.Detail = dialDetail(err)
+		}
+		return res
 	}
 	defer conn.Close()
 	if resolved == models.MailSecurityNone && !netbind.LoopbackPeer(conn) {
@@ -125,9 +129,12 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 	}
 }
 
-// smtpAuthReason reads an AUTH refusal by its reply code: a 5xx is the server's
-// answer to the credentials, a 4xx asks to come back later, and anything else
-// is the conversation breaking.
+// smtpAuthReason reads an AUTH refusal by its reply code. Only the two codes
+// that answer the credentials themselves are a refusal: 535 (RFC 4954) and
+// 534, which Google uses for "application-specific password required" and
+// "log in via your web browser". A 4xx asks to come back later; any other
+// 5xx (504 mechanism unsupported, 530 must STARTTLS, 538 encryption
+// required) is the conversation failing, not the password.
 func smtpAuthReason(err error) string {
 	var te *textproto.Error
 	if !errors.As(err, &te) {
@@ -136,8 +143,12 @@ func smtpAuthReason(err error) string {
 		}
 		return models.MailProbeProtocol
 	}
-	if te.Code >= 500 {
+	switch {
+	case te.Code == 534 || te.Code == 535:
 		return models.MailProbeAuthRefused
+	case te.Code >= 500:
+		return models.MailProbeProtocol
+	default:
+		return models.MailProbeTemporary
 	}
-	return models.MailProbeTemporary
 }

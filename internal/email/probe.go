@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"syscall"
 	"unicode"
 
 	"github.com/warmbly/warmbly/internal/models"
@@ -35,6 +36,33 @@ func probeFail(ctx context.Context, reason string, err error) ProbeResult {
 		reason = models.MailProbeTimeout
 	}
 	return ProbeResult{Reason: reason, Detail: probeDetail(err)}
+}
+
+// dialDetail describes a failed connection in closed words. A dial error
+// names both ends of the socket when the worker binds a local address, and
+// the worker's address is not the customer's to see; what they need is
+// whether the name resolved and whether the port answered.
+func dialDetail(err error) string {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		if dnsErr.IsNotFound {
+			return "the host name does not exist"
+		}
+		return "the host name could not be resolved"
+	}
+	switch {
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "the port refused the connection"
+	case errors.Is(err, syscall.EHOSTUNREACH), errors.Is(err, syscall.ENETUNREACH):
+		return "the host is not reachable from the worker's network"
+	case errors.Is(err, syscall.ECONNRESET):
+		return "the connection was reset"
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return "the connection timed out"
+	}
+	return "the connection could not be opened"
 }
 
 func probeFailText(reason, detail string) ProbeResult {

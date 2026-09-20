@@ -501,12 +501,12 @@ A `400` whose `code` is `mailbox_auth_refused` comes from the SMTP and IMAP conn
 
 #### `mailbox_unreachable`
 
-A `400` whose `code` is `mailbox_unreachable` comes from the same endpoints. The worker could not open a connection to the server at all: the name did not resolve, the port refused, or a firewall dropped the packets. The message says which server and what the dial reported. Nothing was saved.
+A `400` whose `code` is `mailbox_unreachable` comes from the same endpoints. The worker could not open a connection to the server at all: the name did not resolve, the port refused, or a firewall dropped the packets. The message says which server and which of those it was. Nothing was saved.
 
 ```json
 {
   "error": "Bad Request",
-  "message": "SMTP (smtp.example.com:465) could not be reached from the worker: dial tcp 203.0.113.9:465: connect: connection refused. Nothing was saved.",
+  "message": "SMTP (smtp.example.com:465) could not be reached from the worker: the port refused the connection. Nothing was saved.",
   "code": "mailbox_unreachable",
   "request_id": "6f3c0a1e-2d47-4c6b-9a1f-2b7c5f0e8d31"
 }
@@ -535,7 +535,7 @@ A `400` whose `code` is `mailbox_tls_failed` comes from the same endpoints. The 
 
 #### `mailbox_server_declined`
 
-A `400` whose `code` is `mailbox_server_declined` comes from the same endpoints. The server was reached and spoke, but the sign-in could not be completed for a reason other than the credentials: it asked for a retry later (a `4xx` reply, often a login rate limit), it offers no sign-in method Warmbly implements, or the conversation broke. The message carries the server's reply. Nothing was saved.
+A `400` whose `code` is `mailbox_server_declined` comes from the same endpoints. The sign-in could not be completed for a reason other than the credentials: the server asked for a retry later (a `4xx` reply, often a login rate limit), it offers no sign-in method Warmbly implements, it answered with a `5xx` that is not about the password (a mechanism it does not support, a STARTTLS it insists on), the conversation broke, or the probe itself failed before a reply arrived. The message carries the server's reply when there is one. Nothing was saved.
 
 ```json
 {
@@ -548,7 +548,7 @@ A `400` whose `code` is `mailbox_server_declined` comes from the same endpoints.
 
 **How to fix:**
 - For a `4xx` reply, wait a few minutes and retry
-- For a server that offers only mechanisms Warmbly does not implement (NTLM, GSSAPI), use the provider's documented SMTP submission host, or an app password
+- For a server that offers only mechanisms Warmbly does not implement (NTLM, GSSAPI), use the provider's documented SMTP submission host, which normally offers `LOGIN` or `PLAIN`; a different password does not add a mechanism
 
 #### `mailbox_worker_unreachable`
 
