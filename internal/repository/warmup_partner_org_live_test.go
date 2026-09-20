@@ -7,6 +7,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/warmbly/warmbly/internal/config"
+	"github.com/warmbly/warmbly/internal/models"
 )
 
 // partnerOrgFixture supplies sibling and outside partner ownership.
@@ -68,6 +71,8 @@ func newPartnerOrgFixture(t *testing.T) *partnerOrgFixture {
 		}{
 			{`DELETE FROM warmup_tokens WHERE sender_account_id = $1`, f.sender},
 			{`DELETE FROM tasks WHERE email_account_id = $1`, f.sender},
+			{`DELETE FROM warmup_received WHERE email_account_id IN
+			    (SELECT id FROM email_accounts WHERE user_id = $1)`, f.user},
 			{`DELETE FROM warmup_pool_participants WHERE email_account_id IN
 			    (SELECT id FROM email_accounts WHERE user_id = $1)`, f.user},
 			{`DELETE FROM email_accounts WHERE user_id = $1`, f.user},
@@ -199,5 +204,189 @@ func TestLiveGetPartnerDiversityCountsDistinctPartners(t *testing.T) {
 		t.Fatalf("GetPartnerDiversity: %v", err)
 	} else if d.Mailboxes != 0 {
 		t.Fatalf("a future window counted %d partners", d.Mailboxes)
+	}
+}
+
+// received records one verified warmup arrival at recipient from sender.
+func (f *partnerOrgFixture) received(t *testing.T, recipient, sender uuid.UUID, at time.Time) {
+	t.Helper()
+	f.exec(`INSERT INTO warmup_received (email_account_id, internal_id, message_id, sender_account_id, created_at)
+	        VALUES ($1, gen_random_uuid(), $2, $3, $4)`, recipient, "<"+uuid.NewString()+"@test.local>", sender, at)
+}
+
+// moveToFree re-files a fixture mailbox into the free tier, proven for the
+// given number of days.
+func (f *partnerOrgFixture) moveToFree(t *testing.T, id uuid.UUID, memberForDays int) {
+	t.Helper()
+	f.exec(`UPDATE warmup_pool_participants
+	           SET pool_id = $2, joined_at = NOW() - make_interval(days => $3)
+	         WHERE email_account_id = $1`, id, models.WarmupPoolFreeID, memberForDays)
+}
+
+func candidateByID(cands []models.WarmupPartnerCandidate, id uuid.UUID) (models.WarmupPartnerCandidate, bool) {
+	for _, c := range cands {
+		if c.ID == id {
+			return c, true
+		}
+	}
+	return models.WarmupPartnerCandidate{}, false
+}
+
+// A proven free mailbox may write back to the paying mailbox that wrote to it,
+// and to nobody else in the paying tier (#633).
+func TestLiveWarmupPartnerCandidatesReturnTheVisit(t *testing.T) {
+	f := newPartnerOrgFixture(t)
+	ctx := context.Background()
+	repo := &warmupRepository{db: f.pool}
+
+	// The sender is a free mailbox; the sibling and the outside partner stay
+	// premium. Only the outside partner has written to the sender.
+	f.moveToFree(t, f.sender, config.WarmupPoolFallbackMinAgeDays)
+	f.received(t, f.sender, f.outside, time.Now().Add(-time.Hour))
+
+	cands, err := repo.WarmupPartnerCandidates(ctx, "free", f.sender)
+	if err != nil {
+		t.Fatalf("WarmupPartnerCandidates: %v", err)
+	}
+	visit, ok := candidateByID(cands, f.outside)
+	if !ok {
+		t.Fatal("the paying mailbox that wrote to the sender is not offered back")
+	}
+	if visit.Origin != models.WarmupPartnerReturn || visit.PoolType != "premium" {
+		t.Fatalf("return visit carries origin %q in pool %q, want return/premium", visit.Origin, visit.PoolType)
+	}
+	if _, ok := candidateByID(cands, f.sibling); ok {
+		t.Fatal("a paying mailbox that never wrote to the sender is offered on the draw")
+	}
+
+	// The visit lapses with the window.
+	f.exec(`UPDATE warmup_received SET created_at = NOW() - make_interval(days => $2)
+	         WHERE email_account_id = $1`, f.sender, config.WarmupPoolReturnVisitDays+1)
+	cands, err = repo.WarmupPartnerCandidates(ctx, "free", f.sender)
+	if err != nil {
+		t.Fatalf("WarmupPartnerCandidates: %v", err)
+	}
+	if _, ok := candidateByID(cands, f.outside); ok {
+		t.Fatal("a visit older than the window is still returned")
+	}
+}
+
+// The return is only open to a sender that is itself proven: on watch, or too
+// new a member, it keeps warming in its own tier only.
+func TestLiveWarmupPartnerCandidatesReturnNeedsAProvenSender(t *testing.T) {
+	f := newPartnerOrgFixture(t)
+	ctx := context.Background()
+	repo := &warmupRepository{db: f.pool}
+	f.received(t, f.sender, f.outside, time.Now().Add(-time.Hour))
+
+	for _, tc := range []struct {
+		name string
+		prep func()
+	}{
+		{"a member for less than the minimum age", func() {
+			f.moveToFree(t, f.sender, config.WarmupPoolFallbackMinAgeDays-1)
+		}},
+		{"on watch", func() {
+			f.moveToFree(t, f.sender, config.WarmupPoolFallbackMinAgeDays)
+			f.exec(`UPDATE warmup_pool_participants SET health_state = 'watch' WHERE email_account_id = $1`, f.sender)
+		}},
+		{"in a restricted workspace", func() {
+			f.moveToFree(t, f.sender, config.WarmupPoolFallbackMinAgeDays)
+			f.exec(`UPDATE warmup_pool_participants SET health_state = 'healthy' WHERE email_account_id = $1`, f.sender)
+			f.exec(`UPDATE organizations SET risk_state = 'restricted' WHERE id = $1`, f.org)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.prep()
+			cands, err := repo.WarmupPartnerCandidates(ctx, "free", f.sender)
+			if err != nil {
+				t.Fatalf("WarmupPartnerCandidates: %v", err)
+			}
+			if _, ok := candidateByID(cands, f.outside); ok {
+				t.Fatal("an unproven free sender was offered a paying inbox")
+			}
+		})
+	}
+}
+
+// What a candidate sent and received travels with it, and one at its inbound
+// cap for the day is not offered to anyone.
+func TestLiveWarmupPartnerCandidatesCarryReciprocityAndHonourTheCap(t *testing.T) {
+	f := newPartnerOrgFixture(t)
+	ctx := context.Background()
+	repo := &warmupRepository{db: f.pool}
+
+	// The outside partner sent three and heard back once.
+	other := &partnerOrgFixture{pool: f.pool, sender: f.outside, exec: f.exec}
+	for i := 0; i < 3; i++ {
+		other.warmed(t, f.sibling)
+	}
+	f.received(t, f.outside, f.sibling, time.Now().Add(-2*time.Hour))
+	t.Cleanup(func() {
+		f.exec(`DELETE FROM warmup_tokens WHERE sender_account_id = $1`, f.outside)
+		f.exec(`DELETE FROM tasks WHERE email_account_id = $1`, f.outside)
+	})
+
+	cands, err := repo.WarmupPartnerCandidates(ctx, "premium", f.sender)
+	if err != nil {
+		t.Fatalf("WarmupPartnerCandidates: %v", err)
+	}
+	c, ok := candidateByID(cands, f.outside)
+	if !ok {
+		t.Fatal("the outside partner is missing")
+	}
+	if c.Sent7d != 3 || c.Received7d != 1 {
+		t.Fatalf("outside partner sent/received = %d/%d, want 3/1", c.Sent7d, c.Received7d)
+	}
+	if c.Origin != models.WarmupPartnerOwnTier || c.PoolType != "premium" {
+		t.Fatalf("own-tier partner carries origin %q in pool %q", c.Origin, c.PoolType)
+	}
+
+	// Fill the sibling's inbound cap for today; it drops out of every draw.
+	capToday := models.WarmupPartnerCandidate{}.InboundDailyCap(config.WarmupInboundDailyFloor, config.WarmupInboundDailyCeiling, config.WarmupInboundDailyMultiple)
+	for i := 0; i < capToday; i++ {
+		f.received(t, f.sibling, f.outside, time.Now().Add(-time.Minute))
+	}
+	cands, err = repo.WarmupPartnerCandidates(ctx, "premium", f.sender)
+	if err != nil {
+		t.Fatalf("WarmupPartnerCandidates: %v", err)
+	}
+	if _, ok := candidateByID(cands, f.sibling); ok {
+		t.Fatalf("a mailbox that received %d today is still offered", capToday)
+	}
+	if _, ok := candidateByID(cands, f.outside); !ok {
+		t.Fatal("the cap on one mailbox removed another")
+	}
+
+	// Yesterday's arrivals do not count against today.
+	f.exec(`UPDATE warmup_received SET created_at = NOW() - interval '1 day' WHERE email_account_id = $1`, f.sibling)
+	cands, err = repo.WarmupPartnerCandidates(ctx, "premium", f.sender)
+	if err != nil {
+		t.Fatalf("WarmupPartnerCandidates: %v", err)
+	}
+	if _, ok := candidateByID(cands, f.sibling); !ok {
+		t.Fatal("yesterday's arrivals kept a mailbox out of today's draw")
+	}
+}
+
+// The receiving side of the diversity read-out counts verified arrivals and
+// the distinct partners they came from.
+func TestLiveGetPartnerDiversityCountsArrivals(t *testing.T) {
+	f := newPartnerOrgFixture(t)
+	ctx := context.Background()
+	repo := &warmupRepository{db: f.pool}
+	since := time.Now().Add(-7 * 24 * time.Hour)
+
+	f.received(t, f.sender, f.outside, time.Now().Add(-time.Hour))
+	f.received(t, f.sender, f.outside, time.Now().Add(-2*time.Hour))
+	f.received(t, f.sender, f.sibling, time.Now().Add(-3*time.Hour))
+	f.received(t, f.sender, f.sibling, time.Now().Add(-9*24*time.Hour))
+
+	d, err := repo.GetPartnerDiversity(ctx, f.sender, since)
+	if err != nil {
+		t.Fatalf("GetPartnerDiversity: %v", err)
+	}
+	if d.Received != 3 || d.Senders != 2 {
+		t.Fatalf("received/senders = %d/%d, want 3/2", d.Received, d.Senders)
 	}
 }

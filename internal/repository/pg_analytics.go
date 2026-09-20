@@ -61,20 +61,47 @@ func NewAnalyticsRepository(db *db.DB) AnalyticsRepository {
 }
 
 func (r *analyticsRepository) GetWarmupStats(ctx context.Context, orgID uuid.UUID, emailAccountID *uuid.UUID, from, to time.Time) ([]models.WarmupDailyStats, *errx.Error) {
+	// Sends come from the daily plan rows, arrivals from the verified receipts,
+	// joined both ways so a day the mailbox was written to but did not send
+	// still shows what came in. Receipts are bucketed on the UTC day, which is
+	// the day the plan rows are keyed on.
 	query := `
+		WITH sent AS (
+			SELECT
+				ws.date,
+				SUM(ws.emails_sent) AS emails_sent,
+				SUM(ws.emails_replied) AS emails_replied,
+				SUM(ws.target_volume) AS target_volume
+			FROM warmup_statistics ws
+			JOIN email_accounts ea ON ea.id = ws.email_account_id
+			WHERE ea.organization_id = $1
+			  AND ws.date >= $2
+			  AND ws.date <= $3
+			  AND ($4::uuid IS NULL OR ws.email_account_id = $4)
+			GROUP BY ws.date
+		),
+		received AS (
+			SELECT
+				(wr.created_at AT TIME ZONE 'UTC')::date AS date,
+				COUNT(*) AS emails_received
+			FROM warmup_received wr
+			JOIN email_accounts ea ON ea.id = wr.email_account_id
+			WHERE ea.organization_id = $1
+			  AND wr.created_at >= $2::date
+			  AND wr.created_at < ($3::date + interval '1 day')
+			  AND ($4::uuid IS NULL OR wr.email_account_id = $4)
+			GROUP BY 1
+		)
 		SELECT
-			ws.date::text,
-			SUM(ws.emails_sent),
-			SUM(ws.emails_replied),
-			SUM(ws.target_volume)
-		FROM warmup_statistics ws
-		JOIN email_accounts ea ON ea.id = ws.email_account_id
-		WHERE ea.organization_id = $1
-		  AND ws.date >= $2
-		  AND ws.date <= $3
-		  AND ($4::uuid IS NULL OR ws.email_account_id = $4)
-		GROUP BY ws.date
-		ORDER BY ws.date ASC
+			COALESCE(s.date, r.date)::text,
+			COALESCE(s.emails_sent, 0),
+			COALESCE(s.emails_replied, 0),
+			COALESCE(r.emails_received, 0),
+			COALESCE(s.target_volume, 0),
+			s.date IS NOT NULL
+		FROM sent s
+		FULL OUTER JOIN received r ON r.date = s.date
+		ORDER BY 1 ASC
 	`
 
 	params := []any{orgID, from, to, emailAccountID}
@@ -89,7 +116,7 @@ func (r *analyticsRepository) GetWarmupStats(ctx context.Context, orgID uuid.UUI
 	stats := make([]models.WarmupDailyStats, 0)
 	for rows.Next() {
 		var s models.WarmupDailyStats
-		if err := rows.Scan(&s.Date, &s.EmailsSent, &s.EmailsReplied, &s.TargetVolume); err != nil {
+		if err := rows.Scan(&s.Date, &s.EmailsSent, &s.EmailsReplied, &s.EmailsReceived, &s.TargetVolume, &s.Active); err != nil {
 			db.CaptureError(err, "", nil, "scan")
 			return nil, errx.InternalError()
 		}

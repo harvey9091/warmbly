@@ -64,6 +64,9 @@ export interface WarmupHealthInfo {
     partner_mailboxes_7d: number;
     partner_domains_7d: number;
     partner_organizations_7d: number;
+    /** The receiving side over the same window: verified warmup arrivals and the distinct partners they came from. */
+    received_7d: number;
+    senders_7d: number;
 }
 
 export default interface AccountStatus {

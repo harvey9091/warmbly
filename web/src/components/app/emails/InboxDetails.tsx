@@ -747,8 +747,10 @@ function AnalyticsTab({ warmup, loading }: { warmup?: import("@/lib/api/models/a
     const chartData = warmup.daily_stats.map((d) => ({
         key: d.date,
         value: d.emails_sent,
-        hint: `${d.date}: ${d.emails_sent} sent / ${d.target_volume} target · ${d.emails_replied} replies`,
+        hint: `${d.date}: ${d.emails_sent} sent / ${d.target_volume} target · ${d.emails_received ?? 0} received · ${d.emails_replied} replies`,
     }));
+    const received = s.total_received ?? 0;
+    const exchange = s.total_sent > 0 ? `${Math.round((received / s.total_sent) * 100)}% of what it sent` : "from the pool";
     const targets = warmup.daily_stats.map((d) => d.target_volume);
     const selectedIndex = selectedDay ? warmup.daily_stats.findIndex((d) => d.date === selectedDay) : -1;
 
@@ -756,9 +758,12 @@ function AnalyticsTab({ warmup, loading }: { warmup?: import("@/lib/api/models/a
         <div className="divide-y divide-slate-200/60">
             <div className="grid grid-cols-2 divide-x divide-y divide-slate-200/60">
                 <StatCard label="Total sent" value={s.total_sent} sub={`${s.average_daily.toFixed(1)}/active day`} />
-                <StatCard label="Replies" value={s.total_replied} sub={`${s.reply_rate.toFixed(1)}% reply rate`} accent />
+                <StatCard label="Received" value={received} sub={exchange} accent />
+                <StatCard label="Replies" value={s.total_replied} sub={`${s.reply_rate.toFixed(1)}% reply rate`} />
                 <StatCard label="Target met" value={`${Math.round(s.target_progress)}%`} sub="of planned volume" />
-                <StatCard label="Days active" value={s.days_active} sub={`${warmup.date_range.from} → ${warmup.date_range.to}`} />
+                <div className="col-span-2">
+                    <StatCard label="Days active" value={s.days_active} sub={`${warmup.date_range.from} → ${warmup.date_range.to}`} />
+                </div>
             </div>
 
             <div className="px-5 py-4">
@@ -786,7 +791,7 @@ function AnalyticsTab({ warmup, loading }: { warmup?: import("@/lib/api/models/a
                     if (!d) return null;
                     return (
                         <p className="mt-2 text-[11px] text-slate-500 font-mono tabular-nums">
-                            {d.date}: {d.emails_sent} sent / {d.target_volume} target · {d.emails_replied} replies
+                            {d.date}: {d.emails_sent} sent / {d.target_volume} target · {d.emails_received ?? 0} received · {d.emails_replied} replies
                         </p>
                     );
                 })()}

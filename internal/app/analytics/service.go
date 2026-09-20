@@ -73,14 +73,16 @@ func (s *analyticsService) GetWarmupAnalytics(ctx context.Context, orgID uuid.UU
 	}
 
 	// Calculate summary
-	var totalSent, totalReplied, totalTarget int
+	var totalSent, totalReplied, totalReceived, totalTarget, daysActive int
 	for _, day := range dailyStats {
 		totalSent += day.EmailsSent
 		totalReplied += day.EmailsReplied
+		totalReceived += day.EmailsReceived
 		totalTarget += day.TargetVolume
+		if day.Active {
+			daysActive++
+		}
 	}
-
-	daysActive := len(dailyStats)
 	var averageDaily, replyRate, targetProgress float64
 	if daysActive > 0 {
 		averageDaily = float64(totalSent) / float64(daysActive)
@@ -100,6 +102,7 @@ func (s *analyticsService) GetWarmupAnalytics(ctx context.Context, orgID uuid.UU
 		Summary: models.WarmupSummary{
 			TotalSent:      totalSent,
 			TotalReplied:   totalReplied,
+			TotalReceived:  totalReceived,
 			AverageDaily:   averageDaily,
 			ReplyRate:      replyRate,
 			TargetProgress: targetProgress,
@@ -285,6 +288,8 @@ func (s *analyticsService) buildWarmupHealth(ctx context.Context, accountID uuid
 			info.PartnerMailboxes7d = d.Mailboxes
 			info.PartnerDomains7d = d.Domains
 			info.PartnerOrganizations7d = d.Organizations
+			info.Received7d = d.Received
+			info.Senders7d = d.Senders
 		}
 		return info
 	}

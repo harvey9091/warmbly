@@ -33,7 +33,7 @@ The controller runs every six hours against the last seven days of demand: at le
 
 ## Pools
 
-A pool is the set of mailboxes that warm each other. Your mailbox exchanges warmup mail within its own pool, with one documented exception below. Every instance has both pools from install, so a self-hosted instance warms within its own pools from the first mailbox; [Warmbly Cloud](/guides/warmbly-cloud/) is how it joins the hosted one instead.
+A pool is the set of mailboxes that warm each other. Your mailbox exchanges warmup mail within its own pool, with the mirrored crossings documented below. Every instance has both pools from install, so a self-hosted instance warms within its own pools from the first mailbox; [Warmbly Cloud](/guides/warmbly-cloud/) is how it joins the hosted one instead.
 
 | Pool | Who is in it |
 |------|--------------|
@@ -42,7 +42,11 @@ A pool is the set of mailboxes that warm each other. Your mailbox exchanges warm
 
 A mailbox belongs to exactly one pool at a time. When its plan changes the mailbox moves between pools rather than joining a second one, and it takes its warmup standing with it, so a quarantine or block is not cleared by changing tier.
 
-The separation is crossed in exactly one direction, and never silently: when the premium tier runs thin (fewer than 25 other eligible recipients), it borrows up to 25 free-tier mailboxes that have been pool members for at least three days, are healthy now, and belong to a workspace in good standing. It prefers a fresh partner from its own tier before a borrowed one, and checks each borrowed mailbox against its own pool's standing before using it. The free tier never draws premium partners. The one piece of free-to-paid warmup mail that exists is a borrowed mailbox answering the thread the paid mailbox started, which is what makes the exchange read as a conversation; a restricted workspace may not send even that.
+The separation is crossed in two mirrored ways, and never silently. When the premium tier runs thin (fewer than 25 other eligible recipients), it borrows up to 25 free-tier mailboxes that have been pool members for at least three days, are healthy now, and belong to a workspace in good standing. It prefers a fresh partner from its own tier before a borrowed one, and checks each borrowed mailbox against its own pool's standing before using it.
+
+The borrow is returned: a free-tier mailbox that meets the same bar (healthy now, a member for at least three days, in a workspace in good standing) may write to a paying mailbox that wrote to it in the last 14 days, and to no other paying mailbox. A visit is returned alongside the mailbox's own tier rather than after it, so a paying inbox is written back to even when the free tier is large. Nothing unsolicited from the free tier reaches a paying inbox: the paying side always opens the exchange, and a free mailbox on watch keeps warming in its own tier but stops calling on paying ones.
+
+Every draw also favours the inbox that is owed the most. A mailbox that has sent to many partners and heard back from few is drawn up to four times as often as one in balance, and the preference fades as the pool pays it back, so traffic settles near parity instead of overshooting. The other way is bounded too: an inbox receives at most about twice what it sends in a day (never fewer than 10, never more than 60), and once it reaches that it is left out of every draw for the rest of the day. A mailbox with nobody left to write to sends nothing and tries again later rather than mailing the same partner twice.
 
 Warmbly spreads sends across many partners and recipient domains rather than looping the same two mailboxes, since tight reciprocal pairs are easy for providers to spot. **Pool quality matters more than pool size.**
 
@@ -64,7 +68,9 @@ A struggling provider is downweighted, never excluded: a sender that stops maili
 
 ### Seeing the diversity you are getting
 
-A mailbox's drawer shows how many distinct partners its confirmed sends reached over the last seven days, on how many domains, in how many workspaces. Failed and still-pending attempts do not count. The numbers appear next to the local warmup reputation or inside the Warmbly Cloud card when the cloud warms the mailbox. A single workspace over a whole week is the number to watch, whether it is yours or somebody else's: warmup builds the most reputation across many workspaces and domains. It happens when a pool has no other partner available for that mailbox, and on a self-hosted instance that is not linked to Warmbly Cloud it is the only thing that can happen.
+A mailbox's drawer shows how many distinct partners its confirmed sends reached over the last seven days, on how many domains, in how many workspaces, and the other direction: how much verified warmup mail arrived and from how many partners. Failed and still-pending attempts do not count on the sending side, and only mail the mailbox's own sync verified counts on the receiving side. The numbers appear next to the local warmup reputation or inside the Warmbly Cloud card when the cloud warms the mailbox. A single workspace over a whole week is the number to watch, whether it is yours or somebody else's: warmup builds the most reputation across many workspaces and domains. It happens when a pool has no other partner available for that mailbox, and on a self-hosted instance that is not linked to Warmbly Cloud it is the only thing that can happen. A mailbox writing to far more partners than write back is flagged in the same place; the pool favours it on every draw until the two sides even out.
+
+The **Analytics** tab of the same drawer charts the exchange over time: sent, received and replies per day, with the total received against the total sent for the range. The same numbers are in the [warmup analytics](/api/reference/analytics/#get-warmup-analytics) endpoint.
 
 Turning off outbound warmup does not remove a healthy mailbox from the recipient pool. Disconnecting it, losing warmup-plan access, or entering a quarantined or blocked state does. Losing access removes the mailbox from its pool within minutes, whether or not it was still warming.
 
