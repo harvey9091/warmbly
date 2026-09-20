@@ -20,6 +20,7 @@ func (s *JobsService) HandleUpdateEmail(ctx context.Context, e *models.JobEventE
 			message.Flags = append(message.Flags, config.WarmupVerifyHeader+":"+token)
 		}
 		message.UID, message.Mailbox, message.ModSeq = e.UID, e.Mailbox, e.ModSeq
+		message.Seen = models.SeenFromFlags(e.Flags)
 		if e.FolderPath != "" {
 			message.FolderPath = e.FolderPath
 		}
@@ -39,6 +40,11 @@ func (s *JobsService) HandleUpdateEmail(ctx context.Context, e *models.JobEventE
 
 	if !slices.Equal(email.Flags, e.Flags) {
 		updateData.Flags = e.Flags
+	}
+	// The scan carries the message's whole flag set, so read state follows the
+	// provider: mail read in the customer's own client is read here too.
+	if seen := models.SeenFromFlags(e.Flags); seen != email.Seen {
+		updateData.Seen = &seen
 	}
 	if email.UID != e.UID {
 		updateData.UID = &e.UID
@@ -69,6 +75,7 @@ func (s *JobsService) HandleUpdateEmail(ctx context.Context, e *models.JobEventE
 	}
 
 	email.Flags = e.Flags
+	email.Seen = models.SeenFromFlags(e.Flags)
 	email.UID = e.UID
 	email.Mailbox = e.Mailbox
 	email.ModSeq = e.ModSeq
