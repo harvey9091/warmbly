@@ -167,7 +167,7 @@ describe("unibox list shortcuts (#484)", SUITE, () => {
         ).toBe(false);
 
         await act(async () => {
-            fireEvent.click(screen.getByText(ROWS[0].subject).closest("button")!);
+            fireEvent.click(screen.getByText(ROWS[0].subject).closest('[role="button"]')!);
         });
         await settle();
 

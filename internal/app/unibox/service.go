@@ -47,9 +47,10 @@ type UniboxService interface {
 	MarkSeenBulk(ctx context.Context, orgID uuid.UUID, data *models.MarkSeen) (*models.MarkSeen, *errx.Error)
 	MoveFolderBulk(ctx context.Context, orgID uuid.UUID, data *models.MoveFolder) (*models.MoveFolder, *errx.Error)
 
-	// Snooze hides a thread until `until`. Unsnooze drops the row.
-	Snooze(ctx context.Context, userID uuid.UUID, threadID string, until time.Time) (*models.UniboxSnooze, *errx.Error)
-	Unsnooze(ctx context.Context, userID uuid.UUID, threadID string) *errx.Error
+	// Snooze hides conversations until `until`. Unsnooze drops the rows. Both
+	// take a set so the list's selection bar is one call, not one per row.
+	Snooze(ctx context.Context, userID uuid.UUID, threadIDs []string, until time.Time) ([]models.UniboxSnooze, *errx.Error)
+	Unsnooze(ctx context.Context, userID uuid.UUID, threadIDs []string) *errx.Error
 	ListSnoozes(ctx context.Context, userID uuid.UUID) ([]models.UniboxSnooze, *errx.Error)
 
 	// Overview powers the scope rail + top metric strip in one call.

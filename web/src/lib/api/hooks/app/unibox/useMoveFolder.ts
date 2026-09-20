@@ -3,20 +3,25 @@ import moveFolder, { type FilableFolder } from "@/lib/api/client/app/unibox/move
 import { removeThreadsFromLists } from "./listCache";
 
 interface MoveFolderInput {
-    ids: string[];
+    /** Explicit message ids, for a caller that has the thread loaded. */
+    ids?: string[];
     folder: FilableFolder;
-    /** Conversation the ids belong to, so its row leaves the open list at once. */
-    threadId?: string;
+    /**
+     * Conversations to file. Their rows leave the open list at once, and the
+     * server files every message in each, which a list row could not name.
+     */
+    threadIds?: string[];
 }
 
 export default function useMoveFolder() {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: ({ ids, folder }: MoveFolderInput) => moveFolder({ ids, folder }),
-        // The row goes now; the refetch below confirms it.
-        onMutate: async ({ threadId }) => {
-            if (threadId) await removeThreadsFromLists(queryClient, [threadId]);
+        mutationFn: ({ ids, folder, threadIds }: MoveFolderInput) =>
+            moveFolder({ ids, threadIds, folder }),
+        // The rows go now; the refetch below confirms it.
+        onMutate: async ({ threadIds }) => {
+            if (threadIds?.length) await removeThreadsFromLists(queryClient, threadIds);
         },
         // A move changes which scopes the thread belongs to and every folder's
         // counts, so the whole unibox tree is re-read rather than patched. On

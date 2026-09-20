@@ -30,7 +30,9 @@ The conversation list takes the keyboard, so a triage pass never needs the mouse
 | `j` / `k` | Move down and up the list. From no selection, `j` takes the first conversation and `k` the last, whichever way the list is sorted. |
 | `g g` / `G` | Jump to the first or last conversation. |
 | `Enter` | Open the top conversation when nothing is selected yet. |
-| `Escape` | Clear the selection. Inside the search box it gives the keyboard back to the list. |
+| `x` | Tick or untick the row you are on, to build a selection. |
+| `e` | Archive the selection, or the row you are on when nothing is ticked. |
+| `Escape` | Clear the ticked rows, then the open conversation. Inside the search box it gives the keyboard back to the list. |
 | `/` | Put the caret in the list's search box. |
 | `c` | Label the open conversation. |
 
@@ -55,7 +57,7 @@ Opening **Inbox** from the main navigation starts in the Inbox folder. Sent mess
 
 Each message starts in the folder the provider has it in: IMAP special-use folder attributes, Gmail labels, and Outlook well-known folders all map to the same six. Moves at the provider (junking a message, clearing it out of spam) follow on the next sync. Drafts are also reconciled: a draft the mailbox no longer holds is removed here too, so the fresh copy Gmail saves on every autosave does not leave the previous ones behind. You can also file a conversation yourself, which moves it here without moving it at the provider; see [filing a conversation](#filing-a-conversation). The active row is highlighted grey, unread counts sit on the right in blue, and hovering a folder reveals a three-dot menu with **Mark all as read**.
 
-Spam and Trash stay out of every other view: the **All mail** view and the unread badge only count the folders you actually work.
+Spam and Trash stay out of every other view, and so does Archive: filing a conversation is how you take it out of the way, so it leaves Unread, Awaiting reply, every mailbox, label and tag view, and the unread badge. **All mail** and the **Archive** folder are the two places it stays, which is where you go to find it again.
 
 <Callout type="info" title="Spam and Trash start from when you connect">
 The initial import that runs when a mailbox is first connected covers Inbox, Sent, Archive, and Drafts. It deliberately skips the existing contents of Spam and Trash, whose history would consume the import budget that belongs to real conversations. Both folders fill normally from the moment the mailbox is connected, so they show what arrives from then on rather than what was already there.
@@ -65,9 +67,9 @@ The initial import that runs when a mailbox is first connected covers Inbox, Sen
 
 | View | Shows |
 | --- | --- |
-| All mail | Every conversation across every mailbox (except Spam and Trash) |
+| All mail | Every conversation across every mailbox, archived ones included (except Spam and Trash) |
 | Unread | At least one unread message |
-| Awaiting reply | The other side is waiting on you |
+| Awaiting reply | You wrote last and they have not answered |
 | Agent drafts | Conversations where the [inbox agent](/guides/inbox-agent/) has a reply waiting for review |
 | Snoozed | Snoozed for later |
 | Scheduled | Replies queued to send later |
@@ -134,7 +136,7 @@ Categories label conversations. Tags label the mailboxes themselves (grouping ac
 
 ## Read state
 
-A conversation is unread when any message inside is unseen, marked by a blue dot in the margin, bolder text, and a blue timestamp. Opening it marks its messages seen and updates the counts.
+A conversation is unread when any message inside is unseen, marked by a blue dot in the margin, bolder text, and a blue timestamp. Opening it marks its messages seen and updates the counts, and so does **Mark as read** on the row or on a selection, without opening anything.
 
 Read state travels both ways. A message arriving already read is stored that way, and reading a conversation here marks it read in the mailbox itself, so Gmail, Outlook and any IMAP mailbox stop showing it bold too. **Mark as unread** does the same in reverse, and **Mark all as read** on a folder carries the whole sweep across. Only a real change travels: opening a conversation you have already read costs nothing at the provider.
 
@@ -151,6 +153,18 @@ The thread header carries three filing actions, on the row above the message on 
 | Delete | Moves the conversation to Trash, so it leaves every view except Trash |
 
 Archive and Delete both offer **Undo** on the confirmation toast. Open the Trash or Archive folder and the same header offers **Move to inbox**, so nothing filed by accident is stuck.
+
+### From the list, without opening anything
+
+You do not have to open a conversation to deal with it. Hover a row (or just look at it on a phone, where they are always shown) and the right of the first line carries **Archive** and a three-dot menu with **Mark as read / unread**, **Snooze**, **Archive** or **Move to inbox**, and **Delete**. In Archive and Trash the same controls offer the way back rather than the way out.
+
+Archiving from a row files the whole conversation, not the message the row is showing, so it really does leave the view you filed it from.
+
+### Working on several at once
+
+Each row has a tick box in its left gutter, in place of the unread dot. Hover a row to see it, or press **Select** in the list header, which shows every box at once and adds an **All** box that takes everything currently loaded. `x` ticks the row you are on from the keyboard, and holding `Shift` while ticking takes the whole run between that row and the last one you ticked.
+
+With anything ticked, a bar appears along the bottom of the screen with the count and the actions that apply to all of them: **Mark read**, **Mark unread**, **Snooze**, **Archive** (or **Move to inbox**) and **Delete**. Each one is a single request, so filing a screenful is as quick as filing one. **Clear** drops the selection, and so does `Escape`; changing view drops it too, since the rows it applied to are no longer the rows on screen.
 
 <Callout type="info" title="Filing here does not move the message at the provider">
 Unlike read state, Archive and Delete are Warmbly's own filing. The message keeps its place in Gmail, Outlook, or whatever mail client the mailbox belongs to, and deleting a conversation here never deletes mail there. The next sync will not undo your filing either: Warmbly records where the provider has each message separately from where you filed it, and follows the provider only when the provider itself moves the message. So junking a message in Gmail still reaches Warmbly, and an ordinary sync pass does not.

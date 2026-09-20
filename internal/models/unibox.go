@@ -332,15 +332,24 @@ type MailSearchParams struct {
 	// conversation labels at all. nil = no filter.
 	Uncategorized *bool
 	// Folder narrows to one canonical folder (inbox/sent/drafts/archive/
-	// spam/trash). nil = every folder except spam and trash, so junk never
-	// bleeds into the combined view.
-	Folder   *string
-	PageSize int
-	Cursor   string
+	// spam/trash). nil = every working folder, so junk and filed mail never
+	// bleed into the combined view.
+	Folder *string
+	// IncludeArchived puts archived conversations back into an unscoped
+	// result. Filing is how a conversation leaves the working views, so it
+	// has to leave all of them; only "All mail" and reference reads (compose
+	// history) ask for it. Ignored when Folder names one.
+	IncludeArchived *bool
+	PageSize        int
+	Cursor          string
 }
 
 type MarkSeen struct {
 	EmailIDs []uuid.UUID `json:"email_ids"`
+	// ThreadIDs marks whole conversations, so a caller holding a list row
+	// does not have to fetch the thread to learn its message ids. Each entry
+	// is a thread id, or a message id for mail that never got one.
+	ThreadIDs []string `json:"thread_ids,omitempty"`
 	// Folder, when set, marks every unread message in that folder for the
 	// whole workspace instead of the explicit id list.
 	Folder string `json:"folder,omitempty"`
@@ -352,7 +361,12 @@ type MarkSeen struct {
 // is not moved, so the message stays where it is in the user's mail client.
 type MoveFolder struct {
 	EmailIDs []uuid.UUID `json:"email_ids"`
-	Folder   string      `json:"folder"`
+	// ThreadIDs files whole conversations. A row in the list knows its thread
+	// but not the ids inside it, and filing half a conversation leaves it in
+	// the view it was filed out of. Each entry is a thread id, or a message id
+	// for mail that never got one.
+	ThreadIDs []string `json:"thread_ids,omitempty"`
+	Folder    string   `json:"folder"`
 }
 
 // UniboxSnooze hides a thread from the user's inbox until SnoozedUntil

@@ -301,6 +301,12 @@ export default function UniboxPage() {
           // mailbox.
           next.categoryIds = [scope.categoryId];
           break;
+        case "all":
+          // All mail is the one view a filed conversation stays in, so
+          // Archive means "out of the way", not "gone". Every other scope
+          // leaves it out, which is what makes the button do something.
+          next.includeArchived = true;
+          break;
         case "view": {
           // A premade view is a set of automatic labels, resolved to the
           // workspace's category rows by slug.
