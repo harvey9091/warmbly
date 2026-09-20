@@ -171,6 +171,7 @@ function FormsList() {
                     category_ids: f.category_ids,
                     allowed_domains: f.allowed_domains,
                     captcha_enabled: f.captcha_enabled,
+                    triage_enabled: f.triage_enabled,
                 },
             });
             toast.success(`Duplicated as ${copy.name}`);

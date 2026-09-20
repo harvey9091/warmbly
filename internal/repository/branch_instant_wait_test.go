@@ -75,3 +75,87 @@ func TestRoutedWaitHonorsTheBranchInstantFlag(t *testing.T) {
 }
 
 func intPtr(v int) *int { return &v }
+
+// A reply_intent condition is a strict pair with "is" and one intent name,
+// like ai_label, and it must never validate against another operator or an
+// unbounded label.
+func TestValidateBranchConditionsReplyIntent(t *testing.T) {
+	cases := []struct {
+		name string
+		cond models.BranchCondition
+		ok   bool
+	}{
+		{"is with an intent", models.BranchCondition{Field: "reply_intent", Operator: "is", Label: "wants_pricing"}, true},
+		{"empty label", models.BranchCondition{Field: "reply_intent", Operator: "is", Label: ""}, false},
+		{"uppercase label", models.BranchCondition{Field: "reply_intent", Operator: "is", Label: "Agreed"}, false},
+		{"label too long", models.BranchCondition{Field: "reply_intent", Operator: "is", Label: "a_very_long_intent_name_that_runs_past_the_cap"}, false},
+		{"wrong operator", models.BranchCondition{Field: "reply_intent", Operator: "ever", Label: "agreed"}, false},
+		{"is on an engagement field", models.BranchCondition{Field: "opened", Operator: "is", Label: "agreed"}, false},
+		{"is still pairs with ai_label", models.BranchCondition{Field: "ai_label", Operator: "is", Label: "interested"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bc := &models.BranchConditions{Branches: []models.Branch{{BranchID: "b1", Conditions: []models.BranchCondition{tc.cond}}}}
+			err := validateBranchConditions(bc)
+			if (err == nil) != tc.ok {
+				t.Fatalf("validateBranchConditions(%+v) err = %v, want ok=%v", tc.cond, err, tc.ok)
+			}
+		})
+	}
+}
+
+// reply_intent decides immediately off the stored intent, case-insensitively,
+// and an untagged reply matches nothing so it falls to the catch-all.
+func TestConditionStateReplyIntent(t *testing.T) {
+	cases := []struct {
+		name   string
+		stored string
+		label  string
+		want   BranchState
+	}{
+		{"same intent", "wants_pricing", "wants_pricing", BranchMatch},
+		{"case-insensitive", "Wants_Pricing", "wants_pricing", BranchMatch},
+		{"different intent", "not_now", "wants_pricing", BranchNoMatch},
+		{"never tagged", "", "wants_pricing", BranchNoMatch},
+		{"never tagged and empty label", "", "", BranchNoMatch},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prog := &CampaignContactProgress{ContactID: uuid.New(), ReplyIntent: tc.stored}
+			cond := models.BranchCondition{Field: "reply_intent", Operator: "is", Label: tc.label}
+			got, at := conditionState(cond, prog, "b1", time.Now().Add(-time.Hour), time.Now())
+			if got != tc.want {
+				t.Fatalf("state = %v, want %v", got, tc.want)
+			}
+			if !at.IsZero() {
+				t.Fatalf("recheck at = %s, want none: reply_intent has no window", at)
+			}
+		})
+	}
+}
+
+// reply_intent fires on the reply event like the reply_* class fields, so an
+// instant reply trigger routes on it the moment the reply lands.
+func TestReplyIntentIsAnInstantReplyField(t *testing.T) {
+	if !fieldBelongsToEvent("reply_intent", "reply") {
+		t.Fatal("reply_intent should belong to the reply event")
+	}
+	if fieldBelongsToEvent("reply_intent", "open") || fieldBelongsToEvent("reply_intent", "click") {
+		t.Fatal("reply_intent should not belong to open or click")
+	}
+	target := uuid.New()
+	bc := &models.BranchConditions{Branches: []models.Branch{{
+		BranchID:         "b1",
+		TargetSequenceID: &target,
+		Conditions:       []models.BranchCondition{{Field: "reply_intent", Operator: "is", Label: "agreed"}},
+	}}}
+	prog := &CampaignContactProgress{ContactID: uuid.New(), ReplyIntent: "agreed"}
+	matched, got, instant := MatchInstantBranchTarget(bc, prog, "reply")
+	if !matched || !instant || got == nil || *got != target {
+		t.Fatalf("MatchInstantBranchTarget = (%v, %v, %v), want match on %s", matched, got, instant, target)
+	}
+	prog.ReplyIntent = "not_now"
+	if matched, _, _ := MatchInstantBranchTarget(bc, prog, "reply"); matched {
+		t.Fatal("a different intent must not match")
+	}
+}

@@ -250,6 +250,24 @@ func (f *fakeRepo) ThreadStates(context.Context, uuid.UUID, time.Time, int) ([]r
 	return f.states, nil
 }
 
+func (f *fakeRepo) GetByMessageID(_ context.Context, _ uuid.UUID, id string) (*repository.InboxTagResult, error) {
+	for _, r := range f.saved {
+		if r.MessageID == id {
+			return r, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeRepo) RecordActions(_ context.Context, _ uuid.UUID, id string, actions []string) error {
+	for _, r := range f.saved {
+		if r.MessageID == id {
+			r.Actions = actions
+		}
+	}
+	return nil
+}
+
 func newService(t *testing.T, asker Asker, repo repository.InboxTagRepository) *Service {
 	t.Helper()
 	return NewService(asker, repo, nil, nil, true)

@@ -132,7 +132,7 @@ var table = []Entry{
 	},
 	{
 		Key: "TYPESAFE_API_KEY", Group: GroupDeployment, RuntimeChangeable: ChangeBootOnly,
-		Effect:     "Credential for optional automatic inbox tagging. The feature remains off until INBOX_TAGGING_ENABLED is also true.",
+		Effect:     "Credential for the TypeSafe judgments: reply classification, copy judgment, warmup content lint, bounce classification and form triage. Inbox tagging also needs INBOX_TAGGING_ENABLED.",
 		DocsAnchor: docsAI,
 		Resolve:    envValue("TYPESAFE_API_KEY"),
 	},

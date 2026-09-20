@@ -13,6 +13,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/aitools"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/typesafe"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -91,6 +92,11 @@ type service struct {
 	// domain-auth finding describes what actually happens on this install
 	// rather than what happens on a default one. Optional/nil-safe.
 	domainAuth DomainAuthPolicy
+
+	// The copy judge. Both optional together: without them the copy
+	// detectors that read a verdict never fire, and the regex ones still do.
+	judge      typesafe.Asker
+	judgeCache repository.CopyJudgmentRepository
 }
 
 // DomainAuthPolicy resolves whether the sending-domain authentication gate is
@@ -139,6 +145,18 @@ func WithDomainAuthPolicy(p DomainAuthPolicy) Option {
 	return func(s *service) { s.domainAuth = p }
 }
 
+// WithCopyJudge supplies the TypeSafe client and the verdict cache that let
+// the copy detectors read how a step's copy lands with its reader. A nil asker
+// leaves the option inert, so the caller can pass whatever it has.
+func WithCopyJudge(asker typesafe.Asker, cache repository.CopyJudgmentRepository) Option {
+	return func(s *service) {
+		if asker == nil || cache == nil {
+			return
+		}
+		s.judge, s.judgeCache = asker, cache
+	}
+}
+
 // maxNarrationsPerRun bounds how many completions one evaluation can spend.
 // New findings are narrated most-severe-first, so the cap only ever costs the
 // least important cards their rewrite, and the next run picks them up.
@@ -170,6 +188,7 @@ func (s *service) Evaluate(ctx context.Context, orgID uuid.UUID, trigger string)
 	if s.domainAuth != nil {
 		snapshot.DomainAuthEnforced, snapshot.DomainAuthGrace = s.domainAuth.DomainAuth(ctx)
 	}
+	s.judgeCopy(ctx, snapshot)
 	findings := Detect(snapshot, settings)
 
 	keep := make([]string, 0, len(findings))

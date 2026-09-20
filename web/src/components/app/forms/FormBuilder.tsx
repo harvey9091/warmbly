@@ -87,6 +87,7 @@ interface Draft {
     category_ids: string[];
     allowed_domains: string[];
     captcha_enabled: boolean;
+    triage_enabled: boolean;
 }
 
 function draftFrom(f: Form): Draft {
@@ -100,6 +101,7 @@ function draftFrom(f: Form): Draft {
         category_ids: [...f.category_ids],
         allowed_domains: [...f.allowed_domains],
         captcha_enabled: f.captcha_enabled,
+        triage_enabled: f.triage_enabled,
     };
 }
 
@@ -337,6 +339,7 @@ export default function FormBuilder({ form }: { form: Form }) {
             category_ids: d.category_ids,
             allowed_domains: d.allowed_domains,
             captcha_enabled: d.captcha_enabled,
+            triage_enabled: d.triage_enabled,
             ...(s ? { status: s } : {}),
         };
     }
@@ -383,6 +386,7 @@ export default function FormBuilder({ form }: { form: Form }) {
 
     const selected = draft.fields.find((f) => f.id === selectedId) ?? null;
     const captchaAvailable = config.data?.captcha_available ?? false;
+    const triageAvailable = config.data?.triage_available ?? false;
     const baseUrl = config.data?.base_url ?? "";
 
     const canvas = (
@@ -573,7 +577,12 @@ export default function FormBuilder({ form }: { form: Form }) {
 
                 {tab === "settings" && (
                     <div className="flex-1 overflow-y-auto">
-                        <SettingsPanel draft={draft} captchaAvailable={captchaAvailable} onChange={(patch) => patchDraft(patch)} />
+                        <SettingsPanel
+                            draft={draft}
+                            captchaAvailable={captchaAvailable}
+                            triageAvailable={triageAvailable}
+                            onChange={(patch) => patchDraft(patch)}
+                        />
                     </div>
                 )}
 

@@ -71,7 +71,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import type Sequence from "@/lib/api/models/app/campaigns/sequences/Sequence";
 import type { SequenceBranch, BranchCondition, BranchField } from "@/lib/api/models/app/campaigns/sequences/Branching";
-import { BRANCH_FIELD_LABELS, isReplyBranchField, isInstantCapableField } from "@/lib/api/models/app/campaigns/sequences/Branching";
+import { BRANCH_FIELD_LABELS, REPLY_INTENTS, isReplyBranchField, isInstantCapableField, replyIntentLabel } from "@/lib/api/models/app/campaigns/sequences/Branching";
 import useSequences from "@/lib/api/hooks/app/campaigns/sequences/useSequences";
 import useCreateSequence from "@/lib/api/hooks/app/campaigns/sequences/useCreateSequence";
 import useDeleteSequence from "@/lib/api/hooks/app/campaigns/sequences/useDeleteSequence";
@@ -183,6 +183,7 @@ function conditionText(b: SequenceBranch): string {
             const f = BRANCH_FIELD_LABELS[c.field] ?? c.field;
             // Reply-class conditions are "ever" (no day window).
             if (c.field === "ai_label") return `case: ${c.label ?? "…"}`;
+            if (c.field === "reply_intent") return `intent: ${replyIntentLabel(c.label)}`;
             if (isReplyBranchField(c.field)) return f;
             return `${f} within ${c.value ?? 3}d`;
         })
@@ -2343,6 +2344,7 @@ const BRANCH_PATH_OPTIONS: SelectOption[] = [
     { value: "reply_negative", label: "if replied: negative", group: "Reply intent" },
     { value: "reply_neutral", label: "if replied: neutral", group: "Reply intent" },
     { value: "reply_automated", label: "if auto-reply / out of office", group: "Reply intent" },
+    { value: "reply_intent", label: "if reply intent is…", group: "Reply intent" },
     { value: "random", label: "random split" },
 ];
 
@@ -2374,6 +2376,8 @@ function ConnectionEditor({
     const c0 = branch.conditions?.[0];
     const [field, setField] = React.useState<string>(c0?.field ?? "always");
     const [value, setValue] = React.useState<number>(c0?.value ?? (c0?.field === "random" ? 50 : 3));
+    // The intent a reply_intent path routes on; stored in the condition's label.
+    const [intent, setIntent] = React.useState<string>(c0?.field === "reply_intent" ? (c0.label ?? "agreed") : "agreed");
     // Instant-capable branches (reply intent, opened, clicked) fire the moment
     // the event lands by default; this lets the user opt out so the path routes
     // at the next step boundary instead.
@@ -2386,6 +2390,7 @@ function ConnectionEditor({
     const isCasePath = c0?.field === "ai_label";
     const caseName = isCasePath ? (c0?.label ?? "").trim() : "";
     const isReply = isReplyBranchField(field as BranchField);
+    const isIntent = field === "reply_intent";
     const isInstantCapable = !isCasePath && isInstantCapableField(field as BranchField);
     const instantVerb = field === "opened" ? "open" : field === "clicked" ? "click" : "reply";
     const isNegative = field === "not_opened" || field === "not_clicked" || field === "not_replied";
@@ -2399,6 +2404,7 @@ function ConnectionEditor({
         if (isRandom) return [{ field: "random", operator: "chance", value }];
         // Reply-class conditions are checked once, ever (no day window / value).
         if (isReply) return [{ field: field as BranchField, operator: "ever" }];
+        if (isIntent) return [{ field: "reply_intent", operator: "is", label: intent }];
         return [{ field: field as BranchField, operator: "within_days", value }];
     };
     const save = (target_step_id: string | null) => {
@@ -2476,7 +2482,7 @@ function ConnectionEditor({
                             onChange={(f) => {
                                 setField(f);
                                 if (f === "random") setValue((v) => (v >= 1 && v <= 99 ? v : 50));
-                                else if (f !== "always" && !isReplyBranchField(f as BranchField))
+                                else if (f !== "always" && f !== "reply_intent" && !isReplyBranchField(f as BranchField))
                                     setValue((v) => (v >= 1 && v <= 60 ? v : 3));
                             }}
                         />
@@ -2489,6 +2495,12 @@ function ConnectionEditor({
                         <span>% of contacts (chosen at random)</span>
                     </div>
                 )}
+                {isIntent && (
+                    <div>
+                        <p className="mb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-slate-400">Reply intent</p>
+                        <SelectMenu className="w-full" value={intent} options={REPLY_INTENTS} onChange={setIntent} />
+                    </div>
+                )}
                 {isCasePath && (
                     <p className="rounded-md bg-slate-50 px-2 py-1.5 text-[11px] leading-relaxed text-slate-600 ring-1 ring-slate-200">
                         The “{caseName}” case of this switch: contacts take this path when{" "}
@@ -2496,7 +2508,7 @@ function ConnectionEditor({
                         step itself; routing happens at the step boundary with no extra credits.
                     </p>
                 )}
-                {!isAlways && !isRandom && !isReply && !isCasePath && (
+                {!isAlways && !isRandom && !isReply && !isIntent && !isCasePath && (
                     <div className="flex flex-wrap items-center gap-1.5">
                         <span>within</span>
                         <NumberInput value={value} onChange={(v) => setValue(Math.max(1, Math.min(60, Math.round(v) || 1)))} min={1} max={60} className="w-16" align="center" />
@@ -2540,10 +2552,12 @@ function ConnectionEditor({
                                 />
                             </button>
                         </div>
-                        {isReply ? (
+                        {isReply || isIntent ? (
                             <>
                                 <p className="text-[10.5px] text-slate-400">
-                                    {field === "reply_automated"
+                                    {isIntent
+                                        ? "Routes when automatic inbox tagging read the contact's reply as this intent, at 70% confidence or more. Needs inbox tagging on; an untagged reply takes the otherwise path."
+                                        : field === "reply_automated"
                                         ? "Routes when the contact's reply is an auto-reply or out-of-office bounce, not a real human reply. Pair this with action steps (create deal, move stage, notify) to react."
                                         : "Routes when the contact's reply is classified this way. Chain action steps after it, for example create deal then move stage then notify."}
                                 </p>

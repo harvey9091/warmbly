@@ -22,12 +22,14 @@ import {
 import VerificationSettings from "@/components/app/contacts/VerificationSettings";
 import {
     AUTOMATED_INTENTS,
+    DEFAULT_INBOX_TAGGING,
     DEFAULT_PREFERRED_HOURS,
     DEFAULT_UNSUBSCRIBE,
     REPLY_INTENT_CHOICES,
     describeHours,
     formatHour,
     taskIntents,
+    type InboxTaggingSettings,
     type OutreachSettings,
     type ReplyIntent,
     type ReplyIntentSettings,
@@ -103,6 +105,18 @@ function SendingSettings() {
         },
         [],
     );
+
+    const patchInboxTagging = React.useCallback(
+        (next: Partial<InboxTaggingSettings>) => {
+            setDraft((prev) =>
+                prev
+                    ? { ...prev, inbox_tagging: { ...(prev.inbox_tagging ?? DEFAULT_INBOX_TAGGING), ...next } }
+                    : prev,
+            );
+        },
+        [],
+    );
+    const tagging = draft?.inbox_tagging ?? DEFAULT_INBOX_TAGGING;
 
     const patchPreflight = React.useCallback(
         (next: Partial<OutreachSettings["preflight"]>) => {
@@ -338,6 +352,74 @@ function SendingSettings() {
                                 />
                             </Row>
                         )}
+                    </>
+                )}
+            </Section>
+
+            <Section
+                eyebrow="Classified replies"
+                description="What a reply may do once automatic inbox tagging has read it. The hold, the stop and the task are on from the start and every one of them is visible: holds and stops show on the campaign's Leads tab, where you can lift them, and a task is an ordinary CRM task. The suppression is off until you turn it on, because it is the one the system cannot undo; watch the review page under Settings first."
+            >
+                {isLoading || !draft ? (
+                    <div className="h-7 w-40 rounded bg-slate-100 animate-pulse" />
+                ) : (
+                    <>
+                        <Row
+                            label="Hold a contact who says not now"
+                            description="A reply read as open in principle but wrong on timing parks the contact's sequences, in every campaign they are in, and the follow-up lands after the hold instead of three days later."
+                        >
+                            <Toggle
+                                on={tagging.hold_on_not_now}
+                                onChange={(on) => patchInboxTagging({ hold_on_not_now: on })}
+                            />
+                        </Row>
+                        {tagging.hold_on_not_now && (
+                            <Row label="Hold for" description="Between 1 and 90 days.">
+                                <div className="flex items-center gap-1.5">
+                                    <NumberInput
+                                        min={1}
+                                        max={90}
+                                        value={tagging.not_now_hold_days}
+                                        onChange={(n) =>
+                                            patchInboxTagging({
+                                                not_now_hold_days: Number.isFinite(n)
+                                                    ? Math.min(90, Math.max(1, n))
+                                                    : 30,
+                                            })
+                                        }
+                                        className="w-20"
+                                    />
+                                    <span className="text-[11.5px] text-slate-500">days</span>
+                                </div>
+                            </Row>
+                        )}
+                        <Row
+                            label="Stop a contact who declines"
+                            description="Not interested, or not the right person: the contact's sequences are parked for a year. Nothing is unsubscribed and nothing is deleted; a member resumes the lead if the reply was misread."
+                        >
+                            <Toggle
+                                on={tagging.stop_on_declined}
+                                onChange={(on) => patchInboxTagging({ stop_on_declined: on })}
+                            />
+                        </Row>
+                        <Row
+                            label="Open a task when they ask for a call"
+                            description="A reply that asks for a call or proposes a time opens a high-priority task for the mailbox owner, due in 24 hours."
+                        >
+                            <Toggle
+                                on={tagging.task_on_call_request}
+                                onChange={(on) => patchInboxTagging({ task_on_call_request: on })}
+                            />
+                        </Row>
+                        <Row
+                            label="Suppress a contact who asks to be removed"
+                            description="Adds the sender to the suppression list when the classifier is at least 80% sure the reply asks to stop receiving email. The keyword rule above catches the plain phrasings; this catches the rest. Suppression is permanent until a member removes the entry."
+                        >
+                            <Toggle
+                                on={tagging.suppress_on_removal_request}
+                                onChange={(on) => patchInboxTagging({ suppress_on_removal_request: on })}
+                            />
+                        </Row>
                     </>
                 )}
             </Section>

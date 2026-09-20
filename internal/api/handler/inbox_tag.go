@@ -38,7 +38,9 @@ type inboxTagRow struct {
 	Answers          json.RawMessage `json:"answers"`
 	Model            string          `json:"model"`
 	InputTokens      int             `json:"input_tokens"`
-	CreatedAt        string          `json:"created_at"`
+	// Actions is what the workspace's switches let this verdict do.
+	Actions   []string `json:"actions"`
+	CreatedAt string   `json:"created_at"`
 }
 
 type inboxTagReviewResponse struct {
@@ -55,6 +57,7 @@ type inboxTagReviewSummary struct {
 	Total       int `json:"total"`
 	NeedsReview int `json:"needs_review"`
 	FromOffline int `json:"from_offline"`
+	Acted       int `json:"acted"`
 }
 
 type inboxTagReviewPagination struct {
@@ -115,7 +118,7 @@ func (h *Handler) GetInboxTaggingReview(c *gin.Context) {
 		Enabled:    enabled,
 		Data:       out,
 		Total:      total,
-		Summary:    inboxTagReviewSummary{Total: summary.Total, NeedsReview: summary.NeedsReview, FromOffline: summary.FromOffline},
+		Summary:    inboxTagReviewSummary{Total: summary.Total, NeedsReview: summary.NeedsReview, FromOffline: summary.FromOffline, Acted: summary.Acted},
 		Pagination: inboxTagReviewPagination{NextCursor: nextCursor, HasMore: hasMore},
 	})
 }
@@ -124,6 +127,10 @@ func toTagRow(r repository.InboxTagResult) inboxTagRow {
 	labels := r.Labels
 	if labels == nil {
 		labels = []string{}
+	}
+	actions := r.Actions
+	if actions == nil {
+		actions = []string{}
 	}
 	answers := r.Answers
 	if len(answers) == 0 {
@@ -143,6 +150,7 @@ func toTagRow(r repository.InboxTagResult) inboxTagRow {
 		NeedsReview:      r.NeedsReview,
 		ReviewReason:     r.ReviewReason,
 		Labels:           labels,
+		Actions:          actions,
 		Answers:          answers,
 		Model:            r.Model,
 		InputTokens:      r.InputTokens,

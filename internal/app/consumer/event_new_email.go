@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"github.com/warmbly/warmbly/internal/app/advanced"
 	"github.com/warmbly/warmbly/internal/app/inboxtag"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
@@ -668,6 +669,10 @@ func (s *JobsService) tagInboundMessage(ctx context.Context, e *models.JobEventN
 		return
 	}
 
+	// Phases 2 and 3: what the verdict may do, per the workspace's switches.
+	// Live arrivals only; the backfill labels history and never acts on it.
+	s.actOnInboxTag(ctx, orgID, msg, d)
+
 	// Tell the dashboard the message changed.
 	//
 	// The arrival event above this already fired, and it fired BEFORE the
@@ -680,6 +685,39 @@ func (s *JobsService) tagInboundMessage(ctx context.Context, e *models.JobEventN
 	if d.KindSource != "" {
 		s.publishEmailUpdated(ctx, e.UserID, e.Message)
 	}
+}
+
+// actOnInboxTag executes the actions the tagging policy allows for one
+// verdict and records them on the row, so the review page shows the action
+// next to the answer that caused it. The policy decides in inboxtag; the
+// advanced service executes on the primitives a member's own click uses.
+func (s *JobsService) actOnInboxTag(ctx context.Context, orgID uuid.UUID, msg inboxtag.Message, d inboxtag.Decision) {
+	if s.AdvancedService == nil || d.Skipped() || d.Kind != inboxtag.KindHumanReply {
+		return
+	}
+	settings, xerr := s.AdvancedService.GetOrganizationSettings(ctx, orgID)
+	if xerr != nil || settings == nil {
+		return
+	}
+	plan := inboxtag.PlanActions(d, settings.InboxTagging)
+	if plan.Empty() {
+		return
+	}
+	done := s.AdvancedService.ApplyInboxTagActions(ctx, advanced.InboxTagAction{
+		OrganizationID: orgID,
+		OwnerUserID:    msg.UserID,
+		Sender:         msg.FromAddr,
+		Subject:        msg.Subject,
+		MessageID:      msg.MessageID,
+		Plan:           plan,
+	})
+	if len(done) == 0 {
+		return
+	}
+	if err := s.InboxTagger.RecordActions(ctx, orgID, msg.MessageID, done); err != nil {
+		log.Warn().Err(err).Str("message_id", msg.MessageID).Msg("inbox tagging: actions not recorded")
+	}
+	log.Info().Str("message_id", msg.MessageID).Strs("actions", done).Msg("inbox tagging acted on a reply")
 }
 
 // orgForMailbox resolves the workspace that owns a mailbox. Tagging is scoped

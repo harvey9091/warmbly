@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/warmbly/warmbly/internal/app/copyjudge"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
 )
@@ -195,6 +196,11 @@ type AdvisorSnapshot struct {
 	// their mail has already stopped going out or is only about to.
 	DomainAuthEnforced bool
 	DomainAuthGrace    time.Duration
+	// CopyJudgments holds the TypeSafe verdict for each email step's copy,
+	// keyed by step id. Filled by the service when a judge is configured;
+	// a step with no entry is simply not judged, and no copy detector that
+	// reads a verdict fires on it.
+	CopyJudgments map[uuid.UUID]copyjudge.Verdict
 }
 
 // AdvisorRepository persists findings and loads the evaluation snapshot.

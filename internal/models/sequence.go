@@ -321,11 +321,16 @@ type BranchCondition struct {
 	// "ai_label" (operator "is", value in Label) matches when the AI step that
 	// owns this branch stored that label for the contact — deterministic at
 	// schedule time, no model call.
+	//
+	// "reply_intent" (operator "is", value in Label) matches when automatic inbox
+	// tagging stored that intent for the contact's human reply; also decided
+	// at schedule time with no model call.
 	Field string `json:"field"`
 	// Operator is the comparison. "within_days" (the signal occurred in the last
 	// Value days) and "ever" (the signal occurred at all). For the not_* fields
 	// the meaning inverts (did NOT happen within / ever). The reply_* fields take
-	// operator "ever" (no Value). "is" pairs with "ai_label" (compare to Label).
+	// operator "ever" (no Value). "is" pairs with "ai_label" or "reply_intent"
+	// (compare to Label).
 	Operator string `json:"operator"`
 	// Value is the day window for "within_days". nil for operators that take no
 	// argument (e.g. "ever").

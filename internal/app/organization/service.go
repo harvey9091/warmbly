@@ -54,6 +54,10 @@ type OrganizationService interface {
 	// (post-construction; nil keeps the compiled defaults).
 	WireInstanceSettings(s InstanceSettings)
 
+	// WireWorkspaceSeeder attaches a hook that runs once for every new
+	// workspace, so premade rows (inbox labels) exist before the first mail.
+	WireWorkspaceSeeder(fn func(ctx context.Context, orgID uuid.UUID))
+
 	// CRUD
 	Create(ctx context.Context, userID uuid.UUID, name string) (*models.Organization, *errx.Error)
 	Get(ctx context.Context, orgID uuid.UUID) (*models.Organization, *errx.Error)
@@ -175,6 +179,14 @@ type organizationService struct {
 	settings InstanceSettings
 	// opsNotify raises instance-wide operator alerts. Nil is the default.
 	opsNotify OperatorNotifier
+	// seeders run after a workspace is created, best-effort.
+	seeders []func(ctx context.Context, orgID uuid.UUID)
+}
+
+func (s *organizationService) WireWorkspaceSeeder(fn func(ctx context.Context, orgID uuid.UUID)) {
+	if fn != nil {
+		s.seeders = append(s.seeders, fn)
+	}
 }
 
 // WireOperatorNotifier attaches the operator alert channel.
@@ -329,6 +341,10 @@ func (s *organizationService) Create(ctx context.Context, userID uuid.UUID, name
 		}); err != nil {
 			errs.CaptureException(err)
 		}
+	}
+
+	for _, seed := range s.seeders {
+		seed(ctx, org.ID)
 	}
 
 	s.notifyOperator(

@@ -17,6 +17,7 @@ import { ConversationList } from "@/components/app/unibox/ConversationList";
 import { ScheduledList } from "@/components/app/unibox/ScheduledList";
 import { ThreadView } from "@/components/app/unibox/ThreadView";
 import { ScopeRail, scopeKey, type UniboxScope } from "@/components/app/unibox/ScopeRail";
+import { viewById, viewCategoryIds } from "@/lib/unibox/views";
 import { ScopeSheet } from "@/components/app/unibox/ScopeSheet";
 import useFeatureAccess from "@/hooks/useFeatureAccess";
 import { LockedSurface } from "@/components/layout/LockedSurface";
@@ -203,6 +204,10 @@ export default function UniboxPage() {
         return urlScopeRef
           ? { kind: "category", categoryId: urlScopeRef }
           : { kind: "all" };
+      case "view": {
+        const v = viewById(urlScopeRef);
+        return v ? { kind: "view", view: v.id } : { kind: "all" };
+      }
       default:
         return { kind: "all" };
     }
@@ -222,6 +227,9 @@ export default function UniboxPage() {
           return;
         case "category":
           goTo({ scope: "category", ref: s.categoryId });
+          return;
+        case "view":
+          goTo({ scope: "view", ref: s.view });
           return;
         case "all":
           goTo({ scope: "all", ref: null });
@@ -248,6 +256,9 @@ export default function UniboxPage() {
         : null,
     [scope, storeEmails],
   );
+  // A premade view resolves to the workspace's label rows by slug, so the
+  // filter is recomputed once the overview has loaded them.
+  const viewCategoriesData = overview.data?.categories;
   const paramsForScope = React.useCallback(
     (sortBy: UniboxSearchParams["sortBy"]): UniboxSearchParams => {
       const next: UniboxSearchParams = { sortBy: sortBy ?? "newest" };
@@ -290,12 +301,19 @@ export default function UniboxPage() {
           // mailbox.
           next.categoryIds = [scope.categoryId];
           break;
+        case "view": {
+          // A premade view is a set of automatic labels, resolved to the
+          // workspace's category rows by slug.
+          const v = viewById(scope.view);
+          next.categoryIds = v ? viewCategoryIds(v, viewCategoriesData) : [];
+          break;
+        }
         default:
           break;
       }
       return next;
     },
-    [scope, tagAccountIds],
+    [scope, tagAccountIds, viewCategoriesData],
   );
   const [params, setParams] = React.useState<UniboxSearchParams>(() =>
     paramsForScope("newest"),
@@ -311,9 +329,11 @@ export default function UniboxPage() {
   // during render re-renders before commit, so the stale params never
   // reach the query.
   const tagIdsKey = tagAccountIds?.join(",") ?? "";
-  const [prevReset, setPrevReset] = React.useState({ scope, tagIdsKey });
-  if (prevReset.scope !== scope || prevReset.tagIdsKey !== tagIdsKey) {
-    setPrevReset({ scope, tagIdsKey });
+  const viewIdsKey =
+    scope.kind === "view" ? (viewCategoriesData ?? []).map((c) => c.id).join(",") : "";
+  const [prevReset, setPrevReset] = React.useState({ scope, tagIdsKey, viewIdsKey });
+  if (prevReset.scope !== scope || prevReset.tagIdsKey !== tagIdsKey || prevReset.viewIdsKey !== viewIdsKey) {
+    setPrevReset({ scope, tagIdsKey, viewIdsKey });
     setParams((prev) => paramsForScope(prev.sortBy));
   }
 
@@ -365,6 +385,8 @@ export default function UniboxPage() {
         );
         return c ? c.title : "Label";
       }
+      case "view":
+        return viewById(scope.view)?.label ?? "View";
       default:
         return "All mail";
     }

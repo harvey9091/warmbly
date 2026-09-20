@@ -56,6 +56,35 @@ type ReplyIntentSettings struct {
 	OutOfOfficeHoldDays int `json:"out_of_office_hold_days"`
 }
 
+// InboxTaggingSettings are the actions a workspace lets a classified reply
+// take. The three reversible ones default on; the suppression defaults off,
+// because it is the one the system cannot undo.
+type InboxTaggingSettings struct {
+	// HoldOnNotNow parks the contact's sequences when they answer "not now",
+	// for NotNowHoldDays, so the follow-up lands after the timing they named
+	// rather than three days later.
+	HoldOnNotNow   bool `json:"hold_on_not_now"`
+	NotNowHoldDays int  `json:"not_now_hold_days"`
+	// StopOnDeclined parks a contact with no end when they decline or say they
+	// are the wrong person. The hold is visible on the lead and a member lifts
+	// it; nothing is unsubscribed and nothing is deleted.
+	StopOnDeclined bool `json:"stop_on_declined"`
+	// TaskOnCallRequest opens a CRM task for the mailbox owner when a reply
+	// asks for a call or proposes a time.
+	TaskOnCallRequest bool `json:"task_on_call_request"`
+	// SuppressOnRemovalRequest adds the sender to the suppression list when
+	// the reply asks to be removed and the classifier is strongly sure of it.
+	// Phase 3: the one irreversible action, and the one with the highest floor.
+	SuppressOnRemovalRequest bool `json:"suppress_on_removal_request"`
+}
+
+// Bounds on the not-now hold.
+const (
+	NotNowHoldDaysMin     = 1
+	NotNowHoldDaysMax     = 90
+	NotNowHoldDaysDefault = 30
+)
+
 // DefaultCRMTaskIntents is the task-worthy set a workspace gets when it has
 // never chosen one: every human intent, and no automated one. A vacation
 // notice or a bounce is not follow-up work, and one week of sending makes
@@ -147,6 +176,10 @@ func (s *AdvancedOutreachSettings) Normalize() {
 	if s.ReplyIntent.OutOfOfficeHoldDays > OOOHoldDaysMax {
 		s.ReplyIntent.OutOfOfficeHoldDays = OOOHoldDaysMax
 	}
+	if s.InboxTagging.NotNowHoldDays == 0 {
+		s.InboxTagging.NotNowHoldDays = NotNowHoldDaysDefault
+	}
+	s.InboxTagging.NotNowHoldDays = min(max(s.InboxTagging.NotNowHoldDays, NotNowHoldDaysMin), NotNowHoldDaysMax)
 	if !ValidUnsubscribeMode(string(s.Unsubscribe.Mode)) || s.Unsubscribe.Mode == UnsubscribeModeInherit {
 		s.Unsubscribe.Mode = UnsubscribeModeText
 	}
@@ -290,6 +323,7 @@ type AdvancedOutreachSettings struct {
 	TaskReliability      TaskReliabilitySettings         `json:"task_reliability"`
 	ABTesting            ABTestingSettings               `json:"ab_testing"`
 	ReplyIntent          ReplyIntentSettings             `json:"reply_intent"`
+	InboxTagging         InboxTaggingSettings            `json:"inbox_tagging"`
 	SendTimeOptimization SendTimeOptimizationSettings    `json:"send_time_optimization"`
 	Preflight            PreflightValidationSettings     `json:"preflight"`
 	Dashboard            DeliverabilityDashboardSettings `json:"dashboard"`
@@ -742,6 +776,17 @@ func DefaultAdvancedOutreachSettings() AdvancedOutreachSettings {
 			AutoSuppressOnUnsubWord: true,
 			HoldOnOutOfOffice:       true,
 			OutOfOfficeHoldDays:     OOOHoldDaysDefault,
+		},
+		InboxTagging: InboxTaggingSettings{
+			// The reversible actions are on from the start, so a classified
+			// reply does something useful on day one: a hold and a stop show
+			// on the Leads tab and lift with a click, and a task is a task.
+			// Suppression is the one that cannot be undone by the system, so
+			// it waits for the workspace to turn it on.
+			HoldOnNotNow:      true,
+			NotNowHoldDays:    NotNowHoldDaysDefault,
+			StopOnDeclined:    true,
+			TaskOnCallRequest: true,
 		},
 		SendTimeOptimization: SendTimeOptimizationSettings{
 			// Off by default: turning it on delays sends to reach the

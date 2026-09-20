@@ -27,12 +27,13 @@ package inboxtag
 import (
 	"sort"
 	"strings"
+
+	"github.com/warmbly/warmbly/internal/pkg/typesafe"
 )
 
-// Model is pinned, never an alias. "jev-latest" moves, and every threshold
-// below was calibrated against this exact version; a silent model change would
-// shift all of them at once with nothing in the diff to show for it.
-const Model = "jev-1.13.0"
+// Model is the pinned model every threshold below was calibrated against. The
+// pin itself lives with the shared client, so every feature asks one version.
+const Model = typesafe.Model
 
 // Thresholds. Tuning these is tuning the product.
 const (

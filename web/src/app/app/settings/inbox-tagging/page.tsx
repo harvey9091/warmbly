@@ -1,15 +1,10 @@
-// Automatic inbox tagging — the phase-1 review surface.
+// Automatic inbox tagging: the review surface.
 //
-// The feature labels inbound mail and scores it for relevance. It takes no
-// action: no snooze, no lead hold, no task, no suppression. That is the whole
-// point of this phase, and this page is what makes the phase mean something: a
-// person watches what it decided and how sure it was, and only then is it
-// allowed to act on anything.
-//
-// So this page shows the confidence, not just the verdict, and shows where the
-// verdict came from. A label that a mail header decided is a different kind of
-// fact from one the model inferred, and reading the two as the same thing is
-// how you end up trusting the wrong half.
+// The feature labels inbound mail and scores it for relevance, and, per the
+// switches under Settings > Sending, may hold, stop, open a task for or
+// suppress the sender. This page shows the confidence, where the verdict came
+// from, and what it did, so a person can judge the reversible actions that
+// run from day one and decide when to trust the suppression.
 
 import { useState } from "react";
 import { Link } from "react-router-dom";
@@ -30,6 +25,13 @@ import { usePermission } from "@/hooks/usePermission";
 import useInboxTagReview from "@/lib/api/hooks/app/inboxtag/useInboxTagReview";
 import type { InboxTagRow } from "@/lib/api/models/app/inboxtag/InboxTagReview";
 import { cn } from "@/lib/utils";
+
+const ACTION_LABEL: Record<string, string> = {
+    hold: "held",
+    stop: "stopped",
+    task: "task opened",
+    suppress: "suppressed",
+};
 
 const PRIORITY_TONE: Record<string, string> = {
     now: "bg-rose-50 text-rose-700",
@@ -92,6 +94,18 @@ function Row({ r }: { r: InboxTagRow }) {
                     )}
                 </div>
                 <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-400 flex-wrap">
+                    {(r.actions ?? []).map((a) => (
+                        <span
+                            key={a}
+                            title="What this verdict was allowed to do"
+                            className={cn(
+                                "px-1.5 rounded text-[10px] font-semibold uppercase tracking-wide",
+                                a === "suppress" ? "bg-rose-50 text-rose-700" : "bg-sky-50 text-sky-700",
+                            )}
+                        >
+                            {ACTION_LABEL[a] ?? a}
+                        </span>
+                    ))}
                     <span className="font-mono truncate max-w-[22ch]" title={r.thread_id}>
                         {r.thread_id || "—"}
                     </span>
@@ -138,7 +152,7 @@ export default function InboxTaggingPage() {
         <Page>
             <PageTopbar
                 eyebrow="Automatic inbox tagging"
-                subtitle="What the classifier decided, and how sure it was. Phase 1 writes labels only."
+                subtitle="What the classifier decided, how sure it was, and what it did. Which actions run is set under Sending."
             />
 
             {!d?.enabled && !q.isPending && !q.isError && (
@@ -157,7 +171,13 @@ export default function InboxTaggingPage() {
                 <Stat label="Classified" value={q.isPending ? "—" : (d?.summary.total ?? 0).toLocaleString()} sub="messages" accent={(d?.summary.total ?? 0) > 0} />
                 <Stat label="Needs review" value={q.isPending ? "—" : (d?.summary.needs_review ?? 0).toLocaleString()} sub="below the confidence floor" />
                 <Stat label="Decided offline" value={q.isPending ? "—" : (d?.summary.from_offline ?? 0).toLocaleString()} sub="no model call made" />
-                <Stat label="Actions taken" value="0" sub="phase 1 writes labels only" last />
+                <Stat
+                    label="Actions taken"
+                    value={q.isPending ? "—" : (d?.summary.acted ?? 0).toLocaleString()}
+                    sub="held, stopped, task opened or suppressed"
+                    accent={(d?.summary.acted ?? 0) > 0}
+                    last
+                />
             </StatStrip>
 
             <SectionBar label="Recent decisions" count={rows.length}>
@@ -220,13 +240,17 @@ export default function InboxTaggingPage() {
                 )}
             </PageBody>
 
-            <div className="px-5 py-3 flex items-center gap-1.5 text-[11px] text-slate-400">
+            <div className="px-5 py-3 flex items-center gap-1.5 text-[11px] text-slate-400 flex-wrap">
                 <SparklesIcon className="w-3 h-3" />
                 Every label is a workspace label, so the{" "}
                 <Link to="/app/unibox/all" className="underline underline-offset-2 hover:text-slate-700">
                     inbox
                 </Link>{" "}
-                filters on them like any other.
+                filters on them like any other. What a verdict may do is set under{" "}
+                <Link to="/app/settings/sending" className="underline underline-offset-2 hover:text-slate-700">
+                    Sending
+                </Link>
+                .
             </div>
         </Page>
     );

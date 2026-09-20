@@ -16,9 +16,12 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/pkg/emailverify"
+	"github.com/warmbly/warmbly/internal/pkg/typesafe"
 	"github.com/warmbly/warmbly/internal/utils/validate"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/app/bounceclass"
+	"github.com/warmbly/warmbly/internal/app/inboxtag"
 	"github.com/warmbly/warmbly/internal/app/listgate"
 	"github.com/warmbly/warmbly/internal/app/replyclassify"
 	warmupapp "github.com/warmbly/warmbly/internal/app/warmup"
@@ -148,6 +151,18 @@ type Service interface {
 	// WireInboxAgent attaches the inbox agent so an inbound human reply drafts a
 	// suggested reply for review (M10). Best-effort; nil = feature off.
 	WireInboxAgent(a InboxAgent)
+	// WireInboxTags attaches the inbox tagging verdicts so a confident human
+	// reply intent is copied onto the contact's progress row for the
+	// reply_intent branch condition. nil = intents never route.
+	WireInboxTags(repo repository.InboxTagRepository)
+	// WireBounceJudge attaches the TypeSafe asker that classifies a bounce
+	// reason not naming the recipient, so a reputation or policy block does
+	// not suppress a good address. nil = every bounce suppresses.
+	WireBounceJudge(asker typesafe.Asker)
+
+	// ApplyInboxTagActions executes what a classified reply is allowed to do
+	// (hold, stop, task, suppress) and returns the actions that landed.
+	ApplyInboxTagActions(ctx context.Context, in InboxTagAction) []string
 
 	// EmitCampaignEvent dispatches a campaign event (e.g. from a sequence
 	// "notify" action node) to customer webhooks and wired integrations.
@@ -199,7 +214,19 @@ type service struct {
 	evidence         EvidenceRecorder
 	automationRunner AutomationRunner
 	inboxAgent       InboxAgent
+	// inboxTags reads stored tagging verdicts for reply_intent routing. Optional; nil-safe.
+	inboxTags repository.InboxTagRepository
+	// bounceJudge classifies ambiguous bounce reasons. Optional; nil-safe.
+	bounceJudge typesafe.Asker
 }
+
+// WireBounceJudge attaches the bounce classifier after construction. Pass a
+// concrete client only when it is non-nil: a nil *Client in an interface is
+// not nil.
+func (s *service) WireBounceJudge(asker typesafe.Asker) { s.bounceJudge = asker }
+
+// bounceJudgeTimeout bounds one bounce classification.
+const bounceJudgeTimeout = 5 * time.Second
 
 func NewService(
 	repo repository.AdvancedOutreachRepository,
@@ -1226,6 +1253,10 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 			Headers:  buildReplyHeaders(msg),
 			Subject:  msg.Subject,
 			BodyText: msg.Snippet,
+			// The typed layer answers from the tagger's stored verdict for
+			// this message, so a reply is judged once.
+			OrganizationID: *account.OrganizationID,
+			MessageID:      msg.MessageID,
 		}, gate)
 
 		// Always persist the classifier verdict so reply_* branches can route on
@@ -1234,6 +1265,10 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 		// skipped the model.
 		verdict = replyResult
 		_ = s.campaignProgressRepo.RecordReplyClassification(ctx, cID, ctID, sID, replyResult.Class, replyResult.Source, replyResult.Confidence)
+		// The tagging verdict for this message was stored before this hook ran;
+		// copy a confident human-reply intent so reply_intent branches can route on
+		// it, ahead of the instant matcher below.
+		s.recordReplyIntent(ctx, *account.OrganizationID, msg.MessageID, cID, ctID, sID)
 
 		// OOO trap fix: only a HUMAN reply stamps replied_at. An auto_reply /
 		// out_of_office must NOT count as a reply, or it would (a) trip
@@ -1420,7 +1455,8 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 	// Per-intent, so an out-of-office or a bounce does not become a
 	// high-priority follow-up nobody asked for. The default set is human
 	// replies only; a workspace can add the automated ones back.
-	if settings.ReplyIntent.CreatesTaskFor(intent) && s.crmRepo != nil && contactID != nil {
+	if settings.ReplyIntent.CreatesTaskFor(intent) && s.crmRepo != nil && contactID != nil &&
+		!s.inboxTagActed(ctx, *account.OrganizationID, msg.MessageID, inboxtag.ActionTask) {
 		owner, parseErr := uuid.Parse(account.UserID)
 		if parseErr == nil {
 			title := replyTaskTitle(intent, sender)
@@ -1664,6 +1700,31 @@ func (s *service) IngestDeliverabilityEvent(ctx context.Context, organizationID 
 		provider = "manual"
 	}
 
+	// A bounce reason that does not name the recipient is classified so a
+	// reputation or policy block is not held against the address. The verdict
+	// goes in metadata only: the reason text is the contract downstream
+	// classifiers read. One call per ambiguous bounce, no cache.
+	var verdict *bounceclass.Verdict
+	if eventType == models.DeliverabilityEventBounce && s.bounceJudge != nil &&
+		strings.TrimSpace(req.Reason) != "" && !emailverify.NamesRecipient(req.Reason) {
+		// Bounded: a bounce storm must not queue behind a rate-limited judge.
+		jctx, cancel := context.WithTimeout(ctx, bounceJudgeTimeout)
+		v, vErr := bounceclass.Classify(jctx, s.bounceJudge, req.Reason)
+		cancel()
+		switch {
+		case vErr != nil:
+			log.Debug().Err(vErr).Str("recipient", req.RecipientEmail).Msg("bounce reason not classified")
+		case v != nil:
+			verdict = v
+			if req.Metadata == nil {
+				req.Metadata = map[string]interface{}{}
+			}
+			req.Metadata["bounce_cause"] = v.Cause
+			req.Metadata["bounce_cause_confidence"] = v.Confidence
+		}
+	}
+	addressFine := verdict.AddressIsFine()
+
 	if err := s.repo.CreateDeliverabilityEvent(ctx, &models.DeliverabilityEvent{
 		OrganizationID: organizationID,
 		CampaignID:     req.CampaignID,
@@ -1687,6 +1748,18 @@ func (s *service) IngestDeliverabilityEvent(ctx context.Context, organizationID 
 	shouldSuppress := (eventType == models.DeliverabilityEventBounce && settings.BouncePipeline.AutoSuppressOnBounce) ||
 		(eventType == models.DeliverabilityEventComplaint && settings.BouncePipeline.AutoSuppressOnComplaint) ||
 		(eventType == models.DeliverabilityEventUnsubscribe && settings.BouncePipeline.AutoSuppressOnUnsubscribe)
+
+	// The address is not what failed: record the bounce, feed the breaker and
+	// mailbox health below, but keep the recipient sendable.
+	if shouldSuppress && addressFine {
+		shouldSuppress = false
+		log.Info().
+			Str("organization_id", organizationID.String()).
+			Str("recipient", req.RecipientEmail).
+			Str("bounce_cause", verdict.Cause).
+			Float64("confidence", verdict.Confidence).
+			Msg("bounce classified as not about the address; recipient not suppressed and lead kept")
+	}
 
 	if shouldSuppress {
 		_ = s.repo.UpsertSuppressedRecipient(ctx, &models.SuppressedRecipient{
@@ -1712,7 +1785,11 @@ func (s *service) IngestDeliverabilityEvent(ctx context.Context, organizationID 
 		if cErr == nil && campaignTask != nil && campaignTask.SequenceID != nil {
 			switch eventType {
 			case models.DeliverabilityEventBounce:
-				_ = s.campaignProgressRepo.RecordEmailBounced(ctx, *req.CampaignID, *req.ContactID, *campaignTask.SequenceID)
+				// A bounce that was not about the address does not drop the
+				// lead: the step is offered again once the mailbox recovers.
+				if !addressFine {
+					_ = s.campaignProgressRepo.RecordEmailBounced(ctx, *req.CampaignID, *req.ContactID, *campaignTask.SequenceID)
+				}
 				// Only a bounce that names the recipient is evidence against
 				// the address; a full mailbox or a policy block is not.
 				if s.evidence != nil {
@@ -1778,6 +1855,11 @@ func (s *service) IngestDeliverabilityEvent(ctx context.Context, organizationID 
 			if uid, perr := uuid.Parse(camp.UserID); perr == nil {
 				cat := models.NotifHealthBounce
 				title := "Bounce: " + req.RecipientEmail
+				// A reputation block is about the mailbox, not the lead, so
+				// the title says who refused rather than who bounced.
+				if addressFine && verdict.Cause == bounceclass.CauseReputationBlock {
+					title = "Provider refused mail from " + camp.Name
+				}
 				if eventType == models.DeliverabilityEventComplaint {
 					cat = models.NotifHealthComplaint
 					title = "Spam complaint: " + req.RecipientEmail

@@ -65,6 +65,16 @@ type DraftPublisher interface {
 // goroutine + context, so a slow model never stalls inbound-reply processing.
 type Service interface {
 	DraftForReply(ctx context.Context, r models.InboxAgentReply)
+	// WireDraftGate attaches the tagging verdict gate: a reply the classifier
+	// read as closed, a one-line acknowledgement or a legal threat is not
+	// drafted. Optional; without it every human reply is drafted.
+	WireDraftGate(g DraftGate)
+}
+
+// DraftGate answers whether an inbound message is worth a paid draft, from
+// its stored classification, and says why when it is not.
+type DraftGate interface {
+	ShouldDraft(ctx context.Context, orgID uuid.UUID, messageID string) (bool, string)
 }
 
 type service struct {
@@ -77,7 +87,10 @@ type service struct {
 	contacts  ContactReader
 	draftRepo repository.AIDraftRepository
 	publisher DraftPublisher
+	gate      DraftGate
 }
+
+func (s *service) WireDraftGate(g DraftGate) { s.gate = g }
 
 // NewService builds the inbox agent. A nil provider, credit service, org reader,
 // thread reader, or draft repo disables it (DraftForReply becomes a no-op);
@@ -153,6 +166,14 @@ func (s *service) draft(ctx context.Context, r models.InboxAgentReply) {
 	}
 	if !replyclassify.WorthModeling(replyclassify.Input{BodyText: replyText}) {
 		return
+	}
+	// The classifier's verdict, when the message has one: no credits spent
+	// answering "no thanks", "please remove me" or a threat to sue.
+	if s.gate != nil {
+		if ok, why := s.gate.ShouldDraft(ctx, r.OrganizationID, r.InReplyTo); !ok {
+			log.Debug().Str("thread_id", r.ThreadID).Str("reason", why).Msg("inbox agent: draft skipped on the classifier's verdict")
+			return
+		}
 	}
 
 	// Dedupe: never draft twice for the same inbound message, and at most one

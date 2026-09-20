@@ -77,6 +77,8 @@ var agentFixable = map[string]bool{
 	"copy_subject_too_long": true,
 	"copy_shouty_subject":   true,
 	"copy_too_many_links":   true,
+	"copy_reads_as_bulk":    true,
+	"copy_no_clear_ask":     true,
 
 	// Sequence shape: steps are ours to add and re-time.
 	"campaign_no_followups":       true,

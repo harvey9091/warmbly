@@ -2,10 +2,12 @@ package advisor
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/warmbly/warmbly/internal/app/copyjudge"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/repository"
 	"github.com/warmbly/warmbly/internal/tasks"
@@ -52,6 +54,18 @@ func copyDetectors() []Detector {
 			Category: models.AdvisorCategoryCopy,
 			About:    "Subject lines in capitals or stacked with exclamation marks. This is a bulk-mail signal for filters and reads as shouting to a person.",
 			Run:      detectShoutySubject,
+		},
+		{
+			Key:      "copy_reads_as_bulk",
+			Category: models.AdvisorCategoryCopy,
+			About:    "Copy that a calibrated reader model places at the bulk-mail end of a personal-to-bulk scale, or that makes a claim a spam filter objects to (guaranteed results, free money, prizes, pressure to act now). Unlike the phrase list this judges the whole email as its recipient would, so it catches copy that avoids every trigger word and still reads as a blast. Only runs when the operator has configured TypeSafe.",
+			Run:      detectReadsAsBulk,
+		},
+		{
+			Key:      "copy_no_clear_ask",
+			Category: models.AdvisorCategoryCopy,
+			About:    "Copy that asks the reader for nothing, or for several things at once. A cold email earns a reply by making one small, specific request; with none there is nothing to answer, and with several the reader answers none. Judged by a calibrated reader model, and only when the operator has configured TypeSafe.",
+			Run:      detectNoClearAsk,
 		},
 	}
 }
@@ -440,4 +454,123 @@ func joinQuoted(items []string) string {
 		quoted = append(quoted, fmt.Sprintf("%q", it))
 	}
 	return joinWords(quoted)
+}
+
+// judgmentFor returns the step's TypeSafe verdict, when the run judged it.
+func judgmentFor(s *repository.AdvisorSnapshot, sc stepContext) (copyjudge.Verdict, bool) {
+	if s.CopyJudgments == nil {
+		return copyjudge.Verdict{}, false
+	}
+	v, ok := s.CopyJudgments[sc.step.ID]
+	return v, ok
+}
+
+// round2 bands a probability for evidence, so the narrator and the card show
+// "0.82" rather than a float's full tail.
+func round2(v float64) float64 {
+	return math.Round(v*100) / 100
+}
+
+func detectReadsAsBulk(s *repository.AdvisorSnapshot) []Finding {
+	out := []Finding{}
+	for _, sc := range emailSteps(s) {
+		v, ok := judgmentFor(s, sc)
+		if !ok || !v.ReadsAsBulk() {
+			continue
+		}
+
+		reason := "reads as a bulk marketing email rather than a note from one person to another"
+		if v.SpamClaim >= copyjudge.SpamClaimAt {
+			reason = "makes the kind of claim a spam filter objects to: guaranteed results, free money, a prize, or pressure to act now"
+			if v.ReadsAs >= copyjudge.BulkAt && v.Confidence >= copyjudge.ConfFloor {
+				reason = "reads as a bulk marketing email and makes the kind of claim a spam filter objects to"
+			}
+		}
+
+		out = append(out, Finding{
+			Key:         "copy_reads_as_bulk",
+			GroupTitle:  "{count} steps read as bulk mail to their reader",
+			Category:    models.AdvisorCategoryCopy,
+			Severity:    models.AdvisorMedium,
+			Surface:     models.AdvisorSurfaceCampaigns,
+			EntityType:  "step",
+			EntityID:    ref(sc.step.ID),
+			EntityLabel: fmt.Sprintf("%s / %s", sc.campaign, stepLabel(sc)),
+			ParentType:  "campaign",
+			ParentID:    ref(sc.step.CampaignID),
+			Impact:      clampImpact(35 + int(v.ReadsAs*20) + sc.step.Sent/100),
+			Title:       fmt.Sprintf("%s reads as bulk mail to its reader", stepLabel(sc)),
+			Detail: fmt.Sprintf(
+				"Read as its recipient would read it, %s in %s %s. It passes the phrase list; the problem is the whole email, not a word in it. A person who takes a message for a blast does not reply to it, and a filter that does is right.",
+				stepLabel(sc), sc.campaign, reason),
+			Remedy: "Rewrite it as you would write to this one person: open with the reason you are writing to them specifically, say what you do in a line, and ask one small question. Drop any promise you could not make face to face.",
+			Steps: []string{
+				fmt.Sprintf("Open the campaign and go to %s.", stepLabel(sc)),
+				"Read it aloud as if to the one person it is addressed to. Every line that would be strange to say to them is a line to cut.",
+				"Replace claims (guaranteed, free, act now, limited time) with what is true for this reader: what you noticed, why it is relevant to them.",
+				"Run Analyze under the content check and confirm it now reads as a personal note.",
+			},
+			Evidence: map[string]any{
+				"campaign":        sc.campaign,
+				"step":            stepLabel(sc),
+				"subject":         sc.step.Subject,
+				"reads_as":        round2(v.ReadsAs),
+				"personalization": round2(v.Personalization),
+				"spam_claim":      round2(v.SpamClaim),
+				"confidence":      round2(v.Confidence),
+				"step_sends":      sc.step.Sent,
+			},
+		})
+	}
+	return out
+}
+
+func detectNoClearAsk(s *repository.AdvisorSnapshot) []Finding {
+	out := []Finding{}
+	for _, sc := range emailSteps(s) {
+		v, ok := judgmentFor(s, sc)
+		if !ok || !v.LacksClearAsk() {
+			continue
+		}
+
+		what := "asks the reader for nothing"
+		fix := "End with one small question the reader can answer in a line: whether this is worth a look, or who the right person is."
+		if v.Ask == copyjudge.AskSeveral {
+			what = "asks the reader for several things"
+			fix = "Keep one ask and move the rest to the reply. A reader with three requests answers none of them."
+		}
+
+		out = append(out, Finding{
+			Key:         "copy_no_clear_ask",
+			GroupTitle:  "{count} steps have no clear ask",
+			Category:    models.AdvisorCategoryCopy,
+			Severity:    models.AdvisorLow,
+			Surface:     models.AdvisorSurfaceCampaigns,
+			EntityType:  "step",
+			EntityID:    ref(sc.step.ID),
+			EntityLabel: fmt.Sprintf("%s / %s", sc.campaign, stepLabel(sc)),
+			ParentType:  "campaign",
+			ParentID:    ref(sc.step.CampaignID),
+			Impact:      clampImpact(20 + sc.step.Sent/100),
+			Title:       fmt.Sprintf("%s %s", stepLabel(sc), what),
+			Detail: fmt.Sprintf(
+				"%s in %s %s. A cold email earns a reply by making one small, specific request; anything else leaves the reader nothing to answer.",
+				stepLabel(sc), sc.campaign, what),
+			Remedy: fix,
+			Steps: []string{
+				fmt.Sprintf("Open the campaign and go to %s.", stepLabel(sc)),
+				"Decide the one thing you want back from this email: a yes or no, a name, a time.",
+				fix,
+			},
+			Evidence: map[string]any{
+				"campaign":   sc.campaign,
+				"step":       stepLabel(sc),
+				"subject":    sc.step.Subject,
+				"ask":        v.Ask,
+				"confidence": round2(v.Confidence),
+				"step_sends": sc.step.Sent,
+			},
+		})
+	}
+	return out
 }

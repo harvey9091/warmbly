@@ -421,6 +421,14 @@ func (s *Service) Backfill(ctx context.Context, orgID uuid.UUID, opts BackfillOp
 // context rather than one of them sending a reply with nothing to answer.
 // Nil-safe and never fatal: no previous message is the normal case for the
 // first inbound of a thread.
+// RecordActions stores what a verdict was allowed to do, for the review page.
+func (s *Service) RecordActions(ctx context.Context, orgID uuid.UUID, messageID string, actions []string) error {
+	if s == nil || s.repo == nil {
+		return nil
+	}
+	return s.repo.RecordActions(ctx, orgID, messageID, actions)
+}
+
 func (s *Service) PreviousContext(ctx context.Context, accountID uuid.UUID, threadID string, before time.Time) (string, string) {
 	if !s.Enabled() || threadID == "" {
 		return "", ""
@@ -458,8 +466,12 @@ func (s *Service) SweepFollowUps(ctx context.Context, orgID uuid.UUID, since tim
 	if err != nil {
 		return p, err
 	}
-	if err := s.categories.EnsureAll(ctx, orgID, FollowUpLabels); err != nil {
-		log.Warn().Err(err).Msg("inbox tagging: could not seed follow-up labels")
+	// The hourly sweep is also how a workspace that predates the feature
+	// gets its labels: the whole taxonomy when classification is on, the
+	// follow-up labels otherwise. Idempotent and cached, so it costs nothing
+	// after the first pass.
+	if err := s.categories.EnsureAll(ctx, orgID, SeedSet()); err != nil {
+		log.Warn().Err(err).Msg("inbox tagging: could not seed labels")
 	}
 
 	now := time.Now()

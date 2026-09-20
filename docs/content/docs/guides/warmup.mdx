@@ -25,7 +25,7 @@ Enabling warmup controls **outbound** scheduling only. An active mailbox with wa
 
 ### Where the content comes from
 
-Message generation stays off the live sending path. When an AI provider is configured, a background batch builds complete conversation plans (a subject, an opening, and five alternating reply turns), each validated against a strict schema, checked for robotic language, and passed through a safety lint before entering the active bank.
+Message generation stays off the live sending path. When an AI provider is configured, a background batch builds complete conversation plans (a subject, an opening, and five alternating reply turns), each validated against a strict schema, checked for robotic language, and passed through a safety lint before entering the active bank. When the operator has also configured TypeSafe (`TYPESAFE_API_KEY`), each thread is judged for pitches and generated-sounding filler before entering the bank, and the thread text is sent to TypeSafe for that.
 
 At send time a message draws from the least-used suitable thread and accounts for usage atomically, spreading content evenly across thousands of mailboxes. The opening is personalized with the mailbox's stable persona, greeting, sign-off, and signature; reply turns stay unused until the recipient actually replies. If generation is unavailable or the bank is empty, a built-in reviewed library takes over, so **warmup never waits on an AI provider**.
 

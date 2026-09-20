@@ -53,6 +53,10 @@ type Decision struct {
 
 	// Signals are the nouls that fired, above Yes.
 	Signals []string
+	// SignalStrength is every signal's raw noul, fired or not, so an action
+	// that needs Strong rather than Yes can read the number rather than the
+	// list.
+	SignalStrength map[string]float64
 
 	// Scores are the normalised 0..1 positions of each score question, which
 	// is what the weights multiply. The raw score and every probability are
@@ -81,7 +85,7 @@ func Decide(answers map[string]Answer, facts Facts) Decision {
 		return DecideOutbound()
 	}
 
-	d := Decision{Scores: map[string]float64{}}
+	d := Decision{Scores: map[string]float64{}, SignalStrength: map[string]float64{}}
 
 	// ── Kind: the deterministic layer wins where it spoke ───────────────────
 	kindAnswer, hasKind := answers["kind"]
@@ -138,7 +142,12 @@ func Decide(answers map[string]Answer, facts Facts) Decision {
 
 	// ── Signals ────────────────────────────────────────────────────────────
 	for _, id := range SignalIDs() {
-		if a, ok := answers[id]; ok && a.Noul >= Yes {
+		a, ok := answers[id]
+		if !ok {
+			continue
+		}
+		d.SignalStrength[id] = a.Noul
+		if a.Noul >= Yes {
 			d.Signals = append(d.Signals, id)
 		}
 	}

@@ -23583,6 +23583,34 @@
               }
             }
           },
+          "inbox_tagging": {
+            "type": "object",
+            "description": "What a reply classified by automatic inbox tagging may do. The hold, the stop and the task default on; the suppression defaults off. Only a confident human reply acts.",
+            "properties": {
+              "hold_on_not_now": {
+                "type": "boolean",
+                "description": "Park the contact's sequences, in every campaign, when the reply is read as not now."
+              },
+              "not_now_hold_days": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 90,
+                "default": 30
+              },
+              "stop_on_declined": {
+                "type": "boolean",
+                "description": "Park the contact's sequences for a year when the reply declines or names the wrong person."
+              },
+              "task_on_call_request": {
+                "type": "boolean",
+                "description": "Open a CRM task for the mailbox owner when the reply asks for a call or proposes a time."
+              },
+              "suppress_on_removal_request": {
+                "type": "boolean",
+                "description": "Add the sender to the suppression list when the classifier is at least 80% sure the reply asks to be removed."
+              }
+            }
+          },
           "send_time_optimization": {
             "type": "object",
             "properties": {

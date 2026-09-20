@@ -835,6 +835,7 @@ var ExcludedTables = map[string]string{
 	"cloud_link":                   "This instance's own link to Warmbly Cloud: an instance property, not workspace data, and its token would be wrong on any other instance.",
 	"cloud_link_mailboxes":         "Which local mailboxes Warmbly Cloud warms for this instance. The enrollment belongs to the link, which does not travel.",
 	"warmup_conversations":         "The instance's shared warmup content library, not workspace data.",
+	"copy_judgments":               "A cache of copy judgments keyed by the hash of the words judged. The destination re-reads a step the first time its Advisor runs.",
 	"warmup_thread_messages":       "Message identifiers this instance recognised as turns of a warmup conversation, so the reply to each is recognised too. The destination syncs provider mail afresh and rebuilds it from the warmup tokens, which do travel.",
 	"sessions":                     "Live login sessions. They are bound to the source instance's signing key and must not survive a move.",
 	"mailbox_erasures":             "Erasure still owed for a mailbox this instance deleted: a grant to revoke at the provider, and message bodies to remove from this instance's blob store. Both name work on the instance that wrote the row, and the mailboxes are already gone.",

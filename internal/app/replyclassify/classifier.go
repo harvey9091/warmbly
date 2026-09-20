@@ -22,6 +22,8 @@ package replyclassify
 import (
 	"context"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // Reply class enum. These exact strings are the shared contract: they are stored
@@ -53,6 +55,11 @@ type Input struct {
 	Headers  map[string][]string
 	Subject  string
 	BodyText string
+	// OrganizationID and MessageID identify the stored message, so the typed
+	// model layer can reuse a verdict the inbox tagger already paid for.
+	// Optional; the offline layers never read them.
+	OrganizationID uuid.UUID
+	MessageID      string
 }
 
 // Result is the classifier verdict. Confidence is in [0,1]. Source names the
@@ -106,8 +113,13 @@ func ClassifyGated(ctx context.Context, in Input, gate ModelGate) Result {
 	}
 
 	// Layer 3: model (optional, provider-gated AND cost-gated). Skipped
-	// entirely when the gate declines, with no network call.
+	// entirely when the gate declines, with no network call. The typed
+	// classifier (TypeSafe, with a real confidence) is asked first; the LLM
+	// one-word prompt is the fallback for a deployment without it.
 	if gate == nil || gate() {
+		if r, ok := classifyTyped(ctx, in); ok {
+			return r
+		}
 		if r, ok := classifyModel(ctx, in); ok {
 			return r
 		}

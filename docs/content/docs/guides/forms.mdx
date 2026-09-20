@@ -139,9 +139,10 @@ Every published form has layered protection with nothing to configure:
 - a size cap on every submission
 - a render token: the form's data and submit endpoints only answer requests carrying a token minted when the page was served, so scripts cannot scrape form definitions or spray submissions without loading the page. A tab left open for more than 12 hours shows a refresh prompt instead of failing silently
 
-Two more controls are yours:
+Three more controls are yours:
 
 - **Captcha challenge** adds a Cloudflare Turnstile check to the form. The toggle appears once the operator has configured Turnstile for the instance.
+- **Triage** classifies every submission as a **buyer** (a prospective customer or someone asking about what you offer), a **vendor** (someone pitching you), a **job seeker**, **other**, or **junk** (spam, gibberish, a test entry, or an unsolicited pitch). The verdict shows as a chip on the submissions list and can be filtered on. Junk is stored and flagged but creates no contact and joins no campaign, so a bot cannot put itself in your outreach. Everything else is handled exactly as before. Triage is off for each form until you switch it on, and the toggle appears once the operator has configured a `TYPESAFE_API_KEY` for the instance. The answers the visitor typed (and nothing about their connection) are sent to TypeSafe for the judgment; a slow or failed call leaves the submission untriaged rather than delaying the visitor.
 - **Allowed embed domains** limits which sites may embed the form. With domains listed, browsers refuse to frame the page anywhere else (a domain covers its subdomains); empty allows any site. The hosted link keeps working either way.
 
   Worth listing your domains even if you only embed on one site. A form left open to any origin can be framed invisibly under someone else's page and used to collect leads that look like yours, and the browser is the only thing that can prevent it.
