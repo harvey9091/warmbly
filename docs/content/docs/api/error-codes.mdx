@@ -465,19 +465,22 @@ A `400` whose `code` is `storage_limit_reached` comes from `POST /campaigns/:id/
 
 #### `mailbox_validation_timeout`
 
-A `400` whose `code` is `mailbox_validation_timeout` comes from the SMTP and IMAP connect endpoints. Warmbly proves credentials by opening a real connection to the mail server before it stores anything, and the server did not answer inside that window. Nothing was saved and no mailbox was created.
+A `400` whose `code` is `mailbox_validation_timeout` comes from the SMTP and IMAP connect and re-authorize endpoints. Warmbly proves credentials by opening a real connection to the mail server before it stores anything, and a connection stayed silent inside that window. The message names the leg that did not answer and says whether the other one signed in. Nothing was saved and no mailbox was created.
 
 ```json
 {
   "error": "Bad Request",
-  "message": "Warmbly could not get an answer from this mail server in time. Nothing was saved. Check the host and port, then try again.",
+  "message": "SMTP (smtp.gmail.com:465) did not answer in time. IMAP (imap.gmail.com:993) signed in. Nothing was saved. Check the host and port, then try again. Some networks block outbound port 465: if the server also offers 587, connect with 587 and STARTTLS.",
   "code": "mailbox_validation_timeout",
   "request_id": "6f3c0a1e-2d47-4c6b-9a1f-2b7c5f0e8d31"
 }
 ```
 
+The same code with a message that begins `Warmbly's worker did not report back` means no worker answered the check at all, so the mail server was never tested. On the hosted product, retry and contact support if it persists. On a self-hosted instance, check that a worker is running, heartbeating, and reaching the same Redis as the backend.
+
 **How to fix:**
-- Check the host and port. A port that nothing listens on takes the full timeout rather than refusing straight away
+- Read which leg stayed silent. One leg passing and the other hanging is the network between the worker and that port, not the password: a port that nothing listens on, or that a firewall drops, takes the full timeout rather than refusing straight away
+- Outbound 465 is blocked by default on many hosting providers while 587 stays open. If the server offers both, use 587 with `starttls`
 - Retry. A mail server under load can be slow once and answer immediately on the next attempt
 - Confirm the server accepts connections from outside your network, and that the security setting matches the port: `tls` for 465 and 993, `starttls` for 587 and 143
 

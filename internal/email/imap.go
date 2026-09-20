@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"net"
 	"time"
 
 	"github.com/emersion/go-imap/v2"
@@ -32,7 +31,9 @@ func VerifyImap(ctx context.Context, host string, port int, user, pass, security
 		return probeFailText(models.MailProbeCleartext, "unencrypted IMAP is only allowed to a loopback host on a self-hosted instance")
 	}
 
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	// The send and sync clients bind WORKER_BIND_IP; a probe that left from
+	// another address would vouch for a path the mailbox never uses.
+	dialer := netbind.Dialer(netbind.FromEnv())
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return probeFail(ctx, models.MailProbeUnreachable, err)

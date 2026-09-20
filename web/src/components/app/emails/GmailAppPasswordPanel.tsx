@@ -33,8 +33,10 @@ import { cn } from "@/lib/utils";
 const EASE = [0.32, 0.72, 0, 1] as const;
 
 /** Gmail's own servers. The same for personal accounts and Workspace. */
-const GMAIL_SMTP = { host: "smtp.gmail.com", port: 465 } as const;
-const GMAIL_IMAP = { host: "imap.gmail.com", port: 993 } as const;
+// 587 with STARTTLS rather than 465: Google offers both, and many hosts block
+// outbound 465 while 587 stays open.
+const GMAIL_SMTP = { host: "smtp.gmail.com", port: 587, security: "starttls", securityLabel: "STARTTLS" } as const;
+const GMAIL_IMAP = { host: "imap.gmail.com", port: 993, security: "tls", securityLabel: "SSL / TLS" } as const;
 
 /** Google shows an app password as four groups of four letters. */
 const APP_PASSWORD_LENGTH = 16;
@@ -211,8 +213,8 @@ function ConnectStep({
                 addEmail({
                     name: name.trim(),
                     email: address,
-                    imap: { username: address, password: cleaned, host: GMAIL_IMAP.host, port: GMAIL_IMAP.port, security: "tls" },
-                    smtp: { username: address, password: cleaned, host: GMAIL_SMTP.host, port: GMAIL_SMTP.port, security: "tls" },
+                    imap: { username: address, password: cleaned, host: GMAIL_IMAP.host, port: GMAIL_IMAP.port, security: GMAIL_IMAP.security },
+                    smtp: { username: address, password: cleaned, host: GMAIL_SMTP.host, port: GMAIL_SMTP.port, security: GMAIL_SMTP.security },
                 }),
                 {
                     loading: "Checking the app password with Google…",
@@ -290,7 +292,7 @@ function ConnectStep({
                         <span className="w-10 shrink-0 text-slate-500 font-medium">{s.label}</span>
                         <span className="font-mono text-slate-900 truncate">{s.host}</span>
                         <span className="font-mono tabular-nums text-slate-600">:{s.port}</span>
-                        <span className="ml-auto text-slate-500 shrink-0">SSL / TLS</span>
+                        <span className="ml-auto text-slate-500 shrink-0">{s.securityLabel}</span>
                     </div>
                 ))}
                 <div className="px-3 py-2 text-[11.5px] text-slate-500 border-t border-slate-100">
