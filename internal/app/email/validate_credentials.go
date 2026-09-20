@@ -2,6 +2,7 @@ package email
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -83,16 +84,27 @@ func (s *emailService) ValidateCredentials(ctx context.Context, orgID uuid.UUID,
 			return errx.InternalError()
 		}
 
+		// A worker answers with a JSON verdict followed by the legacy digit.
+		// Either alone is enough; a worker that predates verdicts sends only
+		// the digit, and a payload that is neither is skipped.
 		switch msg.Payload {
 		case "1":
 			return nil
 		case "0":
 			return errx.ErrEmailCredentials
 		}
+		var verdict models.EmailValidationVerdict
+		if err := json.Unmarshal([]byte(msg.Payload), &verdict); err != nil {
+			continue
+		}
+		if verdict.OK {
+			return nil
+		}
+		return validationError(verdict, credentials)
 	}
 }
 
-// validationWait is how long the caller waits for a worker's verdict. It is
-// deliberately longer than the worker's own deadline (config.EmailValidationBudget)
-// so a verdict produced right at that limit is still heard.
-const validationWait = 9 * time.Second
+// validationWait is how long the caller waits for a worker's verdict. It
+// covers worker.validationBudget plus worker.replyBudget with room for the
+// bus both ways, so a verdict produced at the worker's limit is still heard.
+const validationWait = 14 * time.Second

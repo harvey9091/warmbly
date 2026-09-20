@@ -481,6 +481,75 @@ A `400` whose `code` is `mailbox_validation_timeout` comes from the SMTP and IMA
 - Retry. A mail server under load can be slow once and answer immediately on the next attempt
 - Confirm the server accepts connections from outside your network, and that the security setting matches the port: `tls` for 465 and 993, `starttls` for 587 and 143
 
+#### `mailbox_auth_refused`
+
+A `400` whose `code` is `mailbox_auth_refused` comes from the SMTP and IMAP connect and re-authorize endpoints. The mail server answered and refused the sign-in. The message names the leg and the server, quotes the server's own reply, and for Google's servers says what an app password is. Nothing was saved.
+
+```json
+{
+  "error": "Bad Request",
+  "message": "SMTP (smtp.gmail.com:465) refused the sign-in: 535 5.7.8 Username and Password not accepted. IMAP (imap.gmail.com:993) refused the sign-in: imap: NO [AUTHENTICATIONFAILED] Invalid credentials (Failure). Nothing was saved. Google accepts only a 16-letter app password here, created at myaccount.google.com/apppasswords on the same Google account as the address, with the username being the full address. The account password does not work, and on Google Workspace the administrator can switch IMAP or app passwords off.",
+  "code": "mailbox_auth_refused",
+  "request_id": "6f3c0a1e-2d47-4c6b-9a1f-2b7c5f0e8d31"
+}
+```
+
+**How to fix:**
+- Read the server's reply in the message: it says which leg refused and usually why (a wrong password, an app password required, IMAP switched off for the domain)
+- The username is normally the full address. The password is the provider's app password when the account has two-step verification on, never the account password
+- Whitespace is not the problem: Warmbly trims the password on every path, and removes every space from one bound for a Google server
+
+#### `mailbox_unreachable`
+
+A `400` whose `code` is `mailbox_unreachable` comes from the same endpoints. The worker could not open a connection to the server at all: the name did not resolve, the port refused, or a firewall dropped the packets. The message says which server and which of those it was. Nothing was saved.
+
+```json
+{
+  "error": "Bad Request",
+  "message": "SMTP (smtp.example.com:465) could not be reached from the worker: the port refused the connection. Nothing was saved.",
+  "code": "mailbox_unreachable",
+  "request_id": "6f3c0a1e-2d47-4c6b-9a1f-2b7c5f0e8d31"
+}
+```
+
+**How to fix:**
+- Check the host and port for typos
+- The connection leaves from the worker, not from your browser or from the API host: the worker's network has to reach the server on that port. Some hosting providers block outbound mail ports until asked
+
+#### `mailbox_tls_failed`
+
+A `400` whose `code` is `mailbox_tls_failed` comes from the same endpoints. The server was reached but no secure connection could be made: the certificate did not verify for that host name, the handshake failed, or the port expects a different mode (`tls` on a STARTTLS port, or the reverse) and no STARTTLS was offered. Nothing was saved.
+
+```json
+{
+  "error": "Bad Request",
+  "message": "IMAP (mail.example.com:143) did not complete a secure connection: the server offers no STARTTLS on this port. Nothing was saved.",
+  "code": "mailbox_tls_failed",
+  "request_id": "6f3c0a1e-2d47-4c6b-9a1f-2b7c5f0e8d31"
+}
+```
+
+**How to fix:**
+- Match the security setting to the port: `tls` for 465 and 993, `starttls` for 587 and 143, unless the provider documents otherwise
+- Use the host name the certificate is issued for, which is the one in the provider's documentation rather than an alias or an IP address
+
+#### `mailbox_server_declined`
+
+A `400` whose `code` is `mailbox_server_declined` comes from the same endpoints. The sign-in could not be completed for a reason other than the credentials: the server asked for a retry later (a `4xx` reply, often a login rate limit), it offers no sign-in method Warmbly implements, it answered with a `5xx` that is not about the password (a mechanism it does not support, a STARTTLS it insists on), the conversation broke, or the probe itself failed before a reply arrived. The message carries the server's reply when there is one. Nothing was saved.
+
+```json
+{
+  "error": "Bad Request",
+  "message": "SMTP (smtp.example.com:587) declined the sign-in for now and asks for a retry: 454 4.7.0 Too many login attempts, please try again later. Nothing was saved.",
+  "code": "mailbox_server_declined",
+  "request_id": "6f3c0a1e-2d47-4c6b-9a1f-2b7c5f0e8d31"
+}
+```
+
+**How to fix:**
+- For a `4xx` reply, wait a few minutes and retry
+- For a server that offers only mechanisms Warmbly does not implement (NTLM, GSSAPI), use the provider's documented SMTP submission host, which normally offers `LOGIN` or `PLAIN`; a different password does not add a mechanism
+
 #### `mailbox_worker_unreachable`
 
 A `503` whose `code` is `mailbox_worker_unreachable` comes from `DELETE /emails/{id}`. Disconnecting a mailbox has to reach the machine that syncs it before the record goes, because once the record is gone nothing can tell that machine to stop. When the instruction cannot be delivered, nothing is removed and the mailbox is left exactly as it was.

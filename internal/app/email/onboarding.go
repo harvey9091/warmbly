@@ -346,7 +346,24 @@ func validateSMTPIMAPInput(data *models.NewSMTPIMAPAccount) *errx.Error {
 	if !validPort(data.IMAP.Port) {
 		return errx.ErrEmailIMAPPort
 	}
+	normalizeMailPasswords(data.SMTP, data.IMAP)
 	return validateMailSecurity(data.SMTP, data.IMAP)
+}
+
+// normalizeMailPasswords drops every space from a Google app password (Google
+// prints them in groups of four) and trims only the edges elsewhere, where an
+// inner space can be part of the password.
+func normalizeMailPasswords(services ...*models.Service) {
+	for _, svc := range services {
+		if svc == nil {
+			continue
+		}
+		if models.GoogleMailHost(svc.Host) {
+			svc.Password = strings.Join(strings.Fields(svc.Password), "")
+			continue
+		}
+		svc.Password = strings.TrimSpace(svc.Password)
+	}
 }
 
 // validPort accepts any routable TCP port. Mail submission is conventionally
