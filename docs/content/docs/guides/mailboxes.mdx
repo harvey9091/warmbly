@@ -53,6 +53,8 @@ Each side also has a **security** setting, which is what decides how the connect
 | STARTTLS | Connects in the clear, then upgrades in place before anything sensitive is sent | SMTP `587` or `2525`, IMAP `143` |
 | None | No encryption. Only offered for a mail server on the same machine as the worker | SMTP `1025`, IMAP `1143` |
 
+If port 465 never answers (many hosting networks block outbound 465 while 587 stays open), the worker dials 587 with STARTTLS on the same server alongside it and uses whichever connects first. A connect that succeeds that way is stored with port 587 and STARTTLS, and the mailbox settings show that. A server that refuses the connection or a name that does not resolve is reported as is, because 587 would fail the same way.
+
 The form picks TLS or STARTTLS from the port as you type, so standard setups need no thought. It never picks **None**, on any port: dropping encryption is always something you ask for. Change the mode yourself when your server is unusual: any port from 1 to 65535 works, so a submission relay on `2525` or IMAP on a custom port is fine as long as the security setting matches what the server actually speaks.
 
 Encryption is not optional over a network. Warmbly will not send credentials over an unencrypted connection to anything but this machine, which is why **None** only appears once the host is `localhost`, an address in `127.0.0.0/8`, or `::1`, and only on a [self-hosted instance](/development/install/). See [local mail relays](#local-mail-relays-proton-bridge) below.
@@ -75,7 +77,7 @@ Choose **Add account**, then **Gmail / Google Workspace**. The dialog walks thro
 
 1. **Turn on 2-Step Verification** on the Google account, under [Google Account, Security](https://myaccount.google.com/security). Google only offers app passwords once it is on, and only alongside a second-step method other than a security key (a phone prompt, an authenticator app or a text message). Already on? Continue.
 2. **Create an app password** at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords): name it Warmbly, press **Create**, and copy the 16 characters. Google shows them once; the spaces between the groups do not matter, Warmbly drops them wherever the password arrives (the dialog, the CSV import, the API).
-3. **Connect**: enter your name, the full address (including `@gmail.com` or your Workspace domain) and the app password. Warmbly checks it against Google before saving anything.
+3. **Connect**: enter your name, the full address (including `@gmail.com` or your Workspace domain) and the app password. Warmbly checks it against Google before saving anything. The address has to be the one the Google account signs in with: Google refuses an app password presented with an alias or a group address, and one created while signed in to a different account.
 
 The settings the dialog uses, in case you connect the same mailbox through **Other (SMTP / IMAP)** or the [CSV import](#connecting-many-mailboxes-at-once):
 

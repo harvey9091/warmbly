@@ -90,7 +90,7 @@ func timeoutError(v models.EmailValidationVerdict, creds *models.SmtpImap, faile
 	parts := make([]string, 0, 2)
 	for _, l := range []failedLeg{{"SMTP", creds.SMTP, v.SMTP}, {"IMAP", creds.IMAP, v.IMAP}} {
 		if l.res.OK {
-			parts = append(parts, legWhere(l.leg, l.svc)+" signed in.")
+			parts = append(parts, legWhere(l.leg, l.svc, l.res)+" signed in.")
 			continue
 		}
 		parts = append(parts, legSentence(l.leg, l.svc, l.res))
@@ -98,24 +98,29 @@ func timeoutError(v models.EmailValidationVerdict, creds *models.SmtpImap, faile
 	msg := strings.Join(parts, " ") + " Nothing was saved. Check the host and port, then try again."
 	for _, l := range failed {
 		if l.leg == "SMTP" && l.res.Reason == models.MailProbeTimeout && l.svc != nil && l.svc.Port == 465 {
-			msg += " Some networks block outbound port 465: if the server also offers 587, connect with 587 and STARTTLS."
+			msg += " Port 465 did not answer and the worker could not use 587 with STARTTLS on the same server either. Some networks block outbound mail ports; check that the server is reachable from outside and which port it listens on."
 			break
 		}
 	}
 	return errx.NewWithIdentifier(errx.BadRequest, errx.ErrEmailValidation.Identifier, msg)
 }
 
-// legWhere names a leg by its server when the caller gave one.
-func legWhere(leg string, svc *models.Service) string {
+// legWhere names a leg by its server when the caller gave one, and by the port
+// the worker ended up on when that differs from the one asked for.
+func legWhere(leg string, svc *models.Service, res models.EmailValidationLeg) string {
 	if svc == nil {
 		return leg + " server"
 	}
-	return fmt.Sprintf("%s (%s)", leg, models.MailDialAddress(models.NormalizeMailHost(svc.Host), svc.Port))
+	host := models.NormalizeMailHost(svc.Host)
+	if res.Port != 0 && res.Port != svc.Port {
+		return fmt.Sprintf("%s (%s, after %d did not answer)", leg, models.MailDialAddress(host, res.Port), svc.Port)
+	}
+	return fmt.Sprintf("%s (%s)", leg, models.MailDialAddress(host, svc.Port))
 }
 
 // legSentence is one leg's failure in the server's own words.
 func legSentence(leg string, svc *models.Service, res models.EmailValidationLeg) string {
-	where := legWhere(leg, svc)
+	where := legWhere(leg, svc, res)
 	detail := ""
 	if res.Detail != "" {
 		detail = ": " + res.Detail
@@ -152,7 +157,7 @@ func providerHint(lead failedLeg) string {
 		return ""
 	}
 	if models.GoogleMailHost(lead.svc.Host) {
-		return "Google accepts only a 16-letter app password here, created at myaccount.google.com/apppasswords on the same Google account as the address, with the username being the full address. The account password does not work, and on Google Workspace the administrator can switch IMAP or app passwords off."
+		return "Google itself refused this address and password. Use a 16-letter app password from myaccount.google.com/apppasswords, created while signed in to the Google account that owns this address, and enter the account's own sign-in address rather than an alias or a group. A deleted app password stops working at once, and on Google Workspace the administrator can block app passwords or IMAP."
 	}
 	return ""
 }

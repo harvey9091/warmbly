@@ -21,11 +21,15 @@ type ProbeResult struct {
 	OK     bool
 	Reason string
 	Detail string
+	// Port and Security are set when the server was reached on a port other
+	// than the one asked for.
+	Port     int
+	Security string
 }
 
 // Leg converts the result to the wire shape the worker publishes.
 func (r ProbeResult) Leg() models.EmailValidationLeg {
-	return models.EmailValidationLeg{OK: r.OK, Reason: r.Reason, Detail: r.Detail}
+	return models.EmailValidationLeg{OK: r.OK, Reason: r.Reason, Detail: r.Detail, Port: r.Port, Security: r.Security}
 }
 
 func probeOK() ProbeResult { return ProbeResult{OK: true} }
