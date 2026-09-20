@@ -37,6 +37,9 @@ func (s *JobsService) HandleFlagsAdd(ctx context.Context, e *models.JobEventFlag
 				message.Flags = append(message.Flags, flag)
 			}
 		}
+		if models.SeenFromFlags(e.Flags) {
+			message.Seen = true
+		}
 		if containsSpamFlag(e.Flags) && message.Folder != models.FolderTrash {
 			message.Folder = models.FolderSpam
 		}
@@ -87,11 +90,23 @@ func (s *JobsService) HandleFlagsAdd(ctx context.Context, e *models.JobEventFlag
 		}
 	}
 
+	// Read state is its own column, so gaining \Seen is a change even when the
+	// flag array already carried it. Gmail and Graph report read state this
+	// way; without this the unibox would only ever be marked read from inside
+	// Warmbly, leaving mail the customer read in their own client unread here.
+	update := repository.UpdateUniboxEntry{}
+	if models.SeenFromFlags(e.Flags) && !email.Seen {
+		seen := true
+		update.Seen = &seen
+		email.Seen = true
+		updated = true
+	}
+
 	if !updated {
 		return nil
 	}
 
-	update := repository.UpdateUniboxEntry{Flags: email.Flags}
+	update.Flags = email.Flags
 	// A provider-side junking (Gmail SPAM label, IMAP \Junk) moves the
 	// message into the spam folder; trash placement is stronger and kept.
 	if containsSpamFlag(e.Flags) && email.Folder != models.FolderTrash && email.Folder != models.FolderSpam {
@@ -131,6 +146,9 @@ func warmupTokenFromFlags(flags []string) string {
 func (s *JobsService) HandleFlagsRemove(ctx context.Context, e *models.JobEventFlags) error {
 	email, err := s.emailForSyncUpdate(ctx, e.UserID, e.ID, func(message *models.EmailMessageStoreData) {
 		message.Flags = slices.DeleteFunc(message.Flags, func(flag string) bool { return slices.Contains(e.Flags, flag) })
+		if models.SeenFromFlags(e.Flags) {
+			message.Seen = false
+		}
 		if message.Folder == models.FolderSpam && !containsSpamFlag(message.Flags) {
 			message.Folder = models.FolderInbox
 		}
@@ -143,7 +161,11 @@ func (s *JobsService) HandleFlagsRemove(ctx context.Context, e *models.JobEventF
 		return nil
 	}
 
-	if len(email.Flags) == 0 {
+	// Losing \Seen is the provider reporting the message back to unread, and
+	// that is the column the inbox reads, not the flag array.
+	unread := models.SeenFromFlags(e.Flags) && email.Seen
+
+	if len(email.Flags) == 0 && !unread {
 		return nil
 	}
 
@@ -162,11 +184,16 @@ func (s *JobsService) HandleFlagsRemove(ctx context.Context, e *models.JobEventF
 	}
 
 	// No change → skip DB update
-	if len(newFlags) == len(email.Flags) {
+	if len(newFlags) == len(email.Flags) && !unread {
 		return nil
 	}
 
 	update := repository.UpdateUniboxEntry{Flags: newFlags}
+	if unread {
+		seen := false
+		update.Seen = &seen
+		email.Seen = false
+	}
 	// Un-junking at the provider (spam label cleared while nothing else
 	// still marks it spam) restores the message to the inbox.
 	if email.Folder == models.FolderSpam && containsSpamFlag(e.Flags) && !containsSpamFlag(newFlags) {

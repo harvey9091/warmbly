@@ -140,7 +140,7 @@ func (w *WMail) googleStore(ctx context.Context, msg *models.EmailMessageData) e
 		SentDate:     msg.Date,
 		Snippet:      msg.Snippet,
 		BodyText:     SearchText(msg.BodyPlain, msg.BodyHTML),
-		Seen:         false,
+		Seen:         models.SeenFromFlags(msg.Flags),
 		UpdatedAt:    now,
 		CreatedAt:    now,
 	}

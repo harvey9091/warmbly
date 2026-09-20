@@ -26,6 +26,10 @@ type UpdateUniboxEntry struct {
 	// ProviderFolder is the provider's own placement. It moves on every real
 	// provider move; Folder only follows when the message was not filed here.
 	ProviderFolder *string `json:"provider_folder"`
+	// Seen is the provider's read state. Set whenever a sync event carries a
+	// change to it, so mail read in the customer's own client stops showing
+	// as unread here.
+	Seen *bool `json:"seen"`
 }
 
 type UniboxRepository interface {
@@ -224,6 +228,11 @@ func (r *uniboxRepository) UpdateEntry(ctx context.Context, userID, emailID, id 
 	if e.ProviderFolder != nil {
 		setClauses = append(setClauses, fmt.Sprintf("provider_folder = $%d", argPos))
 		args = append(args, *e.ProviderFolder)
+		argPos++
+	}
+	if e.Seen != nil {
+		setClauses = append(setClauses, fmt.Sprintf("seen = $%d", argPos))
+		args = append(args, *e.Seen)
 		argPos++
 	}
 

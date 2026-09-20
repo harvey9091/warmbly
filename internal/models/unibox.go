@@ -1,6 +1,7 @@
 package models
 
 import (
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -514,4 +515,18 @@ type SeenRelayTarget struct {
 	// leave the provider holding the earlier answer.
 	Seen bool
 	Ref  MessageSeenRef
+}
+
+// FlagSeen is the RFC 3501 read-state flag. Every provider is mapped onto it
+// before it reaches the platform: IMAP reports it directly, the Gmail sync
+// adds it when the UNREAD label is absent, and the Graph sync adds it for
+// isRead.
+const FlagSeen = `\Seen`
+
+// SeenFromFlags reads a message's read state out of its flags. The stored
+// `seen` column has to follow the provider: mail the customer already read in
+// their own client is read in Warmbly, and a copy the worker files in Sent
+// (appended \Seen, since the sender wrote it) must never arrive as unread.
+func SeenFromFlags(flags []string) bool {
+	return slices.Contains(flags, FlagSeen)
 }
