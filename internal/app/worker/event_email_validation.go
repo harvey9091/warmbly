@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/email"
 	"github.com/warmbly/warmbly/internal/models"
@@ -22,26 +23,67 @@ const probeBudget = 5 * time.Second
 // replyBudget publishes the verdict on a context the probe deadline cannot cancel.
 const replyBudget = 3 * time.Second
 
+// What the worker says when it could not run the probes at all. Closed words:
+// the cause is logged here and never shown to the person at the form.
+const (
+	verdictErrNoCredentials = "the check arrived without both legs' credentials"
+	verdictErrUnseal        = "the worker could not unseal the credentials"
+)
+
+// HandleEmailValidation runs a credential check off the bus loop. The bus
+// hands a worker one message at a time, so a check run inline waits behind
+// every send and mailbox load queued ahead of it while the backend's clock is
+// already running. The verdict travels over Redis, so the message itself is
+// done the moment it has been read.
 func (w *WorkerService) HandleEmailValidation(parent context.Context, data models.EventWorkerEmailValidation) error {
+	ctx := context.WithoutCancel(parent)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				errs.Recover(r)
+			}
+		}()
+		w.runEmailValidation(ctx, data)
+	}()
+	return nil
+}
+
+// runEmailValidation unseals the credentials, probes both legs and always
+// answers: a check the worker could not run is reported as such, because a
+// silent worker reads at the backend as a mail server that never replied.
+func (w *WorkerService) runEmailValidation(parent context.Context, data models.EventWorkerEmailValidation) {
 	ctx, cancelAll := context.WithTimeout(parent, validationBudget)
 	defer cancelAll()
+
+	reply := func(v models.EmailValidationVerdict) {
+		w.publishValidationVerdict(parent, data.ProcessID, v)
+	}
+
+	creds := data.Credentials
+	if creds == nil || creds.IMAP == nil || creds.SMTP == nil {
+		reply(models.EmailValidationVerdict{Error: verdictErrNoCredentials})
+		return
+	}
 
 	cipher, err := w.CipherService.Cipher(ctx, data.OrgID)
 	if err != nil {
 		errs.CaptureException(err)
-		return nil
+		reply(models.EmailValidationVerdict{Error: verdictErrUnseal})
+		return
 	}
 
-	data.Credentials.IMAP.Password, err = cipher.Decrypt(ctx, data.Credentials.IMAP.Password)
+	imapCreds, smtpCreds := *creds.IMAP, *creds.SMTP
+	imapCreds.Password, err = cipher.Decrypt(ctx, imapCreds.Password)
 	if err != nil {
 		errs.CaptureException(err)
-		return nil
+		reply(models.EmailValidationVerdict{Error: verdictErrUnseal})
+		return
 	}
-
-	data.Credentials.SMTP.Password, err = cipher.Decrypt(ctx, data.Credentials.SMTP.Password)
+	smtpCreds.Password, err = cipher.Decrypt(ctx, smtpCreds.Password)
 	if err != nil {
 		errs.CaptureException(err)
-		return nil
+		reply(models.EmailValidationVerdict{Error: verdictErrUnseal})
+		return
 	}
 
 	probeCtx, cancel := context.WithTimeout(ctx, probeBudget)
@@ -64,7 +106,6 @@ func (w *WorkerService) HandleEmailValidation(parent context.Context, data model
 			res = fn()
 		}()
 	}
-	imapCreds, smtpCreds := data.Credentials.IMAP, data.Credentials.SMTP
 	probe(imapDone, func() email.ProbeResult {
 		return email.VerifyImap(probeCtx, imapCreds.Host, imapCreds.Port, imapCreds.Username, imapCreds.Password, imapCreds.Security)
 	})
@@ -73,12 +114,16 @@ func (w *WorkerService) HandleEmailValidation(parent context.Context, data model
 	})
 
 	verdict := validationVerdict(<-smtpDone, <-imapDone)
-	logProbe("smtp", smtpCreds, verdict.SMTP)
-	logProbe("imap", imapCreds, verdict.IMAP)
+	logProbe("smtp", &smtpCreds, verdict.SMTP)
+	logProbe("imap", &imapCreds, verdict.IMAP)
+	reply(verdict)
+}
 
+// publishValidationVerdict answers the backend on the process's channel.
+func (w *WorkerService) publishValidationVerdict(parent context.Context, processID uuid.UUID, verdict models.EmailValidationVerdict) {
 	replyCtx, replyCancel := context.WithTimeout(context.WithoutCancel(parent), replyBudget)
 	defer replyCancel()
-	channel := "email_validation:" + data.ProcessID.String()
+	channel := "email_validation:" + processID.String()
 	// The verdict goes first and the legacy digit after it: a backend that
 	// reads verdicts returns on the first message, and one that predates them
 	// skips what it cannot parse and takes the digit, so a fleet mid-update
@@ -86,7 +131,7 @@ func (w *WorkerService) HandleEmailValidation(parent context.Context, data model
 	if body, err := json.Marshal(verdict); err == nil {
 		if err := w.Cache.Publish(replyCtx, channel, string(body)).Err(); err != nil {
 			errs.CaptureException(err)
-			return nil
+			return
 		}
 	}
 	legacy := "0"
@@ -95,10 +140,7 @@ func (w *WorkerService) HandleEmailValidation(parent context.Context, data model
 	}
 	if err := w.Cache.Publish(replyCtx, channel, legacy).Err(); err != nil {
 		errs.CaptureException(err)
-		return nil
 	}
-
-	return nil
 }
 
 // validationVerdict folds the two probes into the reply the backend reads.

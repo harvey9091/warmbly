@@ -111,8 +111,11 @@ var (
 
 	// Email
 	ErrEmailCredentials = New(BadRequest, "Invalid email credentials.")
-	ErrEmailValidation  = NewWithIdentifier(BadRequest, "mailbox_validation_timeout",
-		"Warmbly could not get an answer from this mail server in time. Nothing was saved. Check the host and port, then try again.")
+	// Raised when no worker reported back on a credential check at all. The
+	// per-leg timeout, where a worker did answer and names the server that
+	// stayed silent, is built in the email service under the same code.
+	ErrEmailValidation = NewWithIdentifier(BadRequest, "mailbox_validation_timeout",
+		"Warmbly's worker did not report back on this mailbox in time, so the mail server was not tested. Nothing was saved. Try again in a moment, and contact support if it keeps happening.")
 	ErrEmailOnboardProvider = New(BadRequest, "Unsupported email provider. Use 'gmail', 'outlook', or 'smtp_imap'.")
 	// Raised when the provider is supported but this deployment has no OAuth
 	// client for it. Self-host only: the hosted product always has both set. The

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/observability/errs"
@@ -96,6 +98,14 @@ func (s *emailService) ValidateCredentials(ctx context.Context, orgID uuid.UUID,
 		var verdict models.EmailValidationVerdict
 		if err := json.Unmarshal([]byte(msg.Payload), &verdict); err != nil {
 			continue
+		}
+		if verdict.Error != "" {
+			// The worker answered but never reached the mail server; that is
+			// this side's failure, not the customer's host or port.
+			err := fmt.Errorf("mailbox validation on worker %s did not run: %s", workerID, verdict.Error)
+			log.Error().Str("worker_id", workerID).Str("process_id", processID.String()).Msg(err.Error())
+			errs.CaptureException(err)
+			return errx.InternalError()
 		}
 		if verdict.OK {
 			return nil

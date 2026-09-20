@@ -48,6 +48,11 @@ type EmailValidationVerdict struct {
 	OK   bool               `json:"ok"`
 	SMTP EmailValidationLeg `json:"smtp"`
 	IMAP EmailValidationLeg `json:"imap"`
+	// Error is set when the worker could not run the probes at all (it could
+	// not unseal the credentials, say), in closed words with the cause logged
+	// on the worker. The backend answers with a server error rather than
+	// letting an untested mailbox read as a mail server that never replied.
+	Error string `json:"error,omitempty"`
 }
 
 // GoogleMailHost reports whether host is one of Google's mail servers, where

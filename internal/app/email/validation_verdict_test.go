@@ -69,6 +69,35 @@ func TestValidationError_Ranking(t *testing.T) {
 	}
 }
 
+// TestValidationError_TimeoutNamesLeg: a silent leg is named, the leg that
+// got through is said to have, and a hanging 465 points at 587.
+func TestValidationError_TimeoutNamesLeg(t *testing.T) {
+	ok := models.EmailValidationLeg{OK: true}
+	xerr := validationError(models.EmailValidationVerdict{
+		SMTP: models.EmailValidationLeg{Reason: models.MailProbeTimeout},
+		IMAP: ok,
+	}, gmailCreds())
+	if xerr.Identifier != errx.ErrEmailValidation.Identifier || xerr.Code != errx.BadRequest {
+		t.Fatalf("got %s/%v", xerr.Identifier, xerr.Code)
+	}
+	for _, want := range []string{"SMTP (smtp.gmail.com:465) did not answer in time", "IMAP (imap.gmail.com:993) signed in", "Nothing was saved", "587"} {
+		if !strings.Contains(xerr.Message, want) {
+			t.Fatalf("message %q lacks %q", xerr.Message, want)
+		}
+	}
+	// Both silent: nothing signed in, and 587 is not offered for an IMAP port.
+	xerr = validationError(models.EmailValidationVerdict{
+		SMTP: models.EmailValidationLeg{Reason: models.MailProbeTimeout},
+		IMAP: models.EmailValidationLeg{Reason: models.MailProbeTimeout},
+	}, &models.SmtpImap{SMTP: &models.Service{Host: "mail.example.com", Port: 587}, IMAP: &models.Service{Host: "mail.example.com", Port: 993}})
+	if strings.Contains(xerr.Message, "signed in") || strings.Contains(xerr.Message, "block outbound") {
+		t.Fatalf("unexpected message: %s", xerr.Message)
+	}
+	if !strings.Contains(xerr.Message, "IMAP (mail.example.com:993) did not answer in time") {
+		t.Fatalf("message %q does not name the IMAP leg", xerr.Message)
+	}
+}
+
 // TestNormalizeMailPasswords: a Google app password loses every space, any
 // other password only what is around it, and a nil leg is left alone.
 func TestNormalizeMailPasswords(t *testing.T) {

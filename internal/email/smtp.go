@@ -54,7 +54,7 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 	implicitTLS := resolved == models.MailSecurityTLS
 	// TCP first and TLS second, like the IMAP probe, so a port that answers
 	// and then fails the handshake reads as a TLS problem, not as unreachable.
-	conn, err = netbind.Dialer(nil).DialContext(ctx, "tcp", addr)
+	conn, err = netbind.Dialer(netbind.FromEnv()).DialContext(ctx, "tcp", addr)
 	// A bad host is ordinary user input, not an exceptional case: dial failed
 	// means conn is nil, and closing it would panic this goroutine and take
 	// the whole worker down with it.

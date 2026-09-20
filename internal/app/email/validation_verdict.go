@@ -58,7 +58,7 @@ func validationError(v models.EmailValidationVerdict, creds *models.SmtpImap) *e
 		}
 	}
 	if lead.res.Reason == models.MailProbeTimeout {
-		return errx.ErrEmailValidation
+		return timeoutError(v, creds, legs)
 	}
 
 	parts := make([]string, 0, len(legs))
@@ -82,12 +82,40 @@ func validationError(v models.EmailValidationVerdict, creds *models.SmtpImap) *e
 	return errx.NewWithIdentifier(errx.BadRequest, id, msg)
 }
 
+// timeoutError is the verdict where the leg that says the most stayed silent.
+// It names that leg and says whether the other one got through, because a
+// port that hangs while the other passes is a network in the way, not a
+// password: many hosts block outbound 465 and leave 587 open.
+func timeoutError(v models.EmailValidationVerdict, creds *models.SmtpImap, failed []failedLeg) *errx.Error {
+	parts := make([]string, 0, 2)
+	for _, l := range []failedLeg{{"SMTP", creds.SMTP, v.SMTP}, {"IMAP", creds.IMAP, v.IMAP}} {
+		if l.res.OK {
+			parts = append(parts, legWhere(l.leg, l.svc)+" signed in.")
+			continue
+		}
+		parts = append(parts, legSentence(l.leg, l.svc, l.res))
+	}
+	msg := strings.Join(parts, " ") + " Nothing was saved. Check the host and port, then try again."
+	for _, l := range failed {
+		if l.leg == "SMTP" && l.res.Reason == models.MailProbeTimeout && l.svc != nil && l.svc.Port == 465 {
+			msg += " Some networks block outbound port 465: if the server also offers 587, connect with 587 and STARTTLS."
+			break
+		}
+	}
+	return errx.NewWithIdentifier(errx.BadRequest, errx.ErrEmailValidation.Identifier, msg)
+}
+
+// legWhere names a leg by its server when the caller gave one.
+func legWhere(leg string, svc *models.Service) string {
+	if svc == nil {
+		return leg + " server"
+	}
+	return fmt.Sprintf("%s (%s)", leg, models.MailDialAddress(models.NormalizeMailHost(svc.Host), svc.Port))
+}
+
 // legSentence is one leg's failure in the server's own words.
 func legSentence(leg string, svc *models.Service, res models.EmailValidationLeg) string {
-	where := leg + " server"
-	if svc != nil {
-		where = fmt.Sprintf("%s (%s)", leg, models.MailDialAddress(models.NormalizeMailHost(svc.Host), svc.Port))
-	}
+	where := legWhere(leg, svc)
 	detail := ""
 	if res.Detail != "" {
 		detail = ": " + res.Detail
