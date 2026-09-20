@@ -75,8 +75,11 @@ func (s *dashboardAnalyticsRepoStub) GetDashboardDailyTrend(_ context.Context, _
 
 func TestWarmupSummaryReportsEveryDisplayedMetric(t *testing.T) {
 	repo := warmupAnalyticsRepoStub{stats: []models.WarmupDailyStats{
-		{Date: "2026-09-14", EmailsSent: 5, EmailsReplied: 2, TargetVolume: 10},
-		{Date: "2026-09-15", EmailsSent: 10, EmailsReplied: 3, TargetVolume: 10},
+		{Date: "2026-09-14", EmailsSent: 5, EmailsReplied: 2, EmailsReceived: 4, TargetVolume: 10, Active: true},
+		{Date: "2026-09-15", EmailsSent: 10, EmailsReplied: 3, EmailsReceived: 7, TargetVolume: 10, Active: true},
+		// A day the mailbox was written to but had no plan: it lists, and is
+		// not a day active.
+		{Date: "2026-09-16", EmailsReceived: 2},
 	}}
 	svc := &analyticsService{analyticsRepo: repo}
 
@@ -87,6 +90,9 @@ func TestWarmupSummaryReportsEveryDisplayedMetric(t *testing.T) {
 	if got.Summary.TotalSent != 15 || got.Summary.TotalReplied != 5 || got.Summary.DaysActive != 2 {
 		t.Errorf("summary totals = sent %d, replied %d, days %d; want 15/5/2",
 			got.Summary.TotalSent, got.Summary.TotalReplied, got.Summary.DaysActive)
+	}
+	if got.Summary.TotalReceived != 13 {
+		t.Errorf("total_received = %d, want 13", got.Summary.TotalReceived)
 	}
 	if math.Abs(got.Summary.AverageDaily-7.5) > 0.001 {
 		t.Errorf("average_daily = %.3f, want 7.5", got.Summary.AverageDaily)

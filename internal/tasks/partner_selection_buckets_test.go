@@ -92,6 +92,27 @@ func premiumSelectorWithRules(gate *rejectingGate, rules []models.WarmupRoutingR
 	return s, Email{ID: uuid.New(), Email: "sender@paid.test", OrganizationID: &org, WarmupPoolType: "premium"}
 }
 
+// borrowedFree is a proven free mailbox filling in a thin premium tier.
+func borrowedFree(email string) models.WarmupPartnerCandidate {
+	return models.WarmupPartnerCandidate{ID: uuid.New(), Email: email, PoolType: "free", Origin: models.WarmupPartnerBorrowed}
+}
+
+// returnVisit is a paying mailbox that wrote to a free sender recently.
+func returnVisit(email string) models.WarmupPartnerCandidate {
+	return models.WarmupPartnerCandidate{ID: uuid.New(), Email: email, PoolType: "premium", Origin: models.WarmupPartnerReturn}
+}
+
+func freeSelector(gate *rejectingGate, cands ...models.WarmupPartnerCandidate) (*tasksService, Email) {
+	org := uuid.New()
+	s := &tasksService{
+		warmupRepo:        candidateRepo{candidates: cands},
+		emailRepo:         directedEmailRepo{},
+		warmupHealth:      gate,
+		warmupRoutingRepo: ruleRepo{},
+	}
+	return s, Email{ID: uuid.New(), Email: "sender@trial.test", OrganizationID: &org, WarmupPoolType: "free"}
+}
+
 // excludeDomain is the customer saying "never warm with this domain".
 func excludeDomain(domain string) []models.WarmupRoutingRule {
 	return []models.WarmupRoutingRule{{
@@ -111,7 +132,7 @@ func TestSelectWarmupPartnerDrawsOwnTierBeforeBorrowed(t *testing.T) {
 	// Many borrowed candidates, so losing the preference is a near-certain failure, not a coin flip.
 	cands := []models.WarmupPartnerCandidate{}
 	for i := 0; i < 8; i++ {
-		free := models.WarmupPartnerCandidate{ID: uuid.New(), Email: "free@trial.test", Borrowed: true}
+		free := borrowedFree("free@trial.test")
 		gate.poolOf[free.ID] = "free"
 		cands = append(cands, free)
 	}
@@ -133,7 +154,7 @@ func TestSelectWarmupPartnerDrawsOwnTierBeforeBorrowed(t *testing.T) {
 // healthy borrowed partner: the draw falls through to the next bucket.
 func TestSelectWarmupPartnerFallsThroughWhenOwnTierFailsTheGate(t *testing.T) {
 	stale := models.WarmupPartnerCandidate{ID: uuid.New(), Email: "stale@paid.test"}
-	free := models.WarmupPartnerCandidate{ID: uuid.New(), Email: "free@trial.test", Borrowed: true}
+	free := borrowedFree("free@trial.test")
 	gate := &rejectingGate{
 		poolOf:   map[uuid.UUID]string{stale.ID: "premium", free.ID: "free"},
 		rejected: map[uuid.UUID]bool{stale.ID: true},
@@ -171,7 +192,7 @@ func TestSelectWarmupPartnerDrawEndsByExhaustion(t *testing.T) {
 		gate.rejected[stale.ID] = true
 		cands = append(cands, stale)
 	}
-	free := models.WarmupPartnerCandidate{ID: uuid.New(), Email: "free@trial.test", Borrowed: true}
+	free := borrowedFree("free@trial.test")
 	gate.poolOf[free.ID] = "free"
 	s, sender := premiumSelector(gate, append(cands, free)...)
 
@@ -268,5 +289,90 @@ func TestDirectedWarmupPartnerAnswersAnAllowedTarget(t *testing.T) {
 
 	if partner := s.directedWarmupPartner(context.Background(), uuid.New(), sender, "premium"); partner == nil {
 		t.Fatal("refused a target no rule excludes")
+	}
+}
+
+// A return visit ranks with the sender's own tier, not after it: with eight
+// fresh siblings ahead of it a borrowed-ranked candidate would never be drawn,
+// and the paying inbox would keep receiving nothing (#633).
+func TestSelectWarmupPartnerDrawsAReturnVisitAlongsideOwnTier(t *testing.T) {
+	gate := &rejectingGate{poolOf: map[uuid.UUID]string{}}
+	var cands []models.WarmupPartnerCandidate
+	for i := 0; i < 8; i++ {
+		own := models.WarmupPartnerCandidate{ID: uuid.New(), Email: "own@trial.test", PoolType: "free", Origin: models.WarmupPartnerOwnTier}
+		gate.poolOf[own.ID] = "free"
+		cands = append(cands, own)
+	}
+	paid := returnVisit("paid@paid.test")
+	// The paying inbox is owed everything it sent, so it carries the full boost.
+	paid.Sent7d, paid.Received7d = 20, 0
+	gate.poolOf[paid.ID] = "premium"
+	s, sender := freeSelector(gate, append(cands, paid)...)
+
+	drew := 0
+	for i := 0; i < 400; i++ {
+		partner, err := s.selectWarmupPartner(context.Background(), sender)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if partner.ID == paid.ID {
+			drew++
+		}
+	}
+	// Eight siblings at weight 1 against one paying inbox at weight 4 is a
+	// third of the draws; ranked after the own tier it would be none.
+	if drew < 80 || drew > 220 {
+		t.Fatalf("drew the paying inbox %d/400 times, want roughly a third", drew)
+	}
+	for _, call := range gate.asked {
+		if call.id == paid.ID && call.pool != "premium" {
+			t.Fatalf("gated the return visit in %q, want the pool it was drawn from", call.pool)
+		}
+	}
+}
+
+// The gate for a return visit is pinned to the pool it was drawn from; gating
+// it against the free sender's own pool would refuse every one.
+func TestSelectWarmupPartnerGatesAReturnVisitInItsOwnPool(t *testing.T) {
+	paid := returnVisit("paid@paid.test")
+	gate := &rejectingGate{poolOf: map[uuid.UUID]string{paid.ID: "premium"}}
+	s, sender := freeSelector(gate, paid)
+
+	partner, err := s.selectWarmupPartner(context.Background(), sender)
+	if err != nil {
+		t.Fatalf("refused the only return visit: %v", err)
+	}
+	if partner.ID != paid.ID {
+		t.Fatalf("drew %s, want the paying inbox %s", partner.ID, paid.ID)
+	}
+	if len(gate.asked) != 1 || gate.asked[0] != (gateCall{paid.ID, "premium"}) {
+		t.Fatalf("gated %v, want the return visit once in premium", gate.asked)
+	}
+}
+
+// Traffic flows towards the inbox that is owed the most, and the boost is
+// gone once it is in balance.
+func TestReciprocityBoostFavoursTheStarvedInbox(t *testing.T) {
+	starved := uuid.New()
+	balanced := uuid.New()
+	overfed := uuid.New()
+	sig := partnerSignals{starvation: map[uuid.UUID]float64{starved: 1, balanced: 0, overfed: 0}}
+	if got := sig.reciprocityBoost(starved); got != 1+reciprocityBoostK {
+		t.Fatalf("starved boost = %v, want %v", got, 1+reciprocityBoostK)
+	}
+	if got := sig.reciprocityBoost(balanced); got != 1 {
+		t.Fatalf("balanced boost = %v, want 1", got)
+	}
+	if got := sig.reciprocityBoost(uuid.New()); got != 1 {
+		t.Fatalf("an unknown candidate scored %v, want the neutral 1", got)
+	}
+
+	draws := map[uuid.UUID]int{}
+	for i := 0; i < 2000; i++ {
+		draws[pickWeightedPartner([]uuid.UUID{starved, balanced}, sig)]++
+	}
+	// Weight 4 against 1: four in five draws, give or take.
+	if draws[starved] < 1400 || draws[starved] > 1800 {
+		t.Fatalf("starved inbox drawn %d/2000, want about 1600", draws[starved])
 	}
 }

@@ -99,6 +99,8 @@ export interface PoolLinkWarmupHealth {
     partner_mailboxes_7d?: number;
     partner_domains_7d?: number;
     partner_organizations_7d?: number;
+    received_7d?: number;
+    senders_7d?: number;
 }
 
 export interface PoolLinkMailboxError {

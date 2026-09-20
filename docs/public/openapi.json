@@ -28814,6 +28814,10 @@
           "total_replied": {
             "type": "integer"
           },
+          "total_received": {
+            "type": "integer",
+            "description": "Verified warmup mail that arrived from pool partners in the range."
+          },
           "average_daily": {
             "type": "number"
           },
@@ -28840,6 +28844,10 @@
           },
           "emails_replied": {
             "type": "integer"
+          },
+          "emails_received": {
+            "type": "integer",
+            "description": "Verified warmup arrivals on this UTC day. A day with arrivals and no plan lists with zero sends."
           },
           "target_volume": {
             "type": "integer"
@@ -29325,6 +29333,14 @@
           "partner_organizations_7d": {
             "type": "integer",
             "description": "Distinct workspaces behind those partners. 1 over a full week means the mailbox is only warming inside one workspace."
+          },
+          "received_7d": {
+            "type": "integer",
+            "description": "Verified warmup arrivals over the last seven days. Only mail the mailbox's own sync verified counts."
+          },
+          "senders_7d": {
+            "type": "integer",
+            "description": "Distinct partners those arrivals came from."
           }
         }
       },

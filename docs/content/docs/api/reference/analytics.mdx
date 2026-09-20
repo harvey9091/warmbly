@@ -188,6 +188,8 @@ Returns warmup send and reply statistics over a date range, with a summary and p
 
 Results are scoped to the selected workspace, so every member with access sees the same mailbox history. Workspace-wide results combine all mailboxes into one row per date. `average_daily` uses active days (dates with a warmup statistics row) as its denominator. `target_progress` is total sends divided by total planned target volume across those active days and may exceed `100` when sends beat the plan.
 
+`total_received` and each day's `emails_received` count verified warmup mail that arrived from pool partners, bucketed on the UTC day it was verified. A day with arrivals but no warmup plan is listed with zero sends and does not count towards `days_active`.
+
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
 | `from` | query | string | Required. Range start (`YYYY-MM-DD`). |
@@ -207,13 +209,14 @@ Results are scoped to the selected workspace, so every member with access sees t
   "summary": {
     "total_sent": 210,
     "total_replied": 84,
+    "total_received": 196,
     "average_daily": 17.5,
     "reply_rate": 40.0,
     "target_progress": 87.5,
     "days_active": 12
   },
   "daily_stats": [
-    { "date": "2026-06-01", "emails_sent": 12, "emails_replied": 5, "target_volume": 12 }
+    { "date": "2026-06-01", "emails_sent": 12, "emails_replied": 5, "emails_received": 11, "target_volume": 12 }
   ]
 }
 ```
@@ -473,6 +476,8 @@ Returns the detailed status for one email account: a combined health score (fold
     "partner_mailboxes_7d": 14,
     "partner_domains_7d": 11,
     "partner_organizations_7d": 9,
+    "received_7d": 12,
+    "senders_7d": 8,
     "evaluated_at": "2026-06-12T06:00:00Z"
   },
   "in_campaign": true
@@ -484,6 +489,8 @@ Returns the detailed status for one email account: a combined health score (fold
 `daily_usage.warmup_sent` and `campaign_sent` both count sends the mailbox completed on that date, which is what the caps are enforced against, so neither can read above the target in force.
 
 The three `partner_*_7d` counters are the distinct partners reached by confirmed warmup sends over the last seven days: mailboxes, their domains, and the workspaces behind them. Failed and still-pending attempts do not count. `partner_organizations_7d` of `1` over a full week means the mailbox is only warming inside one workspace, which is expected on a self-hosted instance that is not linked to Warmbly Cloud and worth investigating anywhere else.
+
+`received_7d` and `senders_7d` are the other direction over the same window: verified warmup arrivals and the distinct partners they came from. Only mail that the mailbox's own sync verifies counts. A mailbox with many partners on the sending side and few on the receiving side is being written to less than it writes; the pool favours it on every draw until the two even out.
 
 ## Get usage overview
 

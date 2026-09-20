@@ -38,6 +38,18 @@ func TestLiveCombinedMetricCountsSplitTheirTables(t *testing.T) {
 	event("bounce", "3 hours", 1)
 	event("open", "1 hour", 1)
 
+	// Two deletions and one spam flag after the floor, a deletion before it.
+	harm := func(kind, offset string, n int) {
+		exec(`INSERT INTO warmup_tampering_events (email_account_id, message_id, kind, created_at)
+		      SELECT $1, '<' || gen_random_uuid()::text || '@test.local>', $2, NOW() - $3::interval FROM generate_series(1, $4)`, f.account, kind, offset, n)
+	}
+	harm("deletion", "1 hour", 2)
+	harm("spam_flag", "1 hour", 1)
+	harm("deletion", "3 hours", 1)
+	t.Cleanup(func() {
+		execSQL(t, handle.Pool, `DELETE FROM warmup_tampering_events WHERE email_account_id = $1`, f.account)
+	})
+
 	row, err := repo.GetParticipantHealthForAccount(ctx, f.account)
 	if err != nil || row == nil {
 		t.Fatalf("participant row: %v", err)
@@ -46,9 +58,9 @@ func TestLiveCombinedMetricCountsSplitTheirTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadMetrics: %v", err)
 	}
-	got := [4]int{metrics.SpamPlacementsLast7d, metrics.UserComplaintsLast7d, metrics.ComplaintsLast30d, metrics.BouncesLast30d}
-	if got != [4]int{3, 2, 2, 4} {
-		t.Fatalf("placements, complaints, external complaints, bounces = %v, want [3 2 2 4]", got)
+	got := [6]int{metrics.SpamPlacementsLast7d, metrics.UserComplaintsLast7d, metrics.ComplaintsLast30d, metrics.BouncesLast30d, metrics.DeletionsLast7d, metrics.SpamFlagsLast7d}
+	if got != [6]int{3, 2, 2, 4, 2, 1} {
+		t.Fatalf("placements, complaints, external complaints, bounces, deletions, spam flags = %v, want [3 2 2 4 2 1]", got)
 	}
 }
 

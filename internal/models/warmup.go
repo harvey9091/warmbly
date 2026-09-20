@@ -119,8 +119,8 @@ func WarmupPoolID(poolType string) (uuid.UUID, bool) {
 }
 
 // WarmupPoolBorrowsFrom is the tier a thin pool may borrow proven recipients
-// from. Only premium borrows, and only free, so free traffic never reaches a
-// paying inbox on the draw.
+// from. Only premium borrows, and only free, so nothing unsolicited from the
+// free tier reaches a paying inbox on the draw.
 func WarmupPoolBorrowsFrom(poolType string) (string, bool) {
 	if poolType == "premium" {
 		return "free", true
@@ -128,14 +128,66 @@ func WarmupPoolBorrowsFrom(poolType string) (string, bool) {
 	return "", false
 }
 
+// WarmupPoolReturnsTo is the tier a proven mailbox may write back into: the
+// mirror of the borrow, so a free mailbox only ever calls on a paying inbox
+// that wrote to it first. Without this half a thin premium tier sends into
+// the free tier and receives nothing (#633).
+func WarmupPoolReturnsTo(poolType string) (string, bool) {
+	if poolType == "free" {
+		return "premium", true
+	}
+	return "", false
+}
+
+// WarmupPartnerOrigin says how a candidate came to be in a sender's draw.
+type WarmupPartnerOrigin string
+
+const (
+	// WarmupPartnerOwnTier is a member of the sender's own pool.
+	WarmupPartnerOwnTier WarmupPartnerOrigin = "own"
+	// WarmupPartnerBorrowed is a proven free mailbox filling in a thin premium
+	// tier. Drawn after the sender's own tier.
+	WarmupPartnerBorrowed WarmupPartnerOrigin = "borrowed"
+	// WarmupPartnerReturn is a paying mailbox that wrote to this free sender
+	// recently. Drawn alongside the sender's own tier: returning the visit is
+	// the pool paying its debt, not a fallback.
+	WarmupPartnerReturn WarmupPartnerOrigin = "return"
+)
+
 // WarmupPartnerCandidate is a recipient the partner selector may draw: a
-// member of the sender's tier, or one borrowed from the tier it may draw on.
+// member of the sender's tier, one borrowed from the tier it may draw on, or
+// one it owes a visit to.
 type WarmupPartnerCandidate struct {
 	ID    uuid.UUID
 	Email string
 	// OrganizationID lets selection rank outside partners ahead of siblings.
 	OrganizationID *uuid.UUID
-	Borrowed       bool
+	// PoolType is the pool the candidate was drawn from. The health gate is
+	// pinned to it, never to the sender's pool (#495).
+	PoolType string
+	Origin   WarmupPartnerOrigin
+	// Sent7d and Received7d are the candidate's verified warmup sends and
+	// arrivals over the last seven days, so the draw can favour an inbox that
+	// gives more than it gets. The inbound cap that keeps a candidate out of
+	// the set for the day is applied in the repository, before any count or
+	// sample is taken.
+	Sent7d     int
+	Received7d int
+}
+
+// Borrowed reports whether the candidate was drawn from the tier the sender's
+// pool borrows from.
+func (c WarmupPartnerCandidate) Borrowed() bool { return c.Origin == WarmupPartnerBorrowed }
+
+// Starvation is how far behind an inbox is on what it sent: 0 for one in
+// balance or that sends nothing, 1 for one that has received nothing back.
+// The draw multiplies a candidate's weight by it, so the pool's traffic flows
+// towards the inboxes that are owed the most.
+func (c WarmupPartnerCandidate) Starvation() float64 {
+	if c.Sent7d <= 0 || c.Received7d >= c.Sent7d {
+		return 0
+	}
+	return float64(c.Sent7d-c.Received7d) / float64(c.Sent7d)
 }
 
 type WarmupHealthState string
@@ -201,6 +253,10 @@ type WarmupHealthCounts struct {
 	ComplaintsLast30d    int
 	BouncesLast30d       int
 	DeliveredLast30d     int
+	// Harm this mailbox did to warmup mail it verifiably received, apart
+	// because a deletion is usually housekeeping and a spam flag never is.
+	DeletionsLast7d int
+	SpamFlagsLast7d int
 }
 
 type WarmupHealthMetrics struct {
@@ -224,4 +280,15 @@ type WarmupHealthMetrics struct {
 	ComplaintRate     float64 `json:"complaint_rate"`
 	BouncesLast30d    int     `json:"bounces_last_30d"`
 	BounceRate        float64 `json:"bounce_rate"`
+
+	// DeletionsLast7d and SpamFlagsLast7d are warmup messages this mailbox
+	// received and then deleted or flagged as spam. TamperingStrikes weighs
+	// them: a spam flag counts double, because nobody flags mail by accident.
+	DeletionsLast7d int `json:"deletions_last_7d"`
+	SpamFlagsLast7d int `json:"spam_flags_last_7d"`
+}
+
+// TamperingStrikes is the weighted harm count the tampering band reads.
+func (m *WarmupHealthMetrics) TamperingStrikes() int {
+	return m.DeletionsLast7d + 2*m.SpamFlagsLast7d
 }

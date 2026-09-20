@@ -53,12 +53,13 @@ const (
 
 	minComplaintSample = 100
 
-	// Tampering: harming pool warmup mail (deleting it or marking it as spam)
-	// bans the mailbox once this many harm events occur within the window.
-	// Default 1 = ban on first harm (Instantly-style zero tolerance); the
-	// owner can appeal. Bump to forgive accidental actions.
-	warmupTamperingBlockThreshold = 1
-	warmupTamperingWindow         = 7 * 24 * time.Hour
+	// Tampering: harm done to warmup mail the mailbox received, as weighted
+	// strikes over the seven-day window (a deletion is one, a spam flag two).
+	// One deletion is housekeeping until proven otherwise, so it only warns;
+	// the ladder climbs from there and every step lapses on its own.
+	tamperingWatchStrikes      = 1
+	tamperingQuarantineStrikes = 2
+	tamperingBlockStrikes      = 4
 
 	warmupThrottleDuration   = 3 * 24 * time.Hour
 	warmupQuarantineDuration = 7 * 24 * time.Hour
@@ -86,8 +87,9 @@ type Service interface {
 	ApplyRateLimitExceeded(ctx context.Context, accountID uuid.UUID, reason string) (*models.WarmupParticipantHealth, *errx.Error)
 
 	// RecordTampering records that a participant harmed a warmup email (deleted
-	// it or marked it as spam) and bans the mailbox from warmup once the harm
-	// count crosses the threshold. The owner can then appeal.
+	// it or marked it as spam) and re-evaluates its standing: the tampering
+	// band warns on a first deletion and climbs from there. The owner can
+	// appeal a block.
 	RecordTampering(ctx context.Context, accountID uuid.UUID, messageID, kind string) (*models.WarmupParticipantHealth, *errx.Error)
 
 	// SubmitAppeal lets the mailbox owner appeal a warmup ban with a reason.
@@ -338,9 +340,8 @@ func (s *service) dispatchPlacementInSpam(ctx context.Context, accountID uuid.UU
 }
 
 // RecordTampering records that a participant harmed a warmup email (deleted it
-// or marked it as spam) and bans the mailbox from warmup once the harm count
-// crosses the threshold within the window. The block carries a clear,
-// user-facing reason and fires the health transition so the dashboard updates.
+// or marked it as spam) and lets the bands decide what that means. The event
+// is the durable record, so a sweep reaches the same answer as this call.
 func (s *service) RecordTampering(ctx context.Context, accountID uuid.UUID, messageID, kind string) (*models.WarmupParticipantHealth, *errx.Error) {
 	inserted, err := s.repo.RecordWarmupTampering(ctx, accountID, messageID, kind)
 	if err != nil {
@@ -350,28 +351,7 @@ func (s *service) RecordTampering(ctx context.Context, accountID uuid.UUID, mess
 		// Already counted this exact harm — don't double-penalise.
 		return s.getParticipantForAnyPool(ctx, accountID)
 	}
-
-	since := s.now().Add(-warmupTamperingWindow)
-	count, err := s.repo.CountWarmupTamperingSince(ctx, accountID, since)
-	if err != nil {
-		return nil, errx.InternalError()
-	}
-
-	if count >= warmupTamperingBlockThreshold {
-		prev, _ := s.getParticipantForAnyPool(ctx, accountID)
-		reason := fmt.Sprintf("Auto-blocked from warmup: %s a warmup email. Warmup mailboxes must let warmup mail be delivered and engaged with. You can appeal this from your dashboard.", tamperingVerb(kind))
-		if count > 1 {
-			reason = fmt.Sprintf("Auto-blocked from warmup: harmed %d warmup emails (deleted or marked as spam) in the last %d days. You can appeal this from your dashboard.", count, int(warmupTamperingWindow.Hours()/24))
-		}
-		if err := s.repo.BlockFromPool(ctx, accountID, reason); err != nil {
-			return nil, errx.InternalError()
-		}
-		if prev != nil && prev.HealthState != models.WarmupHealthBlocked {
-			s.dispatchHealthEvent(ctx, accountID, prev.HealthState, models.WarmupHealthBlocked, reason)
-		}
-	}
-
-	return s.getParticipantForAnyPool(ctx, accountID)
+	return s.evaluateAndPersistAnyPool(ctx, accountID)
 }
 
 func tamperingVerb(kind string) string {
@@ -383,6 +363,33 @@ func tamperingVerb(kind string) string {
 	default:
 		return "tampered with"
 	}
+}
+
+// tamperingKind names the single harm behind a watch.
+func tamperingKind(m *models.WarmupHealthMetrics) string {
+	if m.SpamFlagsLast7d > 0 {
+		return "spam_flag"
+	}
+	return "deletion"
+}
+
+// tamperingSummary spells the harm out for a reason the owner reads.
+func tamperingSummary(m *models.WarmupHealthMetrics) string {
+	parts := []string{}
+	if m.SpamFlagsLast7d > 0 {
+		parts = append(parts, fmt.Sprintf("%d warmup %s marked as spam", m.SpamFlagsLast7d, plural(m.SpamFlagsLast7d, "email", "emails")))
+	}
+	if m.DeletionsLast7d > 0 {
+		parts = append(parts, fmt.Sprintf("%d warmup %s deleted", m.DeletionsLast7d, plural(m.DeletionsLast7d, "email", "emails")))
+	}
+	return strings.Join(parts, " and ")
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // SubmitAppeal records a user's appeal against a warmup ban. Verifies the
@@ -616,6 +623,8 @@ func (s *service) loadMetrics(ctx context.Context, accountID uuid.UUID, particip
 		ComplaintRate:        complaintRate,
 		BouncesLast30d:       bouncesLast30d,
 		BounceRate:           bounceRate,
+		DeletionsLast7d:      counts.DeletionsLast7d,
+		SpamFlagsLast7d:      counts.SpamFlagsLast7d,
 	}, nil
 }
 
@@ -626,7 +635,75 @@ type evaluationDecision struct {
 	Score        float64
 }
 
+// evaluateMetrics is the rate bands and the tampering band judged apart, with
+// the more severe finding kept, so a seven-day rate quarantine can never hide
+// a thirty-day tampering block or the other way round.
 func evaluateMetrics(metrics *models.WarmupHealthMetrics, now time.Time) evaluationDecision {
+	return moreSevere(evaluateRateBands(metrics, now), evaluateTampering(metrics, now))
+}
+
+// healthSeverity orders the bands; ties go to the later term.
+func healthSeverity(state models.WarmupHealthState) int {
+	switch state {
+	case models.WarmupHealthWatch:
+		return 1
+	case models.WarmupHealthThrottled:
+		return 2
+	case models.WarmupHealthQuarantined:
+		return 3
+	case models.WarmupHealthBlocked:
+		return 4
+	}
+	return 0
+}
+
+func moreSevere(a, b evaluationDecision) evaluationDecision {
+	sa, sb := healthSeverity(a.State), healthSeverity(b.State)
+	switch {
+	case sb > sa:
+		return b
+	case sa > sb:
+		return a
+	case a.BlockedUntil != nil && b.BlockedUntil != nil && b.BlockedUntil.After(*a.BlockedUntil):
+		return b
+	}
+	return a
+}
+
+// evaluateTampering needs no sample: each strike is one deliberate act on mail
+// the mailbox verifiably received. A single deletion only warns, because the
+// most likely cause is someone tidying the folder by hand.
+func evaluateTampering(metrics *models.WarmupHealthMetrics, now time.Time) evaluationDecision {
+	strikes := metrics.TamperingStrikes()
+	score := maxFloat(float64(strikes)*10, metrics.SpamPlacementRate)
+	switch {
+	case strikes >= tamperingBlockStrikes:
+		until := now.Add(warmupBlockDuration)
+		return evaluationDecision{
+			State:        models.WarmupHealthBlocked,
+			BlockedUntil: &until,
+			Reason:       "Blocked from warmup: " + tamperingSummary(metrics) + " in the last 7 days. Warmup mail has to be left where it is filed. You can appeal this from your dashboard.",
+			Score:        score,
+		}
+	case strikes >= tamperingQuarantineStrikes:
+		until := now.Add(warmupQuarantineDuration)
+		return evaluationDecision{
+			State:        models.WarmupHealthQuarantined,
+			BlockedUntil: &until,
+			Reason:       "Paused from warmup: " + tamperingSummary(metrics) + " in the last 7 days. Warmup mail has to be left where it is filed.",
+			Score:        score,
+		}
+	case strikes >= tamperingWatchStrikes:
+		return evaluationDecision{
+			State:  models.WarmupHealthWatch,
+			Reason: "A warmup email was " + tamperingVerb(tamperingKind(metrics)) + ". Leave warmup mail where it is filed; a second one within 7 days pauses warmup.",
+			Score:  score,
+		}
+	}
+	return evaluationDecision{State: models.WarmupHealthHealthy, Score: metrics.SpamPlacementRate}
+}
+
+func evaluateRateBands(metrics *models.WarmupHealthMetrics, now time.Time) evaluationDecision {
 	decision := evaluationDecision{
 		State: models.WarmupHealthHealthy,
 		Score: metrics.SpamPlacementRate,

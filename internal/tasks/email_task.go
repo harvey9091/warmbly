@@ -523,7 +523,8 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 	domainsByID := make(map[uuid.UUID]string, len(candidates))
 	providersByID := make(map[uuid.UUID]string, len(candidates))
 	ruleWeight := make(map[uuid.UUID]float64, len(candidates))
-	borrowed := make(map[uuid.UUID]bool, len(candidates))
+	starvation := make(map[uuid.UUID]float64, len(candidates))
+	poolOf := make(map[uuid.UUID]string, len(candidates))
 	excluded := 0
 	for _, c := range candidates {
 		weight := 1.0
@@ -538,7 +539,8 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 		domainsByID[c.ID] = domain
 		providersByID[c.ID] = string(models.ClassifyProvider(domain))
 		ruleWeight[c.ID] = weight
-		borrowed[c.ID] = c.Borrowed
+		starvation[c.ID] = c.Starvation()
+		poolOf[c.ID] = c.PoolType
 		eligible = append(eligible, c)
 	}
 	if len(eligible) == 0 {
@@ -606,7 +608,10 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 		if _, recentlyUsed := recentPartnerSet[c.ID]; recentlyUsed || partnerCounts[c.ID] >= partnerMaxSharedWindow {
 			rank += 2
 		}
-		if c.Borrowed {
+		// A borrowed partner fills in after the sender's own tier. A return
+		// visit does not: it ranks with the own tier, or a free mailbox with a
+		// hundred fresh siblings would never pay a paying inbox back.
+		if c.Borrowed() {
 			rank++
 		}
 		buckets[rank] = append(buckets[rank], c.ID)
@@ -626,8 +631,8 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 		providersByID:       providersByID,
 		placementByProvider: placementByProvider,
 		ruleWeight:          ruleWeight,
+		starvation:          starvation,
 	}
-	borrowFrom, _ := models.WarmupPoolBorrowsFrom(poolType)
 
 	// A pick that fails the gate is dropped and the draw repeats; an emptied
 	// bucket falls through to the next, so a stale own-tier row cannot hide a
@@ -649,9 +654,9 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 		if s.warmupHealth != nil {
 			// Pinned to the pool it was drawn from, so a row that moved pools
 			// between the read and the gate is not accepted elsewhere (#495).
-			gatePool := poolType
-			if borrowed[partnerID] {
-				gatePool = borrowFrom
+			gatePool := poolOf[partnerID]
+			if gatePool == "" {
+				gatePool = poolType
 			}
 			if ok, _, _ := s.warmupHealth.CanParticipate(ctx, partnerID, gatePool); !ok {
 				available = removePartnerID(available, partnerID)
@@ -693,6 +698,11 @@ const (
 	// Below this sample a provider's rate is noise, not a pattern.
 	providerPlacementMinSends = 5
 	providerPlacementWindow   = 7 * 24 * time.Hour
+	// weight *= 1 + k*starvation. An inbox that has received nothing back for
+	// what it sent is drawn this many times more often than one in balance,
+	// and the boost fades as the pool pays it back, so traffic settles near
+	// parity instead of overshooting.
+	reciprocityBoostK = 3.0
 )
 
 // partnerSignals are the per-pick inputs to partner weighting.
@@ -705,6 +715,21 @@ type partnerSignals struct {
 	// ruleWeight is the customer's routing multiplier per candidate. An
 	// exclusion never appears here: it removed the candidate (#501).
 	ruleWeight map[uuid.UUID]float64
+	// starvation is how far behind each candidate is on what it sent (0..1).
+	starvation map[uuid.UUID]float64
+}
+
+// reciprocityBoost favours the inbox that is owed the most. 1.0 for one in
+// balance, and on every candidate the signal is missing for.
+func (sig partnerSignals) reciprocityBoost(partnerID uuid.UUID) float64 {
+	starved, ok := sig.starvation[partnerID]
+	if !ok || starved <= 0 {
+		return 1.0
+	}
+	if starved > 1 {
+		starved = 1
+	}
+	return 1.0 + reciprocityBoostK*starved
 }
 
 // providerPenalty weights sending to one provider by how this sender has
@@ -724,6 +749,7 @@ func (sig partnerSignals) providerPenalty(partnerID uuid.UUID) float64 {
 // pickWeightedPartner picks a partner ID using a composite weight:
 //   - inverse-frequency on the partner's recipient domain (diversity)
 //   - this sender's recent junk rate at the partner's provider (feedback)
+//   - how far behind the partner is on what it sent (reciprocity)
 //   - customer-defined routing rule multipliers (preference)
 //
 // Every candidate here is one the customer allows; an excluded pair was
@@ -732,7 +758,7 @@ func pickWeightedPartner(candidates []uuid.UUID, sig partnerSignals) uuid.UUID {
 	if len(candidates) == 1 {
 		return candidates[0]
 	}
-	if len(sig.domainsByID) == 0 && len(sig.ruleWeight) == 0 && len(sig.placementByProvider) == 0 {
+	if len(sig.domainsByID) == 0 && len(sig.ruleWeight) == 0 && len(sig.placementByProvider) == 0 && len(sig.starvation) == 0 {
 		return candidates[rand.Intn(len(candidates))]
 	}
 
@@ -745,6 +771,9 @@ func pickWeightedPartner(candidates []uuid.UUID, sig partnerSignals) uuid.UUID {
 
 		// Per-provider placement feedback.
 		w *= sig.providerPenalty(id)
+
+		// The pool's debt to this inbox.
+		w *= sig.reciprocityBoost(id)
 
 		// Routing rule multiplier (premium pool only, when configured).
 		if rw, ok := sig.ruleWeight[id]; ok {
@@ -1124,8 +1153,8 @@ func warmupConversations() []Conversation {
 // directedWarmupPartner resolves a task's explicit reply-back target. Nil for
 // an ordinary task, or when the target is no longer eligible, in which case the
 // caller draws a partner as usual. A reply may cross tiers, because the other
-// side started the thread by borrowing; a restricted workspace still may not
-// answer into a paying inbox.
+// side started the thread by borrowing or by returning a visit; a restricted
+// workspace still may not answer into a paying inbox.
 func (s *tasksService) directedWarmupPartner(ctx context.Context, taskID uuid.UUID, account *Email, poolType string) *Email {
 	warmupTask, err := s.taskRepo.GetWarmupTask(ctx, taskID)
 	if err != nil || warmupTask == nil || warmupTask.TargetAccountID == nil {

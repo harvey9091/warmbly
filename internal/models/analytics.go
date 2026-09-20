@@ -22,20 +22,28 @@ type WarmupAnalytics struct {
 }
 
 type WarmupSummary struct {
-	TotalSent    int     `json:"total_sent"`
-	TotalReplied int     `json:"total_replied"`
-	AverageDaily float64 `json:"average_daily"`
-	ReplyRate    float64 `json:"reply_rate"` // percentage
+	TotalSent    int `json:"total_sent"`
+	TotalReplied int `json:"total_replied"`
+	// TotalReceived is verified warmup mail that arrived from partners in the
+	// range: the other half of the exchange, so a mailbox that sends and is
+	// never written to can be seen from the numbers.
+	TotalReceived int     `json:"total_received"`
+	AverageDaily  float64 `json:"average_daily"`
+	ReplyRate     float64 `json:"reply_rate"` // percentage
 	// TargetProgress is actual sends divided by planned target volume for active days.
 	TargetProgress float64 `json:"target_progress"`
 	DaysActive     int     `json:"days_active"`
 }
 
 type WarmupDailyStats struct {
-	Date          string `json:"date"` // YYYY-MM-DD
-	EmailsSent    int    `json:"emails_sent"`
-	EmailsReplied int    `json:"emails_replied"`
-	TargetVolume  int    `json:"target_volume"`
+	Date           string `json:"date"` // YYYY-MM-DD
+	EmailsSent     int    `json:"emails_sent"`
+	EmailsReplied  int    `json:"emails_replied"`
+	EmailsReceived int    `json:"emails_received"`
+	TargetVolume   int    `json:"target_volume"`
+	// Active is whether the mailbox had a warmup plan that day. A day with
+	// arrivals but no plan still lists, but does not count as a day active.
+	Active bool `json:"-"`
 }
 
 // Campaign Analytics
@@ -182,6 +190,10 @@ type WarmupHealthInfo struct {
 	PartnerMailboxes7d     int `json:"partner_mailboxes_7d"`
 	PartnerDomains7d       int `json:"partner_domains_7d"`
 	PartnerOrganizations7d int `json:"partner_organizations_7d"`
+	// The receiving side over the same window: verified warmup arrivals and
+	// the distinct partners they came from.
+	Received7d int `json:"received_7d"`
+	Senders7d  int `json:"senders_7d"`
 }
 
 type AccountHealth struct {
