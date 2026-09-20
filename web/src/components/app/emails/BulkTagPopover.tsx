@@ -16,6 +16,7 @@ import useFlipPlacement from "@/hooks/useFlipPlacement";
 import useBulkTagEmails from "@/lib/api/hooks/app/emails/useBulkTagEmails";
 import createTag from "@/lib/api/client/app/tags/createTag";
 import type User from "@/lib/api/models/auth/User";
+import { errorMessage } from "@/lib/errors/message";
 
 // Same 8 hexes as the tags editor palette; inline creates cycle through
 // them so consecutive new tags don't all share one color.
@@ -80,7 +81,7 @@ export default function BulkTagPopover({ ids }: { ids: string[] }) {
             setPicked((p) => [...p, t.id]);
             setQuery("");
         } catch (err) {
-            toast.error(err instanceof Error ? err.message : "Failed to create tag");
+            toast.error(errorMessage(err, "Failed to create tag"));
         } finally {
             setCreating(false);
         }

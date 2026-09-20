@@ -39,6 +39,7 @@ import (
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/storage"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -355,6 +356,10 @@ func putPublicObject(ctx context.Context, store storage.Store, key string, body 
 	// serves via /public), so callers stay backend-agnostic.
 	url, err := store.PutPublic(ctx, key, bytes.NewReader(body), mime)
 	if err != nil {
+		// Without this the object store's own refusal is dropped on the floor
+		// and the upload is a 500 with nothing behind it anywhere: no log
+		// line, no issue, and a person told only that it failed.
+		errs.CaptureException(err)
 		return "", errx.InternalError()
 	}
 	return url, nil

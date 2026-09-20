@@ -26,6 +26,7 @@ import clippedTitle from "@/lib/helper/clippedTitle";
 import useCreateCategory from "@/lib/api/hooks/app/categories/useCreateCategory";
 import type Category from "@/lib/api/models/app/Category";
 import { TagMeaningTooltip } from "@/components/ui/tag-meaning-tooltip";
+import { errorMessage } from "@/lib/errors/message";
 
 interface Props {
     // Selected ids — kept as ids so the consumer can store them in the
@@ -100,7 +101,7 @@ export default function CategoryPicker({
             onChange([...value, c.id]);
             setQuery("");
         } catch (err) {
-            toast.error(err instanceof Error ? err.message : "Failed to create category");
+            toast.error(errorMessage(err, "Failed to create category"));
         }
     }
 

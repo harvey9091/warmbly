@@ -33,6 +33,7 @@ import { isEmpty, readAcquisition } from "@/lib/acquisition";
 import type Token from "@/lib/api/models/auth/Token";
 import {
     beginPasskeyLogin,
+    passkeyChallengeUnavailable,
     passkeyLogin,
     passkeySupported,
     passkeyAutofillSupported,
@@ -311,32 +312,36 @@ export default function LoginPage() {
     // — no modal, no layout shift. Stays pending until the user picks a passkey
     // (or it's aborted). Cancellation is silent by design. Extracted so it can
     // be re-armed after an explicit-button ceremony settles.
-    const runConditionalPasskey = useCallback(async () => {
+    const runConditionalPasskey = useCallback(async (signal?: AbortSignal) => {
         if (safariNeedsExplicitPasskeyGesture()) return;
         if (!passkeySupported() || !(await passkeyAutofillSupported())) return;
         try {
-            const token = await passkeyLogin({ conditional: true });
+            const token = await passkeyLogin({ conditional: true, signal });
             toast.success("Welcome back!");
             await completeSession(token);
         } catch (e) {
             // Cancel / no-passkey is expected here; report only real failures.
-            if (!(e instanceof PasskeyCancelled)) captureException(e);
+            if (e instanceof PasskeyCancelled || passkeyChallengeUnavailable(e)) return;
+            captureException(e);
         }
     }, [completeSession]);
 
-    const prepareExplicitPasskey = useCallback((preserveStatus = false) => {
+    const prepareExplicitPasskey = useCallback((preserveStatus = false, signal?: AbortSignal) => {
         if (!passkeySupported() || explicitPasskeyChallengeRef.current || explicitPasskeyChallengePendingRef.current) return;
 
         if (!preserveStatus) setPasskeyStatus("preparing");
         explicitPasskeyChallengePendingRef.current = true;
-        beginPasskeyLogin()
+        beginPasskeyLogin(signal)
             .then((challenge) => {
                 explicitPasskeyChallengeRef.current = challenge;
                 if (!preserveStatus) setPasskeyStatus("ready");
             })
             .catch((e) => {
+                // This one starts on mount, so leaving the page rejects it.
+                // That is not a state the page still has an opinion about.
+                if (e instanceof PasskeyCancelled) return;
                 setPasskeyStatus("error");
-                captureException(e);
+                if (!passkeyChallengeUnavailable(e)) captureException(e);
             })
             .finally(() => {
                 explicitPasskeyChallengePendingRef.current = false;
@@ -347,9 +352,13 @@ export default function LoginPage() {
     // secure context (or with passkeys off) this only produced an opaque error.
     useEffect(() => {
         if (!passkeysEnabled) return;
-        prepareExplicitPasskey();
-        void runConditionalPasskey();
-        return () => cancelPasskeyCeremony();
+        const challenges = new AbortController();
+        prepareExplicitPasskey(false, challenges.signal);
+        void runConditionalPasskey(challenges.signal);
+        return () => {
+            challenges.abort();
+            cancelPasskeyCeremony();
+        };
     }, [passkeysEnabled, prepareExplicitPasskey, runConditionalPasskey]);
 
     // The "no passkey here" note is informational, not an error — auto-dismiss

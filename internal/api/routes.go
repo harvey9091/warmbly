@@ -299,6 +299,17 @@ func Run(
 		cliAuthPublic.POST("/poll", h.CLIAuthPoll)
 	}
 
+	// Minting a discoverable-login challenge is page furniture, not an attempt
+	// at anything: the sign-in screen asks for one on load, before the person
+	// has typed. It gets its own per-IP budget so opening that page repeatedly
+	// cannot spend the allowance password sign-in, registration and reset all
+	// draw on. Finishing the ceremony is an attempt and stays on /auth below.
+	passkeyPublic := v1.Group("/auth/passkey")
+	passkeyPublic.Use(m.PasskeyChallengeIPRateLimitMiddleware())
+	{
+		passkeyPublic.POST("/login/begin", h.PasskeyLoginBegin)
+	}
+
 	auth := v1.Group("/auth")
 	// Every unauthenticated auth route shares one per-IP budget. Nothing
 	// throttled these before: RateLimitMiddleware is keyed on the user id and
@@ -326,8 +337,8 @@ func Run(
 		// Passkey (WebAuthn) sign-in is discoverable/usernameless: a passkey
 		// is already strong auth, so it's a single step with no email OTP.
 		// Public on purpose — there's no account context until the assertion
-		// resolves, and the challenge + signature are the protection.
-		auth.POST("/passkey/login/begin", h.PasskeyLoginBegin)
+		// resolves, and the challenge + signature are the protection. The
+		// challenge half is minted above, on a budget of its own.
 		auth.POST("/passkey/login/finish", h.PasskeyLoginFinish)
 
 		// Native-app social sign-in: the app authenticates with Apple/Google
