@@ -1,13 +1,18 @@
 package advisor
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/warmbly/warmbly/internal/app/copyjudge"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/typesafe"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -730,5 +735,239 @@ func TestWarmupPoolFindingExplainsItselfWithTheBandsReason(t *testing.T) {
 	}
 	if _, ok := found.Evidence["spam_score"]; ok {
 		t.Fatal("evidence still carries a spam score")
+	}
+}
+
+// judgedSnapshot is one active campaign with one email step, plus the verdict
+// the copy judge would have attached to it.
+func judgedSnapshot(v *copyjudge.Verdict) (*repository.AdvisorSnapshot, uuid.UUID) {
+	campaignID, stepID := uuid.New(), uuid.New()
+	snap := snapshotOf()
+	snap.Campaigns = []repository.AdvisorCampaign{{ID: campaignID, Name: "Outbound", Status: "active"}}
+	snap.Steps = []repository.AdvisorStep{{
+		ID: stepID, CampaignID: campaignID, Kind: "email", Position: 0,
+		Name:      "Opener",
+		Subject:   "quick question",
+		BodyPlain: "Saw your talk on onboarding. Would a short note on how we cut it to a day be useful?",
+	}}
+	if v != nil {
+		snap.CopyJudgments = map[uuid.UUID]copyjudge.Verdict{stepID: *v}
+	}
+	return snap, stepID
+}
+
+func TestJudgmentDetectorsAreSilentWithoutAVerdict(t *testing.T) {
+	// An install without TypeSafe, or a run where the judge was down, has no
+	// verdict for the step. That is "not judged", never "judged fine" or
+	// "judged bad".
+	snap, _ := judgedSnapshot(nil)
+	got := findingsByKey(Detect(snap, defaults()))
+	for _, key := range []string{"copy_reads_as_bulk", "copy_no_clear_ask"} {
+		if _, fired := got[key]; fired {
+			t.Errorf("%s fired on a step with no judgment", key)
+		}
+	}
+}
+
+func TestPersonalCopyWithOneAskIsNotAFinding(t *testing.T) {
+	snap, _ := judgedSnapshot(&copyjudge.Verdict{
+		ReadsAs: 0, Personalization: 0, Ask: copyjudge.AskOneClear, SpamClaim: 0.05, Confidence: 0.95,
+	})
+	got := findingsByKey(Detect(snap, defaults()))
+	for _, key := range []string{"copy_reads_as_bulk", "copy_no_clear_ask"} {
+		if _, fired := got[key]; fired {
+			t.Errorf("%s fired on a personal note with one clear ask", key)
+		}
+	}
+}
+
+func TestReadsAsBulkFiresOnAConfidentBulkVerdict(t *testing.T) {
+	snap, stepID := judgedSnapshot(&copyjudge.Verdict{
+		ReadsAs: 1, Personalization: 1, Ask: copyjudge.AskOneClear, SpamClaim: 0.1, Confidence: 0.9,
+	})
+	f, fired := findingsByKey(Detect(snap, defaults()))["copy_reads_as_bulk"]
+	if !fired {
+		t.Fatal("copy_reads_as_bulk did not fire on a confident bulk verdict")
+	}
+	if f.Severity != models.AdvisorMedium {
+		t.Errorf("severity should be medium, got %s", f.Severity)
+	}
+	if f.EntityType != "step" || f.EntityID == nil || *f.EntityID != stepID || f.ParentType != "campaign" {
+		t.Error("finding is not attached to its step and campaign")
+	}
+	if f.Evidence["reads_as"] != 1.0 || f.Evidence["confidence"] != 0.9 {
+		t.Errorf("evidence does not carry the numbers it fired on: %v", f.Evidence)
+	}
+	if !strings.Contains(f.Title, "Opener") {
+		t.Errorf("title does not name the step: %q", f.Title)
+	}
+}
+
+func TestReadsAsBulkNeedsConfidenceUnlessAClaimIsMade(t *testing.T) {
+	// The model put it at the bulk end but was not sure. An unsure verdict is
+	// not reproducible, and a finding that flickers between runs is worse
+	// than none.
+	snap, _ := judgedSnapshot(&copyjudge.Verdict{
+		ReadsAs: 1, Ask: copyjudge.AskOneClear, SpamClaim: 0.1, Confidence: 0.5,
+	})
+	if _, fired := findingsByKey(Detect(snap, defaults()))["copy_reads_as_bulk"]; fired {
+		t.Error("copy_reads_as_bulk fired below the confidence floor")
+	}
+
+	// A filter-baiting claim is its own probability and needs no floor.
+	snap, _ = judgedSnapshot(&copyjudge.Verdict{
+		ReadsAs: 0.2, Ask: copyjudge.AskOneClear, SpamClaim: 0.85, Confidence: 0.5,
+	})
+	f, fired := findingsByKey(Detect(snap, defaults()))["copy_reads_as_bulk"]
+	if !fired {
+		t.Fatal("copy_reads_as_bulk did not fire on a spam claim")
+	}
+	if !strings.Contains(f.Detail, "spam filter") {
+		t.Errorf("detail should say the claim is the problem: %q", f.Detail)
+	}
+}
+
+func TestNoClearAskSaysWhichWay(t *testing.T) {
+	snap, _ := judgedSnapshot(&copyjudge.Verdict{ReadsAs: 0, Ask: copyjudge.AskNone, Confidence: 0.9})
+	f, fired := findingsByKey(Detect(snap, defaults()))["copy_no_clear_ask"]
+	if !fired {
+		t.Fatal("copy_no_clear_ask did not fire on no_ask")
+	}
+	if f.Severity != models.AdvisorLow {
+		t.Errorf("severity should be low, got %s", f.Severity)
+	}
+	if !strings.Contains(f.Title, "nothing") {
+		t.Errorf("title should say it asks for nothing: %q", f.Title)
+	}
+
+	snap, _ = judgedSnapshot(&copyjudge.Verdict{ReadsAs: 0, Ask: copyjudge.AskSeveral, Confidence: 0.9})
+	f, fired = findingsByKey(Detect(snap, defaults()))["copy_no_clear_ask"]
+	if !fired {
+		t.Fatal("copy_no_clear_ask did not fire on several_asks")
+	}
+	if !strings.Contains(f.Title, "several") {
+		t.Errorf("title should say it asks for several things: %q", f.Title)
+	}
+	if f.Evidence["ask"] != copyjudge.AskSeveral {
+		t.Errorf("evidence should carry the ask: %v", f.Evidence)
+	}
+
+	snap, _ = judgedSnapshot(&copyjudge.Verdict{ReadsAs: 0, Ask: copyjudge.AskNone, Confidence: 0.3})
+	if _, fired := findingsByKey(Detect(snap, defaults()))["copy_no_clear_ask"]; fired {
+		t.Error("copy_no_clear_ask fired below the confidence floor")
+	}
+}
+
+// recordingJudge answers every step with one verdict and counts the calls.
+type recordingJudge struct {
+	calls int
+	err   error
+}
+
+func (r *recordingJudge) Ask(_ context.Context, _ any, _ map[string]typesafe.Question) (*typesafe.Response, error) {
+	r.calls++
+	if r.err != nil {
+		return nil, r.err
+	}
+	resp := &typesafe.Response{Model: typesafe.Model, Answers: map[string]typesafe.Answer{
+		"reads_as":        {Type: typesafe.QuestionScore, Score: 2, Confidence: 0.9},
+		"personalization": {Type: typesafe.QuestionScore, Score: 1, Confidence: 0.9},
+		"ask":             {Type: typesafe.QuestionChoice, Choice: copyjudge.AskOneClear, Confidence: 0.9},
+		"spam_claim":      {Type: typesafe.QuestionNoul, Noul: 0.1},
+	}}
+	return resp, nil
+}
+
+type memoryJudgeCache struct {
+	rows map[string]copyjudge.Verdict
+	puts int
+}
+
+func (m *memoryJudgeCache) Get(_ context.Context, orgID uuid.UUID, hash string) (*copyjudge.Verdict, error) {
+	v, ok := m.rows[orgID.String()+hash]
+	if !ok {
+		return nil, nil
+	}
+	return &v, nil
+}
+
+func (m *memoryJudgeCache) Put(_ context.Context, orgID uuid.UUID, hash string, v *copyjudge.Verdict) error {
+	if m.rows == nil {
+		m.rows = map[string]copyjudge.Verdict{}
+	}
+	m.rows[orgID.String()+hash] = *v
+	m.puts++
+	return nil
+}
+
+func TestJudgeCopyReadsTheCacheBeforeAsking(t *testing.T) {
+	judge := &recordingJudge{}
+	cache := &memoryJudgeCache{}
+	s := NewService(nil, nil, nil, nil, nil, nil, WithCopyJudge(judge, cache)).(*service)
+
+	snap, stepID := judgedSnapshot(nil)
+	s.judgeCopy(context.Background(), snap)
+	if judge.calls != 1 || cache.puts != 1 {
+		t.Fatalf("first run: %d calls, %d cache writes", judge.calls, cache.puts)
+	}
+	v, ok := snap.CopyJudgments[stepID]
+	if !ok || v.ReadsAs != 1 {
+		t.Fatalf("verdict not attached to the step: %v %v", ok, v)
+	}
+
+	// Same copy again: the cache answers, the model is not asked.
+	snap2, _ := judgedSnapshot(nil)
+	snap2.OrganizationID = snap.OrganizationID
+	snap2.Steps[0].ID = stepID
+	s.judgeCopy(context.Background(), snap2)
+	if judge.calls != 1 {
+		t.Errorf("unchanged copy was judged again (%d calls)", judge.calls)
+	}
+	if _, ok := snap2.CopyJudgments[stepID]; !ok {
+		t.Error("cached verdict was not attached")
+	}
+
+	// Drafts are never judged, so they never cost anything.
+	snap3, _ := judgedSnapshot(nil)
+	snap3.Campaigns[0].Status = "draft"
+	s.judgeCopy(context.Background(), snap3)
+	if judge.calls != 1 {
+		t.Error("a draft campaign's step was sent to the judge")
+	}
+}
+
+func TestJudgeCopyCapsFreshJudgmentsAndSurvivesErrors(t *testing.T) {
+	judge := &recordingJudge{}
+	cache := &memoryJudgeCache{}
+	s := NewService(nil, nil, nil, nil, nil, nil, WithCopyJudge(judge, cache)).(*service)
+
+	snap, _ := judgedSnapshot(nil)
+	campaignID := snap.Campaigns[0].ID
+	for i := 0; i < maxCopyJudgmentsPerRun+10; i++ {
+		snap.Steps = append(snap.Steps, repository.AdvisorStep{
+			ID: uuid.New(), CampaignID: campaignID, Kind: "email", Position: i + 1,
+			Subject: fmt.Sprintf("step %d", i), BodyPlain: fmt.Sprintf("body %d", i),
+		})
+	}
+	s.judgeCopy(context.Background(), snap)
+	if judge.calls != maxCopyJudgmentsPerRun {
+		t.Errorf("expected the cap of %d fresh judgments, got %d", maxCopyJudgmentsPerRun, judge.calls)
+	}
+	if len(snap.CopyJudgments) != maxCopyJudgmentsPerRun {
+		t.Errorf("expected %d verdicts attached, got %d", maxCopyJudgmentsPerRun, len(snap.CopyJudgments))
+	}
+
+	// The judge being down leaves steps unjudged and the run intact.
+	down := NewService(nil, nil, nil, nil, nil, nil, WithCopyJudge(&recordingJudge{err: errors.New("529")}, &memoryJudgeCache{})).(*service)
+	snap, _ = judgedSnapshot(nil)
+	down.judgeCopy(context.Background(), snap)
+	if len(snap.CopyJudgments) != 0 {
+		t.Error("a failed judgment produced a verdict")
+	}
+	got := findingsByKey(Detect(snap, defaults()))
+	for _, key := range []string{"copy_reads_as_bulk", "copy_no_clear_ask"} {
+		if _, fired := got[key]; fired {
+			t.Errorf("%s fired on a step the judge never answered for", key)
+		}
 	}
 }

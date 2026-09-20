@@ -36,6 +36,10 @@ type CampaignContactProgress struct {
 	// step ("" when the step has no labels or the AI could not decide). Read by
 	// the ai_label branch conditions.
 	AILabel string
+	// ReplyIntent is the inbox tagging intent of the contact's human reply on
+	// this step (agreed, wants_pricing, not_now, ...; "" when tagging is off or
+	// the classifier was not sure). Read by the reply_intent branch condition.
+	ReplyIntent string
 }
 
 // CampaignProgress represents overall campaign progress
@@ -211,6 +215,10 @@ type CampaignProgressRepository interface {
 	// on that step. Upserts (the AI step runs before its progress row is stamped
 	// sent). Read by the ai_label branch conditions when routing out of the step.
 	RecordAILabel(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID, label string) error
+	// RecordReplyIntent stores the inbox tagging intent of the contact's reply on
+	// the given step. Upserts on the same key as RecordReplyClassification and
+	// touches only reply_intent. Read by the reply_intent branch condition.
+	RecordReplyIntent(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID, intent string) error
 	// GetLatestReplyClass returns the most-recent classified reply class for a
 	// contact in a campaign ("" when none). Convenience getter for the branch
 	// evaluator / callers that need only the class.
@@ -974,6 +982,18 @@ func (r *campaignProgressRepository) RecordAILabel(ctx context.Context, campaign
 	return err
 }
 
+// RecordReplyIntent persists the inbox tagging intent on the progress row.
+func (r *campaignProgressRepository) RecordReplyIntent(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID, intent string) error {
+	query := `
+		INSERT INTO campaign_contact_progress (campaign_id, contact_id, sequence_id, reply_intent)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (campaign_id, contact_id, sequence_id)
+		DO UPDATE SET reply_intent = EXCLUDED.reply_intent
+	`
+	_, err := r.db.Exec(ctx, query, campaignID, contactID, sequenceID, intent)
+	return err
+}
+
 // GetResolvedAIVariables reads the ai_variables_resolved jsonb for the row and
 // decodes it into a var-id -> text map. A missing row or empty column yields an
 // empty (non-nil) map, never an error.
@@ -1126,7 +1146,8 @@ func (r *campaignProgressRepository) GetContactProgress(ctx context.Context, cam
 	query := `
 		SELECT campaign_id, contact_id, sequence_id, sent_at,
 		       CASE WHEN opened_machine THEN NULL ELSE opened_at END,
-		       clicked_at, replied_at, bounced_at, complained_at, COALESCE(reply_class, ''), COALESCE(ai_label, '')
+		       clicked_at, replied_at, bounced_at, complained_at, COALESCE(reply_class, ''), COALESCE(ai_label, ''),
+		       COALESCE(reply_intent, '')
 		FROM campaign_contact_progress
 		WHERE campaign_id = $1 AND contact_id = $2
 		ORDER BY sent_at ASC
@@ -1153,6 +1174,7 @@ func (r *campaignProgressRepository) GetContactProgress(ctx context.Context, cam
 			&progress.ComplainedAt,
 			&progress.ReplyClass,
 			&progress.AILabel,
+			&progress.ReplyIntent,
 		)
 		if err != nil {
 			return nil, err
@@ -1376,7 +1398,7 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 	for rows.Next() {
 		var in routeInput
 		var contactID uuid.UUID
-		if serr := rows.Scan(&contactID, &in.addedAt, &in.sender, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.sentIDs, &in.hasReplied,
+		if serr := rows.Scan(&contactID, &in.addedAt, &in.sender, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.replyIntent, &in.sentIDs, &in.hasReplied,
 			&in.pausedAt, &in.pausedUntil, &in.pauseReason, &in.pauseSource); serr != nil {
 			return nil, nil, false, serr
 		}
@@ -1476,7 +1498,7 @@ func (r *campaignProgressRepository) RouteContact(ctx context.Context, campaignI
 	}
 	query := `
 		SELECT cl.added_at, cl.email_account_id,
-		       lp.sequence_id, lp.sent_at, lp.opened_at, lp.clicked_at, lp.replied_at, COALESCE(lp.reply_class, ''), COALESCE(lp.ai_label, ''),
+		       lp.sequence_id, lp.sent_at, lp.opened_at, lp.clicked_at, lp.replied_at, COALESCE(lp.reply_class, ''), COALESCE(lp.ai_label, ''), COALESCE(lp.reply_intent, ''),
 		       COALESCE(ss.ids, '{}') AS sent_ids,
 		       ` + leadHoldColumns + `,
 		       EXISTS (
@@ -1501,7 +1523,7 @@ func (r *campaignProgressRepository) RouteContact(ctx context.Context, campaignI
 		LEFT JOIN LATERAL (
 			SELECT sequence_id, sent_at,
 			       CASE WHEN p.opened_machine THEN NULL ELSE p.opened_at END AS opened_at,
-			       clicked_at, replied_at, reply_class, ai_label
+			       clicked_at, replied_at, reply_class, ai_label, reply_intent
 			FROM campaign_contact_progress p
 			WHERE p.campaign_id = $1 AND p.contact_id = cl.contact_id AND p.sent_at IS NOT NULL
 			ORDER BY p.sent_at DESC LIMIT 1
@@ -1517,7 +1539,7 @@ func (r *campaignProgressRepository) RouteContact(ctx context.Context, campaignI
 	var in routeInput
 	var bounced, failed, suppressed, undeliverable bool
 	err = r.db.QueryRow(ctx, query, campaignID, config.CampaignSendMaxAttempts, contactID).Scan(
-		&in.addedAt, &in.sender, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.sentIDs,
+		&in.addedAt, &in.sender, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.replyIntent, &in.sentIDs,
 		&in.pausedAt, &in.pausedUntil, &in.pauseReason, &in.pauseSource,
 		&in.hasReplied, &bounced, &failed, &suppressed, &undeliverable,
 	)
@@ -1556,10 +1578,10 @@ type routeInput struct {
 	addedAt *time.Time
 	// sender is the mailbox this lead's sequence is bound to, nil until its
 	// first email was reserved.
-	sender              *uuid.UUID
-	replyClass, aiLabel string
-	sentIDs             []uuid.UUID
-	hasReplied          bool
+	sender                           *uuid.UUID
+	replyClass, aiLabel, replyIntent string
+	sentIDs                          []uuid.UUID
+	hasReplied                       bool
 	// The per-lead hold. pausedAt non-nil is the hold itself; pausedUntil nil
 	// means it has no end and only a person lifts it.
 	pausedAt, pausedUntil    *time.Time
@@ -1858,7 +1880,7 @@ func (cr *campaignRouter) route(campaignID, contactID uuid.UUID, in routeInput) 
 		prog := &CampaignContactProgress{
 			CampaignID: campaignID, ContactID: contactID, SequenceID: *in.lastSeq,
 			SentAt: in.sentAt, OpenedAt: in.openedAt, ClickedAt: in.clickedAt, RepliedAt: in.repliedAt,
-			ReplyClass: in.replyClass, AILabel: in.aiLabel,
+			ReplyClass: in.replyClass, AILabel: in.aiLabel, ReplyIntent: in.replyIntent,
 		}
 		sa := time.Time{}
 		if in.sentAt != nil {
@@ -2025,7 +2047,7 @@ func (r *campaignProgressRepository) CountUndeliverableLeads(ctx context.Context
 	}
 	query := `
 		SELECT cl.contact_id, cl.added_at,
-		       lp.sequence_id, lp.sent_at, lp.opened_at, lp.clicked_at, lp.replied_at, COALESCE(lp.reply_class, ''), COALESCE(lp.ai_label, ''),
+		       lp.sequence_id, lp.sent_at, lp.opened_at, lp.clicked_at, lp.replied_at, COALESCE(lp.reply_class, ''), COALESCE(lp.ai_label, ''), COALESCE(lp.reply_intent, ''),
 		       COALESCE(ss.ids, '{}') AS sent_ids,
 		       EXISTS (
 		         SELECT 1 FROM campaign_contact_progress rp
@@ -2036,7 +2058,7 @@ func (r *campaignProgressRepository) CountUndeliverableLeads(ctx context.Context
 		LEFT JOIN LATERAL (
 			SELECT sequence_id, sent_at,
 			       CASE WHEN p.opened_machine THEN NULL ELSE p.opened_at END AS opened_at,
-			       clicked_at, replied_at, reply_class, ai_label
+			       clicked_at, replied_at, reply_class, ai_label, reply_intent
 			FROM campaign_contact_progress p
 			WHERE p.campaign_id = $1 AND p.contact_id = cl.contact_id AND p.sent_at IS NOT NULL
 			ORDER BY p.sent_at DESC LIMIT 1
@@ -2074,7 +2096,7 @@ func (r *campaignProgressRepository) CountUndeliverableLeads(ctx context.Context
 	for rows.Next() {
 		var in routeInput
 		var contactID uuid.UUID
-		if serr := rows.Scan(&contactID, &in.addedAt, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.sentIDs, &in.hasReplied); serr != nil {
+		if serr := rows.Scan(&contactID, &in.addedAt, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.replyIntent, &in.sentIDs, &in.hasReplied); serr != nil {
 			return 0, serr
 		}
 		res := router.route(campaignID, contactID, in)
@@ -2122,10 +2144,16 @@ func automaticHoldGuard(alias, untilParam string) string {
 	return `
 		  AND (
 		    NOT (` + liveHold(alias) + `)
-		    OR (` + alias + `.pause_source = 'out_of_office' AND ` + alias + `.paused_until IS NOT NULL
-		        AND ` + untilParam + `::timestamptz IS NOT NULL
-		        AND ` + alias + `.paused_until < ` + untilParam + `::timestamptz)
+		    OR (` + alias + `.pause_source IN ('out_of_office', 'inbox_tagging') AND ` + alias + `.paused_until IS NOT NULL
+		        AND (` + untilParam + `::timestamptz IS NULL
+		             OR ` + alias + `.paused_until < ` + untilParam + `::timestamptz))
 		  )`
+}
+
+// automaticHoldSource reports a hold the system wrote, which a member's own
+// pause always outranks and a longer automatic hold is never cut short by.
+func automaticHoldSource(source string) bool {
+	return source == models.LeadHoldSourceOutOfOffice || source == models.LeadHoldSourceInboxTagging
 }
 
 // HoldLead parks one lead's flow and returns the hold it wrote.
@@ -2139,7 +2167,7 @@ func automaticHoldGuard(alias, untilParam string) string {
 // overruling a person's decision.
 func (r *campaignProgressRepository) HoldLead(ctx context.Context, campaignID, contactID uuid.UUID, until *time.Time, reason, source string) (*models.LeadHold, error) {
 	guard := ""
-	if source == models.LeadHoldSourceOutOfOffice {
+	if automaticHoldSource(source) {
 		guard = automaticHoldGuard("campaign_leads", "$3")
 	}
 	now := time.Now()
@@ -2178,7 +2206,7 @@ func (r *campaignProgressRepository) HoldLead(ctx context.Context, campaignID, c
 // that never launches expires on its own.
 func (r *campaignProgressRepository) HoldLeadEverywhere(ctx context.Context, contactID uuid.UUID, until *time.Time, reason, source string) ([]uuid.UUID, error) {
 	guard := ""
-	if source == models.LeadHoldSourceOutOfOffice {
+	if automaticHoldSource(source) {
 		guard = automaticHoldGuard("cl", "$2")
 	}
 	rows, err := r.db.Query(ctx, `
@@ -2272,7 +2300,7 @@ func (r *campaignProgressRepository) CountHeldLeads(ctx context.Context, campaig
 func routedLeadsQuery(order string) string {
 	return `
 		SELECT cl.contact_id, cl.added_at, cl.email_account_id,
-		       lp.sequence_id, lp.sent_at, lp.opened_at, lp.clicked_at, lp.replied_at, COALESCE(lp.reply_class, ''), COALESCE(lp.ai_label, ''),
+		       lp.sequence_id, lp.sent_at, lp.opened_at, lp.clicked_at, lp.replied_at, COALESCE(lp.reply_class, ''), COALESCE(lp.ai_label, ''), COALESCE(lp.reply_intent, ''),
 		       COALESCE(ss.ids, '{}') AS sent_ids,
 		       EXISTS (
 		         SELECT 1 FROM campaign_contact_progress rp
@@ -2284,7 +2312,7 @@ func routedLeadsQuery(order string) string {
 		LEFT JOIN LATERAL (
 			SELECT sequence_id, sent_at,
 			       CASE WHEN p.opened_machine THEN NULL ELSE p.opened_at END AS opened_at,
-			       clicked_at, replied_at, reply_class, ai_label
+			       clicked_at, replied_at, reply_class, ai_label, reply_intent
 			FROM campaign_contact_progress p
 			WHERE p.campaign_id = $1 AND p.contact_id = cl.contact_id AND p.sent_at IS NOT NULL
 			ORDER BY p.sent_at DESC LIMIT 1
@@ -2372,7 +2400,7 @@ func (r *campaignProgressRepository) LeadSupply(ctx context.Context, campaignID 
 	for rows.Next() {
 		var in routeInput
 		var contactID uuid.UUID
-		if serr := rows.Scan(&contactID, &in.addedAt, &in.sender, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.sentIDs, &in.hasReplied,
+		if serr := rows.Scan(&contactID, &in.addedAt, &in.sender, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.replyIntent, &in.sentIDs, &in.hasReplied,
 			&in.pausedAt, &in.pausedUntil, &in.pauseReason, &in.pauseSource); serr != nil {
 			return nil, serr
 		}

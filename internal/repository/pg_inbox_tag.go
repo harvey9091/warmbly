@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,7 +31,10 @@ type InboxTagResult struct {
 	Labels           []string
 	Model            string
 	InputTokens      int
-	CreatedAt        time.Time
+	// Actions is what the workspace's switches let this verdict do: "hold",
+	// "stop", "task", "suppress". Empty for a verdict that only labelled.
+	Actions   []string
+	CreatedAt time.Time
 }
 
 type InboxTagRepository interface {
@@ -49,6 +53,13 @@ type InboxTagRepository interface {
 	// ThreadStates backs the follow-up sweep: who spoke last, when, and how far
 	// the thread ever got.
 	ThreadStates(ctx context.Context, orgID uuid.UUID, since time.Time, limit int) ([]ThreadFollowUpState, error)
+
+	// GetByMessageID reads one completed verdict, so the reply classifier, the
+	// inbox agent and the action executor can reuse a judgment already paid
+	// for. Nil when the message was never classified.
+	GetByMessageID(ctx context.Context, orgID uuid.UUID, messageID string) (*InboxTagResult, error)
+	// RecordActions stores what a verdict was allowed to do.
+	RecordActions(ctx context.Context, orgID uuid.UUID, messageID string, actions []string) error
 }
 
 type inboxTagRepository struct {
@@ -148,9 +159,7 @@ func (r *inboxTagRepository) ListForReview(ctx context.Context, orgID uuid.UUID,
 	}
 
 	rows, err := r.db.Query(ctx, `
-		SELECT id, organization_id, email_account_id, message_id, thread_id,
-		       kind, kind_confidence, kind_source, intent, intent_confidence,
-		       relevance, priority, needs_review, review_reason, answers, labels, model, input_tokens, created_at
+		SELECT `+inboxTagColumns+`
 		FROM inbox_tag_results `+where+`
 		ORDER BY relevance DESC, created_at DESC
 		LIMIT $2 OFFSET $3`, orgID, limit, offset)
@@ -161,12 +170,8 @@ func (r *inboxTagRepository) ListForReview(ctx context.Context, orgID uuid.UUID,
 
 	out := make([]InboxTagResult, 0, limit)
 	for rows.Next() {
-		var x InboxTagResult
-		if err := rows.Scan(
-			&x.ID, &x.OrganizationID, &x.EmailAccountID, &x.MessageID, &x.ThreadID,
-			&x.Kind, &x.KindConfidence, &x.KindSource, &x.Intent, &x.IntentConfidence,
-			&x.Relevance, &x.Priority, &x.NeedsReview, &x.ReviewReason, &x.Answers, &x.Labels, &x.Model, &x.InputTokens, &x.CreatedAt,
-		); err != nil {
+		x, err := scanInboxTag(rows)
+		if err != nil {
 			return nil, 0, err
 		}
 		out = append(out, x)
@@ -174,22 +179,66 @@ func (r *inboxTagRepository) ListForReview(ctx context.Context, orgID uuid.UUID,
 	return out, total, rows.Err()
 }
 
+const inboxTagColumns = `id, organization_id, email_account_id, message_id, thread_id,
+		       kind, kind_confidence, kind_source, intent, intent_confidence,
+		       relevance, priority, needs_review, review_reason, answers, labels, model, input_tokens, actions, created_at`
+
+func scanInboxTag(row pgx.Row) (InboxTagResult, error) {
+	var x InboxTagResult
+	err := row.Scan(
+		&x.ID, &x.OrganizationID, &x.EmailAccountID, &x.MessageID, &x.ThreadID,
+		&x.Kind, &x.KindConfidence, &x.KindSource, &x.Intent, &x.IntentConfidence,
+		&x.Relevance, &x.Priority, &x.NeedsReview, &x.ReviewReason, &x.Answers, &x.Labels, &x.Model, &x.InputTokens, &x.Actions, &x.CreatedAt,
+	)
+	return x, err
+}
+
+func (r *inboxTagRepository) GetByMessageID(ctx context.Context, orgID uuid.UUID, messageID string) (*InboxTagResult, error) {
+	if messageID == "" {
+		return nil, nil
+	}
+	x, err := scanInboxTag(r.db.QueryRow(ctx, `
+		SELECT `+inboxTagColumns+`
+		FROM inbox_tag_results
+		WHERE organization_id = $1 AND message_id = $2 AND status = 'complete'`, orgID, messageID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &x, nil
+}
+
+func (r *inboxTagRepository) RecordActions(ctx context.Context, orgID uuid.UUID, messageID string, actions []string) error {
+	if actions == nil {
+		actions = []string{}
+	}
+	_, err := r.db.Exec(ctx, `
+		UPDATE inbox_tag_results SET actions = $3, updated_at = NOW()
+		WHERE organization_id = $1 AND message_id = $2`, orgID, messageID, actions)
+	return err
+}
+
 type InboxTagReviewSummary struct {
 	Total       int
 	NeedsReview int
 	FromOffline int
+	// Acted counts verdicts that held, stopped, opened a task or suppressed.
+	Acted int
 }
 
 func (r *inboxTagRepository) ReviewSummary(ctx context.Context, orgID uuid.UUID) (InboxTagReviewSummary, error) {
 	const q = `
 		SELECT COUNT(*),
 		       COUNT(*) FILTER (WHERE needs_review),
-		       COUNT(*) FILTER (WHERE kind_source = 'header')
+		       COUNT(*) FILTER (WHERE kind_source = 'header'),
+		       COUNT(*) FILTER (WHERE cardinality(actions) > 0)
 		FROM inbox_tag_results
 		WHERE organization_id = $1 AND status = 'complete'
 	`
 	var out InboxTagReviewSummary
-	err := r.db.QueryRow(ctx, q, orgID).Scan(&out.Total, &out.NeedsReview, &out.FromOffline)
+	err := r.db.QueryRow(ctx, q, orgID).Scan(&out.Total, &out.NeedsReview, &out.FromOffline, &out.Acted)
 	return out, err
 }
 

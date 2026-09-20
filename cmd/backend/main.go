@@ -61,6 +61,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/guardrail"
 	idempotencyapp "github.com/warmbly/warmbly/internal/app/idempotency"
 	"github.com/warmbly/warmbly/internal/app/inboxagent"
+	"github.com/warmbly/warmbly/internal/app/inboxtag"
 	"github.com/warmbly/warmbly/internal/app/instancecheck"
 	"github.com/warmbly/warmbly/internal/app/instanceconfig"
 	"github.com/warmbly/warmbly/internal/app/instancesettings"
@@ -132,6 +133,7 @@ import (
 	"github.com/warmbly/warmbly/internal/pkg/generation"
 	"github.com/warmbly/warmbly/internal/pkg/geo"
 	"github.com/warmbly/warmbly/internal/pkg/idtoken"
+	"github.com/warmbly/warmbly/internal/pkg/typesafe"
 	"github.com/warmbly/warmbly/internal/repository"
 	"github.com/warmbly/warmbly/internal/scheduler"
 	"github.com/warmbly/warmbly/internal/tasks"
@@ -296,6 +298,7 @@ func main() {
 	var emailSyncStateRepository repository.EmailSyncStateRepository
 	var trackedLinkRepository repository.TrackedLinkRepository
 	var inboxTagRepository repository.InboxTagRepository
+	var typeSafeClient *typesafe.Client
 	var unsubscribeLinkRepository repository.UnsubscribeLinkRepository
 	var customDomainRepository repository.CustomDomainRepository
 	// instanceSettings and the health registry are built after the handler
@@ -640,6 +643,10 @@ func main() {
 		emailMessageMapForHandler = repository.NewEmailMessageMapRepository(primaryDB)
 		trackedLinkRepository = repository.NewTrackedLinkRepository(primaryDB.Pool)
 		inboxTagRepository = repository.NewInboxTagRepository(primaryDB.Pool)
+		if key := config.TypeSafeAPIKey(); key != "" {
+			// One TypeSafe client for every typed judgment in this process.
+			typeSafeClient = typesafe.NewClient(key)
+		}
 		unsubscribeLinkRepository = repository.NewUnsubscribeLinkRepository(primaryDB.Pool)
 		customDomainRepository = repository.NewCustomDomainRepository(primaryDB.Pool)
 		instanceChecksDB = primaryDB.Pool
@@ -721,6 +728,11 @@ func main() {
 			generationClient = generation.NewClient(aiKey)
 		}
 		warmupContentService = warmupcontent.NewService(warmupContentRepo, generationClient)
+		if typeSafeClient != nil {
+			// Generated warmup threads are judged for pitches and filler before
+			// entering the bank.
+			warmupContentService.WireJudge(typeSafeClient)
+		}
 
 		// Writing assistant generator: the OpenAI-compatible provider implements
 		// WritingGenerator directly; the Anthropic connector delegates writing to
@@ -797,6 +809,9 @@ func main() {
 			dailyThrottleService = dailythrottle.NewService(cache)
 		}
 		organizationService = organization.NewService(organizationRepository, subscriptionRepository, userRepostory, planRepository, dailyThrottleService)
+		// Every workspace gets its inbox labels the moment it exists, so the
+		// premade views in the inbox work before the first message arrives.
+		organizationService.WireWorkspaceSeeder(inboxtag.SeedLabels(repository.NewTagCategoryStore(primaryDB.Pool)))
 
 		// Plan-based webhook/integration fan-out throttle. The cap scales with
 		// the org's effective mailbox allowance (see WebhookDispatchLimit) so a
@@ -1238,6 +1253,8 @@ func main() {
 		formService.SetContacts(contactService)
 		formService.SetRealtime(streamingPublisher)
 		formService.SetCaptcha(captcha)
+		// Per-form triage of submissions; off per form until switched on.
+		formService.SetTriage(typeSafeAsker(typeSafeClient))
 		formService.SetWebhooks(webhookServiceForHandler)
 		formService.SetContactReader(contactRepostory)
 		formService.SetGeo(geoloc)
@@ -1510,6 +1527,11 @@ func main() {
 				return res.Text, nil
 			})
 		}
+		if typeSafeClient != nil {
+			// The typed layer is asked before the LLM one, and answers from the
+			// tagger's stored verdict when the message has one.
+			replyclassify.SetTypedClassifier(inboxtag.ReplyClassifier(typeSafeClient, inboxTagRepository))
+		}
 		// In-app notifications: API reads/writes happen here; also wire the gate
 		// onto the backend's advanced service (deliverability webhooks can ingest
 		// here too).
@@ -1538,11 +1560,23 @@ func main() {
 		// agent wired onto the advanced service so any reply processed here also
 		// drafts. Paid + opt-in checked inside; nil provider leaves it inert.
 		aiDraftRepo = repository.NewAIDraftRepository(primaryDB.Pool)
-		advancedService.WireInboxAgent(inboxagent.NewService(
+		inboxAgentService := inboxagent.NewService(
 			aiProvider, creditService, featureGateService,
 			organizationRepository, uniboxRepository, skillsService,
 			contactRepostory, aiDraftRepo, streamingPublisher,
-		))
+		)
+		if typeSafeClient != nil {
+			inboxAgentService.WireDraftGate(inboxtag.NewDraftGate(inboxTagRepository))
+		}
+		advancedService.WireInboxAgent(inboxAgentService)
+		// The classified intent lands on the contact's progress for the
+		// reply_intent branch condition.
+		advancedService.WireInboxTags(inboxTagRepository)
+		if typeSafeClient != nil {
+			// A bounce whose reason does not name the recipient is classified, so a
+			// reputation or policy block does not suppress a good address.
+			advancedService.WireBounceJudge(typeSafeClient)
+		}
 		emailSender := tasks.NewEmailSender(emailRepostory, eventsPublisher)
 		// Never hand a send to a worker that stopped heartbeating: nothing
 		// would execute it and nothing would report it, so the step would
@@ -1854,6 +1888,9 @@ func main() {
 			// Normalized: the CNAME value the advisor hands over has to be the
 			// bare host, whatever shape TRACKING_DOMAIN was set in.
 			advisor.WithTrackingHost(config.TrackingHostname()),
+			// Each step's copy is judged for how it reads to its recipient,
+			// cached by the hash of the words so unchanged copy costs nothing.
+			advisor.WithCopyJudge(typeSafeAsker(typeSafeClient), repository.NewCopyJudgmentRepository(primaryDB.Pool)),
 			// So the domain-auth finding reports this install's actual gate
 			// (enforced or not, and the grace window) instead of a default one.
 			advisor.WithDomainAuthPolicy(instanceSettings))
@@ -2013,6 +2050,7 @@ func main() {
 		CreditService:    creditService,
 		WritingGenerator: writingGenerator,
 		AIProvider:       aiProvider,
+		TypeSafe:         typeSafeAsker(typeSafeClient),
 		AISearch:         aiSearch,
 		AITools:          aiToolRegistry,
 		AIAgentService:   aiAgentService,
@@ -2269,4 +2307,13 @@ func bootstrapInstanceSettings(ctx context.Context, svc instancesettings.Service
 	if applied {
 		log.Printf("instance settings seeded from WARMBLY_SETTINGS_BOOTSTRAP")
 	}
+}
+
+// typeSafeAsker turns a possibly-nil client into a possibly-nil interface, so
+// a handler's nil check means "not configured" rather than "a typed nil".
+func typeSafeAsker(c *typesafe.Client) typesafe.Asker {
+	if c == nil {
+		return nil
+	}
+	return c
 }

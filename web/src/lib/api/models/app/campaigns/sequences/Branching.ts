@@ -28,7 +28,11 @@ export type BranchField =
     // The AI step that owns this branch stored this label for the contact
     // (campaign_contact_progress.ai_label). Operator is "is"; the label rides
     // in `label`. Only meaningful on branches out of an AI step.
-    | "ai_label";
+    | "ai_label"
+    // Automatic inbox tagging stored this intent for the contact's human reply
+    // (campaign_contact_progress.reply_intent). Operator is "is"; the intent
+    // rides in `label`. Empty when tagging is off or the classifier was unsure.
+    | "reply_intent";
 
 export type BranchOperator = "within_days" | "ever" | "chance" | "is";
 
@@ -59,6 +63,7 @@ export const INSTANT_CAPABLE_FIELDS: BranchField[] = [
     "reply_negative",
     "reply_neutral",
     "reply_automated",
+    "reply_intent",
     "opened",
     "clicked",
 ];
@@ -72,7 +77,8 @@ export interface BranchCondition {
     operator: BranchOperator;
     // Days for `within_days`; percent (1-99) for `random`/`chance`. Omitted for `ever`.
     value?: number;
-    // The AI-step label an `ai_label` condition compares against (operator "is").
+    // The AI-step label an `ai_label` condition, or the intent a `reply_intent`
+    // condition, compares against (operator "is").
     label?: string;
 }
 
@@ -106,4 +112,25 @@ export const BRANCH_FIELD_LABELS: Record<BranchField, string> = {
     reply_neutral: "replied: neutral",
     reply_automated: "auto-reply / out of office",
     ai_label: "AI label is",
+    reply_intent: "reply intent is",
 };
+
+// The intents automatic inbox tagging can store for a human reply, as a
+// `reply_intent` condition offers them. Values mirror internal/app/inboxtag.
+export const REPLY_INTENTS: { value: string; label: string }[] = [
+    { value: "agreed", label: "Agreed" },
+    { value: "wants_info", label: "Wants info" },
+    { value: "wants_pricing", label: "Wants pricing" },
+    { value: "not_now", label: "Not now" },
+    { value: "not_interested", label: "Not interested" },
+    { value: "wrong_person", label: "Wrong person" },
+    { value: "opt_out", label: "Opt out" },
+    { value: "scheduling", label: "Scheduling" },
+    { value: "in_progress", label: "In progress" },
+    { value: "question_answered", label: "Question answered" },
+    { value: "unclear", label: "Unclear" },
+];
+
+export function replyIntentLabel(intent: string | undefined): string {
+    return REPLY_INTENTS.find((i) => i.value === intent)?.label ?? intent ?? "…";
+}

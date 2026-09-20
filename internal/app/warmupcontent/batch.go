@@ -290,6 +290,20 @@ func (s *service) ingestBatch(ctx context.Context, job *models.WarmupGenerationJ
 			job.LintRejectedCount++
 			continue
 		}
+		// One TypeSafe call per generated thread, offline in the batch poller,
+		// so the daily generation cap already bounds its cost.
+		if s.judge != nil {
+			if judgment, err := judgeThread(ctx, s.judge, subject, description, messages); err != nil {
+				// An outage must never empty the bank: the thread stays.
+				log.Debug().Err(err).Str("job_id", job.ID.String()).
+					Msg("warmup batch generation: thread judgment unavailable, accepting")
+			} else if reject, reason := judgment.Reject(); reject {
+				job.LintRejectedCount++
+				log.Debug().Str("job_id", job.ID.String()).Str("reason", reason).
+					Msg("warmup batch generation: thread rejected by judgment")
+				continue
+			}
+		}
 
 		record := &models.WarmupConversation{
 			ID:             uuid.New(),

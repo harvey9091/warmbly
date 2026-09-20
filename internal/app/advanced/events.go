@@ -5,7 +5,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 
+	"github.com/warmbly/warmbly/internal/app/inboxtag"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/repository"
 )
@@ -108,6 +110,50 @@ type InboxAgent interface {
 // called (the reply hook guards on a nil agent).
 func (s *service) WireInboxAgent(a InboxAgent) {
 	s.inboxAgent = a
+}
+
+// WireInboxTags attaches the inbox tagging verdict store after construction.
+// No-op if never called (the reply hook guards on a nil store).
+func (s *service) WireInboxTags(repo repository.InboxTagRepository) {
+	s.inboxTags = repo
+}
+
+// recordReplyIntent copies a confident human-reply intent from the stored
+// tagging verdict onto the contact's progress row, so reply_intent branches
+// route on it with no model call. Best-effort: a miss or an error only logs.
+func (s *service) recordReplyIntent(ctx context.Context, orgID uuid.UUID, messageID string, campaignID, contactID, sequenceID uuid.UUID) {
+	if s.inboxTags == nil || messageID == "" {
+		return
+	}
+	res, err := s.inboxTags.GetByMessageID(ctx, orgID, messageID)
+	if err != nil {
+		log.Warn().Err(err).Str("message_id", messageID).Msg("reply intent: inbox tag lookup failed")
+		return
+	}
+	if res == nil || res.Kind != inboxtag.KindHumanReply || res.NeedsReview || res.Intent == "" || res.IntentConfidence < inboxtag.ConfFloor {
+		return
+	}
+	if err := s.campaignProgressRepo.RecordReplyIntent(ctx, campaignID, contactID, sequenceID, res.Intent); err != nil {
+		log.Warn().Err(err).Str("campaign_id", campaignID.String()).Str("contact_id", contactID.String()).Msg("reply intent: record failed")
+	}
+}
+
+// inboxTagActed reports whether the tagger already took the named action on
+// this message, so the reply hook does not repeat it.
+func (s *service) inboxTagActed(ctx context.Context, orgID uuid.UUID, messageID, action string) bool {
+	if s.inboxTags == nil || messageID == "" {
+		return false
+	}
+	res, err := s.inboxTags.GetByMessageID(ctx, orgID, messageID)
+	if err != nil || res == nil {
+		return false
+	}
+	for _, a := range res.Actions {
+		if a == action {
+			return true
+		}
+	}
+	return false
 }
 
 // notify raises an in-app notification off the hot path. It detaches from the

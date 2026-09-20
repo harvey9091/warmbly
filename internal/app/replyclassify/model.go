@@ -38,7 +38,38 @@ type ModelClassifyFunc func(ctx context.Context, system, user string) (string, e
 var (
 	modelMu       sync.RWMutex
 	modelClassify ModelClassifyFunc
+	typedClassify TypedClassifyFunc
 )
+
+// TypedClassifyFunc is the preferred model layer: a classifier that returns a
+// class with a calibrated confidence, or false when it has no confident
+// answer. Wired from the app mains with SetTypedClassifier when a TypeSafe key
+// is configured; the inbox tagger supplies it.
+type TypedClassifyFunc func(ctx context.Context, in Input) (Result, bool)
+
+// SetTypedClassifier wires (or clears, with nil) the typed model layer.
+func SetTypedClassifier(fn TypedClassifyFunc) {
+	modelMu.Lock()
+	typedClassify = fn
+	modelMu.Unlock()
+}
+
+// classifyTyped runs the typed layer when one is wired.
+func classifyTyped(ctx context.Context, in Input) (Result, bool) {
+	modelMu.RLock()
+	fn := typedClassify
+	modelMu.RUnlock()
+	if fn == nil {
+		return Result{}, false
+	}
+	cctx, cancel := context.WithTimeout(ctx, modelTimeout)
+	defer cancel()
+	r, ok := fn(cctx, in)
+	if !ok || r.Class == "" {
+		return Result{}, false
+	}
+	return r, true
+}
 
 // SetModelClassifier wires (or clears, with nil) the platform provider that
 // backs Layer 3. Safe to call once at startup; guarded for concurrent reads.

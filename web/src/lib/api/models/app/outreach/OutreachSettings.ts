@@ -49,6 +49,25 @@ export interface ReplyIntentSettings {
     out_of_office_hold_days: number;
 }
 
+// What a classified reply may do beyond labelling, from automatic inbox
+// tagging. The reversible three default on; the suppression waits for the
+// workspace to turn it on.
+export interface InboxTaggingSettings {
+    hold_on_not_now: boolean;
+    not_now_hold_days: number;
+    stop_on_declined: boolean;
+    task_on_call_request: boolean;
+    suppress_on_removal_request: boolean;
+}
+
+export const DEFAULT_INBOX_TAGGING: InboxTaggingSettings = {
+    hold_on_not_now: true,
+    not_now_hold_days: 30,
+    stop_on_declined: true,
+    task_on_call_request: true,
+    suppress_on_removal_request: false,
+};
+
 // Matches models.DefaultCRMTaskIntents: every human intent, no automated one.
 export const DEFAULT_CRM_TASK_INTENTS: ReplyIntent[] = [
     "positive",
@@ -98,6 +117,7 @@ export interface OutreachSettings {
     task_reliability: Record<string, unknown>;
     ab_testing: Record<string, unknown>;
     reply_intent: ReplyIntentSettings;
+    inbox_tagging?: InboxTaggingSettings;
     send_time_optimization: SendTimeOptimizationSettings;
     preflight: PreflightSettings;
     dashboard: Record<string, unknown>;

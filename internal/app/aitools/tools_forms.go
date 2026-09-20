@@ -76,6 +76,7 @@ func (d Deps) registerFormTools(r *Registry) {
 			"category_ids":    arrProp("Categories to file new contacts under.", map[string]any{"type": "string"}),
 			"allowed_domains": arrProp("Domains the form may be embedded on.", map[string]any{"type": "string"}),
 			"captcha_enabled": boolProp("Require a captcha. Has no effect where the install has no captcha provider."),
+			"triage_enabled":  boolProp("Classify each submission as buyer, vendor, job seeker, other or junk; junk creates no contact. Has no effect where the install has no TypeSafe key."),
 		}, "form_id"),
 		Risk:            generation.RiskWrite,
 		RequiredOrgPerm: models.PermManageContacts,
@@ -203,6 +204,7 @@ func (d Deps) updateForm(ctx context.Context, inv Invocation, args json.RawMessa
 		CategoryIDs    *[]string        `json:"category_ids"`
 		AllowedDomains *[]string        `json:"allowed_domains"`
 		CaptchaEnabled *bool            `json:"captcha_enabled"`
+		TriageEnabled  *bool            `json:"triage_enabled"`
 	}](args)
 	if err != nil {
 		return "", err
@@ -218,6 +220,7 @@ func (d Deps) updateForm(ctx context.Context, inv Invocation, args json.RawMessa
 		RedirectURL:    in.RedirectURL,
 		AllowedDomains: in.AllowedDomains,
 		CaptchaEnabled: in.CaptchaEnabled,
+		TriageEnabled:  in.TriageEnabled,
 	}
 	if in.Status != "" {
 		status := models.FormStatus(in.Status)

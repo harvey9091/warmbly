@@ -130,6 +130,9 @@ func (h *LeadHold) Live(t time.Time) bool {
 const (
 	LeadHoldSourceManual      = "manual"
 	LeadHoldSourceOutOfOffice = "out_of_office"
+	// LeadHoldSourceInboxTagging is a hold a classified reply wrote: "not now"
+	// for a while, a decline with no end.
+	LeadHoldSourceInboxTagging = "inbox_tagging"
 )
 
 // Lead status constants for ContactCampaignProgress.Status.

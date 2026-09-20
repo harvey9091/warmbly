@@ -6,6 +6,7 @@
 //   Compose
 //   All mail / Inbox / Unread / Awaiting reply / Agent drafts / Snoozed
 //   Drafts / Sent / Scheduled / Archive / Spam / Trash
+//   Views                        (premade, over the automatic labels)
 //   Mailboxes / Labels / Tags   (collapsible, searchable past 8 items)
 //
 // Today and This week are not rows: the filter sheet's date range covers
@@ -31,6 +32,10 @@ import {
   SparklesIcon,
   Trash2Icon,
   ClockIcon,
+  FlameIcon,
+  MessageSquareReplyIcon,
+  BotIcon,
+  BanIcon,
 } from "lucide-react";
 import useUniboxOverview from "@/lib/api/hooks/app/unibox/useUniboxOverview";
 import useMarkSeen from "@/lib/api/hooks/app/unibox/useMarkSeen";
@@ -49,6 +54,8 @@ import {
 import type { UniboxFolder } from "@/lib/api/models/app/unibox/UniboxSearch";
 import { TagMeaningTooltip } from "@/components/ui/tag-meaning-tooltip";
 import { isAutomaticTag } from "@/lib/unibox/tagMeanings";
+import { UNIBOX_VIEWS, viewCategories, type UniboxViewId } from "@/lib/unibox/views";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export type UniboxScope =
   | { kind: "all" }
@@ -62,7 +69,8 @@ export type UniboxScope =
   | { kind: "folder"; folder: UniboxFolder }
   | { kind: "mailbox"; mailboxId: string }
   | { kind: "tag"; tagId: string }
-  | { kind: "category"; categoryId: string };
+  | { kind: "category"; categoryId: string }
+  | { kind: "view"; view: UniboxViewId };
 
 export function scopeKey(s: UniboxScope): string {
   switch (s.kind) {
@@ -74,6 +82,8 @@ export function scopeKey(s: UniboxScope): string {
       return `tag:${s.tagId}`;
     case "category":
       return `category:${s.categoryId}`;
+    case "view":
+      return `view:${s.view}`;
     default:
       return s.kind;
   }
@@ -92,6 +102,14 @@ const MAIL_FOLDERS: {
   { folder: "spam", label: "Spam", icon: <OctagonAlertIcon className={ICON} /> },
   { folder: "trash", label: "Trash", icon: <Trash2Icon className={ICON} /> },
 ];
+
+const VIEW_ICONS: Record<UniboxViewId, React.ReactNode> = {
+  hot: <FlameIcon className={ICON} />,
+  needs_reply: <MessageSquareReplyIcon className={ICON} />,
+  follow_up: <ClockIcon className={ICON} />,
+  declined: <BanIcon className={ICON} />,
+  automated: <BotIcon className={ICON} />,
+};
 
 const COLLAPSE_THRESHOLD = 8;
 const COLLAPSED_VISIBLE = 6;
@@ -219,6 +237,40 @@ export function ScopeRail({ scope, onChange }: ScopeRailProps) {
             </div>
           )}
       </Group>
+
+      {data && data.categories && data.categories.some((c) => isAutomaticTag(c.title)) && (
+        <Group>
+          <div className="px-2 pt-1 pb-1 text-[10px] uppercase tracking-[0.14em] text-slate-400">
+            Views
+          </div>
+          {UNIBOX_VIEWS.map((v) => {
+            const members = viewCategories(v, data.categories);
+            // Unread across the member labels. A thread wearing two of them
+            // counts twice, which is close enough for a rail number.
+            const unread = members.reduce((n, c) => n + c.unread, 0);
+            return (
+              <Tooltip key={v.id}>
+                <TooltipTrigger asChild>
+                  <div>
+                    <Item
+                      icon={VIEW_ICONS[v.id]}
+                      label={v.label}
+                      hideNativeTitle
+                      count={unread || undefined}
+                      accent={unread > 0}
+                      active={active === `view:${v.id}`}
+                      onClick={() => onChange({ kind: "view", view: v.id })}
+                    />
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent sideOffset={6} className="max-w-72">
+                  {v.meaning}
+                </TooltipContent>
+              </Tooltip>
+            );
+          })}
+        </Group>
+      )}
 
       <CollapsibleSection
         label="Mailboxes"

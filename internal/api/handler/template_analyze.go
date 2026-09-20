@@ -8,16 +8,25 @@
 // The rules pass runs in the same request and comes back under "rules", so the
 // two halves of the editor's panel are scored from one reading of the copy
 // rather than from two drafts a keystroke apart.
+//
+// A third pass, under "judgment", asks TypeSafe how the copy reads to its
+// recipient. It costs no credits and needs no LLM, so a deployment with a
+// TypeSafe key and no AI provider still answers here, with the rules score and
+// the judgment in place of the LLM's findings.
 package handler
 
 import (
+	"context"
+	"github.com/google/uuid"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
 
 	"github.com/warmbly/warmbly/internal/api/middleware"
+	"github.com/warmbly/warmbly/internal/app/copyjudge"
 	"github.com/warmbly/warmbly/internal/app/credits"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
@@ -57,7 +66,7 @@ func (h *Handler) AnalyzeTemplateContent(c *gin.Context) {
 		return
 	}
 
-	if h.AIProvider == nil {
+	if h.AIProvider == nil && h.TypeSafe == nil {
 		// Identified, because "no provider here" is permanent for this
 		// deployment while a provider outage is not, and the editor hides the
 		// button only for the first.
@@ -76,6 +85,32 @@ func (h *Handler) AnalyzeTemplateContent(c *gin.Context) {
 	}
 
 	rules := warmlint.Score(req.Subject, req.BodyHTML, req.BodyPlain)
+
+	if h.AIProvider == nil {
+		// No LLM to quote the copy back, so the judgment is the analysis:
+		// the rules score, one sentence on how it reads, nothing charged.
+		judgment := h.copyJudgment(c.Request.Context(), *orgID, req)
+		if judgment == nil {
+			errx.JSON(c, errx.New(errx.ServiceUnavailable, "The copy judge is temporarily unavailable. Nothing was charged."))
+			return
+		}
+		remaining := 0
+		if bal, berr := h.CreditService.GetBalance(c.Request.Context(), *orgID); berr == nil {
+			remaining = bal
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"score":             rules.Score,
+			"verdict":           judgment.Summary(),
+			"findings":          []spamcheck.Finding{},
+			"rules":             rules,
+			"judgment":          judgment,
+			"model":             judgment.Model,
+			"tokens_used":       judgment.InputTokens,
+			"credits_remaining": remaining,
+			"credits_charged":   0,
+		})
+		return
+	}
 
 	paid, _ := h.FeatureGateService.IsPaidOrganization(c.Request.Context(), *orgID)
 	model := h.AIProvider.ModelForTier(paid)
@@ -136,6 +171,10 @@ func (h *Handler) AnalyzeTemplateContent(c *gin.Context) {
 		return
 	}
 
+	// Judged only once the paid analysis succeeded, so a request refused for
+	// credits or a provider error spends no TypeSafe call.
+	judgment := h.copyJudgment(c.Request.Context(), *orgID, req)
+
 	charged := 0
 	if !local {
 		charged = credits.CostSpamAnalysis
@@ -145,7 +184,7 @@ func (h *Handler) AnalyzeTemplateContent(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	out := gin.H{
 		"score":             analysis.Score,
 		"verdict":           analysis.Verdict,
 		"findings":          analysis.Findings,
@@ -156,5 +195,25 @@ func (h *Handler) AnalyzeTemplateContent(c *gin.Context) {
 		"tokens_used":       analysis.TokensUsed,
 		"credits_remaining": remaining,
 		"credits_charged":   charged,
-	})
+	}
+	if judgment != nil {
+		out["judgment"] = judgment
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// copyJudgment asks TypeSafe how the copy reads. Uncached on purpose: a
+// re-check is the writer asking again. Nil when unconfigured or unavailable.
+func (h *Handler) copyJudgment(ctx context.Context, orgID uuid.UUID, req analyzeTemplateRequest) *copyjudge.Verdict {
+	if h.TypeSafe == nil {
+		return nil
+	}
+	jctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	v, err := copyjudge.Judge(jctx, h.TypeSafe, req.Subject, copyjudge.Body(req.BodyPlain, req.BodyHTML))
+	if err != nil {
+		log.Debug().Err(err).Str("organization_id", orgID.String()).Msg("copy judgment unavailable")
+		return nil
+	}
+	return v
 }

@@ -30,6 +30,7 @@ import scoreTemplate from "@/lib/api/client/app/campaigns/scoreTemplate";
 import useAnalyzeTemplate from "@/lib/api/hooks/app/campaigns/useAnalyzeTemplate";
 import type TemplateScore from "@/lib/api/models/app/campaigns/TemplateScore";
 import type {
+    CopyJudgment,
     SpamFinding,
     TemplateAnalysis,
     TemplateField,
@@ -155,6 +156,95 @@ function FindingRow({ finding }: { finding: SpamFinding }) {
 
 // Movement since the previous check, which is what makes Re-check worth
 // pressing: it answers whether the edit helped.
+// Thresholds mirror the backend policy (internal/app/copyjudge): a spam claim
+// counts from 0.7, and a three-level scale splits at thirds.
+const SPAM_CLAIM_AT = 0.7;
+const BULK_AT = 0.75;
+const JUDGMENT_CONF_FLOOR = 0.7;
+
+// Mirrors copyjudge.Verdict.ReadsAsBulk on the backend.
+function readsAsBulk(j: { reads_as: number; spam_claim: number; confidence: number }): boolean {
+    return (j.reads_as >= BULK_AT && j.confidence >= JUDGMENT_CONF_FLOOR) || j.spam_claim >= SPAM_CLAIM_AT;
+}
+
+function readsAsLabel(v: number): { label: string; tone: DitherTone; text: string } {
+    if (v < 1 / 3) return { label: "Personal note", tone: "emerald", text: "text-emerald-600" };
+    if (v < 2 / 3) return { label: "Somewhere between", tone: "amber", text: "text-amber-600" };
+    return { label: "Bulk mail", tone: "rose", text: "text-rose-600" };
+}
+
+function personalizationLabel(v: number): { label: string; tone: DitherTone; text: string } {
+    if (v < 0.5) return { label: "Written for this reader", tone: "emerald", text: "text-emerald-600" };
+    return { label: "Could be sent to anyone", tone: "amber", text: "text-amber-600" };
+}
+
+const ASK_LABEL: Record<CopyJudgment["ask"], { label: string; text: string }> = {
+    one_clear_ask: { label: "One clear ask", text: "text-emerald-600" },
+    several_asks: { label: "Several asks", text: "text-amber-600" },
+    no_ask: { label: "No ask", text: "text-amber-600" },
+};
+
+// One row of the judgment: a name, a meter for scaled answers, and the band it
+// landed in. Meters run from the personal end, so a low fraction is the good
+// one and the tone carries the reading.
+function JudgmentRow({
+    name,
+    label,
+    text,
+    frac,
+    tone,
+}: {
+    name: string;
+    label: string;
+    text: string;
+    frac?: number;
+    tone?: DitherTone;
+}) {
+    return (
+        <div className="flex items-center gap-2">
+            <span className="w-24 shrink-0 text-[11.5px] text-slate-500">{name}</span>
+            {frac !== undefined && tone && (
+                <DitherMeter frac={Math.max(0, Math.min(1, frac))} tone={tone} height={4} className="flex-1" />
+            )}
+            <span className={cn("ml-auto shrink-0 text-[11.5px] font-medium", text)}>{label}</span>
+        </div>
+    );
+}
+
+// How the copy reads to its recipient. Numbers from a calibrated model, so the
+// panel shows the band each one landed in rather than restating a verdict.
+function JudgmentBlock({ judgment }: { judgment: CopyJudgment }) {
+    const reads = readsAsLabel(judgment.reads_as);
+    const personal = personalizationLabel(judgment.personalization);
+    const ask = ASK_LABEL[judgment.ask] ?? ASK_LABEL.no_ask;
+    const unsure = judgment.confidence < 0.7;
+    return (
+        <div className="mt-2 rounded-md border border-slate-200 bg-slate-50/60 p-2">
+            <div className="flex items-center gap-1.5">
+                <span className="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">Reads as</span>
+                {unsure && <span className="text-[10px] text-slate-400">low confidence</span>}
+            </div>
+            <div className="mt-1.5 space-y-1.5">
+                <JudgmentRow name="To the reader" label={reads.label} text={reads.text} frac={judgment.reads_as} tone={reads.tone} />
+                <JudgmentRow
+                    name="Personalization"
+                    label={personal.label}
+                    text={personal.text}
+                    frac={judgment.personalization}
+                    tone={personal.tone}
+                />
+                <JudgmentRow name="Ask" label={ask.label} text={ask.text} />
+            </div>
+            {judgment.spam_claim >= SPAM_CLAIM_AT && (
+                <p className="mt-1.5 inline-flex items-center gap-1.5 text-[11.5px] text-rose-600">
+                    <AlertTriangleIcon className="w-3.5 h-3.5" />
+                    Makes a claim a spam filter would object to.
+                </p>
+            )}
+        </div>
+    );
+}
+
 function ScoreDelta({ from, to }: { from: number; to: number }) {
     const diff = to - from;
     if (diff === 0) return <span className="text-[11px] text-slate-400">No change since your last check.</span>;
@@ -430,6 +520,8 @@ export default function ContentScore({
                         <p className="mt-2 text-[12px] leading-relaxed text-slate-600">{analysis.verdict}</p>
                     )}
 
+                    {analysis.judgment && <JudgmentBlock judgment={analysis.judgment} />}
+
                     {analysis.findings.length > 0 ? (
                         <ul className="mt-1.5 divide-y divide-slate-200/60">
                             {analysis.findings.map((finding, i) => (
@@ -437,9 +529,13 @@ export default function ContentScore({
                             ))}
                         </ul>
                     ) : (
-                        <p className="mt-2 inline-flex items-center gap-1.5 text-[11.5px] text-emerald-600">
-                            <ShieldCheckIcon className="w-3.5 h-3.5" /> Nothing in this copy stood out as spammy.
-                        </p>
+                        // Silent when the judgment already says otherwise: an
+                        // all-clear under a bulk-mail reading contradicts it.
+                        !(analysis.judgment && readsAsBulk(analysis.judgment)) && (
+                            <p className="mt-2 inline-flex items-center gap-1.5 text-[11.5px] text-emerald-600">
+                                <ShieldCheckIcon className="w-3.5 h-3.5" /> Nothing in this copy stood out as spammy.
+                            </p>
+                        )
                     )}
 
                     {suggestedSubject && suggestedSubject !== subject.trim() && (

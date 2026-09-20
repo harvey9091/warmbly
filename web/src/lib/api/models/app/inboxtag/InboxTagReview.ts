@@ -1,8 +1,9 @@
-// GET /analytics/inbox-tagging — the phase-1 review surface.
+// GET /analytics/inbox-tagging, the review surface.
 //
-// Automatic tagging writes labels and a relevance score and nothing else. The
-// whole point of the phase is that a person can see what it decided, and how
-// sure it was, before it is allowed to act on anything.
+// Automatic tagging writes labels and a relevance score, and, once a workspace
+// switches an action on, may hold, stop, open a task for or suppress the
+// sender. Every row shows what was decided, how sure it was, and what it did,
+// so a person can watch the labels be right before letting them act.
 
 export interface InboxTagRow {
     id: string;
@@ -23,6 +24,8 @@ export interface InboxTagRow {
     /** Which confidence fell below the floor: kind or intent. */
     review_reason: "" | "kind" | "intent";
     labels: string[];
+    /** What the workspace's switches let this verdict do: hold, stop, task, suppress. */
+    actions: string[];
     /** Every raw probability, exactly as the API returned it. */
     answers: Record<string, unknown>;
     model: string;
@@ -39,6 +42,8 @@ export default interface InboxTagReview {
         total: number;
         needs_review: number;
         from_offline: number;
+        /** Verdicts that held, stopped, opened a task or suppressed. */
+        acted: number;
     };
     pagination: {
         next_cursor: string | null;

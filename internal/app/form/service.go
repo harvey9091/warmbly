@@ -15,6 +15,7 @@ import (
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/pkg/geo"
+	"github.com/warmbly/warmbly/internal/pkg/typesafe"
 	"github.com/warmbly/warmbly/internal/repository"
 	"github.com/warmbly/warmbly/internal/utils"
 	"github.com/warmbly/warmbly/internal/utils/validate"
@@ -66,6 +67,8 @@ type Service interface {
 
 	// SetCaptcha wires the Turnstile verifier; nil leaves captcha off.
 	SetCaptcha(v CaptchaVerifier)
+	// SetTriage wires the TypeSafe judge; nil leaves submission triage off.
+	SetTriage(a typesafe.Asker)
 	SetRealtime(p RealtimePublisher)
 	SetWebhooks(d WebhookDispatcher)
 	SetContacts(a ContactAdder)
@@ -139,6 +142,7 @@ type service struct {
 	contacts      ContactAdder
 	contactReader ContactReader
 	captcha       CaptchaVerifier
+	triage        typesafe.Asker
 	realtime      RealtimePublisher
 	webhooks      WebhookDispatcher
 	geo           *geo.Client
@@ -149,6 +153,7 @@ func NewService(repo repository.FormRepository) Service {
 }
 
 func (s *service) SetCaptcha(v CaptchaVerifier)               { s.captcha = v }
+func (s *service) SetTriage(a typesafe.Asker)                 { s.triage = a }
 func (s *service) SetRealtime(p RealtimePublisher)            { s.realtime = p }
 func (s *service) SetWebhooks(d WebhookDispatcher)            { s.webhooks = d }
 func (s *service) SetContacts(a ContactAdder)                 { s.contacts = a }
@@ -271,6 +276,9 @@ func (s *service) Update(ctx context.Context, orgID, id uuid.UUID, in *models.Fo
 	}
 	if in.CaptchaEnabled != nil {
 		f.CaptchaEnabled = *in.CaptchaEnabled
+	}
+	if in.TriageEnabled != nil {
+		f.TriageEnabled = *in.TriageEnabled
 	}
 	if in.Status != nil {
 		if !in.Status.Valid() {
@@ -395,10 +403,23 @@ func (s *service) Submit(ctx context.Context, publicID string, answers map[strin
 		sub.CampaignID = link.CampaignID
 	}
 
+	// Triage is best-effort too: a timeout leaves the submission untriaged
+	// and everything below runs as if the form had it off.
+	if f.TriageEnabled && s.triage != nil {
+		tctx, cancel := context.WithTimeout(ctx, triageTimeout)
+		if verdict, confidence, ok := triage(tctx, s.triage, f.Fields, data); ok {
+			sub.Triage = verdict
+			sub.TriageConfidence = confidence
+		}
+		cancel()
+	}
+	junk := sub.Triage == models.FormTriageJunk
+
 	// The contact write is best-effort: a plan cap or a bad address must not
-	// lose the submission, and never the visitor's success page.
+	// lose the submission, and never the visitor's success page. Junk is
+	// stored and flagged but never becomes a contact or a lead.
 	var contactID string
-	if lead != nil && s.contacts != nil {
+	if lead != nil && s.contacts != nil && !junk {
 		// A form outlives the member who made it: created_by is ON DELETE SET
 		// NULL, so offboarding that person would otherwise stop lead capture
 		// silently while submissions kept storing. Contacts are org-owned, so
@@ -476,6 +497,9 @@ func (s *service) Submit(ctx context.Context, publicID string, answers map[strin
 		}
 		if sub.CampaignID != nil {
 			payload["campaign_id"] = sub.CampaignID.String()
+		}
+		if sub.Triage != "" {
+			payload["triage"] = sub.Triage
 		}
 		_, _ = s.webhooks.Dispatch(ctx, f.OrganizationID, models.WebhookEventFormSubmitted, payload)
 	}

@@ -1,4 +1,4 @@
-package inboxtag
+package typesafe
 
 import (
 	"context"
@@ -59,6 +59,12 @@ func TestParseDetailAllThreeShapes(t *testing.T) {
 	}
 }
 
+func testQuestions() map[string]Question {
+	return map[string]Question{
+		"kind": Choice("What is this message?", map[string]string{"human_reply": "A person replying"}),
+	}
+}
+
 func testClient(t *testing.T, srv *httptest.Server) *Client {
 	t.Helper()
 	c := NewClient("test-key")
@@ -84,14 +90,14 @@ func TestRetriesOn429ThenSucceeds(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	resp, err := testClient(t, srv).Ask(context.Background(), "x", Questions())
+	resp, err := testClient(t, srv).Ask(context.Background(), "x", testQuestions())
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
 	if attempts != 3 {
 		t.Fatalf("made %d attempts, want 3", attempts)
 	}
-	if resp.Answers["kind"].Choice != KindHumanReply {
+	if resp.Answers["kind"].Choice != "human_reply" {
 		t.Fatalf("answer not decoded: %+v", resp.Answers)
 	}
 }
@@ -105,7 +111,7 @@ func TestRetriesOn529(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := testClient(t, srv).Ask(context.Background(), "x", Questions())
+	_, err := testClient(t, srv).Ask(context.Background(), "x", testQuestions())
 	if err == nil {
 		t.Fatal("expected an error after exhausting retries")
 	}
@@ -128,7 +134,7 @@ func TestDoesNotRetryOn400(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := testClient(t, srv).Ask(context.Background(), "x", Questions())
+	_, err := testClient(t, srv).Ask(context.Background(), "x", testQuestions())
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -160,7 +166,7 @@ func TestParseRetryAfter(t *testing.T) {
 // 400, and it would only be discovered in production on whichever message first
 // reached that question.
 func TestScoreQuestionsWithinAPILimit(t *testing.T) {
-	for id, q := range Questions() {
+	for id, q := range testQuestions() {
 		if q.Type != QuestionScore {
 			continue
 		}

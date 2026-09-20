@@ -1,17 +1,21 @@
 ---
 title: "Automatic inbox tagging"
-description: "Label and score inbound mail as it arrives. Optional, off by default."
+description: "Label and score inbound mail as it arrives, and let a confident verdict hold, stop, follow up or suppress. Optional, off by default."
 ---
 
 Automatic tagging reads each inbound message and files it under workspace labels, then scores how much it deserves your attention. It is optional and off until an operator turns it on.
 
 Classification sends message content to TypeSafe, so it is opt-in twice: an operator supplies a key, and separately switches the feature on. An instance that does neither never calls TypeSafe and behaves exactly as it did before. Other optional AI features can also send content to their configured provider; see [data control](/development/data-control/).
 
-## What it does today
+## What it does
 
-It writes labels and a relevance score. That is all.
+It writes labels and a relevance score for every inbound message. That part needs nothing from you beyond turning the feature on.
 
-It does not snooze a thread, hold a lead, create a task, or suppress an address. Those are later phases and they ship separately, because labels are reversible and visible while a wrongly suppressed address is neither: nothing tells you it happened, and the lead is gone.
+It can also act on a confident verdict: hold a contact who said not now, stop a contact who declined, open a task when someone asks for a call, and suppress a sender who asked to be removed. Each of those is its own switch under **Settings > Sending > Classified replies**. The three reversible ones are on from the start; the suppression is off until you turn it on, because it is the one the system cannot undo. See [Acting on a verdict](#acting-on-a-verdict).
+
+## Nothing to set up
+
+The whole label set is created when a workspace is created (and, on an instance that turned the feature on later, within the hour by the follow-up sweep), so the inbox can filter for `opt-out` before anything has opted out. The premade **Views** in the inbox rail (Hot leads, Needs a reply, Follow up, Declined, Automated) are built on those labels and fill as mail is classified; see [Unified inbox](/guides/unibox/). Every label has a hover explanation, so nobody has to learn the taxonomy first.
 
 ## The labels
 
@@ -62,6 +66,28 @@ Each message gets a score from 0 to 100, and a priority of `now`, `today`, `when
 
 The score is arithmetic over the answers, computed in Warmbly rather than asked. Asking for a single "how relevant is this" rating hides four independent judgments inside one question, and the model correctly refuses those: it returns a flat distribution at zero confidence.
 
+## Acting on a verdict
+
+Four actions, each behind its own switch under **Settings > Sending > Classified replies**. The hold, the stop and the task are on by default; the suppression is off. Only a confident human reply may act: a verdict marked `needs-review`, a bounce, an autoresponder or a cold pitch never does, whatever its signals say. The intent has to clear the same `0.70` floor the labels use, because an action on an intent the labels did not trust is an action on a coin toss.
+
+| Switch | Fires on | What happens |
+|---|---|---|
+| Hold a contact who says not now | `not-now` | The contact's sequences are parked, in every campaign they are in, for the number of days you set (default 30, between 1 and 90). The hold shows on the campaign's Leads tab and lifts on its own |
+| Stop a contact who declines | `not-interested`, `wrong-person` | The contact's sequences are parked for a year, in every campaign they are in. Nothing is unsubscribed and nothing is deleted; resume the lead from the Leads tab if the reply was misread |
+| Open a task when they ask for a call | `asks-for-call`, `scheduling` | A high-priority CRM task for the mailbox owner, due in 24 hours, titled with what they asked |
+| Suppress a contact who asks to be removed | requests removal at `0.80` or above | The sender goes on the suppression list with the reason, and the contact's subscription flag is cleared, exactly as a reply that says "unsubscribe" does today |
+
+The suppression is the one irreversible action, so it reads its own yes/no question ("the sender asks to be removed") at the strong floor rather than the eight-way intent, and when it fires nothing else does: a suppressed address has no sequence left to hold or chase. A hold written by a classified reply never overrides a hold a member set by hand, and never cuts a longer automatic hold short. A call request opens one task, whichever of the tagging switch and the reply follow-up setting would have opened it.
+
+Every action is recorded on the verdict, so the review page shows what was done next to the answer that caused it, and the **Actions taken** count at the top tells you how often the switches fire. Actions run on mail as it arrives; a backfill over history labels and never acts.
+
+## What else reads the verdict
+
+Two other features reuse a stored verdict rather than paying for a second judgment:
+
+- **Campaign reply handling.** The reply classifier that drives `stop_on_reply` and the reply branches reads the stored kind and intent when one exists, so `agreed` routes as a positive reply and `not-interested` as a negative one with the classifier's real confidence. The intent itself is also stored on the contact's progress, and a sequence can branch on it with the `reply_intent` condition (see [Campaigns](/guides/campaigns/)). Without tagging, the classifier asks TypeSafe one three-way question instead, and without a key it falls back to the platform LLM as before.
+- **The inbox agent.** A reply the verdict shows as closed (`not-interested`, `opt-out`, `wrong-person`, `not-now`), a one-line acknowledgement, a legal threat or a message that needs a person to read it is not drafted, so no credits are spent answering it.
+
 ## When it declines to decide
 
 Every classification carries a confidence. If the message kind is below 0.70, the thread is labelled `needs-review` and no inferred kind, intent, or signal label is applied. If the kind is confident but the intent is below 0.70, the trusted kind and relevance remain, the uncertain intent label is omitted, and `needs-review` is added.
@@ -91,7 +117,7 @@ TYPESAFE_API_KEY=...        # from typesafe.ai
 INBOX_TAGGING_ENABLED=true  # off by default even when a key is present
 ```
 
-Then **Settings > Inbox tagging** shows every decision: the labels, the relevance, the confidence, and where the verdict came from. Watch it for a week before trusting it. That is what this phase is for.
+Then **Settings > Inbox tagging** shows every decision: the labels, the relevance, the confidence, where the verdict came from, and what it did. Watch it for a week before enabling the suppression under **Settings > Sending > Classified replies**; the reversible actions are already on and every one of them is visible on the Leads tab or the Tasks page.
 
 ## Backfilling mail you already have
 
@@ -120,5 +146,6 @@ A message with no Message-ID is skipped. A database claim prevents two concurren
 
 ## Related guides
 
-- [Unified inbox](/guides/unibox/) — where the labels appear and how to filter on them
-- [Campaigns](/guides/campaigns/) — reply handling, which is separate and runs regardless
+- [Unified inbox](/guides/unibox/): where the labels appear and how to filter on them
+- [Campaigns](/guides/campaigns/): reply handling and the `reply_intent` branch condition
+- [Inbox agent](/guides/inbox-agent/): the drafts a verdict can skip

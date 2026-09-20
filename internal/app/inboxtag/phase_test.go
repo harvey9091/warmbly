@@ -9,19 +9,19 @@ import (
 	"testing"
 )
 
-// PHASE 1 BOUNDARY.
+// THE POLICY BOUNDARY.
 //
-// This phase writes labels and a relevance score. It does not snooze, hold a
-// lead, create a task, or suppress an address. That is not a limitation to be
-// worked around, it is the deployment plan: labels are reversible and visible,
-// suppression is neither. Wrongly suppressing a lead is silent and permanent,
-// and it is the one mistake here nobody ever finds out about.
+// This package classifies and, since phase 2, plans: act.go turns a verdict
+// and the workspace's switches into a Plan. It still executes nothing. The
+// hold, the task and the suppression are written by the advanced service on
+// the primitives a member's own click uses, so every threshold that can cost
+// a lead stays in policy.go and act.go, reviewable without reading a line of
+// application logic, and every action lands where a person already looks.
 //
 // A comment saying so would be ignored the first time someone was in a hurry,
 // so the boundary is a test. If this fails because you added one of these
-// calls, you are starting phase 2, and this test is the first thing to change,
-// deliberately, in its own pull request.
-func TestPhaseOneReachesNoActionPrimitives(t *testing.T) {
+// calls, move the call to advanced.ApplyInboxTagActions and return a Plan.
+func TestPolicyPackageExecutesNoAction(t *testing.T) {
 	forbidden := map[string]string{
 		"SnoozeThread":    "phase 2",
 		"Snooze":          "phase 2",
@@ -59,7 +59,7 @@ func TestPhaseOneReachesNoActionPrimitives(t *testing.T) {
 				return true
 			}
 			if phase, bad := forbidden[sel.Sel.Name]; bad {
-				t.Errorf("%s:%d calls %s, which belongs to %s. Phase 1 writes labels only.",
+				t.Errorf("%s:%d calls %s, which is a %s action. This package plans; advanced executes.",
 					name, fset.Position(call.Pos()).Line, sel.Sel.Name, phase)
 			}
 			return true
@@ -68,8 +68,8 @@ func TestPhaseOneReachesNoActionPrimitives(t *testing.T) {
 }
 
 // The service's only declared capability beyond reading and storing is applying
-// labels. If a new interface appears on it, that is the moment to ask which
-// phase it belongs to.
+// labels. Actions are planned here and executed elsewhere, so a new capability
+// on the service is a sign something is being executed in the wrong place.
 func TestServiceCapabilitiesAreLabelsOnly(t *testing.T) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "service.go", nil, 0)

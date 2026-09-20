@@ -72,9 +72,20 @@ Every window below lives in the database, not the environment, and is edited und
 
 Mail over a daily budget is deferred, never dropped: the provider cursor is held and the mail is re-offered on the next pass. Replies to the mailbox's own outreach ride a separate budget of the same size and keep landing regardless.
 
-### Automatic inbox tagging
+### TypeSafe judgments
 
-Automatic inbox tagging is off unless both `TYPESAFE_API_KEY` and `INBOX_TAGGING_ENABLED=true` are set. When enabled, the consumer sends the inbound subject and bounded plain-text body, plus the previous outbound message in the thread when one exists, to TypeSafe for classification. The result and raw probabilities are stored in `inbox_tag_results`. Completed results travel with the Inbox group in a workspace export; temporary processing claims do not. See [Automatic inbox tagging](/guides/inbox-tagging/).
+`TYPESAFE_API_KEY` turns on a family of typed judgments, each of which sends a bounded piece of text to TypeSafe and stores a verdict. Without the key none of them runs and no content leaves the instance. What each one sends:
+
+| Judgment | On by | What is sent | Where the verdict lives |
+|---|---|---|---|
+| Automatic inbox tagging | `INBOX_TAGGING_ENABLED=true` | The inbound subject and bounded plain-text body, plus the previous outbound message in the thread when one exists | `inbox_tag_results`, with the raw probabilities and the actions taken. Completed results travel with the Inbox group in a workspace export; processing claims do not |
+| Reply classification | The key alone | The subject and body of a reply to a campaign, only when no tagging verdict exists for it and the offline layers could not decide | `campaign_contact_progress.reply_class` and `reply_intent` |
+| Copy judgment | The key alone | The subject and body of a campaign step, at Advisor evaluation and on the editor's re-check | `copy_judgments`, keyed by a hash of the copy and never exported |
+| Warmup content lint | The key alone | A generated warmup thread before it enters the bank | Rejected threads are counted on the generation job; nothing else is kept |
+| Bounce classification | The key alone | The bounce reason text, only when it does not name the recipient | `deliverability_events.metadata` |
+| Form triage | A per-form switch | The submitted answers, labelled by field; never the visitor's address, agent or URL | `form_submissions.triage`, which travels with the Contacts group |
+
+See [Automatic inbox tagging](/guides/inbox-tagging/), [Advisor](/guides/advisor/), [Warmup](/guides/warmup/), [Deliverability](/guides/deliverability/) and [Forms](/guides/forms/).
 
 ### Event history
 

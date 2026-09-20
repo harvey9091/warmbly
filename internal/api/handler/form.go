@@ -66,6 +66,7 @@ func (h *Handler) GetFormsConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"base_url":          config.FormsBaseURL(),
 		"captcha_available": config.CaptchaProvider() != "none" && config.TurnstileSiteKey() != "",
+		"triage_available":  config.TypeSafeAPIKey() != "",
 	})
 }
 

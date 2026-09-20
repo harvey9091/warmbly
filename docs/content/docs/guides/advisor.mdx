@@ -59,6 +59,8 @@ Only the first two badge a nav tab.
 
 **Copy** (conservative, and drafts are skipped): a merge variable that will not resolve, shipping a literal `{{token}}`; two or more bulk-mail phrases (one is never flagged); over `200` words; a subject over `60` characters; more than two links in a first touch; a shouting subject.
 
+Two more copy findings run only when the operator has configured TypeSafe (`TYPESAFE_API_KEY`), a calibrated reader model rather than a language model: a step that **reads as bulk mail** to its recipient, or makes a claim a spam filter objects to (guaranteed results, free money, a prize, pressure to act now); and a step with **no clear ask**, either asking for nothing or for several things. Each step's subject and body are sent to TypeSafe for this, once per version of the copy; the verdict is cached and an unchanged step is never sent again. At most `40` steps are judged per evaluation, and the rest wait for the next run.
+
 **List quality**: shared inboxes (`info@`, `sales@`) above `15%`; consumer domains above `40%` of a B2B list; suppressed contacts above `10%`; missing first names above `10%` when copy personalizes on them; unsubscribed contacts still enrolled.
 
 ## Fixing something

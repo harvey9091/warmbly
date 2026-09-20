@@ -55,6 +55,7 @@ import (
 	"github.com/warmbly/warmbly/internal/pkg/generation"
 	"github.com/warmbly/warmbly/internal/pkg/geo"
 	"github.com/warmbly/warmbly/internal/pkg/nodeagent"
+	"github.com/warmbly/warmbly/internal/pkg/typesafe"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -270,6 +271,12 @@ func main() {
 	}
 	integrationServiceC.SetAI(aiProviderC, creditServiceC)
 	integrationServiceC.SetAISearch(aiSearchC)
+	// One TypeSafe client for every typed judgment in this process. Nil when
+	// no key is configured, and every feature that reads it stays off.
+	var typeSafeClient *typesafe.Client
+	if key := config.TypeSafeAPIKey(); key != "" {
+		typeSafeClient = typesafe.NewClient(key)
+	}
 	if aiProviderC != nil {
 		replyclassify.SetModelClassifier(func(ctx context.Context, system, user string) (string, error) {
 			res, err := aiProviderC.Complete(ctx, generation.CompletionRequest{System: system, Prompt: user, MaxTokens: 16, Temperature: generation.Deterministic()})
@@ -401,6 +408,11 @@ func main() {
 		streamingPublisher,
 	)
 	advancedService.WireInboxAgent(inboxAgentServiceC)
+	if typeSafeClient != nil {
+		// A bounce whose reason does not name the recipient is classified, so a
+		// reputation or policy block does not suppress a good address.
+		advancedService.WireBounceJudge(typeSafeClient)
+	}
 
 	eventsPublisher := events.NewPublisher(consumerBus, s3Client, consumerCodec, cipherService)
 
@@ -412,21 +424,30 @@ func main() {
 	// Follow-up labels use stored mailbox facts and run without TypeSafe.
 	// Message classification still requires both the key and opt-in switch.
 	tagCategories := repository.NewTagCategoryStore(primaryDB.Pool)
+	inboxTagRepo := repository.NewInboxTagRepository(primaryDB.Pool)
 	var tagAsker inboxtag.Asker
-	classify := config.InboxTaggingEnabled()
+	classify := config.InboxTaggingEnabled() && typeSafeClient != nil
 	if classify {
-		tagAsker = inboxtag.NewClient(config.TypeSafeAPIKey())
+		tagAsker = inboxtag.NewAsker(typeSafeClient)
 		log.Printf("automatic inbox tagging enabled (model %s)", inboxtag.Model)
 	} else {
 		log.Printf("automatic inbox classification off; timestamp-based follow-up labels still run locally")
 	}
 	inboxTagger := inboxtag.NewService(
 		tagAsker,
-		repository.NewInboxTagRepository(primaryDB.Pool),
+		inboxTagRepo,
 		tagCategories,
 		tagCategories,
 		classify,
 	)
+	if typeSafeClient != nil {
+		// The reply classifier's model layer and the inbox agent's gate both
+		// read the verdict the tagger stored moments earlier, so a reply is
+		// paid for once. Without tagging the classifier asks one question.
+		replyclassify.SetTypedClassifier(inboxtag.ReplyClassifier(typeSafeClient, inboxTagRepo))
+		inboxAgentServiceC.WireDraftGate(inboxtag.NewDraftGate(inboxTagRepo))
+	}
+	advancedService.WireInboxTags(inboxTagRepo)
 
 	jobsService := &jobs.JobsService{
 		Bus:                         consumerBus,
