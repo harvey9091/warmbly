@@ -112,3 +112,35 @@ func TestNormalizeMailPasswords(t *testing.T) {
 		t.Fatalf("other: %q", other.Password)
 	}
 }
+
+// TestAdoptProbedPort: a pass reached on 587 after 465 stayed silent is stored
+// with 587 and STARTTLS; a pass on the port asked for changes nothing.
+func TestAdoptProbedPort(t *testing.T) {
+	svc := &models.Service{Host: "smtp.gmail.com", Port: 465, Security: models.MailSecurityTLS}
+	adoptProbedPort(svc, models.EmailValidationLeg{OK: true})
+	if svc.Port != 465 || svc.Security != models.MailSecurityTLS {
+		t.Fatalf("own port rewritten: %+v", svc)
+	}
+	adoptProbedPort(svc, models.EmailValidationLeg{OK: true, Port: 587, Security: models.MailSecurityStartTLS})
+	if svc.Port != 587 || svc.Security != models.MailSecurityStartTLS {
+		t.Fatalf("probed port not adopted: %+v", svc)
+	}
+	adoptProbedPort(nil, models.EmailValidationLeg{OK: true, Port: 587})
+}
+
+// TestValidationError_NamesTheFallbackPort: a refusal that came back on 587
+// says so, because the person is looking at a form that says 465.
+func TestValidationError_NamesTheFallbackPort(t *testing.T) {
+	creds := &models.SmtpImap{
+		SMTP: &models.Service{Host: "smtp.gmail.com", Port: 465, Security: models.MailSecurityTLS},
+		IMAP: &models.Service{Host: "imap.gmail.com", Port: 993},
+	}
+	v := models.EmailValidationVerdict{
+		SMTP: models.EmailValidationLeg{Reason: models.MailProbeAuthRefused, Detail: "535 5.7.8 Username and Password not accepted", Port: 587, Security: models.MailSecurityStartTLS},
+		IMAP: models.EmailValidationLeg{OK: true},
+	}
+	xerr := validationError(v, creds)
+	if !strings.Contains(xerr.Message, "SMTP (smtp.gmail.com:587, after 465 did not answer) refused the sign-in") {
+		t.Fatalf("got %q", xerr.Message)
+	}
+}

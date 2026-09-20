@@ -470,7 +470,7 @@ A `400` whose `code` is `mailbox_validation_timeout` comes from the SMTP and IMA
 ```json
 {
   "error": "Bad Request",
-  "message": "SMTP (smtp.gmail.com:465) did not answer in time. IMAP (imap.gmail.com:993) signed in. Nothing was saved. Check the host and port, then try again. Some networks block outbound port 465: if the server also offers 587, connect with 587 and STARTTLS.",
+  "message": "SMTP (smtp.gmail.com:465) did not answer in time. IMAP (imap.gmail.com:993) signed in. Nothing was saved. Check the host and port, then try again. Port 465 did not answer and the worker could not use 587 with STARTTLS on the same server either. Some networks block outbound mail ports; check that the server is reachable from outside and which port it listens on.",
   "code": "mailbox_validation_timeout",
   "request_id": "6f3c0a1e-2d47-4c6b-9a1f-2b7c5f0e8d31"
 }
@@ -480,7 +480,7 @@ The same code with a message that begins `Warmbly's worker did not report back` 
 
 **How to fix:**
 - Read which leg stayed silent. One leg passing and the other hanging is the network between the worker and that port, not the password: a port that nothing listens on, or that a firewall drops, takes the full timeout rather than refusing straight away
-- Outbound 465 is blocked by default on many hosting providers while 587 stays open. If the server offers both, use 587 with `starttls`
+- When 465 never answers, the worker also tries 587 with STARTTLS on the same server and uses it if it connects; a passing check is then stored with port 587. This error means neither port answered, so check that the server is reachable from outside your network and which port it listens on
 - Retry. A mail server under load can be slow once and answer immediately on the next attempt
 - Confirm the server accepts connections from outside your network, and that the security setting matches the port: `tls` for 465 and 993, `starttls` for 587 and 143
 
@@ -491,7 +491,7 @@ A `400` whose `code` is `mailbox_auth_refused` comes from the SMTP and IMAP conn
 ```json
 {
   "error": "Bad Request",
-  "message": "SMTP (smtp.gmail.com:465) refused the sign-in: 535 5.7.8 Username and Password not accepted. IMAP (imap.gmail.com:993) refused the sign-in: imap: NO [AUTHENTICATIONFAILED] Invalid credentials (Failure). Nothing was saved. Google accepts only a 16-letter app password here, created at myaccount.google.com/apppasswords on the same Google account as the address, with the username being the full address. The account password does not work, and on Google Workspace the administrator can switch IMAP or app passwords off.",
+  "message": "SMTP (smtp.gmail.com:587) refused the sign-in: 535 5.7.8 Username and Password not accepted. IMAP (imap.gmail.com:993) refused the sign-in: imap: NO [AUTHENTICATIONFAILED] Invalid credentials (Failure). Nothing was saved. Google itself refused this address and password. Use a 16-letter app password from myaccount.google.com/apppasswords, created while signed in to the Google account that owns this address, and enter the account's own sign-in address rather than an alias or a group. A deleted app password stops working at once, and on Google Workspace the administrator can block app passwords or IMAP.",
   "code": "mailbox_auth_refused",
   "request_id": "6f3c0a1e-2d47-4c6b-9a1f-2b7c5f0e8d31"
 }
@@ -501,6 +501,7 @@ A `400` whose `code` is `mailbox_auth_refused` comes from the SMTP and IMAP conn
 - Read the server's reply in the message: it says which leg refused and usually why (a wrong password, an app password required, IMAP switched off for the domain)
 - The username is normally the full address. The password is the provider's app password when the account has two-step verification on, never the account password
 - Whitespace is not the problem: Warmbly trims the password on every path, and removes every space from one bound for a Google server
+- On Google, a refusal with a real app password nearly always means the address is not the account that issued it: enter the account's own sign-in address rather than an alias or a group, create the app password while signed in to that account, and check it has not been deleted since. On Google Workspace the administrator can also block app passwords or IMAP for the organization
 
 #### `mailbox_unreachable`
 

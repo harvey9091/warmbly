@@ -296,7 +296,7 @@ function ConnectStep({
                     </div>
                 ))}
                 <div className="px-3 py-2 text-[11.5px] text-slate-500 border-t border-slate-100">
-                    The username is the full address, on both. Deleting the app password in the Google account disconnects the mailbox.
+                    The address must be the one the Google account signs in with, not an alias, and the app password must come from that same account. Deleting it in the Google account disconnects the mailbox.
                 </div>
             </div>
         </StepFrame>

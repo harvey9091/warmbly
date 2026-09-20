@@ -283,11 +283,6 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 	ctx, cancel := context.WithTimeout(ctx, sendTimeout)
 	defer cancel()
 
-	var conn net.Conn
-	var err error
-	// Implicit TLS (SMTPS) means the server speaks TLS from the first byte, so
-	// a plaintext dial + STARTTLS never gets past the greeting. The mode is
-	// the mailbox's stored choice, falling back to the port convention.
 	resolved := models.ResolveSMTPSecurity(security, port)
 	// The unencrypted mode is checked before the dial and again against the
 	// peer we actually got, because only the second one is a fact about this
@@ -295,21 +290,34 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 	if resolved == models.MailSecurityNone && !models.CleartextMailAllowed(host) {
 		return errx.ErrMailInsecureRemoteHost
 	}
-	implicitTLS := resolved == models.MailSecurityTLS
-	if implicitTLS {
-		conn, err = netbind.TLSDialer(c.BindIP, tlsConf).DialContext(ctx, "tcp", addr)
-	} else {
-		conn, err = netbind.Dialer(c.BindIP).DialContext(ctx, "tcp", addr)
-	}
-	if err != nil {
+	// The socket may be 587 with STARTTLS when the mailbox's 465 never
+	// answered; the mode to speak is the one the dial reports.
+	dialed, err := DialSubmission(ctx, c.BindIP, host, port, security)
+	if err != nil || dialed.Conn == nil {
+		if err == nil {
+			err = errors.New("dial returned no connection")
+		}
 		return errx.ErrMailServerUnreachableAt("dial "+addr, dialCause(err))
 	}
+	conn := dialed.Conn
 	defer conn.Close()
+	resolved = dialed.Security
 	if resolved == models.MailSecurityNone && !netbind.LoopbackPeer(conn) {
 		return errx.ErrMailInsecureRemoteHost
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
+	}
+	// Implicit TLS (SMTPS) means the server speaks TLS from the first byte,
+	// so a plaintext dial + STARTTLS never gets past the greeting. Its
+	// handshake failure is reported at the dial stage, where it always was.
+	implicitTLS := resolved == models.MailSecurityTLS
+	if implicitTLS {
+		tlsConn := tls.Client(conn, tlsConf)
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			return errx.ErrMailServerUnreachableAt("dial "+addr, err)
+		}
+		conn = tlsConn
 	}
 
 	// Use the resolved host: c.Credentials is nil for OAuth2-configured clients.

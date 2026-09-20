@@ -16,8 +16,9 @@ import (
 
 // ValidateCredentials seals a copy of the credentials with the org DEK and asks
 // a worker to try them against the live servers. The caller's credentials are
-// never mutated: they go on to be stored under the credentials key, and sealing
-// them in place here would double-encrypt the stored password.
+// never mutated, except for the SMTP port when the worker signed in on another
+// one (adoptProbedPort): they go on to be stored under the credentials key, and
+// sealing them in place here would double-encrypt the stored password.
 func (s *emailService) ValidateCredentials(ctx context.Context, orgID uuid.UUID, workerID string, credentials *models.SmtpImap) *errx.Error {
 	processID := uuid.New()
 
@@ -108,6 +109,7 @@ func (s *emailService) ValidateCredentials(ctx context.Context, orgID uuid.UUID,
 			return errx.InternalError()
 		}
 		if verdict.OK {
+			adoptProbedPort(credentials.SMTP, verdict.SMTP)
 			return nil
 		}
 		return validationError(verdict, credentials)
@@ -118,3 +120,14 @@ func (s *emailService) ValidateCredentials(ctx context.Context, orgID uuid.UUID,
 // covers worker.validationBudget plus worker.replyBudget with room for the
 // bus both ways, so a verdict produced at the worker's limit is still heard.
 const validationWait = 14 * time.Second
+
+// adoptProbedPort stores the port the worker actually signed in on. It is the
+// one field a verdict may correct: a mailbox that kept naming a port the fleet
+// cannot reach would fail on every send.
+func adoptProbedPort(svc *models.Service, leg models.EmailValidationLeg) {
+	if svc == nil || leg.Port == 0 || leg.Port == svc.Port {
+		return
+	}
+	svc.Port = leg.Port
+	svc.Security = leg.Security
+}

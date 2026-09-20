@@ -28,7 +28,6 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 	// Brackets belong to the address, not to the host, and JoinHostPort is
 	// what puts them back for an IPv6 literal.
 	host = models.NormalizeMailHost(host)
-	addr := models.MailDialAddress(host, port)
 
 	// Matches the send client's TLS policy: MAIL_TLS_INSECURE is a dev-only
 	// knob for the local self-signed sandbox, never set in production.
@@ -38,34 +37,31 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 		MinVersion:         tls.VersionTLS12,
 	}
 
-	var conn net.Conn
-	var err error
-
-	// netbind dialers so validation probes leave from WORKER_BIND_IP exactly
-	// like the sends they are vouching for.
-	resolved := models.ResolveSMTPSecurity(security, port)
 	// The unencrypted mode only ever addresses this machine. Refusing it here
 	// as well as at send time means a mailbox that could never be dialled
 	// safely fails at connect, where the user is standing in front of the
 	// form, rather than at the first send.
+	resolved := models.ResolveSMTPSecurity(security, port)
 	if resolved == models.MailSecurityNone && !models.CleartextMailAllowed(host) {
 		return probeFailText(models.MailProbeCleartext, "unencrypted SMTP is only allowed to a loopback host on a self-hosted instance")
 	}
-	implicitTLS := resolved == models.MailSecurityTLS
 	// TCP first and TLS second, like the IMAP probe, so a port that answers
 	// and then fails the handshake reads as a TLS problem, not as unreachable.
-	conn, err = netbind.Dialer(netbind.FromEnv()).DialContext(ctx, "tcp", addr)
+	// The dial leaves from WORKER_BIND_IP like the sends it vouches for, and
+	// comes back holding 587 when the mailbox's 465 never answered.
+	dialed, err := wsmtp.DialSubmission(ctx, netbind.FromEnv(), host, port, security)
 	// A bad host is ordinary user input, not an exceptional case: dial failed
 	// means conn is nil, and closing it would panic this goroutine and take
 	// the whole worker down with it.
-	if err != nil || conn == nil {
+	if err != nil || dialed.Conn == nil {
 		if err == nil {
 			err = errors.New("dial returned no connection")
 		}
 		return probeFail(ctx, models.MailProbeUnreachable, err)
 	}
+	conn := dialed.Conn
 	defer conn.Close()
-	if resolved == models.MailSecurityNone && !netbind.LoopbackPeer(conn) {
+	if dialed.Security == models.MailSecurityNone && !netbind.LoopbackPeer(conn) {
 		return probeFailText(models.MailProbeCleartext, "the host did not resolve to this machine")
 	}
 	// The greeting, EHLO and STARTTLS read with no deadline of their own, so a
@@ -78,6 +74,16 @@ func VerifySMTP(ctx context.Context, host string, port int, user, pass, security
 	if err := conn.SetDeadline(deadline); err != nil {
 		return probeFail(ctx, models.MailProbeProtocol, err)
 	}
+	res := verifySMTPSession(ctx, conn, dialed.Security, host, user, pass, tlsConf)
+	if dialed.FellBack {
+		res.Port, res.Security = dialed.Port, dialed.Security
+	}
+	return res
+}
+
+// verifySMTPSession runs the sign-in on an open socket in the given mode.
+func verifySMTPSession(ctx context.Context, conn net.Conn, resolved, host, user, pass string, tlsConf *tls.Config) ProbeResult {
+	implicitTLS := resolved == models.MailSecurityTLS
 	if implicitTLS {
 		tlsConn := tls.Client(conn, tlsConf)
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
