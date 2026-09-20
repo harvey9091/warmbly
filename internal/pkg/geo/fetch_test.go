@@ -107,7 +107,10 @@ func TestEnsureAcceptsEveryShapeADatabaseIsServedIn(t *testing.T) {
 	}
 }
 
-func TestEnsureNeverReplacesAFileThatIsAlreadyThere(t *testing.T) {
+// A database still inside its maxAge is taken as current. Staleness is the only
+// thing that makes Ensure look at a file it already has; see the refresh tests
+// for what happens once one ages out.
+func TestEnsureDoesNotReplaceADatabaseThatIsStillCurrent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "GeoLite2-City.mmdb")
 	if err := os.WriteFile(path, []byte("the operator's own copy"), 0o644); err != nil {
 		t.Fatal(err)

@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,25 +35,55 @@ const maxDatabaseBytes = 512 << 20
 // tarMagicOffset is where the POSIX ustar magic sits in a 512-byte tar header.
 const tarMagicOffset = 257
 
+// maxAge is how long a database we manage is trusted without asking whether a
+// newer one exists. MaxMind publishes GeoLite2 on Tuesdays and Fridays, so a
+// week is one full cycle of slack.
+//
+// Only a database this package downloaded ages. With no URL configured nothing
+// here runs at all, so an operator's own file is never touched.
+const maxAge = 7 * 24 * time.Hour
+
+// Retry budget for the download. A single blip used to cost the container its
+// geo data for the whole of its life, because Ensure ran once at boot and
+// never again.
+const (
+	fetchAttempts = 4
+	retryBackoff  = 2 * time.Second
+	maxRetryWait  = 30 * time.Second
+)
+
+// errNotModified is the mirror confirming our copy is still current. MaxMind
+// does not count a 304 against the daily download allowance, which is what
+// makes checking for staleness cheap enough to do on every boot.
+var errNotModified = errors.New("geo: not modified")
+
 // Ensure puts a MaxMind database at path, downloading it from url when nothing
-// is there yet. It reports whether it downloaded one.
+// is there yet and refreshing it once it goes stale. It reports whether it
+// wrote a new one.
 //
-// An existing file always wins and is never re-fetched: a bind mount, a volume
-// or a file an operator dropped in by hand is their copy, and replacing it
-// behind their back on a restart is not this function's business. That also
-// makes the container case self-correcting, because an ephemeral filesystem
-// starts empty and a persistent one keeps what the last boot fetched.
+// An empty url does nothing and is not an error, which is how an operator keeps
+// a file of their own: nothing here reads or replaces a path this package was
+// not asked to manage. The database is optional everywhere it is read, so every
+// failure is a warning to the caller and never a reason to refuse to start, and
+// a refresh that fails leaves the copy already on disk in place.
 //
-// An empty url does nothing and is not an error. The database is optional
-// everywhere it is read, so every failure here is a warning to the caller and
-// never a reason to refuse to start.
+// A file younger than maxAge is taken as current without a request at all. An
+// older one is revalidated with If-Modified-Since, so the usual answer is a 304
+// that costs nothing and does not count against MaxMind's daily allowance.
+// Without this an existing file won forever, and anything that persisted a copy
+// once -- a volume, a mirror, a container that stayed up -- pinned itself to
+// that copy for good.
 func Ensure(ctx context.Context, path, url string) (bool, error) {
 	path, url = strings.TrimSpace(path), strings.TrimSpace(url)
 	if path == "" || url == "" {
 		return false, nil
 	}
+	var since time.Time
 	if info, err := os.Stat(path); err == nil && info.Size() > 0 {
-		return false, nil
+		if time.Since(info.ModTime()) < maxAge {
+			return false, nil
+		}
+		since = info.ModTime()
 	}
 
 	dir := filepath.Dir(path)
@@ -62,8 +94,15 @@ func Ensure(ctx context.Context, path, url string) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 
-	body, err := get(ctx, url)
+	body, err := get(ctx, url, since)
 	if err != nil {
+		if errors.Is(err, errNotModified) {
+			// Still current. Restamp it so the next boot does not ask again
+			// for another maxAge.
+			now := time.Now()
+			_ = os.Chtimes(path, now, now)
+			return false, nil
+		}
 		return false, err
 	}
 	defer body.Close()
@@ -114,23 +153,121 @@ func Ensure(ctx context.Context, path, url string) (bool, error) {
 
 // get performs the download, treating any non-2xx as a failure rather than
 // writing an error page to disk as if it were a database.
-func get(ctx context.Context, raw string) (io.ReadCloser, error) {
+//
+// A refused or dropped attempt is retried with a growing wait, because the one
+// thing this must not do is give up on the first blip: the caller runs at boot,
+// and a container that misses its database here has no geo data until it is
+// replaced. A server that says when to come back is obeyed rather than guessed
+// at, which is the difference between backing off a 429 and compounding it.
+func get(ctx context.Context, raw string, since time.Time) (io.ReadCloser, error) {
+	// A URL that cannot carry a credential safely is wrong however many times
+	// it is asked, so this is checked once and outside the loop.
 	if err := checkURL(raw); err != nil {
 		return nil, err
 	}
+
+	wait := retryBackoff
+	var last error
+	for attempt := 1; ; attempt++ {
+		body, after, err := fetchOnce(ctx, raw, since)
+		if err == nil || errors.Is(err, errNotModified) {
+			return body, err
+		}
+		last = err
+		if attempt >= fetchAttempts || !worthRetrying(err) {
+			return nil, last
+		}
+		delay := wait
+		if after > 0 {
+			delay = after
+		}
+		if delay > maxRetryWait {
+			delay = maxRetryWait
+		}
+		select {
+		case <-ctx.Done():
+			return nil, last
+		case <-time.After(delay):
+		}
+		wait *= 2
+	}
+}
+
+// fetchOnce is one attempt. It returns the server's Retry-After alongside the
+// error so the caller can wait exactly as long as it was told to.
+func fetchOnce(ctx context.Context, raw string, since time.Time) (io.ReadCloser, time.Duration, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 	if err != nil {
-		return nil, fmt.Errorf("geo: %s is not a usable URL", redactURL(raw))
+		return nil, 0, fmt.Errorf("geo: %s is not a usable URL", redactURL(raw))
+	}
+	if !since.IsZero() {
+		req.Header.Set("If-Modified-Since", since.UTC().Format(http.TimeFormat))
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("geo: %s: %w", redactURL(raw), cause(err))
+		return nil, 0, fmt.Errorf("geo: %s: %w", redactURL(raw), cause(err))
+	}
+	if resp.StatusCode == http.StatusNotModified {
+		resp.Body.Close()
+		return nil, 0, errNotModified
 	}
 	if resp.StatusCode/100 != 2 {
+		after := retryAfter(resp.Header.Get("Retry-After"))
 		resp.Body.Close()
-		return nil, fmt.Errorf("geo: %s returned %s", redactURL(raw), resp.Status)
+		return nil, after, &statusError{url: redactURL(raw), status: resp.Status, code: resp.StatusCode}
 	}
-	return resp.Body, nil
+	return resp.Body, 0, nil
+}
+
+// statusError carries the code so worthRetrying can read it without matching
+// on the sentence.
+type statusError struct {
+	url    string
+	status string
+	code   int
+}
+
+func (e *statusError) Error() string { return fmt.Sprintf("geo: %s returned %s", e.url, e.status) }
+
+// worthRetrying separates "ask again" from "asking again cannot help". A
+// refusal the server will repeat -- a bad licence key, a missing edition -- is
+// not worth three more of the daily allowance.
+func worthRetrying(err error) bool {
+	var se *statusError
+	if errors.As(err, &se) {
+		return se.code == http.StatusTooManyRequests || se.code >= 500
+	}
+	// A name that does not resolve will not resolve on the third try either,
+	// and a mistyped mirror should cost a boot one failed lookup rather than
+	// the whole backoff ladder.
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return false
+	}
+	// Anything else that is not an answer at all is a transport failure worth
+	// another attempt: a reset, a timeout, a mirror still coming up.
+	return true
+}
+
+// retryAfter reads the header in both the forms RFC 9110 allows. Anything else
+// is no guidance, and the caller falls back to its own backoff.
+func retryAfter(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs < 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if when, err := http.ParseTime(v); err == nil {
+		if d := time.Until(when); d > 0 {
+			return d
+		}
+	}
+	return 0
 }
 
 // client refuses to follow a redirect down from https to http, because the

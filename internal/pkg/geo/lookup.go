@@ -35,11 +35,14 @@ func (c *Client) Lookup(ip netip.Addr) (*Info, error) {
 		return info, nil
 	}
 
-	// A nil client (geo disabled, or the MaxMind DB was missing at boot) or a
-	// nil reader degrades to "Unknown" rather than panicking — geo enrichment is
-	// best-effort and must never fail session creation.
-	if c != nil && c.r != nil {
-		cityRecord, err := c.r.City(ip)
+	// No client, or no database yet, degrades to "Unknown" rather than
+	// panicking — geo enrichment is best-effort and must never fail session
+	// creation. The reader is held for the whole lookup so a refresh landing
+	// mid-call cannot close the file underneath it.
+	db, release := c.reader()
+	defer release()
+	if db != nil {
+		cityRecord, err := db.City(ip)
 		if err == nil && cityRecord != nil {
 			info.City = cityRecord.City.Names.English
 			if len(cityRecord.Subdivisions) > 0 {
