@@ -120,6 +120,11 @@ export interface InstanceSettings {
         engagement_event_days: number;
         form_event_days: number;
         audit_log_days: number;
+        // Warmup mail is deleted from each mailbox after this many days (a
+        // mailbox may set its own); the per-message warmup records after the
+        // second. The daily warmup statistics are never pruned.
+        warmup_mail_days: number;
+        warmup_event_days: number;
     };
     // How soon after a send an open or click is recorded as automated. The
     // clock starts at dispatch to the worker, so the window also covers the

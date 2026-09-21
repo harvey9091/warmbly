@@ -89,6 +89,27 @@ type WarmupReceived struct {
 	MessageID       string
 	SenderAccountID uuid.UUID
 	CreatedAt       time.Time
+	// RetiredAt is when the retention sweep sent the deletion for this
+	// message. A removal observed after that is the platform's own.
+	RetiredAt *time.Time
+}
+
+// WarmupMailToRetire is one warmup message whose retention window has passed,
+// with what the worker needs to find it: the provider's key from the message
+// map (a Gmail id, a Graph id, or the RFC Message-ID on IMAP), the immutable
+// Message-ID, and where the mailbox files warmup so the search starts there.
+// Token is set for the sender's own copy of a send, InternalID for the copy a
+// recipient received.
+type WarmupMailToRetire struct {
+	UserID         uuid.UUID
+	EmailAccountID uuid.UUID
+	WorkerID       uuid.UUID
+	InternalID     uuid.UUID
+	Token          uuid.UUID
+	MessageID      string
+	ProviderKey    string
+	Placement      string
+	Folder         string
 }
 
 // WarmupRepository defines methods for warmup data access
@@ -214,6 +235,25 @@ type WarmupRepository interface {
 	GetWarmupReceived(ctx context.Context, accountID, internalID uuid.UUID) (*WarmupReceived, error)
 	RecordWarmupTampering(ctx context.Context, accountID uuid.UUID, messageID, kind string) (bool, error)
 	CountWarmupTamperingSince(ctx context.Context, accountID uuid.UUID, since time.Time) (int, error)
+
+	// Retention: warmup mail is deleted from the mailbox once its window has
+	// passed, the platform's own copy of the body with it, and the
+	// per-message records are pruned after theirs.
+	//
+	// ListWarmupMailToRetire returns received copies whose window (the
+	// mailbox's own, else defaultDays) has passed, oldest first, on active
+	// mailboxes that have a worker to act. ListWarmupSentCopiesToRetire is
+	// the same for the sender's own copy of each send. RetireWarmupReceived
+	// and RetireWarmupSentCopy stamp the row once the deletion is on the bus.
+	ListWarmupMailToRetire(ctx context.Context, defaultDays, limit int) ([]WarmupMailToRetire, error)
+	RetireWarmupReceived(ctx context.Context, accountID, internalID uuid.UUID) error
+	ListWarmupSentCopiesToRetire(ctx context.Context, defaultDays, limit int) ([]WarmupMailToRetire, error)
+	RetireWarmupSentCopy(ctx context.Context, token uuid.UUID) error
+	// PruneWarmupEventsBefore drops per-message records older than before:
+	// tampering events, spam reports, retired receipts, and tokens whose sent
+	// copy is gone. A receipt or token whose mail is still in the mailbox is
+	// kept, so a removal seen later can still be told apart from tampering.
+	PruneWarmupEventsBefore(ctx context.Context, before time.Time) (int64, error)
 
 	// Appeals (user-facing submission; admin review lives in the admin repo).
 	CreateWarmupAppeal(ctx context.Context, accountID, userID uuid.UUID, reason string) (uuid.UUID, error)
@@ -1663,13 +1703,13 @@ func (r *warmupRepository) RecordWarmupReceived(ctx context.Context, accountID, 
 // message id. Returns nil when the message was not a warmup email.
 func (r *warmupRepository) GetWarmupReceived(ctx context.Context, accountID, internalID uuid.UUID) (*WarmupReceived, error) {
 	query := `
-		SELECT email_account_id, internal_id, message_id, sender_account_id, created_at
+		SELECT email_account_id, internal_id, message_id, sender_account_id, created_at, retired_at
 		FROM warmup_received
 		WHERE email_account_id = $1 AND internal_id = $2
 	`
 	var w WarmupReceived
 	err := r.db.QueryRow(ctx, query, accountID, internalID).Scan(
-		&w.EmailAccountID, &w.InternalID, &w.MessageID, &w.SenderAccountID, &w.CreatedAt,
+		&w.EmailAccountID, &w.InternalID, &w.MessageID, &w.SenderAccountID, &w.CreatedAt, &w.RetiredAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -1678,6 +1718,123 @@ func (r *warmupRepository) GetWarmupReceived(ctx context.Context, accountID, int
 		return nil, err
 	}
 	return &w, nil
+}
+
+// ListWarmupMailToRetire lists received warmup copies past their window:
+// the mailbox's own when it set one, else the instance default handed in as
+// $1, on active mailboxes that have a worker to act. The provider key comes
+// from the message map by the internal id, which is what the worker's remove
+// and flag events are keyed on.
+func (r *warmupRepository) ListWarmupMailToRetire(ctx context.Context, defaultDays, limit int) ([]WarmupMailToRetire, error) {
+	query := `
+		SELECT ea.user_id, ea.id, ea.worker_id, wr.internal_id, wr.message_id,
+		       COALESCE(m.message_id, ''), ea.warmup_placement, ea.warmup_folder
+		FROM warmup_received wr
+		JOIN email_accounts ea ON ea.id = wr.email_account_id
+		LEFT JOIN LATERAL (
+			SELECT em.message_id FROM email_message_map em
+			WHERE em.email_id = ea.id AND em.id = wr.internal_id
+			LIMIT 1
+		) m ON true
+		WHERE ea.status = 'active'
+		  AND ea.worker_id IS NOT NULL
+		  AND wr.retired_at IS NULL
+		  AND wr.created_at < NOW() - make_interval(days => COALESCE(ea.warmup_retention_days, $1))
+		ORDER BY wr.created_at
+		LIMIT $2`
+	return r.scanMailToRetire(ctx, query, defaultDays, limit, false)
+}
+
+// ListWarmupSentCopiesToRetire lists the sender's own copies past their
+// window. Gmail and Outlook file that copy themselves; an SMTP mailbox never
+// gets one, because the worker does not append warmup to Sent, so those
+// senders are left out rather than searched for a message that does not
+// exist. The map is keyed by the provider's id on Gmail and Graph, so the key
+// is usually empty there and the worker searches by Message-ID instead.
+func (r *warmupRepository) ListWarmupSentCopiesToRetire(ctx context.Context, defaultDays, limit int) ([]WarmupMailToRetire, error) {
+	query := `
+		SELECT ea.user_id, ea.id, ea.worker_id, wt.token, wt.sent_message_id,
+		       COALESCE(m.message_id, ''), ea.warmup_placement, ea.warmup_folder
+		FROM warmup_tokens wt
+		JOIN email_accounts ea ON ea.id = wt.sender_account_id
+		LEFT JOIN LATERAL (
+			SELECT em.message_id FROM email_message_map em
+			WHERE em.email_id = ea.id AND em.message_id = wt.sent_message_id
+			LIMIT 1
+		) m ON true
+		WHERE ea.status = 'active'
+		  AND ea.worker_id IS NOT NULL
+		  AND ea.provider <> 'smtp_imap'
+		  AND wt.sent_message_id <> ''
+		  AND wt.sent_retired_at IS NULL
+		  AND wt.created_at < NOW() - make_interval(days => COALESCE(ea.warmup_retention_days, $1))
+		ORDER BY wt.created_at
+		LIMIT $2`
+	return r.scanMailToRetire(ctx, query, defaultDays, limit, true)
+}
+
+func (r *warmupRepository) scanMailToRetire(ctx context.Context, query string, defaultDays, limit int, sent bool) ([]WarmupMailToRetire, error) {
+	rows, err := r.db.Query(ctx, query, defaultDays, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []WarmupMailToRetire
+	for rows.Next() {
+		var m WarmupMailToRetire
+		var id uuid.UUID
+		if err := rows.Scan(&m.UserID, &m.EmailAccountID, &m.WorkerID, &id, &m.MessageID, &m.ProviderKey, &m.Placement, &m.Folder); err != nil {
+			return nil, err
+		}
+		if sent {
+			m.Token = id
+		} else {
+			m.InternalID = id
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// RetireWarmupReceived stamps the receipt once its deletion is on the bus.
+func (r *warmupRepository) RetireWarmupReceived(ctx context.Context, accountID, internalID uuid.UUID) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE warmup_received SET retired_at = NOW()
+		WHERE email_account_id = $1 AND internal_id = $2 AND retired_at IS NULL`, accountID, internalID)
+	return err
+}
+
+// RetireWarmupSentCopy stamps the token once the deletion of the sender's own
+// copy is on the bus.
+func (r *warmupRepository) RetireWarmupSentCopy(ctx context.Context, token uuid.UUID) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE warmup_tokens SET sent_retired_at = NOW()
+		WHERE token = $1 AND sent_retired_at IS NULL`, token)
+	return err
+}
+
+// PruneWarmupEventsBefore drops the per-message warmup records older than
+// before. Receipts and tokens are kept while their mail may still be in the
+// mailbox (not yet retired), so the retention sweep can still reach it and a
+// removal seen later is still recognised as warmup rather than tampering.
+func (r *warmupRepository) PruneWarmupEventsBefore(ctx context.Context, before time.Time) (int64, error) {
+	var total int64
+	for _, q := range []string{
+		`DELETE FROM warmup_tampering_events WHERE created_at < $1`,
+		`DELETE FROM warmup_spam_reports WHERE created_at < $1`,
+		`DELETE FROM warmup_received WHERE created_at < $1 AND retired_at IS NOT NULL`,
+		`DELETE FROM warmup_tokens
+		 WHERE created_at < $1
+		   AND (sent_message_id = '' OR sent_retired_at IS NOT NULL
+		        OR sender_account_id IN (SELECT id FROM email_accounts WHERE provider = 'smtp_imap'))`,
+	} {
+		cmd, err := r.db.Exec(ctx, q, before)
+		if err != nil {
+			return total, err
+		}
+		total += cmd.RowsAffected()
+	}
+	return total, nil
 }
 
 // RecordWarmupTampering records one "harm" a participant did to a warmup email.

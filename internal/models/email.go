@@ -105,6 +105,10 @@ type Email struct {
 	// means the instance default rather than "no folder".
 	WarmupPlacement string `json:"warmup_placement"`
 	WarmupFolder    string `json:"warmup_folder"`
+	// WarmupRetentionDays is how long warmup mail stays in this mailbox before
+	// the platform deletes it. Zero means the instance setting: see
+	// WarmupMailRetentionDays.
+	WarmupRetentionDays int `json:"warmup_retention_days"`
 
 	Timezone string `json:"timezone"`
 
@@ -183,6 +187,26 @@ func (e *Email) WarmupFiling() (placement, folder string) {
 		folder = config.WarmupFolderDefault
 	}
 	return placement, folder
+}
+
+// ValidWarmupRetentionDays reports whether d is an accepted per-mailbox
+// window: zero for the instance setting, or a number of days inside the band.
+func ValidWarmupRetentionDays(d int) bool {
+	return d == 0 || (d >= config.WarmupMailRetentionDaysMin && d <= config.RetentionDaysMax)
+}
+
+// WarmupMailRetentionDays resolves how long this mailbox keeps warmup mail:
+// its own window when it set one, otherwise the instance's. A row written
+// before the column existed carries zero and follows the instance, which is
+// what every mailbox did when the window was not a choice.
+func (e *Email) WarmupMailRetentionDays(instanceDays int) int {
+	if ValidWarmupRetentionDays(e.WarmupRetentionDays) && e.WarmupRetentionDays != 0 {
+		return e.WarmupRetentionDays
+	}
+	if instanceDays < config.WarmupMailRetentionDaysMin {
+		return config.WarmupMailRetentionDaysDefault
+	}
+	return instanceDays
 }
 
 // SendFrom is the address this mailbox's mail is actually From. A verified
@@ -570,6 +594,9 @@ type UpdateEmail struct {
 	// an empty string.
 	WarmupPlacement *string `json:"warmup_placement"`
 	WarmupFolder    *string `json:"warmup_folder"`
+	// WarmupRetentionDays is how long warmup mail is kept in the mailbox; 0
+	// goes back to the instance setting.
+	WarmupRetentionDays *int `json:"warmup_retention_days"`
 
 	// Timezone is the mailbox's own IANA zone, which its sending behaviour and
 	// business-hours window are evaluated in. Empty means not configured, so

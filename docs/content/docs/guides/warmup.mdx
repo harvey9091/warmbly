@@ -142,6 +142,14 @@ One case reaches back. If a warmup message is ever missed on arrival and shows u
 
 The sweep repairs what it can still see, so it does not clear a backlog that built up before the setting existed. To do that on Gmail, search `label:Warmbly` and archive the results: warmup mail has always carried the label, so that selects exactly it. On Outlook and IMAP the received mail is already in the folder, and only the Sent copies from before this change stay in Sent.
 
+### Retention
+
+Warmup mail is real mail taking up real space, and once its engagement has been recorded there is nothing left to keep it for. So Warmbly clears the folder itself: every warmup message, received or sent, is deleted from the mailbox once it is older than the mailbox's retention window, 30 days unless you or your instance operator chose otherwise. On Gmail that means it is moved to Trash, which Gmail empties after another 30 days; on Outlook, Microsoft 365 and IMAP it is deleted outright. The copy of the message Warmbly itself stored goes with it.
+
+The window is per mailbox, next to the filing setting on the **Warmup** tab of its drawer, and on the API as `warmup_retention_days`. Leave it empty to follow the instance setting; the shortest is 3 days, so a thread always has time to finish and the delayed engagement (read, starred, marked important) has always run before its message goes. A self-hosted instance sets its default under **Instance > Configuration > Data retention**, see [data control](/development/data-control/#warmup-mail-in-mailboxes).
+
+At the volumes warmup runs, a few plaintext messages of a couple of kilobytes each, a mailbox in balance takes years to fill even on a small hosting quota, so the retention is there so that you never have to think about it rather than because the folder is about to overflow. You do not need to clear the folder by hand, and if you do, see [pool safety](#pool-safety) for what counts.
+
 <Callout type="info" title="Gmail and the Sent copy">
   Gmail exposes folders as labels and does not document whether `SENT` may be removed. Warmbly asks once per mailbox: where Gmail allows it, the sent copy leaves Sent entirely; where it refuses, the copy keeps its place in Sent and carries the warmup label, and nothing asks again. Outlook, Microsoft 365 and IMAP mailboxes move the copy out of Sent normally. SMTP mailboxes never get one in the first place, because Warmbly does not file a Sent copy for warmup.
 </Callout>
@@ -179,7 +187,9 @@ Shared pools only work if participants behave, so every mailbox is judged on rat
 
 Quarantined and blocked mailboxes are selected as neither sender nor recipient. Mail arriving in a mailbox is never held against it: every warmup message carries a single-use token bound to its recipient, so a token cannot be replayed or redirected, and one that lands where it does not belong is simply filed as ordinary mail.
 
-What a mailbox does to warmup mail it received is held against it, on a ladder rather than at once. Deleting a warmup email counts as one strike and marking one as spam counts as two, over the last seven days. One strike puts the mailbox on watch with the reason shown in its drawer, two pause it from the pool for seven days, and four block it for thirty. So tidying the Warmbly folder by hand once is a warning, not a ban, while flagging pool mail as spam twice is a block. A mailbox's own filing is never counted: Warmbly moving a warmup email into its folder, marking it read or rescuing it from spam is the platform acting, not the owner.
+What a mailbox does to warmup mail it received is held against it, on a ladder rather than at once. Deleting a warmup email within a day of its arrival counts as one strike and marking one as spam counts as two, over the last seven days. One strike puts the mailbox on watch with the reason shown in its drawer, two pause it from the pool for seven days, and four block it for thirty. So deleting one fresh warmup message is a warning, not a ban, while flagging pool mail as spam twice is a block.
+
+Only a fresh deletion counts, because that is the one that costs the pool something: the engagement a warmup message earns happens in its first hours, and removing it before then takes that signal away. A warmup message deleted later is housekeeping, whether by you, by Gmail emptying its Trash, by a retention rule on your mail server or by Warmbly's own [retention](#retention), and it is never held against the mailbox. On Gmail, pressing Delete is what is judged, not the purge from Trash weeks later. A mailbox's own filing is never counted either: Warmbly moving a warmup email into its folder, marking it read, rescuing it from spam or deleting it once its window has passed is the platform acting, not the owner.
 
 <Callout type="warn" title="Acting early protects everyone">
   Warmbly intervenes well before providers would penalize a mailbox. One landing in spam a large share of the time is already dangerous to the pool, so it is throttled or removed rather than left collecting negative signals.

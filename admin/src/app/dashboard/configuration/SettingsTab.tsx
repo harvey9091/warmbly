@@ -85,19 +85,36 @@ const RETENTION_FIELDS = [
         key: "engagementDays",
         setting: "engagement_event_days",
         label: "Opens and clicks (days)",
+        min: RETENTION_MIN_DAYS,
         help: "Per-event open and click logs, with the client, device and approximate location of each. Campaign counts and routing read a separate summary that is never pruned, so shortening this changes what a contact's timeline can show, not what a campaign does.",
     },
     {
         key: "formDays",
         setting: "form_event_days",
         label: "Form funnel events (days)",
+        min: RETENTION_MIN_DAYS,
         help: "Views, starts, field-level drop-off and submissions for hosted forms. Funnel reports range up to 90 days, so anything below that shortens the report too. Submitted contacts are unaffected.",
     },
     {
         key: "auditDays",
         setting: "audit_log_days",
         label: "Audit log (days)",
+        min: RETENTION_MIN_DAYS,
         help: "Who did what, from which IP address and user agent, with the change payload. This window is how long that record is held, and it is the one most likely to be set by a retention policy.",
+    },
+    {
+        key: "warmupMailDays",
+        setting: "warmup_mail_days",
+        label: "Warmup mail in mailboxes (days)",
+        min: 3,
+        help: "How long warmup mail stays in each mailbox before Warmbly deletes it, wherever the mailbox's filing setting keeps it (Trash on Gmail), with the stored copy of its body. A mailbox may set its own window in its drawer; this is the one every other mailbox follows. The floor leaves room for the engagement and a reply in the thread to finish.",
+    },
+    {
+        key: "warmupEventDays",
+        setting: "warmup_event_days",
+        label: "Warmup records (days)",
+        min: 30,
+        help: "Per-message warmup records: tokens, receipts, tampering events and spam reports. The pool health bands read the last 30 days, which is the floor. The daily sent and received counts behind the analytics are separate and never pruned.",
     },
 ] as const;
 
@@ -108,14 +125,26 @@ const RETENTION_PRESETS = [
     {
         id: "default",
         label: "Defaults",
-        description: "365 / 180 / 90 days",
-        values: { engagementDays: "365", formDays: "180", auditDays: "90" },
+        description: "365 / 180 / 90 days, warmup 30 / 365",
+        values: {
+            engagementDays: "365",
+            formDays: "180",
+            auditDays: "90",
+            warmupMailDays: "30",
+            warmupEventDays: "365",
+        },
     },
     {
         id: "minimal",
         label: "Minimal retention",
-        description: "30 / 30 / 30 days",
-        values: { engagementDays: "30", formDays: "30", auditDays: "30" },
+        description: "30 / 30 / 30 days, warmup 7 / 30",
+        values: {
+            engagementDays: "30",
+            formDays: "30",
+            auditDays: "30",
+            warmupMailDays: "7",
+            warmupEventDays: "30",
+        },
     },
 ] as const;
 
@@ -185,6 +214,8 @@ function toForm(s: InstanceSettings): FormState {
             engagementDays: String(s.retention.engagement_event_days),
             formDays: String(s.retention.form_event_days),
             auditDays: String(s.retention.audit_log_days),
+            warmupMailDays: String(s.retention.warmup_mail_days),
+            warmupEventDays: String(s.retention.warmup_event_days),
         },
         tracking: {
             machineWindowOpen: String(s.tracking.machine_window_open_seconds),
@@ -269,9 +300,7 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
         form !== null && SYNC_FIELDS.every((f) => syncFieldValid(form.sync[f.key], f.min, f.max));
     const retentionValid =
         form !== null &&
-        RETENTION_FIELDS.every((f) =>
-            syncFieldValid(form.retention[f.key], RETENTION_MIN_DAYS, RETENTION_MAX_DAYS),
-        );
+        RETENTION_FIELDS.every((f) => syncFieldValid(form.retention[f.key], f.min, RETENTION_MAX_DAYS));
 
     const trackingValid =
         form !== null &&
@@ -307,7 +336,7 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
         }
         if (!retentionValid) {
             toast.error(
-                `Every retention window must be a whole number of days between ${RETENTION_MIN_DAYS} and ${RETENTION_MAX_DAYS.toLocaleString()}`,
+                `Every retention window must be a whole number of days up to ${RETENTION_MAX_DAYS.toLocaleString()}, and not below the floor shown under it`,
             );
             return;
         }
@@ -336,6 +365,8 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
                 engagement_event_days: Number(form.retention.engagementDays),
                 form_event_days: Number(form.retention.formDays),
                 audit_log_days: Number(form.retention.auditDays),
+                warmup_mail_days: Number(form.retention.warmupMailDays),
+                warmup_event_days: Number(form.retention.warmupEventDays),
             },
             tracking: {
                 machine_window_open_seconds: Number(form.tracking.machineWindowOpen),
@@ -565,7 +596,7 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
                                 {RETENTION_FIELDS.map((f) => {
                                     const valid = syncFieldValid(
                                         form.retention[f.key],
-                                        RETENTION_MIN_DAYS,
+                                        f.min,
                                         RETENTION_MAX_DAYS,
                                     );
                                     return (
@@ -590,13 +621,13 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
                                                 className="mt-1"
                                             />
                                             <p className="mt-1 text-xs text-muted-foreground">
-                                                {f.help} Between {RETENTION_MIN_DAYS} and{" "}
+                                                {f.help} Between {f.min} and{" "}
                                                 {RETENTION_MAX_DAYS.toLocaleString()} days.
                                             </p>
                                             {!valid && (
                                                 <p className="mt-1 text-xs text-red-600">
                                                     Enter a whole number of days between{" "}
-                                                    {RETENTION_MIN_DAYS} and{" "}
+                                                    {f.min} and{" "}
                                                     {RETENTION_MAX_DAYS.toLocaleString()}.
                                                 </p>
                                             )}

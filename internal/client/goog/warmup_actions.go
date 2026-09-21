@@ -241,3 +241,42 @@ func (c *Client) SetSeen(ctx context.Context, messageIDs []string, seen bool) er
 	}
 	return nil
 }
+
+// Trash moves a message to Gmail's Trash, which Gmail empties on its own
+// after thirty days. This is the deletion the retention window asks for: the
+// modify scope the mailbox was connected with allows trashing and not the
+// permanent delete, and Trash is also what a person pressing Delete gets.
+func (c *Client) Trash(ctx context.Context, messageID string) error {
+	if c.srv == nil {
+		return fmt.Errorf("gmail service not initialized")
+	}
+	_, err := c.srv.Users.Messages.Trash("me", messageID).Context(ctx).Do()
+	if err != nil {
+		var gerr *googleapi.Error
+		if errors.As(err, &gerr) && gerr.Code == 404 {
+			// Already gone, which is the state being asked for.
+			return nil
+		}
+		return fmt.Errorf("failed to trash message: %w", err)
+	}
+	return nil
+}
+
+// FindByRFCMessageID returns the Gmail id of the message carrying the RFC
+// 5322 Message-ID, or "" when the mailbox does not have it. Trash and Spam
+// are excluded by Gmail's search by default, which is right here: a message
+// already in either needs nothing more from the retention sweep.
+func (c *Client) FindByRFCMessageID(ctx context.Context, rfcMessageID string) (string, error) {
+	rfcMessageID = strings.Trim(strings.TrimSpace(rfcMessageID), "<>")
+	if rfcMessageID == "" || c.srv == nil {
+		return "", nil
+	}
+	ids, _, err := c.ListMessages(ctx, "rfc822msgid:"+rfcMessageID, "", 1)
+	if err != nil {
+		return "", err
+	}
+	if len(ids) == 0 {
+		return "", nil
+	}
+	return ids[0], nil
+}

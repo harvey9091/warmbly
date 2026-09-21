@@ -67,6 +67,14 @@ type Retention struct {
 	FormEventDays int `json:"form_event_days"`
 	// AuditLogDays is how long the audit trail is kept.
 	AuditLogDays int `json:"audit_log_days"`
+	// WarmupMailDays is how long warmup mail stays in a mailbox before the
+	// platform deletes it from the warmup folder. A mailbox may set its own
+	// window; this is the one every other mailbox follows.
+	WarmupMailDays int `json:"warmup_mail_days"`
+	// WarmupEventDays is how long the per-message warmup records (tokens,
+	// receipts, tampering and spam reports) are kept. The daily warmup
+	// statistics behind the analytics are separate and never pruned.
+	WarmupEventDays int `json:"warmup_event_days"`
 }
 
 // Tracking holds the engagement-classification windows. Zero means "compiled
@@ -235,6 +243,8 @@ func DefaultRetention() Retention {
 		EngagementEventDays: config.EngagementEventRetentionDaysDefault,
 		FormEventDays:       config.FormEventsRetentionDaysDefault,
 		AuditLogDays:        config.AuditLogRetentionDaysDefault,
+		WarmupMailDays:      config.WarmupMailRetentionDaysDefault,
+		WarmupEventDays:     config.WarmupEventRetentionDaysDefault,
 	}
 }
 
@@ -243,21 +253,26 @@ func DefaultRetention() Retention {
 // written before this section existed must not silently start deleting
 // everything on the next sweep.
 func (r *Retention) Normalize() {
-	clamp := func(v, def int) int {
+	clamp := func(v, def, floor int) int {
 		if v <= 0 {
 			return def
 		}
-		if v < config.RetentionDaysMin {
-			return config.RetentionDaysMin
+		if v < floor {
+			return floor
 		}
 		if v > config.RetentionDaysMax {
 			return config.RetentionDaysMax
 		}
 		return v
 	}
-	r.EngagementEventDays = clamp(r.EngagementEventDays, config.EngagementEventRetentionDaysDefault)
-	r.FormEventDays = clamp(r.FormEventDays, config.FormEventsRetentionDaysDefault)
-	r.AuditLogDays = clamp(r.AuditLogDays, config.AuditLogRetentionDaysDefault)
+	r.EngagementEventDays = clamp(r.EngagementEventDays, config.EngagementEventRetentionDaysDefault, config.RetentionDaysMin)
+	r.FormEventDays = clamp(r.FormEventDays, config.FormEventsRetentionDaysDefault, config.RetentionDaysMin)
+	r.AuditLogDays = clamp(r.AuditLogDays, config.AuditLogRetentionDaysDefault, config.RetentionDaysMin)
+	// The two warmup windows have floors of their own: mail has to outlive
+	// the engagement legs and a reply-back, and the records have to outlive
+	// the thirty-day health bands that read them.
+	r.WarmupMailDays = clamp(r.WarmupMailDays, config.WarmupMailRetentionDaysDefault, config.WarmupMailRetentionDaysMin)
+	r.WarmupEventDays = clamp(r.WarmupEventDays, config.WarmupEventRetentionDaysDefault, config.WarmupEventRetentionDaysMin)
 }
 
 // Normalize clamps a document into its accepted range. It is applied on read
@@ -344,6 +359,8 @@ type Patch struct {
 		EngagementEventDays *int `json:"engagement_event_days"`
 		FormEventDays       *int `json:"form_event_days"`
 		AuditLogDays        *int `json:"audit_log_days"`
+		WarmupMailDays      *int `json:"warmup_mail_days"`
+		WarmupEventDays     *int `json:"warmup_event_days"`
 	} `json:"retention"`
 	Tracking *struct {
 		MachineWindowOpenSeconds     *int `json:"machine_window_open_seconds"`
@@ -403,6 +420,12 @@ func (p Patch) Apply(doc Document) Document {
 		}
 		if p.Retention.AuditLogDays != nil {
 			doc.Retention.AuditLogDays = *p.Retention.AuditLogDays
+		}
+		if p.Retention.WarmupMailDays != nil {
+			doc.Retention.WarmupMailDays = *p.Retention.WarmupMailDays
+		}
+		if p.Retention.WarmupEventDays != nil {
+			doc.Retention.WarmupEventDays = *p.Retention.WarmupEventDays
 		}
 	}
 	if p.Tracking != nil {

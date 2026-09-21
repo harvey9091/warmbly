@@ -56,6 +56,12 @@ const (
 	WarmupActionMarkRead       = "mark_read"
 	WarmupActionMarkImportant  = "mark_important"
 	WarmupActionStar           = "star"
+	// WarmupActionDelete removes a warmup message the retention window has
+	// passed on from the mailbox (Trash on Gmail, Deleted Items on Outlook,
+	// expunged on IMAP) and drops the platform's copy of its body. Published
+	// by the retention sweep alone, and only for a message it has retired
+	// first, so the removal the sync then observes is never a strike.
+	WarmupActionDelete = "delete"
 )
 
 // WarmupEmailAction represents actions to perform on a detected warmup email.
@@ -89,6 +95,12 @@ type WarmupEmailAction struct {
 	// which is what every mailbox did before the setting existed.
 	Placement    string `json:"placement,omitempty" avro:"placement"`
 	TargetFolder string `json:"target_folder,omitempty" avro:"target_folder"`
+
+	// InternalID is the platform's id for the message, which keys the stored
+	// body the delete action drops. Empty when the control plane does not
+	// know it (the sender's own copy of a send), in which case the worker
+	// resolves it from the provider id it acted on.
+	InternalID string `json:"internal_id,omitempty" avro:"internal_id"`
 
 	// DelaySeconds is retained for wire compatibility but is now always 0: the
 	// recipient-side "dwell" is owned by the consumer's durable schedule

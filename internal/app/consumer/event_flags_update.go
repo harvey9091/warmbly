@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -21,10 +22,20 @@ func (s *JobsService) HandleFlagsAdd(ctx context.Context, e *models.JobEventFlag
 	// tracked in the unibox, so there's nothing else to do for it.
 	if s.WarmupRepo != nil {
 		if rec, _ := s.WarmupRepo.GetWarmupReceived(ctx, e.EmailID, e.ID); rec != nil {
-			if containsSpamFlag(e.Flags) && s.WarmupService != nil {
+			switch {
+			case s.WarmupService == nil:
+			case containsSpamFlag(e.Flags):
 				hSender, _ := s.WarmupService.ApplySpamReport(ctx, e.EmailID, rec.SenderAccountID, rec.MessageID, "user_complaint")
 				s.markRiskBandFromWarmupHealth(ctx, rec.SenderAccountID, hSender)
 				hHarmer, _ := s.WarmupService.RecordTampering(ctx, e.EmailID, rec.MessageID, "spam_flag")
+				s.markRiskBandFromWarmupHealth(ctx, e.EmailID, hHarmer)
+			case containsTrashFlag(e.Flags) && warmupDeletionCounts(rec, time.Now()):
+				// Gmail reports Delete as gaining the TRASH label and only
+				// reports the message gone when Trash is emptied, weeks later.
+				// The label is the owner's act, so it is judged here, on the
+				// same freshness rule as a removal; the later purge is then
+				// outside the window and reads as housekeeping.
+				hHarmer, _ := s.WarmupService.RecordTampering(ctx, e.EmailID, rec.MessageID, "deletion")
 				s.markRiskBandFromWarmupHealth(ctx, e.EmailID, hHarmer)
 			}
 			return nil
@@ -215,4 +226,15 @@ func (s *JobsService) HandleFlagsRemove(ctx context.Context, e *models.JobEventF
 	email.Flags = newFlags
 	s.publishEmailUpdated(ctx, e.UserID, email)
 	return nil
+}
+
+// containsTrashFlag reports the transition Gmail emits for Delete: the TRASH
+// label, passed through untranslated by the worker.
+func containsTrashFlag(flags []string) bool {
+	for _, f := range flags {
+		if f == "TRASH" || f == "\\Trash" {
+			return true
+		}
+	}
+	return false
 }

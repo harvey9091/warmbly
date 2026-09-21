@@ -170,6 +170,7 @@ var (
 	ErrEmailReplyRate            = New(BadRequest, "Warmup reply rate must be between 0 and 100.")
 	ErrEmailWarmupPlacement      = New(BadRequest, "Warmup filing must be one of: folder, inbox, archive.")
 	ErrEmailWarmupFolder         = New(BadRequest, fmt.Sprintf("Warmup folder must be at most %d characters and contain no folder separators or control characters.", config.WarmupFolderMaxLen))
+	ErrEmailWarmupRetention      = New(BadRequest, fmt.Sprintf("Warmup retention must be between %d and %d days, or 0 to follow the instance setting.", config.WarmupMailRetentionDaysMin, config.RetentionDaysMax))
 
 	// Disconnecting a mailbox has to reach the machine syncing it before the
 	// row goes: afterwards there is no assignment left to read and nothing that

@@ -473,6 +473,7 @@ func main() {
 		AdvancedService:             advancedService,
 		InboxTagger:                 inboxTagger,
 		Cache:                       redisCache,
+		Retention:                   instancesettings.NewService(instancesettings.NewStore(primaryDB.Pool)),
 		AdminRepo:                   repository.NewAdminRepository(primaryDB.Pool),
 		AssignmentService:           workerAssignmentSvc,
 		Notifier:                    notificationService,
@@ -512,6 +513,9 @@ func main() {
 	// effective dwell close to the requested value.
 	go jobsService.StartWarmupEngagementPoller(ctx, 30*time.Second)
 	go jobsService.StartWarmupInboxCleanup(ctx)
+	// Deletes warmup mail past its retention window from the mailbox itself
+	// and prunes the per-message warmup records after theirs.
+	go jobsService.StartWarmupMailRetention(ctx)
 	go jobsService.StartPendingWarmupVerification(ctx)
 	// Re-offers inbound mail that reply processing never claimed, so a
 	// reply refused by a since-fixed check is still attributed to its lead.

@@ -87,6 +87,7 @@ import { DitherBarChart } from "@/components/ui/dither";
 import WeekdayBitmask from "../campaigns/schedule/WeekdayBitmask";
 import { Loading } from "@/components/loader";
 import { NumberInput, TextInput } from "@/components/ui/field";
+import { clampWarmupRetentionDays } from "@/lib/warmupRetention";
 import { useConfirm } from "@/hooks/context/confirm";
 import { usePresenceResource } from "@/hooks/PresenceProvider";
 import ResourceViewers from "@/components/app/presence/ResourceViewers";
@@ -377,7 +378,7 @@ const EDITABLE: (keyof Inbox)[] = [
     "tags", "campaign_limit", "min_wait_time", "reply_to", "save_to_sent",
     "warmup_base", "warmup_max", "warmup_increase", "warmup_reply_rate",
     "warmup_tag", "warmup_start_time", "warmup_end_time", "warmup_days",
-    "warmup_placement", "warmup_folder",
+    "warmup_placement", "warmup_folder", "warmup_retention_days",
 ];
 
 function Detail({ mailbox, onClose, initialTab = "overview", canWarmup = true }: { mailbox: Inbox; onClose: () => void; initialTab?: string; canWarmup?: boolean }) {
@@ -1365,7 +1366,42 @@ function WarmupPlacementFields({
                     />
                 </FieldShell>
             )}
+            <WarmupRetentionField form={form} update={update} gmail={gmail} />
         </>
+    );
+}
+
+/* ── How long warmup mail stays in the mailbox ─────────────────────────── */
+
+// Warmup mail is deleted by Warmbly once it has served its purpose, so a
+// mailbox on a fixed quota never fills with it and the owner never has to
+// clear the folder by hand. The window is per mailbox; empty follows the
+// instance setting (30 days unless the operator changed it).
+function WarmupRetentionField({
+    form,
+    update,
+    gmail,
+}: {
+    form: Inbox;
+    update: (patch: Partial<Inbox>) => void;
+    gmail: boolean;
+}) {
+    const days = form.warmup_retention_days ?? 0;
+    const where = gmail ? "moved to Trash, which Gmail empties after 30 days" : "deleted";
+    return (
+        <FieldShell
+            label="Keep warmup mail for (days)"
+            hint={`Warmup mail older than this is ${where} by Warmbly wherever the setting above keeps it, and the copy Warmbly stores goes with it. 0 follows the instance setting (30 days unless changed); otherwise 3 to 3650. A message is never deleted before its engagement is recorded.`}
+        >
+            <NumberInput
+                value={days}
+                min={0}
+                max={3650}
+                suffix="days"
+                onChange={(n) => update({ warmup_retention_days: clampWarmupRetentionDays(n) })}
+                className="w-full h-9"
+            />
+        </FieldShell>
     );
 }
 
