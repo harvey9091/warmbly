@@ -100,6 +100,7 @@ Returned when the request cannot be processed due to invalid syntax.
 | `code` | Status | Meaning |
 |--------|--------|---------|
 | `password_breached` | 400 | The password appears in a public list of breached passwords and was refused. Choose one that does not |
+| `sso_link_expired` | 400 | The pending token from a `link_required` sign-in is unknown, expired (ten minutes), already used, or has had three wrong passwords. Start the provider sign-in again |
 
 A password must be 8 to 128 characters. There is no composition rule, but it is checked against the 100,000 most commonly breached passwords published by the UK National Cyber Security Centre, case-insensitively.
 

@@ -22,25 +22,19 @@ type LoginResult struct {
 	PendingToken  string `json:"pending_token,omitempty"`
 	ExpiresIn     int    `json:"expires_in,omitempty"`
 
-	// LinkRequired is the third outcome, reached only through a federated
-	// sign-in: the provider asserted an address that already belongs to an
-	// account with a password, and that password has to be presented at
-	// POST /auth/sso/link before the identity is attached and a session
-	// issued. PendingToken and ExpiresIn carry the challenge, LinkEmail and
-	// LinkProvider let the form say what is being linked to what.
+	// LinkRequired: a federated sign-in on an existing password account, which
+	// links and signs in only once that password reaches POST /auth/sso/link.
 	LinkRequired bool   `json:"link_required,omitempty"`
 	LinkEmail    string `json:"link_email,omitempty"`
 	LinkProvider string `json:"link_provider,omitempty"`
 }
 
 // SSOLinkPending is the Redis-backed state for a federated sign-in waiting on
-// the account's password, keyed by the pending session id. It binds the
-// pending JWT's nonce (single-use), counts attempts, and holds the verified
-// identity so nothing about it is taken from the confirming request.
+// the account's password; the identity is held here, never taken from the
+// confirming request.
 type SSOLinkPending struct {
 	UserID   uuid.UUID `json:"user_id"`
 	Nonce    string    `json:"nonce"`
-	Tries    int       `json:"tries"`
 	Provider string    `json:"provider"`
 	Issuer   string    `json:"issuer"`
 	Subject  string    `json:"subject"`
@@ -55,6 +49,11 @@ type TwoFAPending struct {
 	UserID uuid.UUID `json:"user_id"`
 	Nonce  string    `json:"nonce"`
 	Tries  int       `json:"tries"`
+	// LinkIdentity is attached to the account only once the code passes, so a
+	// federated sign-in on a 2FA account links after both factors, not one.
+	LinkIdentity *UserIdentity `json:"link_identity,omitempty"`
+	// AuthProvider is what the resulting session records; empty means email.
+	AuthProvider string `json:"auth_provider,omitempty"`
 }
 
 type Session struct {

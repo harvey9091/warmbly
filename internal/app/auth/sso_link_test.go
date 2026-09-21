@@ -148,3 +148,26 @@ func TestFederatedSignInReturnsAKnownIdentityWithoutAPassword(t *testing.T) {
 		t.Fatalf("touched=%d links=%v", ids.touched, ids.linked)
 	}
 }
+
+// A password prompt that gates nothing would recur on every sign-in. Without
+// an identity store, or without a subject to store, there is nothing to link
+// and the sign-in completes as it did before.
+func TestFederatedSignInAsksNothingWhenNothingCanBeLinked(t *testing.T) {
+	s, u, _ := federatedFixture("$argon2id$hash", &config.AuthPolicy{})
+	s.identities = nil
+
+	res := resolve(t, s)
+	if res.LinkRequired || res.UserID != u.ID {
+		t.Fatalf("link_required=%v user=%s with no identity store", res.LinkRequired, res.UserID)
+	}
+
+	s, u, ids := federatedFixture("$argon2id$hash", &config.AuthPolicy{})
+	res, err := s.resolveFederatedUser(context.Background(), models.IdentityProviderGoogle,
+		"https://accounts.google.com", "", &mail.Address{Address: "owner@example.com"}, "", "")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if res.LinkRequired || res.UserID != u.ID || len(ids.linked) != 0 {
+		t.Fatalf("link_required=%v user=%s links=%v with an empty subject", res.LinkRequired, res.UserID, ids.linked)
+	}
+}

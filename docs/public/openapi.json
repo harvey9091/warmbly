@@ -616,7 +616,7 @@
       "post": {
         "operationId": "auth_sso_link",
         "summary": "Link a provider sign-in to an existing password account",
-        "description": "Completes a Google, Apple or OpenID Connect sign-in that came back link_required: the provider's verified address already belongs to an account with a password. A correct password attaches the provider identity to that account and returns the session, or a 2FA challenge when the account has TOTP enrolled. A wrong password is refused like a sign-in and counts against the same per-address budget; three wrong answers end the challenge and the sign-in has to be started again.",
+        "description": "Completes a Google, Apple or OpenID Connect sign-in that came back link_required: the provider's verified address already belongs to an account with a password. A correct password attaches the provider identity to that account and returns the session, or a 2FA challenge when the account has TOTP enrolled (the identity is then attached once /auth/2fa/verify passes). A wrong password is refused like a sign-in and counts against the same per-address budget; three wrong answers, or ten minutes, end the challenge with the code sso_link_expired and the sign-in has to be started again.",
         "tags": [
           "auth"
         ],
@@ -643,7 +643,7 @@
             }
           },
           "400": {
-            "description": "Invalid request body, wrong password, or an invalid, expired or exhausted pending token.",
+            "description": "Invalid request body, wrong password (Invalid email or password.), or an unknown, expired, used or exhausted pending token (code sso_link_expired).",
             "content": {
               "application/json": {
                 "schema": {

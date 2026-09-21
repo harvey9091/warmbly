@@ -75,6 +75,11 @@ var (
 	ErrSSOBrowser = NewWithIdentifier(Unauthorized, "sso_wrong_browser",
 		"Finish signing in in the browser you started in. Open the sign-in page there and try again.")
 
+	// ErrSSOLinkExpired ends a link challenge: an unknown or expired pending
+	// token, or too many wrong passwords. The client starts the sign-in over.
+	ErrSSOLinkExpired = NewWithIdentifier(BadRequest, "sso_link_expired",
+		"That sign-in request expired or had too many attempts. Start the sign-in again.")
+
 	ErrExternalCode     = New(BadRequest, "Invalid or expired code, please try again.")
 	ErrExternalEmail    = New(BadRequest, "Invalid or unverified email address.")
 	ErrExternalProvider = New(BadRequest, "This sign-in method isn't available on this server.")

@@ -692,6 +692,12 @@ export default function LoginPage() {
             await completeSession(res as unknown as Token);
         } catch (e) {
             toast.error(buildError(e as AppError));
+            // The challenge is gone (expired or exhausted), so the form can
+            // only fail from here: back to the start.
+            if ((e as AppError).code === "sso_link_expired") {
+                setLinkChallenge(null);
+                goTo("email", -1);
+            }
         }
     };
 

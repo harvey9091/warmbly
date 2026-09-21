@@ -16,6 +16,18 @@ import (
 // fresh nonce in Redis. The token carries no AccessNonce + has no DB session, so
 // it can never be used as an access token — only exchanged via VerifyLogin.
 func (s *service) CreatePendingChallenge(ctx context.Context, userID uuid.UUID) (string, int, *errx.Error) {
+	return s.createChallenge(ctx, &models.TwoFAPending{UserID: userID})
+}
+
+func (s *service) CreateLinkingChallenge(ctx context.Context, userID uuid.UUID, identity models.UserIdentity, authProvider string) (string, int, *errx.Error) {
+	if s.linker == nil {
+		return "", 0, errx.InternalError()
+	}
+	return s.createChallenge(ctx, &models.TwoFAPending{UserID: userID, LinkIdentity: &identity, AuthProvider: authProvider})
+}
+
+func (s *service) createChallenge(ctx context.Context, pend *models.TwoFAPending) (string, int, *errx.Error) {
+	userID := pend.UserID
 	sid := uuid.New()
 	nonce, err := crypt.Nonce()
 	if err != nil {
@@ -26,7 +38,8 @@ func (s *service) CreatePendingChallenge(ctx context.Context, userID uuid.UUID) 
 	if terr != nil {
 		return "", 0, errx.InternalError()
 	}
-	if err := s.savePending(ctx, sid, &models.TwoFAPending{UserID: userID, Nonce: nonce}, pendingTTL); err != nil {
+	pend.Nonce = nonce
+	if err := s.savePending(ctx, sid, pend, pendingTTL); err != nil {
 		return "", 0, errx.InternalError()
 	}
 	return pendTok, int(pendingTTL.Seconds()), nil
@@ -74,7 +87,20 @@ func (s *service) VerifyLogin(ctx context.Context, pendingToken, code, ipaddr, u
 	// Single-use: delete the pending record BEFORE minting (delete-then-mint
 	// closes a double-spend race).
 	s.deletePending(ctx, claims.SessionID)
+	// A carried identity links only here, once both factors have passed.
+	if pend.LinkIdentity != nil {
+		if s.linker == nil {
+			return nil, errx.InternalError()
+		}
+		if lerr := s.linker.Link(ctx, claims.UserID, *pend.LinkIdentity); lerr != nil {
+			return nil, errx.New(errx.Forbidden, "that identity is already linked to another account")
+		}
+	}
+	provider := token.AuthProviderEmail
+	if pend.AuthProvider != "" {
+		provider = pend.AuthProvider
+	}
 	// The password was checked before the challenge was minted and a TOTP or
 	// recovery code has just been checked here, so this session has two factors.
-	return s.tokens.GenerateMFASession(ctx, claims.UserID, "", ipaddr, userAgent, token.AuthProviderEmail)
+	return s.tokens.GenerateMFASession(ctx, claims.UserID, "", ipaddr, userAgent, provider)
 }

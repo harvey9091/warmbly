@@ -82,19 +82,16 @@ func (s *authService) externalIDTokenAuth(ctx context.Context, verifier IDTokenV
 	return s.finishFederatedLogin(ctx, res, ipaddr, userAgent, provider)
 }
 
-// federatedResolution is what a verified external identity resolved to. When
-// LinkRequired is set the account exists but has not yet proved it wants this
-// identity attached: nothing was linked and no session may be issued until
-// its password arrives at SSOLinkConfirm.
+// federatedResolution is what a verified external identity resolved to. With
+// LinkRequired nothing was linked and no session may be issued yet.
 type federatedResolution struct {
 	UserID       uuid.UUID
 	LinkRequired bool
 	Identity     models.UserIdentity
 }
 
-// finishFederatedLogin turns a resolution into a login result: the password
-// challenge when the account still has to claim the identity, the session
-// otherwise. Both federated paths end here so they cannot disagree.
+// finishFederatedLogin: the password challenge while the account still has
+// to claim the identity, the session otherwise. Both federated paths end here.
 func (s *authService) finishFederatedLogin(ctx context.Context, res federatedResolution, ipaddr, userAgent, sessionProvider string) (*models.LoginResult, *errx.Error) {
 	if res.LinkRequired {
 		return s.createLinkChallenge(ctx, res.UserID, res.Identity)
@@ -109,13 +106,8 @@ func (s *authService) finishFederatedLogin(ctx context.Context, res federatedRes
 // back to the email address is allowed exactly once, to link a pre-existing
 // local account, and only when that account has no other identity from this
 // issuer already: a second subject claiming an address that is already
-// federated is an impersonation attempt, not a re-login.
-//
-// An address match alone does not attach the identity to an account that has
-// a password. The provider verified the address, not that whoever holds this
-// provider account is the person who set that password, so the link waits
-// for the password (SSOLinkConfirm). An account with no password was created
-// through a verified address and has nothing to ask for, so it links here.
+// federated is an impersonation attempt, not a re-login. A password account
+// is not linked on the address alone: the link waits for its password.
 func (s *authService) resolveFederatedUser(ctx context.Context, provider, issuer, subject string, email *mail.Address, firstName, lastName string) (federatedResolution, *errx.Error) {
 	identity := models.UserIdentity{
 		Provider: provider,
@@ -159,12 +151,16 @@ func (s *authService) resolveFederatedUser(ctx context.Context, provider, issuer
 		if xerr := s.refuseSecondIdentity(ctx, u.ID, issuer); xerr != nil {
 			return federatedResolution{}, xerr
 		}
-		required, xerr := s.linkRequiresPassword(ctx, u.ID)
-		if xerr != nil {
-			return federatedResolution{}, xerr
-		}
-		if required {
-			return federatedResolution{UserID: u.ID, LinkRequired: true, Identity: identity}, nil
+		// Only an identity that can actually be linked is worth a password;
+		// with nothing to attach the prompt would gate nothing and recur.
+		if s.identities != nil && issuer != "" && subject != "" {
+			required, xerr := s.linkRequiresPassword(ctx, u.ID)
+			if xerr != nil {
+				return federatedResolution{}, xerr
+			}
+			if required {
+				return federatedResolution{UserID: u.ID, LinkRequired: true, Identity: identity}, nil
+			}
 		}
 	}
 
@@ -192,10 +188,8 @@ func (s *authService) refuseSecondIdentity(ctx context.Context, userID uuid.UUID
 	return nil
 }
 
-// linkRequiresPassword reports whether attaching a federated identity to this
-// account has to wait for its password. A deployment with password sign-in
-// off has no password to ask for, and neither does an account that never set
-// one. A read failure refuses rather than links: it is the safe direction.
+// linkRequiresPassword: a password account waits for its password; with
+// password sign-in off, or no password set, there is nothing to ask for.
 func (s *authService) linkRequiresPassword(ctx context.Context, userID uuid.UUID) (bool, *errx.Error) {
 	if s.policy != nil && s.policy.DisablePasswordLogin {
 		return false, nil
