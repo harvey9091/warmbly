@@ -107,7 +107,7 @@ const RETENTION_FIELDS = [
         setting: "warmup_mail_days",
         label: "Warmup mail in mailboxes (days)",
         min: 3,
-        help: "How long warmup mail stays in each mailbox before Warmbly deletes it from the warmup folder (Trash on Gmail), with the stored copy of its body. A mailbox may set its own window in its drawer; this is the one every other mailbox follows. The floor leaves room for the engagement and a reply in the thread to finish.",
+        help: "How long warmup mail stays in each mailbox before Warmbly deletes it, wherever the mailbox's filing setting keeps it (Trash on Gmail), with the stored copy of its body. A mailbox may set its own window in its drawer; this is the one every other mailbox follows. The floor leaves room for the engagement and a reply in the thread to finish.",
     },
     {
         key: "warmupEventDays",
@@ -627,7 +627,7 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
                                             {!valid && (
                                                 <p className="mt-1 text-xs text-red-600">
                                                     Enter a whole number of days between{" "}
-                                                    {RETENTION_MIN_DAYS} and{" "}
+                                                    {f.min} and{" "}
                                                     {RETENTION_MAX_DAYS.toLocaleString()}.
                                                 </p>
                                             )}

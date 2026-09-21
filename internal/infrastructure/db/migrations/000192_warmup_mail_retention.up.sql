@@ -23,13 +23,3 @@ ALTER TABLE public.warmup_received
 
 ALTER TABLE public.warmup_tokens
     ADD COLUMN sent_retired_at timestamp with time zone;
-
--- The retention sweep walks the live rows oldest first; the retired ones are
--- the bulk and never need reading again.
-CREATE INDEX idx_warmup_received_live
-    ON public.warmup_received (created_at)
-    WHERE retired_at IS NULL;
-
-CREATE INDEX idx_warmup_tokens_sent_live
-    ON public.warmup_tokens (created_at)
-    WHERE sent_retired_at IS NULL AND sent_message_id <> '';

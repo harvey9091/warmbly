@@ -1,6 +1,3 @@
-DROP INDEX IF EXISTS public.idx_warmup_tokens_sent_live;
-DROP INDEX IF EXISTS public.idx_warmup_received_live;
-
 ALTER TABLE public.warmup_tokens
     DROP COLUMN IF EXISTS sent_retired_at;
 

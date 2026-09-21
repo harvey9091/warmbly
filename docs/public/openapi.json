@@ -21427,7 +21427,7 @@
           },
           "warmup_retention_days": {
             "type": "integer",
-            "description": "How many days warmup mail stays in this mailbox before Warmbly deletes it from the warmup folder. 0 means the instance setting (30 days by default)."
+            "description": "How many days warmup mail stays in this mailbox before Warmbly deletes it, wherever warmup_placement keeps it. 0 means the instance setting (30 days by default)."
           },
           "timezone": {
             "type": "string"
@@ -21574,7 +21574,7 @@
           },
           "warmup_retention_days": {
             "type": "integer",
-            "description": "How many days warmup mail stays in this mailbox before Warmbly deletes it from the warmup folder: 3 to 3650, or 0 to follow the instance setting."
+            "description": "How many days warmup mail stays in this mailbox before Warmbly deletes it, wherever warmup_placement keeps it: 3 to 3650, or 0 to follow the instance setting."
           },
           "tags": {
             "type": "array",

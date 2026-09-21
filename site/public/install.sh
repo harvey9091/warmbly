@@ -2125,7 +2125,7 @@ wiz_retention() {
             ask_number "Form funnel events (days)" "$RET_FORMS" 1 3650; RET_FORMS=$ANSWER
             ask_number "Audit log, incl. IP addresses (days)" "$RET_AUDIT" 1 3650; RET_AUDIT=$ANSWER
             say ""
-            out "  ${DIM}Warmup. Mail is deleted from each mailbox's warmup folder after the first window.${R}"
+            out "  ${DIM}Warmup. Mail is deleted from each mailbox after the first window, records after the second.${R}"
             ask_number "Warmup mail in mailboxes (days)" "$RET_WARMUP_MAIL" 3 3650; RET_WARMUP_MAIL=$ANSWER
             ask_number "Warmup records (days)" "$RET_WARMUP_EVENTS" 30 3650; RET_WARMUP_EVENTS=$ANSWER
             ;;
@@ -2277,7 +2277,7 @@ summary_rows() {
 "${DIM}Database${R}       ${WHITE}$(db_label)${R}" \
 "${DIM}Blobs${R}          ${WHITE}$(blob_label)${R}" \
 "${DIM}Import${R}         ${WHITE}${SYNC_BACKFILL_DAYS} days, up to ${SYNC_BACKFILL_MESSAGES} messages per mailbox${R}" \
-"${DIM}Kept${R}           ${WHITE}opens/clicks ${RET_ENGAGEMENT}d, forms ${RET_FORMS}d, audit ${RET_AUDIT}d, warmup ${RET_WARMUP_MAIL}d${R}" \
+"${DIM}Kept${R}           ${WHITE}opens/clicks ${RET_ENGAGEMENT}d, forms ${RET_FORMS}d, audit ${RET_AUDIT}d, warmup mail ${RET_WARMUP_MAIL}d, records ${RET_WARMUP_EVENTS}d${R}" \
 "${DIM}Backups${R}        ${WHITE}$(backup_label)${R}" \
 "${DIM}First owner${R}    ${WHITE}$(owner_label)${R}" \
 "${DIM}Sign-ups${R}       ${WHITE}$(registration_label)${R}" \

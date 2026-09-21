@@ -87,6 +87,7 @@ import { DitherBarChart } from "@/components/ui/dither";
 import WeekdayBitmask from "../campaigns/schedule/WeekdayBitmask";
 import { Loading } from "@/components/loader";
 import { NumberInput, TextInput } from "@/components/ui/field";
+import { clampWarmupRetentionDays } from "@/lib/warmupRetention";
 import { useConfirm } from "@/hooks/context/confirm";
 import { usePresenceResource } from "@/hooks/PresenceProvider";
 import ResourceViewers from "@/components/app/presence/ResourceViewers";
@@ -1387,18 +1388,17 @@ function WarmupRetentionField({
 }) {
     const days = form.warmup_retention_days ?? 0;
     const where = gmail ? "moved to Trash, which Gmail empties after 30 days" : "deleted";
-    const invalid = days !== 0 && days < 3;
     return (
         <FieldShell
             label="Keep warmup mail for (days)"
-            hint={`Warmup mail older than this is ${where} by Warmbly, and the copy Warmbly stores goes with it. 0 follows the instance setting (30 days unless changed); otherwise 3 to 3650. A message is never deleted before its engagement is recorded.`}
+            hint={`Warmup mail older than this is ${where} by Warmbly wherever the setting above keeps it, and the copy Warmbly stores goes with it. 0 follows the instance setting (30 days unless changed); otherwise 3 to 3650. A message is never deleted before its engagement is recorded.`}
         >
             <NumberInput
                 value={days}
                 min={0}
                 max={3650}
-                suffix={invalid ? <span className="text-red-600">min 3</span> : "days"}
-                onChange={(n) => update({ warmup_retention_days: Math.max(0, Math.min(3650, Math.floor(n))) })}
+                suffix="days"
+                onChange={(n) => update({ warmup_retention_days: clampWarmupRetentionDays(n) })}
                 className="w-full h-9"
             />
         </FieldShell>

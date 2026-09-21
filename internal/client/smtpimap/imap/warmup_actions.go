@@ -391,12 +391,22 @@ func (c *Client) SetSeen(ctx context.Context, mailboxName string, uids []uint32,
 	return nil
 }
 
-// DeleteUID removes one message from mailboxName for good: \Deleted, then an
-// expunge limited to that UID where the server offers UIDPLUS, so a message
-// somebody else flagged in the same folder is not taken along with it. This
-// is what the retention window asks for once a warmup message has served its
-// purpose, and IMAP has no Trash of its own to move it to instead.
-func (c *Client) DeleteUID(ctx context.Context, mailboxName string, uid uint32) error {
+// ErrNoSingleMessageDelete is returned when the server offers neither UIDPLUS
+// nor MOVE, so one message cannot be removed without expunging every message
+// another client has flagged \Deleted in the same folder.
+var ErrNoSingleMessageDelete = errors.New("imap: server offers neither UIDPLUS nor MOVE; not expunging a whole folder for one message")
+
+// DeleteUID removes one message from mailboxName: the retention window's
+// deletion once a warmup message has served its purpose.
+//
+// Only one message may go. With UIDPLUS that is \Deleted plus an expunge
+// scoped to the UID. Without it, a plain EXPUNGE would also take every
+// message some other client has flagged in the folder and not yet expunged,
+// so the message is moved to trashName instead, where the server's own
+// retention takes it from, and only with a real MOVE (the COPY fallback ends
+// in that same folder-wide EXPUNGE). A server with neither gets
+// ErrNoSingleMessageDelete and the message stays.
+func (c *Client) DeleteUID(ctx context.Context, mailboxName, trashName string, uid uint32) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -407,27 +417,39 @@ func (c *Client) DeleteUID(ctx context.Context, mailboxName string, uid uint32) 
 	defer c.lifecycle.RUnlock()
 	defer c.begin()()
 	name := c.qualifyMailboxLocked(mailboxName)
-	if _, err := c.selectMailbox(name, nil); err != nil {
-		return fmt.Errorf("select %q: %w", name, err)
-	}
+	caps := c.client.Caps()
 
-	set := imap.UIDSetNum(imap.UID(uid))
-	storeCmd := c.client.Store(set, &imap.StoreFlags{
-		Op:     imap.StoreFlagsAdd,
-		Silent: true,
-		Flags:  []imap.Flag{imap.FlagDeleted},
-	}, nil)
-	if err := storeCmd.Close(); err != nil {
-		return fmt.Errorf("store \\Deleted on uid %d: %w", uid, err)
-	}
-	if c.client.Caps().Has(imap.CapUIDPlus) {
+	if caps.Has(imap.CapUIDPlus) {
+		if _, err := c.selectMailbox(name, nil); err != nil {
+			return fmt.Errorf("select %q: %w", name, err)
+		}
+		set := imap.UIDSetNum(imap.UID(uid))
+		storeCmd := c.client.Store(set, &imap.StoreFlags{
+			Op:     imap.StoreFlagsAdd,
+			Silent: true,
+			Flags:  []imap.Flag{imap.FlagDeleted},
+		}, nil)
+		if err := storeCmd.Close(); err != nil {
+			return fmt.Errorf("store \\Deleted on uid %d: %w", uid, err)
+		}
 		if err := c.client.UIDExpunge(set).Close(); err != nil {
 			return fmt.Errorf("uid expunge %d in %q: %w", uid, name, err)
 		}
 		return nil
 	}
-	if err := c.client.Expunge().Close(); err != nil {
-		return fmt.Errorf("expunge %q: %w", name, err)
+	if trashName != "" && caps.Has(imap.CapMove) && !strings.EqualFold(c.qualifyMailboxLocked(trashName), name) {
+		return c.moveUIDLocked(mailboxName, trashName, uid)
 	}
-	return nil
+	return ErrNoSingleMessageDelete
+}
+
+// IsTrashMailbox returns true if the mailbox's attributes or name identify it
+// as the Trash folder, under RFC 6154 SPECIAL-USE or by name match.
+func IsTrashMailbox(name string, attrs []string) bool {
+	for _, a := range attrs {
+		if strings.EqualFold(a, string(imap.MailboxAttrTrash)) {
+			return true
+		}
+	}
+	return matchesFolderName(strings.ToLower(leaf(strings.TrimSpace(name))), ImapTrash)
 }

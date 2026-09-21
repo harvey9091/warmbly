@@ -47,7 +47,7 @@ func (d Deps) registerMailboxTools(r *Registry) {
 			"warmup_days":           intProp("Warmup active days bitmask."),
 			"warmup_placement":      enumProp("Where warmup mail is filed in the mailbox itself.", "folder", "inbox", "archive"),
 			"warmup_folder":         strProp("Folder (Gmail label) for warmup mail when warmup_placement is folder. Empty string means the instance default, Warmbly."),
-			"warmup_retention_days": intProp("Days warmup mail stays in the mailbox before Warmbly deletes it from the warmup folder: 3 to 3650, or 0 to follow the instance setting."),
+			"warmup_retention_days": intProp("Days warmup mail stays in the mailbox before Warmbly deletes it, wherever warmup_placement keeps it: 3 to 3650, or 0 to follow the instance setting."),
 		}, "email_account_id"),
 		Risk:            generation.RiskWrite,
 		RequiredOrgPerm: models.PermManageEmails,
