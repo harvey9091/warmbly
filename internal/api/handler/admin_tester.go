@@ -12,6 +12,7 @@ import (
 	"github.com/warmbly/warmbly/internal/api/middleware"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/pkg/argon2"
+	"github.com/warmbly/warmbly/internal/pkg/displayname"
 )
 
 // A tester account is one an operator hands to somebody outside the team: a
@@ -93,6 +94,11 @@ func (h *Handler) AdminCreateTester(c *gin.Context) {
 	}
 	if h.UserRepo == nil || h.OrganizationService == nil {
 		errx.JSON(c, errx.New(errx.ServiceUnavailable, "account creation is not available on this instance"))
+		return
+	}
+
+	if _, nerr := displayname.Validate("Workspace name", req.OrgName, displayname.Workspace, true); nerr != nil {
+		errx.JSON(c, nerr)
 		return
 	}
 

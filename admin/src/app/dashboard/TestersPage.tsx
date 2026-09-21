@@ -208,6 +208,7 @@ export default function TestersPage() {
                         <input
                             className="w-full h-8 rounded-md border border-border bg-background px-2 text-xs"
                             placeholder="Workspace name (optional)"
+                            maxLength={64}
                             value={orgName}
                             onChange={(e) => setOrgName(e.target.value)}
                         />

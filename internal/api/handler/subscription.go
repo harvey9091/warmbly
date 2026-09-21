@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"github.com/warmbly/warmbly/internal/api/middleware"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/displayname"
 )
 
 // GetSubscription returns the current organization's subscription
@@ -346,6 +348,8 @@ type EnterpriseInquiryRequest struct {
 	Notes           string `json:"notes,omitempty"`
 }
 
+const enterpriseNotesMaxLength = 2000
+
 // SubmitEnterpriseInquiry submits an enterprise pricing inquiry
 func (h *Handler) SubmitEnterpriseInquiry(c *gin.Context) {
 	var req EnterpriseInquiryRequest
@@ -354,9 +358,24 @@ func (h *Handler) SubmitEnterpriseInquiry(c *gin.Context) {
 		return
 	}
 
+	company, xerr := displayname.Validate("Company name", req.CompanyName, displayname.Workspace, false)
+	if xerr != nil {
+		errx.JSON(c, xerr)
+		return
+	}
+	contact, xerr := displayname.Validate("Contact name", req.ContactName, displayname.Person, false)
+	if xerr != nil {
+		errx.JSON(c, xerr)
+		return
+	}
+	if len([]rune(req.Notes)) > enterpriseNotesMaxLength {
+		errx.JSON(c, errx.New(errx.BadRequest, fmt.Sprintf("Notes must be %d characters or less.", enterpriseNotesMaxLength)))
+		return
+	}
+
 	inquiry := &models.EnterpriseInquiry{
-		CompanyName:     req.CompanyName,
-		ContactName:     req.ContactName,
+		CompanyName:     company,
+		ContactName:     contact,
 		ContactEmail:    req.ContactEmail,
 		EstimatedVolume: req.EstimatedVolume,
 		TeamSize:        req.TeamSize,

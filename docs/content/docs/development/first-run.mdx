@@ -128,7 +128,7 @@ All of these are read **only while the users table is empty**, so they are a no-
 | It gets | Detail |
 |---|---|
 | An owner account | Owner of a new organization, which is a membership status rather than a role |
-| An organization | Named from `WARMBLY_BOOTSTRAP_ORG`, or derived from the owner's name |
+| An organization | Named from `WARMBLY_BOOTSTRAP_ORG` when it is a valid workspace name, otherwise derived from the owner's name |
 | A trial | Irrelevant when `BILLING_PROVIDER=none`, which is the self-host default and unlocks everything. The dashboard header shows a `Self-hosted` badge instead of a plan or trial, and the billing and referral settings pages are hidden |
 | Every platform admin bit | So the same account signs in to the dashboard on `:5173` and the admin panel on `:5174` |
 

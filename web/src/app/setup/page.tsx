@@ -30,7 +30,8 @@ import getUser from "@/lib/api/client/auth/getUser";
 import useAuthConfig from "@/lib/api/hooks/auth/useAuthConfig";
 import { usePasswordStrength } from "@/hooks/usePasswordStrength";
 import { saveTokens } from "@/lib/auth";
-import { Label, TextInput } from "@/components/ui/field";
+import { FieldError, Label, TextInput } from "@/components/ui/field";
+import { PERSON_NAME_MAX, nameError, normalizeName } from "@/lib/displayName";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import type AuthConfig from "@/lib/api/models/auth/AuthConfig";
 
@@ -81,6 +82,11 @@ export default function SetupPage() {
             toast.error("Enter the email address for the owner account.");
             return;
         }
+        const invalidName = nameError("Name", firstName, "person", true);
+        if (invalidName) {
+            toast.error(invalidName);
+            return;
+        }
         if (password.length < 8) {
             toast.error("Password must be at least 8 characters long.");
             return;
@@ -102,7 +108,7 @@ export default function SetupPage() {
                 token,
                 email,
                 password,
-                first_name: firstName || undefined,
+                first_name: normalizeName(firstName) || undefined,
             });
             saveTokens(session as unknown as Record<string, unknown>);
             // Prime the profile with the new token before entering the gated
@@ -198,8 +204,11 @@ export default function SetupPage() {
                         onChange={setFirstName}
                         autoComplete="given-name"
                         placeholder="Alex"
+                        invalid={!!nameError("Name", firstName, "person", true)}
+                        maxLength={PERSON_NAME_MAX}
                         className={FIELD}
                     />
+                    <FieldError message={nameError("Name", firstName, "person", true)} />
                 </div>
 
                 <div>
