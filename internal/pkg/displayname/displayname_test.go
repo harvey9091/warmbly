@@ -27,7 +27,8 @@ func TestCheck(t *testing.T) {
 		{"google\u3002com", Person, Link},
 		{"a@b", Person, Link},
 		{"javascript:alert(1)", Person, Link},
-		{"mailto: x", Person, Link},
+		{"mailto:x", Person, Link},
+		{"Big Data: EU", Workspace, OK},
 		{"//evil", Person, Link},
 		{"10.0.0.1", Workspace, Link},
 		{"xn--80ak6aa92e.xn--p1ai", Workspace, Link},
@@ -70,5 +71,19 @@ func TestDisplayable(t *testing.T) {
 	long := "A very long workspace name that predates the sixty four character bound"
 	if got := Displayable(long); got != long {
 		t.Errorf("Displayable dropped a long legacy name: %q", got)
+	}
+}
+
+func TestDefaultWorkspace(t *testing.T) {
+	cases := map[string]string{
+		"":         "My Organization",
+		"  ":       "My Organization",
+		"Ada":      "Ada's Organization",
+		"evil.com": "My Organization",
+	}
+	for in, want := range cases {
+		if got := DefaultWorkspace(in); got != want {
+			t.Errorf("DefaultWorkspace(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

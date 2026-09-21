@@ -9,7 +9,7 @@ export const WORKSPACE_NAME_MAX = 64;
 const MAX_COMBINING_RUN = 3;
 
 const SCHEME =
-    /(?:^|[^\p{L}\p{N}])(?:https?|ftps?|mailto|tel|sms|callto|skype|javascript|data|file|news|irc|xmpp|ssh|git|ws|wss)\s*:/iu;
+    /(?:^|[^\p{L}\p{N}])(?:https?|ftps?|mailto|tel|sms|callto|skype|javascript|data|file|news|irc|xmpp|ssh|git|ws|wss):\S/iu;
 const DOMAIN = /[\p{L}\p{N}-]\.(?:\p{L}{2,}|xn--)/u;
 const IPV4 = /\d{1,3}(?:\.\d{1,3}){3}/;
 const FORBIDDEN_CHAR = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}<>`\\]/u;

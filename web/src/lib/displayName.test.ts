@@ -13,6 +13,7 @@ describe("nameError", () => {
         "www.example",
         "a@b",
         "javascript:alert(1)",
+        "mailto:x",
         "ｇｏｏｇｌｅ．ｃｏｍ",
         "google。com",
         "10.0.0.1",

@@ -48,7 +48,7 @@ const (
 const ErrorCode = "invalid_name"
 
 var (
-	schemeRe = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}])(?:https?|ftps?|mailto|tel|sms|callto|skype|javascript|data|file|news|irc|xmpp|ssh|git|ws|wss)\s*:`)
+	schemeRe = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}])(?:https?|ftps?|mailto|tel|sms|callto|skype|javascript|data|file|news|irc|xmpp|ssh|git|ws|wss):\S`)
 	// A label, a dot and a letter run: what linkifiers read as a hostname.
 	domainRe = regexp.MustCompile(`[\p{L}\p{N}-]\.(?:[\p{L}]{2,}|xn--)`)
 	ipv4Re   = regexp.MustCompile(`\d{1,3}(?:\.\d{1,3}){3}`)
@@ -217,6 +217,9 @@ func hasLetter(s string, kind Kind) bool {
 
 // DefaultWorkspace names the workspace created for a new account.
 func DefaultWorkspace(firstName string) string {
+	if Normalize(firstName) == "" {
+		return "My Organization"
+	}
 	if name := Clean(firstName+"'s Organization", Workspace); name != "" {
 		return name
 	}
