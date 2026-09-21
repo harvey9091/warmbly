@@ -139,6 +139,10 @@ type AuthService interface {
 	// provider redirects a browser here, so the response must be a redirect.
 	SSOCallbackComplete(ctx context.Context, in SSOCallback) (string, *errx.Error)
 	SSOExchange(ctx context.Context, code, binding string) (*models.LoginResult, *errx.Error)
+	// SSOLinkConfirm completes a federated sign-in that came back with
+	// link_required: the address already belongs to a password account, and
+	// the identity is attached only once that password is presented.
+	SSOLinkConfirm(ctx context.Context, data *SSOLinkData, ipaddr, userAgent string) (*models.LoginResult, *errx.Error)
 }
 
 // OperatorNotifier is the instance-wide operator alert surface, injected

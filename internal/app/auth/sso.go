@@ -272,7 +272,7 @@ func (s *authService) SSOCallbackComplete(ctx context.Context, in SSOCallback) (
 		lastName = in.LastName
 	}
 
-	userID, rerr := s.resolveFederatedUser(
+	res, rerr := s.resolveFederatedUser(
 		ctx,
 		in.Provider,
 		claims.Issuer,
@@ -285,7 +285,9 @@ func (s *authService) SSOCallbackComplete(ctx context.Context, in SSOCallback) (
 		return "", rerr
 	}
 
-	result, lerr := s.finishLoginAs(ctx, userID, in.IPAddress, in.UserAgent, sessionProvider(in.Provider))
+	// Carried through the handoff like a 2FA challenge is: the dashboard
+	// collects it at the exchange and asks for the password there.
+	result, lerr := s.finishFederatedLogin(ctx, res, in.IPAddress, in.UserAgent, sessionProvider(in.Provider))
 	if lerr != nil {
 		return "", lerr
 	}

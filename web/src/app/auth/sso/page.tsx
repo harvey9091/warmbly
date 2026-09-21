@@ -52,6 +52,26 @@ export default function SSOCallbackPage() {
                     navigate("/auth/login", { replace: true, state: { two_fa_pending: session.pending_token } });
                     return;
                 }
+                // The provider's address already belongs to an account with a
+                // password. Nothing is linked and no session exists until that
+                // password is entered, which the login screen collects.
+                if (session.link_required) {
+                    if (!session.pending_token) {
+                        setError("This address already has an account, but the link request did not arrive. Try signing in again.");
+                        return;
+                    }
+                    navigate("/auth/login", {
+                        replace: true,
+                        state: {
+                            sso_link: {
+                                pending_token: session.pending_token,
+                                email: session.link_email ?? "",
+                                provider: session.link_provider ?? "",
+                            },
+                        },
+                    });
+                    return;
+                }
                 if (!session.access_token) {
                     setError("That sign-in did not return a session. Try again.");
                     return;

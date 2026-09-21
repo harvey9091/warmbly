@@ -433,6 +433,7 @@ Alongside them, `api_url` is this API's own public base (for a copyable example 
 - `POST /auth/oidc/begin`, `GET /auth/oidc/callback` (generic OpenID Connect sign-in)
 - `POST /auth/google/begin`, `GET /auth/google/callback`, `POST /auth/apple/begin`, `POST /auth/apple/callback` (browser Sign in with Google and Sign in with Apple)
 - `POST /auth/sso/exchange` (swaps the single-use handoff code from any of those callbacks for the session; `POST /auth/oidc/exchange` is the older name for the same endpoint)
+- `POST /auth/sso/link` (completes a provider sign-in that resolved to an existing password account: takes that account's password, attaches the identity and returns the session)
 - `POST /auth/logout`, `POST /auth/logout-all`, `GET /auth/me`, `PATCH /auth/me/onboarding`
 - `POST /auth/me/avatar`, `DELETE /auth/me/avatar`
 - `POST /emails/onboarding/oauth/start`, `POST /emails/onboarding/oauth/finish`, `POST /emails/onboarding/smtp-imap`

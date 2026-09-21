@@ -21,6 +21,30 @@ type LoginResult struct {
 	TwoFARequired bool   `json:"two_fa_required,omitempty"`
 	PendingToken  string `json:"pending_token,omitempty"`
 	ExpiresIn     int    `json:"expires_in,omitempty"`
+
+	// LinkRequired is the third outcome, reached only through a federated
+	// sign-in: the provider asserted an address that already belongs to an
+	// account with a password, and that password has to be presented at
+	// POST /auth/sso/link before the identity is attached and a session
+	// issued. PendingToken and ExpiresIn carry the challenge, LinkEmail and
+	// LinkProvider let the form say what is being linked to what.
+	LinkRequired bool   `json:"link_required,omitempty"`
+	LinkEmail    string `json:"link_email,omitempty"`
+	LinkProvider string `json:"link_provider,omitempty"`
+}
+
+// SSOLinkPending is the Redis-backed state for a federated sign-in waiting on
+// the account's password, keyed by the pending session id. It binds the
+// pending JWT's nonce (single-use), counts attempts, and holds the verified
+// identity so nothing about it is taken from the confirming request.
+type SSOLinkPending struct {
+	UserID   uuid.UUID `json:"user_id"`
+	Nonce    string    `json:"nonce"`
+	Tries    int       `json:"tries"`
+	Provider string    `json:"provider"`
+	Issuer   string    `json:"issuer"`
+	Subject  string    `json:"subject"`
+	Email    string    `json:"email"`
 }
 
 // TwoFAPending is the Redis-backed state for an in-flight 2FA login challenge,

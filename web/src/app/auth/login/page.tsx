@@ -17,6 +17,7 @@ import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp
 import useLogin from "@/lib/api/hooks/auth/useLogin";
 import useLoginConfirm from "@/lib/api/hooks/auth/useLoginConfirm";
 import { useTwoFactorVerify } from "@/lib/api/hooks/auth/useTwoFactor";
+import useLinkSSO from "@/lib/api/hooks/auth/useLinkSSO";
 import useRegister from "@/lib/api/hooks/auth/useRegister";
 import useRegisterConfirm from "@/lib/api/hooks/auth/useRegisterConfirm";
 import { saveTokens } from "@/lib/auth";
@@ -25,6 +26,7 @@ import { TURNSTILE_KEY, API_URL } from "@/lib/information";
 import useBrand from "@/hooks/useBrand";
 import useAuthConfig from "@/lib/api/hooks/auth/useAuthConfig";
 import type Session from "@/lib/api/models/auth/Session";
+import type { SSOLinkChallenge } from "@/lib/api/models/auth/LoginResult";
 import beginSSO from "@/lib/api/client/auth/beginSSO";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
@@ -152,7 +154,7 @@ function useCountdown(seconds: number) {
    Main multi-step auth page
    ═══════════════════════════════════════════ */
 
-type Step = "email" | "signin" | "signup" | "verify" | "2fa";
+type Step = "email" | "signin" | "signup" | "verify" | "2fa" | "link";
 type PasskeyStatus = "preparing" | "ready" | "waiting" | "timeout" | "not-found" | "error";
 // Why a signup cannot proceed. Either read off /auth/config before the form is
 // shown, or returned by the API when the policy changed mid-session.
@@ -195,15 +197,20 @@ export default function LoginPage() {
     // here with its pending challenge rather than a session, because the 2FA
     // form lives on this screen. See the SSO landing page.
     const ssoTwoFA = (location.state as { two_fa_pending?: string } | null)?.two_fa_pending ?? "";
+    // A federated sign-in whose address already belongs to an account with a
+    // password comes back the same way: the identity is attached, and the
+    // session issued, only once that password is entered here.
+    const ssoLink = (location.state as { sso_link?: SSOLinkChallenge } | null)?.sso_link ?? null;
     // The pending token is single use, so it must not survive a reload of this
     // screen: history state does, and would leave a form that can only fail.
     useEffect(() => {
-        if (ssoTwoFA) navigate(location.pathname + location.search, { replace: true, state: null });
+        if (ssoTwoFA || ssoLink) navigate(location.pathname + location.search, { replace: true, state: null });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     /* State */
-    const [step, setStep] = useState<Step>(ssoTwoFA ? "2fa" : "email");
+    const [step, setStep] = useState<Step>(ssoTwoFA ? "2fa" : ssoLink ? "link" : "email");
+    const [linkChallenge, setLinkChallenge] = useState<SSOLinkChallenge | null>(ssoLink);
     const [mode, setMode] = useState<"signin" | "signup">(() =>
         location.pathname.includes("/register") ||
         new URLSearchParams(location.search).get("mode") === "signup"
@@ -265,6 +272,7 @@ export default function LoginPage() {
     const registerMutation = useRegister();
     const loginConfirmMutation = useLoginConfirm();
     const verify2FAMutation = useTwoFactorVerify();
+    const linkMutation = useLinkSSO();
     const registerConfirmMutation = useRegisterConfirm();
 
     const pending = captchaLoading ||
@@ -660,6 +668,41 @@ export default function LoginPage() {
         }
     };
 
+    /* ── Link step: a provider sign-in on an existing password account ── */
+    // No captcha: the pending token is the proof of a completed provider
+    // flow, and a wrong password is metered server-side like a sign-in.
+    const handleLink = async (password: string) => {
+        if (!linkChallenge) return;
+        try {
+            const res = await linkMutation.mutateAsync({ pending_token: linkChallenge.pending_token, password });
+            if (res.two_fa_required) {
+                if (!res.pending_token) {
+                    toast.error("Something went wrong, please try again.");
+                    return;
+                }
+                setPendingToken(res.pending_token);
+                goTo("2fa");
+                return;
+            }
+            if (!res.access_token) {
+                toast.error("Something went wrong, please try again.");
+                return;
+            }
+            toast.success(`${providerLabel(linkChallenge.provider)} sign-in added to your account`);
+            await completeSession(res as unknown as Token);
+        } catch (e) {
+            toast.error(buildError(e as AppError));
+        }
+    };
+
+    /* What a provider is called on screen. Generic OIDC carries the name the
+       operator configured, so a deployment behind Okta says Okta. */
+    const providerLabel = (provider: string): string => {
+        if (provider === "google") return "Google";
+        if (provider === "apple") return "Apple";
+        return authConfig.provider_labels?.oidc || "single sign-on";
+    };
+
     /* ── Resend OTP ─────────────────────── */
     const handleResend = useCallback(() => {
         withCaptcha(async (token) => {
@@ -762,13 +805,30 @@ export default function LoginPage() {
                     </MotionWrap>
                 )}
 
+                {!signupGate && !showSignupUnavailable && step === "link" && linkChallenge && (
+                    <MotionWrap key="link" direction={direction}>
+                        <LinkStep
+                            email={linkChallenge.email}
+                            providerLabel={providerLabel(linkChallenge.provider)}
+                            pending={linkMutation.isPending}
+                            onBack={() => {
+                                setLinkChallenge(null);
+                                goTo("email", -1);
+                            }}
+                            onSubmit={handleLink}
+                        />
+                    </MotionWrap>
+                )}
+
                 {!signupGate && !showSignupUnavailable && step === "2fa" && (
                     <MotionWrap key="2fa" direction={direction}>
                         <TwoFactorStep
                             pending={verify2FAMutation.isPending}
                             onBack={() => {
                                 setPendingToken("");
-                                goTo("verify", -1);
+                                // A challenge reached from a provider sign-in or
+                                // the link step has no emailed code to return to.
+                                goTo(session ? "verify" : "email", -1);
                             }}
                             onSubmit={handle2FA}
                         />
@@ -1161,6 +1221,69 @@ function SignInStep({
                     </button>
                 </>
             )}
+        </div>
+    );
+}
+
+/* ── Link step ─────────────────────────── */
+
+// The provider verified the address, not the account. Asking for the password
+// is what makes "sign in with Google" on an address that already has an
+// account mean the account's owner chose it.
+function LinkStep({
+    email,
+    providerLabel,
+    pending,
+    onBack,
+    onSubmit,
+}: {
+    email: string;
+    providerLabel: string;
+    pending: boolean;
+    onBack: () => void;
+    onSubmit: (password: string) => void;
+}) {
+    const { register, handleSubmit, formState: { errors } } = useForm<z.infer<typeof signInSchema>>({
+        resolver: zodResolver(signInSchema),
+    });
+
+    return (
+        <div>
+            <div className="text-center mb-6">
+                <EmailPill email={email} onEdit={onBack} />
+                <h1 className="text-[28px] font-bold text-slate-900 tracking-tight leading-tight">Confirm it's you</h1>
+                <p className="text-sm text-slate-400 mt-1.5">
+                    This address already has a Warmbly account. Enter its password to add {providerLabel} sign-in to it.
+                </p>
+            </div>
+
+            <form onSubmit={handleSubmit((data) => onSubmit(data.password))} className="space-y-4">
+                <div>
+                    <div className="flex items-center justify-between mb-1">
+                        <label className="text-sm font-medium text-slate-600 pl-0.5">Password</label>
+                        <Link to="/auth/reset-password" className="text-xs text-sky-500 hover:text-sky-600 font-medium transition-colors">
+                            Forgot password?
+                        </Link>
+                    </div>
+                    <input
+                        type="password"
+                        placeholder="Enter your password"
+                        className={INPUT}
+                        autoComplete="current-password"
+                        autoFocus
+                        {...register("password")}
+                    />
+                    <FieldError message={errors.password?.message} />
+                </div>
+
+                <div className="pt-1">
+                    <AuthButton loading={pending}>Link and sign in</AuthButton>
+                </div>
+            </form>
+
+            <p className="text-xs text-slate-400 text-center mt-4">
+                Not you? Go back and sign in with your password instead; nothing has been changed on the account.
+            </p>
         </div>
     );
 }

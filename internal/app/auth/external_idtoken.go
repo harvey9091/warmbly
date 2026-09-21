@@ -72,14 +72,34 @@ func (s *authService) externalIDTokenAuth(ctx context.Context, verifier IDTokenV
 	// it, because the unique index is on the raw column.
 	email.Address = normalizeEmail(email.Address)
 
-	userID, rerr := s.resolveFederatedUser(ctx, provider, claims.Issuer, claims.Subject, email, firstName, lastName)
+	res, rerr := s.resolveFederatedUser(ctx, provider, claims.Issuer, claims.Subject, email, firstName, lastName)
 	if rerr != nil {
 		return nil, rerr
 	}
 
 	// Ban check and the 2FA gate both live in finishLoginAs, so social
 	// sign-in enforces exactly what password login does.
-	return s.finishLoginAs(ctx, userID, ipaddr, userAgent, provider)
+	return s.finishFederatedLogin(ctx, res, ipaddr, userAgent, provider)
+}
+
+// federatedResolution is what a verified external identity resolved to. When
+// LinkRequired is set the account exists but has not yet proved it wants this
+// identity attached: nothing was linked and no session may be issued until
+// its password arrives at SSOLinkConfirm.
+type federatedResolution struct {
+	UserID       uuid.UUID
+	LinkRequired bool
+	Identity     models.UserIdentity
+}
+
+// finishFederatedLogin turns a resolution into a login result: the password
+// challenge when the account still has to claim the identity, the session
+// otherwise. Both federated paths end here so they cannot disagree.
+func (s *authService) finishFederatedLogin(ctx context.Context, res federatedResolution, ipaddr, userAgent, sessionProvider string) (*models.LoginResult, *errx.Error) {
+	if res.LinkRequired {
+		return s.createLinkChallenge(ctx, res.UserID, res.Identity)
+	}
+	return s.finishLoginAs(ctx, res.UserID, ipaddr, userAgent, sessionProvider)
 }
 
 // resolveFederatedUser maps a verified external identity to a local account.
@@ -90,23 +110,36 @@ func (s *authService) externalIDTokenAuth(ctx context.Context, verifier IDTokenV
 // local account, and only when that account has no other identity from this
 // issuer already: a second subject claiming an address that is already
 // federated is an impersonation attempt, not a re-login.
-func (s *authService) resolveFederatedUser(ctx context.Context, provider, issuer, subject string, email *mail.Address, firstName, lastName string) (uuid.UUID, *errx.Error) {
+//
+// An address match alone does not attach the identity to an account that has
+// a password. The provider verified the address, not that whoever holds this
+// provider account is the person who set that password, so the link waits
+// for the password (SSOLinkConfirm). An account with no password was created
+// through a verified address and has nothing to ask for, so it links here.
+func (s *authService) resolveFederatedUser(ctx context.Context, provider, issuer, subject string, email *mail.Address, firstName, lastName string) (federatedResolution, *errx.Error) {
+	identity := models.UserIdentity{
+		Provider: provider,
+		Issuer:   issuer,
+		Subject:  subject,
+		Email:    email.Address,
+	}
+
 	if s.identities != nil && issuer != "" && subject != "" {
 		existing, ierr := s.identities.FindUserByIdentity(ctx, issuer, subject)
 		if ierr != nil {
 			errs.CaptureException(ierr)
-			return uuid.Nil, errx.InternalError()
+			return federatedResolution{}, errx.InternalError()
 		}
 		if existing != uuid.Nil {
 			_ = s.identities.TouchLogin(ctx, issuer, subject)
-			return existing, nil
+			return federatedResolution{UserID: existing, Identity: identity}, nil
 		}
 	}
 
 	u, uerr := s.userRepository.GetUserByEmail(ctx, email.Address)
 	if uerr != nil && !errors.Is(uerr, errx.ErrUser) {
 		errs.CaptureException(uerr)
-		return uuid.Nil, errx.InternalError()
+		return federatedResolution{}, errx.InternalError()
 	}
 
 	if u == nil {
@@ -114,40 +147,81 @@ func (s *authService) resolveFederatedUser(ctx context.Context, provider, issuer
 		// DISABLE_REGISTRATION like every other one. Without this an instance
 		// set to `true` is still open to anyone the IdP will assert.
 		if xerr := s.federatedSignupAllowed(ctx, email.Address); xerr != nil {
-			return uuid.Nil, xerr
+			return federatedResolution{}, xerr
 		}
 		var cerr error
 		u, cerr = s.createExternalUser(ctx, email, firstName, lastName)
 		if cerr != nil {
 			errs.CaptureException(cerr)
-			return uuid.Nil, errx.InternalError()
+			return federatedResolution{}, errx.InternalError()
 		}
-	} else if s.identities != nil && issuer != "" {
-		linked, herr := s.identities.HasIdentityForIssuer(ctx, u.ID, issuer)
-		if herr != nil {
-			errs.CaptureException(herr)
-			return uuid.Nil, errx.InternalError()
+	} else {
+		if xerr := s.refuseSecondIdentity(ctx, u.ID, issuer); xerr != nil {
+			return federatedResolution{}, xerr
 		}
-		if linked {
-			return uuid.Nil, errx.New(errx.Forbidden, "this account is already linked to a different identity from that provider")
+		required, xerr := s.linkRequiresPassword(ctx, u.ID)
+		if xerr != nil {
+			return federatedResolution{}, xerr
 		}
-	}
-
-	if s.identities != nil && issuer != "" && subject != "" {
-		if lerr := s.identities.Link(ctx, u.ID, models.UserIdentity{
-			Provider: provider,
-			Issuer:   issuer,
-			Subject:  subject,
-			Email:    email.Address,
-		}); lerr != nil {
-			// A unique-index violation means another account already owns this
-			// identity. Refuse rather than sign anyone in.
-			errs.CaptureException(lerr)
-			return uuid.Nil, errx.New(errx.Forbidden, "that identity is already linked to another account")
+		if required {
+			return federatedResolution{UserID: u.ID, LinkRequired: true, Identity: identity}, nil
 		}
 	}
 
-	return u.ID, nil
+	if xerr := s.linkIdentity(ctx, u.ID, identity); xerr != nil {
+		return federatedResolution{}, xerr
+	}
+
+	return federatedResolution{UserID: u.ID, Identity: identity}, nil
+}
+
+// refuseSecondIdentity refuses the email fallback for an account that already
+// holds a different subject from this issuer.
+func (s *authService) refuseSecondIdentity(ctx context.Context, userID uuid.UUID, issuer string) *errx.Error {
+	if s.identities == nil || issuer == "" {
+		return nil
+	}
+	linked, herr := s.identities.HasIdentityForIssuer(ctx, userID, issuer)
+	if herr != nil {
+		errs.CaptureException(herr)
+		return errx.InternalError()
+	}
+	if linked {
+		return errx.New(errx.Forbidden, "this account is already linked to a different identity from that provider")
+	}
+	return nil
+}
+
+// linkRequiresPassword reports whether attaching a federated identity to this
+// account has to wait for its password. A deployment with password sign-in
+// off has no password to ask for, and neither does an account that never set
+// one. A read failure refuses rather than links: it is the safe direction.
+func (s *authService) linkRequiresPassword(ctx context.Context, userID uuid.UUID) (bool, *errx.Error) {
+	if s.policy != nil && s.policy.DisablePasswordLogin {
+		return false, nil
+	}
+	if s.authRepository == nil {
+		return false, nil
+	}
+	hash, xerr := s.authRepository.GetPasswordHash(ctx, userID)
+	if xerr != nil {
+		errs.CaptureException(xerr)
+		return false, errx.InternalError()
+	}
+	return hash != "", nil
+}
+
+// linkIdentity binds the identity to the account. A unique-index violation
+// means another account already owns it, and nobody is signed in on it.
+func (s *authService) linkIdentity(ctx context.Context, userID uuid.UUID, identity models.UserIdentity) *errx.Error {
+	if s.identities == nil || identity.Issuer == "" || identity.Subject == "" {
+		return nil
+	}
+	if lerr := s.identities.Link(ctx, userID, identity); lerr != nil {
+		errs.CaptureException(lerr)
+		return errx.New(errx.Forbidden, "that identity is already linked to another account")
+	}
+	return nil
 }
 
 // createExternalUser provisions a first-time social sign-in: a passwordless
