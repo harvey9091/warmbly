@@ -21427,6 +21427,15 @@
           },
           "warmup_retention_days": {
             "type": "integer",
+            "anyOf": [
+              {
+                "const": 0
+              },
+              {
+                "minimum": 3,
+                "maximum": 3650
+              }
+            ],
             "description": "How many days warmup mail stays in this mailbox before Warmbly deletes it, wherever warmup_placement keeps it. 0 means the instance setting (30 days by default)."
           },
           "timezone": {
@@ -21574,6 +21583,15 @@
           },
           "warmup_retention_days": {
             "type": "integer",
+            "anyOf": [
+              {
+                "const": 0
+              },
+              {
+                "minimum": 3,
+                "maximum": 3650
+              }
+            ],
             "description": "How many days warmup mail stays in this mailbox before Warmbly deletes it, wherever warmup_placement keeps it: 3 to 3650, or 0 to follow the instance setting."
           },
           "tags": {

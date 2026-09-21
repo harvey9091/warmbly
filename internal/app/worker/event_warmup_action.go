@@ -41,13 +41,17 @@ func (w *WorkerService) HandleWarmupAction(ctx context.Context, action models.Wa
 	w.mailManager.RLock()
 	mail, exists := w.mailManager.Emails[action.EmailID]
 	w.mailManager.RUnlock()
-	if !exists {
-		log.Warn().Str("email_id", action.EmailID.String()).Msg("Email account not found for warmup action")
-		return nil
-	}
-
 	var err error
 	switch {
+	case !exists:
+		// Engagement on a mailbox this worker is not holding is dropped; it
+		// is best effort and a mailbox mid-move earns its signal elsewhere.
+		// A retention delete is redelivered instead, because the control
+		// plane has already retired the row and will not send it again.
+		log.Warn().Str("email_id", action.EmailID.String()).Msg("Email account not found for warmup action")
+		if hasWarmupAction(action.Actions, models.WarmupActionDelete) {
+			err = errors.New("mailbox not loaded on this worker")
+		}
 	case mail.GoogleData != nil && mail.GoogleData.Client != nil:
 		err = w.runGoogleWarmupActions(ctx, mail, action)
 	case mail.GraphData != nil && mail.GraphData.Client != nil:
@@ -280,13 +284,26 @@ func (w *WorkerService) runImapWarmupActions(ctx context.Context, mail *wmail.WM
 	}
 
 	files := hasWarmupAction(action.Actions, models.WarmupActionFile)
-	boxName, uid := w.locateWarmupMessage(ctx, imapClient, action, sourceBox, files, dst, inboxName, sentName)
+	deletes := hasWarmupAction(action.Actions, models.WarmupActionDelete)
+	boxName, uid, searchErr := w.locateWarmupMessage(ctx, imapClient, action, sourceBox, files, dst, inboxName, sentName)
 	if boxName == "" {
+		if deletes && searchErr != nil {
+			// A folder could not be searched, so absence is not established;
+			// deleting the body now would leave the message with nothing to
+			// key a retry by.
+			return fmt.Errorf("locate warmup message for deletion: %w", searchErr)
+		}
 		log.Warn().
 			Str("folder", action.MailboxFolder).
 			Uint32("uid_validity", action.MailboxUIDValidity).
 			Str("email_id", action.EmailID.String()).
 			Msg("Warmup action skipped: the message could not be located in any folder")
+		if deletes {
+			// Already gone from the mailbox: an earlier delivery removed it
+			// before the body drop failed, or the owner did. Either way the
+			// body is the only thing left to do.
+			return w.dropWarmupBody(ctx, mail, action, action.RFCMessageID)
+		}
 		return nil
 	}
 
@@ -404,7 +421,9 @@ func lookupTrash(boxes []*models.Mailbox) *models.Mailbox {
 //
 // The Message-ID is the one identifier a move does not change, so the likely
 // destinations are searched for it, most likely first. An empty folder name
-// means the message is nowhere we know to look.
+// means the message is nowhere we know to look; the error, when set with it,
+// is the last search that failed, so the caller can tell "absent" from
+// "could not look".
 func (w *WorkerService) locateWarmupMessage(
 	ctx context.Context,
 	client warmupIMAPClient,
@@ -412,10 +431,11 @@ func (w *WorkerService) locateWarmupMessage(
 	sourceBox *models.Mailbox,
 	files bool,
 	dst, inboxName, sentName string,
-) (string, uint32) {
+) (string, uint32, error) {
 	if files && sourceBox != nil {
-		return sourceBox.Name, action.UID
+		return sourceBox.Name, action.UID, nil
 	}
+	var searchErr error
 	if action.RFCMessageID != "" {
 		// Ordered by likelihood: the destination a previous leg filed it into,
 		// then the inbox a rescue put it back in, then Sent for our own copy of
@@ -433,17 +453,18 @@ func (w *WorkerService) locateWarmupMessage(
 			uid, err := client.FindUIDByMessageID(ctx, name, action.RFCMessageID)
 			if err != nil {
 				log.Debug().Err(err).Str("folder", name).Str("email_id", action.EmailID.String()).Msg("Could not search a folder for the warmup message")
+				searchErr = err
 				continue
 			}
 			if uid != 0 {
-				return name, uid
+				return name, uid, nil
 			}
 		}
 	}
 	if sourceBox != nil {
-		return sourceBox.Name, action.UID
+		return sourceBox.Name, action.UID, nil
 	}
-	return "", 0
+	return "", 0, searchErr
 }
 
 // warmupIMAPClient is the slice of the IMAP client the warmup actions use, so
