@@ -222,14 +222,17 @@ func (r *adminRepository) SearchUsers(ctx context.Context, search *models.AdminU
 	offset := search.Offset
 
 	orderBy := "ORDER BY u.created_at DESC, u.id DESC"
-	if search.SortBy == "email" || search.SortBy == "name" {
+	if search.SortBy != "" {
 		dir := " ASC"
 		if search.SortDesc {
 			dir = " DESC"
 		}
-		if search.SortBy == "email" {
+		switch search.SortBy {
+		case "created_at":
+			orderBy = "ORDER BY u.created_at" + dir + ", u.id" + dir
+		case "email":
 			orderBy = "ORDER BY u.email" + dir + ", u.id" + dir
-		} else {
+		case "name":
 			orderBy = "ORDER BY u.first_name" + dir + ", u.last_name" + dir + ", u.id" + dir
 		}
 	}

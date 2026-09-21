@@ -170,6 +170,24 @@ func TestLiveAdminPagingWalksEveryRowOnce(t *testing.T) {
 		sameSet(t, "users by name", got, users)
 	})
 
+	t.Run("users oldest first", func(t *testing.T) {
+		var order []uuid.UUID
+		got := walk(t, func(cursor string) ([]uuid.UUID, models.Pagination) {
+			res, err := admin.SearchUsers(ctx, &models.AdminUserSearch{Query: f.tag, Status: "all", SortBy: "created_at", Limit: 1, Offset: offsetOf(t, cursor)})
+			if err != nil {
+				t.Fatalf("SearchUsers: %v", err)
+			}
+			for _, u := range res.Data {
+				order = append(order, u.ID)
+			}
+			return order[len(order)-len(res.Data):], res.Pagination
+		})
+		sameSet(t, "users oldest first", got, users)
+		if order[0] != f.user {
+			t.Fatalf("ascending created_at starts at %s, want the fixture's first user %s", order[0], f.user)
+		}
+	})
+
 	t.Run("campaigns", func(t *testing.T) {
 		org := &models.ParamUUID{UUID: f.org}
 		got := walk(t, func(cursor string) ([]uuid.UUID, models.Pagination) {
