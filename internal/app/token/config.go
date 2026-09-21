@@ -34,4 +34,7 @@ const (
 	PurposeRegistration  = "registration"
 	PurposePasswordReset = "reset"
 	PurposeTwoFAPending  = "2fa"
+	// PurposeSSOLink is a federated sign-in parked on an existing password
+	// account until that password is presented; it opens nothing else.
+	PurposeSSOLink = "sso_link"
 )

@@ -367,6 +367,10 @@ func Run(
 		// The name the exchange shipped under when OIDC was the only browser
 		// flow, kept so a client written against it keeps working.
 		auth.POST("/oidc/exchange", h.SSOExchange)
+		// A federated sign-in whose address belongs to an existing password
+		// account comes back link_required; this takes the password, attaches
+		// the identity and issues the session.
+		auth.POST("/sso/link", h.SSOLink)
 
 		// 2FA login challenge (PUBLIC): exchanges a single-use pending token +
 		// TOTP/recovery code for a real session. Rate-limited in the service

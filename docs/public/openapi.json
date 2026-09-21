@@ -612,6 +612,59 @@
         }
       }
     },
+    "/auth/sso/link": {
+      "post": {
+        "operationId": "auth_sso_link",
+        "summary": "Link a provider sign-in to an existing password account",
+        "description": "Completes a Google, Apple or OpenID Connect sign-in that came back link_required: the provider's verified address already belongs to an account with a password. A correct password attaches the provider identity to that account and returns the session, or a 2FA challenge when the account has TOTP enrolled (the identity is then attached once /auth/2fa/verify passes). A wrong password is refused like a sign-in and counts against the same per-address budget; three wrong answers, or ten minutes, end the challenge with the code sso_link_expired and the sign-in has to be started again.",
+        "tags": [
+          "auth"
+        ],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SSOLinkRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The session, or a 2FA challenge.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body, wrong password (Invalid email or password.), or an unknown, expired, used or exhausted pending token (code sso_link_expired).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account or the identity can no longer be linked: the account is suspended, already holds a different identity from this provider, or the identity belongs to another account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/passkey/login/begin": {
       "post": {
         "operationId": "auth_passkey_login_begin",
@@ -20724,7 +20777,7 @@
       },
       "LoginResult": {
         "type": "object",
-        "description": "Result of /auth/login/confirm: either a full token pair (the TokenPair fields are present) or a 2FA challenge (two_fa_required=true with a pending_token). The two cases are mutually exclusive.",
+        "description": "Result of /auth/login/confirm, /auth/sso/exchange, /auth/google and /auth/apple: a full token pair (the TokenPair fields are present), a 2FA challenge (two_fa_required=true with a pending_token), or, for a provider sign-in whose address already belongs to an account with a password, a link challenge (link_required=true with a pending_token for /auth/sso/link). The cases are mutually exclusive.",
         "properties": {
           "access_token": {
             "type": "string",
@@ -20747,11 +20800,29 @@
           },
           "pending_token": {
             "type": "string",
-            "description": "Single-use pending token to pass to /auth/2fa/verify. Present only when two_fa_required is true."
+            "description": "Single-use pending token. Pass it to /auth/2fa/verify when two_fa_required is true, or to /auth/sso/link when link_required is true."
           },
           "expires_in": {
             "type": "integer",
-            "description": "Seconds until the pending token expires. Present only when two_fa_required is true."
+            "description": "Seconds until the pending token expires. Present only with a challenge."
+          },
+          "link_required": {
+            "type": "boolean",
+            "description": "True when the provider's address already belongs to an account with a password. Nothing is linked and no session exists until that password is posted to /auth/sso/link."
+          },
+          "link_email": {
+            "type": "string",
+            "format": "email",
+            "description": "The address the provider asserted, for the password form. Present only when link_required is true."
+          },
+          "link_provider": {
+            "type": "string",
+            "enum": [
+              "google",
+              "apple",
+              "oidc"
+            ],
+            "description": "Which provider is being linked. Present only when link_required is true."
           }
         }
       },
@@ -20864,6 +20935,25 @@
           "code": {
             "type": "string",
             "description": "A current TOTP code or a recovery code."
+          }
+        }
+      },
+      "SSOLinkRequest": {
+        "type": "object",
+        "description": "Request body for /auth/sso/link.",
+        "required": [
+          "pending_token",
+          "password"
+        ],
+        "properties": {
+          "pending_token": {
+            "type": "string",
+            "description": "The pending_token from a link_required login result."
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "description": "The password of the existing account the provider's address belongs to."
           }
         }
       },

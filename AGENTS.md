@@ -201,6 +201,7 @@ Every instance that has not updated yet runs the code an attacker can read here.
 - TOTP verification records the step it consumed (`user_totp_settings.last_used_step`) and refuses a replay of it. Any new second factor needs equivalent single-use enforcement
 - **admin routes require a session that verified a second factor.** `middleware.RequireAdminPermission` refuses `!session.MFAVerified` with `admin_mfa_required`. Never add an admin route that bypasses it
 - an operation that changes who can get in, or moves money or ownership, requires a fresh authentication (`middleware.RequireFreshAuth`, `POST /v1/auth/reauth`). API-key and OAuth callers pass through, because they present a credential on every call and have no session to refresh
+- a federated identity (Google, Apple, OIDC) is bound to an account by `(issuer, subject)`. The email fallback that finds an existing account on a first sign-in attaches the identity to a password account only after that password is presented (`resolveFederatedUser` parks it as `link_required`, `SSOLinkConfirm` completes it through `finishLoginAs`). Only an account with no password links on the address alone
 
 ### Sessions and tokens
 

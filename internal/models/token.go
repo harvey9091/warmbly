@@ -21,6 +21,24 @@ type LoginResult struct {
 	TwoFARequired bool   `json:"two_fa_required,omitempty"`
 	PendingToken  string `json:"pending_token,omitempty"`
 	ExpiresIn     int    `json:"expires_in,omitempty"`
+
+	// LinkRequired: a federated sign-in on an existing password account, which
+	// links and signs in only once that password reaches POST /auth/sso/link.
+	LinkRequired bool   `json:"link_required,omitempty"`
+	LinkEmail    string `json:"link_email,omitempty"`
+	LinkProvider string `json:"link_provider,omitempty"`
+}
+
+// SSOLinkPending is the Redis-backed state for a federated sign-in waiting on
+// the account's password; the identity is held here, never taken from the
+// confirming request.
+type SSOLinkPending struct {
+	UserID   uuid.UUID `json:"user_id"`
+	Nonce    string    `json:"nonce"`
+	Provider string    `json:"provider"`
+	Issuer   string    `json:"issuer"`
+	Subject  string    `json:"subject"`
+	Email    string    `json:"email"`
 }
 
 // TwoFAPending is the Redis-backed state for an in-flight 2FA login challenge,
@@ -31,6 +49,11 @@ type TwoFAPending struct {
 	UserID uuid.UUID `json:"user_id"`
 	Nonce  string    `json:"nonce"`
 	Tries  int       `json:"tries"`
+	// LinkIdentity is attached to the account only once the code passes, so a
+	// federated sign-in on a 2FA account links after both factors, not one.
+	LinkIdentity *UserIdentity `json:"link_identity,omitempty"`
+	// AuthProvider is what the resulting session records; empty means email.
+	AuthProvider string `json:"auth_provider,omitempty"`
 }
 
 type Session struct {
