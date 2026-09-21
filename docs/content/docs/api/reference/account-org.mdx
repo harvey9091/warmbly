@@ -480,7 +480,7 @@ Auth: Session only (not available to API keys).
 
 `POST /auth/me/password`
 
-Updates the signed-in user's password. Returns `200 OK`.
+Updates the signed-in user's password. Every session the account holds is ended, the one making the request included, and the response is the token pair of a new session for the calling device. Tokens issued before the change are refused after it, so the client must replace its stored pair with the one returned. Returns `200 OK`.
 
 Auth: Session only (not available to API keys).
 
@@ -495,6 +495,17 @@ Auth: Session only (not available to API keys).
 {
   "current_password": "correct horse battery staple",
   "new_password": "a longer better passphrase"
+}
+```
+
+#### Response
+
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiJ9...",
+  "access_token_expires_at": "2026-09-21T22:00:00Z",
+  "refresh_token": "eyJhbGciOiJIUzI1NiJ9...",
+  "refresh_token_expires_at": "2026-10-21T10:00:00Z"
 }
 ```
 

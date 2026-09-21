@@ -108,8 +108,9 @@ type AuthService interface {
 	ResetPasswordConfirm(ctx context.Context, data *ResetPasswordConfirm, session, ipaddr string) *errx.Error
 
 	// ChangePassword updates a logged-in user's password after verifying the
-	// current one.
-	ChangePassword(ctx context.Context, userID, currentSessionID uuid.UUID, data *ChangePassword) *errx.Error
+	// current one. Every session ends with it and the caller gets the token
+	// pair of a new one for its device.
+	ChangePassword(ctx context.Context, userID, currentSessionID uuid.UUID, ipaddr, userAgent string, data *ChangePassword) (*models.Token, *errx.Error)
 
 	// Policy is the resolved per-deployment auth behavior, exposed so the
 	// public /auth/config endpoint can report it to the login screen.

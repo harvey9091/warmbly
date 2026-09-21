@@ -959,7 +959,7 @@
       "post": {
         "operationId": "auth_change_password",
         "summary": "Change password",
-        "description": "Changes the signed-in user's password (current + new). Requires a user session token (not an API key).",
+        "description": "Changes the signed-in user's password (current + new). Every session the account holds is ended, the calling one included, and the response is the token pair of a new session for the calling device; tokens issued before the change are refused after it. Requires a user session token (not an API key).",
         "tags": [
           "auth"
         ],
@@ -985,7 +985,14 @@
         },
         "responses": {
           "200": {
-            "description": "Password changed."
+            "description": "Password changed. The body is the token pair of the new session; every earlier token is now refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPair"
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid request body or weak new password.",

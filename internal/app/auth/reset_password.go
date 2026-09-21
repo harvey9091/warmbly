@@ -10,6 +10,7 @@ import (
 	tokenpkg "github.com/warmbly/warmbly/internal/app/token"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
+	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/notify/templates"
 	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/argon2"
@@ -196,52 +197,52 @@ func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPassw
 
 // ChangePassword updates a logged-in user's password. It verifies the current
 // password first (so a hijacked but unattended session can't silently change
-// it), rejects OAuth-only accounts, and enforces the password policy.
-func (s *authService) ChangePassword(ctx context.Context, userID, currentSessionID uuid.UUID, data *ChangePassword) *errx.Error {
+// it), rejects OAuth-only accounts, and enforces the password policy. Every
+// session ends with the change; the caller gets a new pair for its device.
+func (s *authService) ChangePassword(ctx context.Context, userID, currentSessionID uuid.UUID, ipaddr, userAgent string, data *ChangePassword) (*models.Token, *errx.Error) {
 	hash, xerr := s.authRepository.GetPasswordHash(ctx, userID)
 	if xerr != nil {
-		return xerr
+		return nil, xerr
 	}
 	if hash == "" {
-		return errx.New(errx.BadRequest, "this account signs in without a password")
+		return nil, errx.New(errx.BadRequest, "this account signs in without a password")
 	}
 
 	ok, verr := argon2.Verify(data.CurrentPassword, hash)
 	if verr != nil {
 		errs.CaptureException(verr)
-		return errx.InternalError()
+		return nil, errx.InternalError()
 	}
 	if !ok {
-		return errx.ErrCredentials
+		return nil, errx.ErrCredentials
 	}
 
 	if perr := crypt.PasswordError(data.NewPassword); perr != nil {
-		return perr
+		return nil, perr
 	}
 	if data.NewPassword == data.CurrentPassword {
-		return errx.New(errx.BadRequest, "the new password must be different")
+		return nil, errx.New(errx.BadRequest, "the new password must be different")
 	}
 
 	newHash, hashErr := argon2.Hash(data.NewPassword)
 	if hashErr != nil {
 		errs.CaptureException(hashErr)
-		return errx.InternalError()
+		return nil, errx.InternalError()
 	}
 	if err := s.authRepository.ResetPassword(ctx, userID, newHash); err != nil {
-		return err
+		return nil, err
 	}
 
-	// Changing the password evicts every OTHER signed-in device (the whole
-	// point of changing it when a session may be compromised). The current
-	// device keeps its session so the user isn't logged out of the action
-	// they just performed.
-	if s.tokenService != nil && currentSessionID != uuid.Nil {
-		if err := s.tokenService.RevokeOtherSessions(ctx, userID, currentSessionID); err != nil {
-			errs.CaptureException(err)
-			// Non-fatal: the password is already changed.
-		}
+	if s.tokenService == nil {
+		return nil, nil
 	}
-	return nil
+	// Reported, not swallowed: the caller must not keep a token that may now be revoked.
+	tok, err := s.tokenService.ReissueSession(ctx, userID, currentSessionID, ipaddr, userAgent)
+	if err != nil {
+		errs.CaptureException(err)
+		return nil, err
+	}
+	return tok, nil
 }
 
 // PasswordHashFor returns the stored argon2 hash for a user.
