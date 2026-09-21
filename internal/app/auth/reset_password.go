@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	tokenpkg "github.com/warmbly/warmbly/internal/app/token"
@@ -158,6 +159,18 @@ func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPassw
 		return errx.ErrToken
 	}
 
+	// A link is only good for the password it was requested against. Once the
+	// password has been written by any path (this flow, the signed-in change,
+	// the operator CLI), every link issued before that write is dead, however
+	// long its own expiry has left.
+	changedAt, err := s.authRepository.PasswordChangedAt(ctx, sess.UserID)
+	if err != nil {
+		return err
+	}
+	if resetLinkPredatesPassword(sess.IssuedAt, changedAt) {
+		return errx.ErrToken
+	}
+
 	if err := s.deletePasswordResetSession(ctx, sess.SessionID); err != nil {
 		return err
 	}
@@ -192,6 +205,20 @@ func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPassw
 	}
 
 	return nil
+}
+
+// resetLinkPredatesPassword reports whether a reset token was issued no later
+// than the last password write. JWT iat is whole seconds and the write is
+// stamped by Postgres at microseconds, so a token minted in the same second as
+// the change is refused too: fail closed, the person asks for a new link.
+func resetLinkPredatesPassword(issuedAt *jwt.NumericDate, changedAt *time.Time) bool {
+	if changedAt == nil {
+		return false
+	}
+	if issuedAt == nil {
+		return true
+	}
+	return !issuedAt.Time.After(*changedAt)
 }
 
 // ChangePassword updates a logged-in user's password. It verifies the current

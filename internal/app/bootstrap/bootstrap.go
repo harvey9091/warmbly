@@ -36,6 +36,7 @@ import (
 	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/argon2"
 	"github.com/warmbly/warmbly/internal/pkg/crypt"
+	"github.com/warmbly/warmbly/internal/pkg/displayname"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -124,10 +125,7 @@ func (s *Service) createOwner(ctx context.Context, address string) error {
 		return fmt.Errorf("bootstrap: saving the owner: %w", err)
 	}
 
-	orgName := strings.TrimSpace(os.Getenv("WARMBLY_BOOTSTRAP_ORG"))
-	if orgName == "" {
-		orgName = defaultOrgName(u.FirstName)
-	}
+	orgName := bootstrapOrgName(u.FirstName)
 	org, orgErr := s.orgSvc.Create(ctx, u.ID, orgName)
 	if orgErr != nil {
 		return fmt.Errorf("bootstrap: creating the organization: %w", orgErr)
@@ -264,6 +262,14 @@ func (s *Service) Claim(ctx context.Context, token, address, password, firstName
 	if perr := crypt.PasswordError(password); perr != nil {
 		return nil, perr
 	}
+	firstName, nerr := displayname.Validate("Name", firstName, displayname.Person, true)
+	if nerr != nil {
+		return nil, nerr
+	}
+	lastName, nerr = displayname.Validate("Last name", lastName, displayname.Person, true)
+	if nerr != nil {
+		return nil, nerr
+	}
 
 	// Refuse on an instance that already has accounts, even with a valid
 	// token: a stale link out of an old log must never mint a second owner.
@@ -313,10 +319,7 @@ func (s *Service) Claim(ctx context.Context, token, address, password, firstName
 		return nil, err
 	}
 
-	orgName := strings.TrimSpace(os.Getenv("WARMBLY_BOOTSTRAP_ORG"))
-	if orgName == "" {
-		orgName = defaultOrgName(u.FirstName)
-	}
+	orgName := bootstrapOrgName(u.FirstName)
 	org, orgErr := s.orgSvc.Create(ctx, u.ID, orgName)
 	if orgErr != nil {
 		errs.CaptureException(orgErr)
@@ -335,11 +338,16 @@ func (s *Service) Claim(ctx context.Context, token, address, password, firstName
 	return u, nil
 }
 
-func defaultOrgName(firstName string) string {
-	if firstName == "" {
-		return "My Organization"
+// bootstrapOrgName is WARMBLY_BOOTSTRAP_ORG when it is a valid workspace name.
+func bootstrapOrgName(firstName string) string {
+	env := os.Getenv("WARMBLY_BOOTSTRAP_ORG")
+	if name := displayname.Clean(env, displayname.Workspace); name != "" {
+		return name
 	}
-	return firstName + "'s Organization"
+	if strings.TrimSpace(env) != "" {
+		log.Printf("Warning: WARMBLY_BOOTSTRAP_ORG is not a valid workspace name; using the default.")
+	}
+	return displayname.DefaultWorkspace(firstName)
 }
 
 func hashToken(token string) string {

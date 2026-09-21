@@ -191,7 +191,7 @@ Auth: public (not available to API keys).
 
 `POST /auth/reset-password/confirm`
 
-Sets a new password using the emailed reset code (carried inside the signed `session` token).
+Sets a new password using the emailed reset code (carried inside the signed `session` token). A reset token is single-use and bound to the password it was requested against: once the password is written by any path (this endpoint, the signed-in change, or an operator reset), every reset token issued before that write answers `401` however long its own expiry has left.
 
 Auth: public (not available to API keys).
 

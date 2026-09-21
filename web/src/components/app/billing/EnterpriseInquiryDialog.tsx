@@ -12,7 +12,10 @@ import { useAppStore } from "@/stores";
 import useEnterpriseInquiry from "@/lib/api/hooks/app/subscription/useEnterpriseInquiry";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
-import { Label, NumberInput, TextInput } from "@/components/ui/field";
+import { FieldError, Label, NumberInput, TextInput } from "@/components/ui/field";
+import { PERSON_NAME_MAX, WORKSPACE_NAME_MAX, nameError, normalizeName } from "@/lib/displayName";
+
+const NOTES_MAX = 2000;
 
 export default function EnterpriseInquiryDialog({
     open,
@@ -85,14 +88,16 @@ export default function EnterpriseInquiryDialog({
         };
     }, [open, inquiry.isPending, onClose]);
 
-    const valid = company.trim() && name.trim() && /.+@.+\..+/.test(email.trim());
+    const companyError = company.trim() ? nameError("Company name", company, "workspace") : null;
+    const nameInvalid = name.trim() ? nameError("Contact name", name, "person") : null;
+    const valid = company.trim() && name.trim() && !companyError && !nameInvalid && /.+@.+\..+/.test(email.trim());
 
     async function submit() {
         if (!valid || inquiry.isPending) return;
         try {
             const res = await inquiry.mutateAsync({
-                company_name: company.trim(),
-                contact_name: name.trim(),
+                company_name: normalizeName(company),
+                contact_name: normalizeName(name),
                 contact_email: email.trim(),
                 estimated_volume: Number.isFinite(volume) ? volume : undefined,
                 team_size: Number.isFinite(teamSize) ? teamSize : undefined,
@@ -159,12 +164,26 @@ export default function EnterpriseInquiryDialog({
                             </p>
                             <div>
                                 <Label>Company</Label>
-                                <TextInput value={company} onChange={setCompany} placeholder="Acme Inc" />
+                                <TextInput
+                                    value={company}
+                                    onChange={setCompany}
+                                    placeholder="Acme Inc"
+                                    invalid={!!companyError}
+                                    maxLength={WORKSPACE_NAME_MAX}
+                                />
+                                <FieldError message={companyError} />
                             </div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 <div>
                                     <Label>Your name</Label>
-                                    <TextInput value={name} onChange={setName} placeholder="Jane Doe" />
+                                    <TextInput
+                                        value={name}
+                                        onChange={setName}
+                                        placeholder="Jane Doe"
+                                        invalid={!!nameInvalid}
+                                        maxLength={PERSON_NAME_MAX}
+                                    />
+                                    <FieldError message={nameInvalid} />
                                 </div>
                                 <div>
                                     <Label>Work email</Label>
@@ -191,6 +210,7 @@ export default function EnterpriseInquiryDialog({
                                 <textarea
                                     value={notes}
                                     onChange={(e) => setNotes(e.target.value)}
+                                    maxLength={NOTES_MAX}
                                     rows={3}
                                     placeholder="Mailbox count, providers, compliance needs…"
                                     className="w-full rounded-md border border-slate-200 px-2.5 py-1.5 text-[12.5px] text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100 resize-y"

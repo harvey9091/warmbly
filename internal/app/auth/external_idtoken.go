@@ -10,6 +10,7 @@ import (
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/observability/errs"
+	"github.com/warmbly/warmbly/internal/pkg/displayname"
 	"github.com/warmbly/warmbly/internal/pkg/idtoken"
 	"github.com/warmbly/warmbly/internal/repository"
 )
@@ -233,6 +234,9 @@ func (s *authService) createExternalUser(ctx context.Context, email *mail.Addres
 		return nil, err
 	}
 
+	// A provider-asserted name the rules refuse is dropped, never a failed sign-in.
+	firstName = displayname.Clean(firstName, displayname.Person)
+	lastName = displayname.Clean(lastName, displayname.Person)
 	if firstName != "" {
 		// Provider-asserted name beats CreateUser's email local-part default.
 		if perr := s.userRepository.UpdateProfile(ctx, u.ID, firstName, lastName); perr == nil {
@@ -253,10 +257,7 @@ func (s *authService) createExternalUser(ctx context.Context, email *mail.Addres
 
 	var org *models.Organization
 	if s.organizationService != nil {
-		orgName := u.FirstName + "'s Organization"
-		if u.FirstName == "" {
-			orgName = "My Organization"
-		}
+		orgName := displayname.DefaultWorkspace(u.FirstName)
 		var orgErr *errx.Error
 		org, orgErr = s.organizationService.Create(ctx, u.ID, orgName)
 		if orgErr != nil {

@@ -20902,13 +20902,21 @@
       },
       "UpdateProfileRequest": {
         "type": "object",
-        "description": "Editable profile fields for the authenticated user.",
+        "description": "Editable profile fields for the authenticated user. Both names are plain text: no links, web addresses, email addresses or invisible formatting characters. A refused name answers 400 with code `invalid_name`.",
+        "required": [
+          "first_name",
+          "last_name"
+        ],
         "properties": {
           "first_name": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50
           },
           "last_name": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50
           }
         }
       },

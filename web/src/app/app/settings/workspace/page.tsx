@@ -1,7 +1,8 @@
 import React from "react";
 import { Link } from "react-router-dom";
 import { useAppStore, type Organization as StoreOrganization } from "@/stores";
-import { TextInput } from "@/components/ui/field";
+import { FieldError, TextInput } from "@/components/ui/field";
+import { WORKSPACE_NAME_MAX, nameError, normalizeName } from "@/lib/displayName";
 import { Textarea } from "@/components/ui/textarea";
 import useUpdateOrganization from "@/lib/api/hooks/app/organizations/useUpdateOrganization";
 import type Organization from "@/lib/api/models/app/organizations/Organization";
@@ -113,13 +114,15 @@ function WorkspaceSettings({ org: currentOrg }: { org: StoreOrganization | null 
         void saveToThisWorkspace({ assistant_shared_history: next });
     };
 
-    // Auto-save the workspace name ~700ms after typing stops. An empty name is
-    // never persisted; the field just stays unsaved until it's valid again.
+    // Auto-save the workspace name ~700ms after typing stops. A name the server
+    // would refuse is never sent; the field shows why and stays unsaved.
+    const nameInvalid = nameError("Workspace name", name, "workspace");
     const autosave = useAutosave({
-        value: name.trim(),
+        value: normalizeName(name),
         debounceMs: 700,
         save: async (v) => {
-            if (!v) throw new Error("name required");
+            const invalid = nameError("Workspace name", v, "workspace");
+            if (invalid) throw new Error(invalid);
             await saveToThisWorkspace({ name: v });
         },
     });
@@ -158,7 +161,17 @@ function WorkspaceSettings({ org: currentOrg }: { org: StoreOrganization | null 
                     />
                 </Row>
                 <Row label="Workspace name" description="Shown in the sidebar and invitation emails.">
-                    <TextInput value={name} onChange={setName} className="w-full max-w-[280px]" />
+                    <div className="w-full max-w-[280px]">
+                        <TextInput
+                            value={name}
+                            onChange={setName}
+                            invalid={!!nameInvalid}
+                            title={nameInvalid ?? undefined}
+                            maxLength={WORKSPACE_NAME_MAX}
+                            className="w-full"
+                        />
+                        <FieldError message={nameInvalid} />
+                    </div>
                 </Row>
                 <Row
                     label="Workspace ID"
