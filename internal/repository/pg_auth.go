@@ -20,6 +20,9 @@ type AuthRepository interface {
 	ExternalLogin(ctx context.Context, email string) (*models.User, *errx.Error)
 	ResetPassword(ctx context.Context, userID uuid.UUID, password string) *errx.Error
 	GetPasswordHash(ctx context.Context, userID uuid.UUID) (string, *errx.Error)
+	// PasswordChangedAt is when the password was last written, nil when it
+	// has not been since the column existed.
+	PasswordChangedAt(ctx context.Context, userID uuid.UUID) (*time.Time, *errx.Error)
 }
 
 type authRepository struct {
@@ -142,10 +145,28 @@ func (r *authRepository) GetPasswordHash(ctx context.Context, userID uuid.UUID) 
 	return *hash, nil
 }
 
+// PasswordChangedAt returns the last password write, which is the floor a
+// reset link's issue time must clear.
+func (r *authRepository) PasswordChangedAt(ctx context.Context, userID uuid.UUID) (*time.Time, *errx.Error) {
+	var at *time.Time
+	err := r.DB.QueryRow(ctx, `SELECT password_changed_at FROM users WHERE id = $1`, userID).Scan(&at)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errx.ErrNotFound
+		}
+		db.CaptureError(err, "get password changed at", []any{userID}, "queryrow")
+		return nil, errx.InternalError()
+	}
+	return at, nil
+}
+
+// ResetPassword is the one write of a password hash, so it is also the one
+// place the change is stamped: every reset link issued before this instant is
+// refused from here on, whichever path (reset, change, operator CLI) wrote it.
 func (r *authRepository) ResetPassword(ctx context.Context, userID uuid.UUID, passwordHash string) *errx.Error {
 	query := `
 		UPDATE users
-		SET password_hash = $1, updated_at = now()
+		SET password_hash = $1, password_changed_at = now(), updated_at = now()
 		WHERE id = $2
 	`
 	params := []any{
