@@ -222,7 +222,9 @@ func (h *Handler) ResetPasswordConfirm(c *gin.Context) {
 	c.Status(http.StatusOK)
 }
 
-// ChangePassword updates the signed-in user's password (current + new).
+// ChangePassword updates the signed-in user's password (current + new). Every
+// session ends with it; the response carries the token pair of a new session
+// for this device, and the client must use it from here on.
 func (h *Handler) ChangePassword(c *gin.Context) {
 	uid, err := uuid.Parse(middleware.GetUserID(c))
 	if err != nil {
@@ -239,10 +241,15 @@ func (h *Handler) ChangePassword(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), authRequestTimeout)
 	defer cancel()
 
-	if xerr := h.AuthService.ChangePassword(ctx, uid, currentSessionID(c), &data); xerr != nil {
+	tok, xerr := h.AuthService.ChangePassword(ctx, uid, middleware.GetSession(c), c.ClientIP(), c.Request.UserAgent(), &data)
+	if xerr != nil {
 		errx.Handle(c, xerr)
 		return
 	}
+	if tok == nil {
+		c.Status(http.StatusOK)
+		return
+	}
 
-	c.Status(http.StatusOK)
+	c.JSON(http.StatusOK, tok)
 }

@@ -41,6 +41,12 @@ type TokenService interface {
 	ListSessions(ctx context.Context, userID, currentSessionID uuid.UUID) ([]SessionView, *errx.Error)
 	RevokeSessionByID(ctx context.Context, userID, sessionID, currentSessionID uuid.UUID) *errx.Error
 	RevokeOtherSessions(ctx context.Context, userID, currentSessionID uuid.UUID) *errx.Error
+	// ReissueSession ends every one of the user's sessions, the current one
+	// included, and returns the token pair of a fresh session for the same
+	// device. A credential change calls it so nothing issued before the change
+	// is accepted after it. current is the caller's session as the middleware
+	// resolved it; nil means no context to carry over.
+	ReissueSession(ctx context.Context, userID uuid.UUID, current *models.Session, ipaddr, userAgent string) (*models.Token, *errx.Error)
 	// StampReauth records that this session just re-proved the account holder,
 	// which is what RequireFreshAuth checks before a sensitive change.
 	StampReauth(ctx context.Context, sessionID uuid.UUID) *errx.Error
