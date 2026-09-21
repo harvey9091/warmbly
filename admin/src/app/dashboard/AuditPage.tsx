@@ -213,10 +213,10 @@ export default function AuditPage() {
                         size="sm"
                         variant="outline"
                         onClick={() => {
-                            const c = data?.pagination?.cursor;
+                            const c = data?.pagination?.next_cursor;
                             if (c) setCursors((prev) => [...prev, c]);
                         }}
-                        disabled={!data?.pagination?.cursor}
+                        disabled={!data?.pagination?.next_cursor}
                     >
                         Next
                     </Button>

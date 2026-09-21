@@ -31,6 +31,10 @@ export class APIError<T = unknown> extends Error {
     // failed page can show exactly what broke instead of a generic message.
     code?: string;
     requestId?: string;
+    // The call that failed, path only: no query string, so no filter value
+    // reaches an error report.
+    method?: string;
+    path?: string;
     body?: T;
     constructor(message: string, status: number, body?: T) {
         super(message);
@@ -150,6 +154,8 @@ export async function Request<T>(config: AuthRequestConfig): Promise<T> {
 function noteFailure(config: AuthRequestConfig, failure: APIError): void {
     const method = config.method?.toUpperCase() ?? "REQUEST";
     const path = config.url?.split("?")[0] ?? "";
+    failure.method = method;
+    failure.path = path;
 
     const properties: Record<string, string | number | boolean> = {
         method,

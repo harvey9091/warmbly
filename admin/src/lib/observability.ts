@@ -32,7 +32,7 @@ export type Identity = { userId: string; email?: string | null; name?: string | 
 export type StepProperties = Record<string, string | number | boolean>;
 
 type Backend = {
-    capture: (error: unknown) => void;
+    capture: (error: unknown, properties?: StepProperties) => void;
     identify: (identity: Identity) => void;
     step: (message: string, properties?: StepProperties) => void;
 };
@@ -42,7 +42,7 @@ const backends: Backend[] = [];
 // EARLY_LIMIT bounds the pre-load buffers: a render loop that throws every
 // frame must not grow them without end.
 const EARLY_LIMIT = 20;
-let early: unknown[] = [];
+let early: Array<{ error: unknown; properties?: StepProperties }> = [];
 let earlySteps: Array<{ message: string; properties?: StepProperties }> = [];
 
 // identity is remembered rather than forwarded once, because a backend that
@@ -74,7 +74,7 @@ export function initErrorReporting(): void {
             .then((posthog) =>
                 settle(posthog && POSTHOG_ERROR_TRACKING
                     ? {
-                          capture: (error) => void posthog.captureException(error),
+                          capture: (error, properties) => void posthog.captureException(error, properties),
                           identify: (next) => identifyPostHog(posthog, next),
                           step: (message, properties) => posthog.addExceptionStep(message, properties),
                       }
@@ -102,7 +102,8 @@ export function initErrorReporting(): void {
                     release: SENTRY_RELEASE || undefined,
                 });
                 settle({
-                    capture: (error) => void Sentry.captureException(error),
+                    capture: (error, properties) =>
+                        void Sentry.captureException(error, properties ? { extra: properties } : undefined),
                     identify: (next) =>
                         Sentry.setUser(next
                             ? { id: next.userId, email: next.email ?? undefined, username: next.name ?? undefined }
@@ -210,12 +211,12 @@ function identifyPostHog(posthog: import("posthog-js").PostHog, next: Identity):
 
 // captureException reports an error the app handled itself. A no-op when no
 // backend is configured.
-export function captureException(error: unknown): void {
+export function captureException(error: unknown, properties?: StepProperties): void {
     // Remembered as well as reported while a backend is still loading, so the
     // one that has not arrived yet gets it on replay. Only the newly settled
     // backend replays, so nothing is reported twice.
-    if (awaiting > 0) remember(error);
-    for (const backend of backends) backend.capture(error);
+    if (awaiting > 0) remember(error, properties);
+    for (const backend of backends) backend.capture(error, properties);
 }
 
 // setErrorIdentity names the operator later events belong to. Pass null on
@@ -241,7 +242,7 @@ function settle(backend: Backend | null): void {
         backends.push(backend);
         if (identity) backend.identify(identity);
         for (const step of earlySteps) backend.step(step.message, step.properties);
-        for (const error of early) backend.capture(error);
+        for (const entry of early) backend.capture(entry.error, entry.properties);
     }
 
     awaiting--;
@@ -269,7 +270,7 @@ function installEarlyHandlers(): void {
     };
 }
 
-function remember(error: unknown): void {
+function remember(error: unknown, properties?: StepProperties): void {
     if (early.length >= EARLY_LIMIT) return;
-    early.push(error);
+    early.push({ error, properties });
 }

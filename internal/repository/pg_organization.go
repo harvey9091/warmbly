@@ -10,7 +10,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/warmbly/warmbly/internal/models"
-	"github.com/warmbly/warmbly/internal/utils/paging"
 )
 
 // OrganizationRepository defines the interface for organization data access
@@ -795,7 +794,7 @@ func (r *organizationRepository) SearchOrganizationsForAdmin(ctx context.Context
 
 	if search.PlanID != nil {
 		where += ` AND s.plan_id = $` + itoa(argNum)
-		args = append(args, *search.PlanID)
+		args = append(args, search.PlanID.UUID)
 		argNum++
 	}
 	switch search.PlanVisibility {
@@ -845,7 +844,7 @@ func (r *organizationRepository) SearchOrganizationsForAdmin(ctx context.Context
 	}
 	addBefore := func(col string, v *time.Time) {
 		if v != nil {
-			where += " AND " + col + " < ($" + itoa(argNum) + " + INTERVAL '1 day')"
+			where += " AND " + col + " < ($" + itoa(argNum) + "::timestamptz + INTERVAL '1 day')"
 			args = append(args, *v)
 			argNum++
 		}
@@ -919,11 +918,7 @@ func (r *organizationRepository) SearchOrganizationsForAdmin(ctx context.Context
 	addAfter("o.updated_at", search.UpdatedAfter)
 	addBefore("o.updated_at", search.UpdatedBefore)
 
-	if search.Cursor != nil {
-		where += ` AND o.id < $` + itoa(argNum)
-		args = append(args, *search.Cursor)
-		argNum++
-	}
+	offset := search.Offset
 
 	orderCol := "o.created_at"
 	switch search.SortBy {
@@ -942,7 +937,7 @@ func (r *organizationRepository) SearchOrganizationsForAdmin(ctx context.Context
 	if search.SortBy != "" && !search.SortDesc {
 		orderDir = "ASC"
 	}
-	orderBy := "ORDER BY " + orderCol + " " + orderDir
+	orderBy := "ORDER BY " + orderCol + " " + orderDir + ", o.id DESC"
 
 	args = append(args, limit+1)
 
@@ -956,7 +951,7 @@ func (r *organizationRepository) SearchOrganizationsForAdmin(ctx context.Context
 		LEFT JOIN plans p ON p.id = s.plan_id` + adminOrgAcquisitionJoin + `
 		` + where + `
 		` + orderBy + `
-		LIMIT $` + itoa(argNum)
+		` + adminLimitOffset("$"+itoa(argNum), offset)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1007,8 +1002,7 @@ func (r *organizationRepository) SearchOrganizationsForAdmin(ctx context.Context
 	}
 	if len(items) > limit {
 		result.Data = items[:limit]
-		last := items[limit-1].ID
-		result.Pagination.NextCursor = paging.UUIDString(last)
+		result.Pagination.NextCursor = adminNextCursor(offset, limit)
 	}
 
 	// Total count for the same filter — drop the trailing LIMIT arg.
@@ -1286,12 +1280,12 @@ func (r *organizationRepository) ListLimitRequestsForAdmin(ctx context.Context, 
 	}
 	if search.OrgID != nil {
 		where += " AND lr.organization_id = $" + itoa(argNum)
-		args = append(args, *search.OrgID)
+		args = append(args, search.OrgID.UUID)
 		argNum++
 	}
 	if search.SubmittedBy != nil {
 		where += " AND lr.submitted_by = $" + itoa(argNum)
-		args = append(args, *search.SubmittedBy)
+		args = append(args, search.SubmittedBy.UUID)
 		argNum++
 	}
 	if search.Reviewed {
@@ -1317,7 +1311,7 @@ func (r *organizationRepository) ListLimitRequestsForAdmin(ctx context.Context, 
 	}
 	addBefore := func(col string, v *time.Time) {
 		if v != nil {
-			where += " AND " + col + " < ($" + itoa(argNum) + " + INTERVAL '1 day')"
+			where += " AND " + col + " < ($" + itoa(argNum) + "::timestamptz + INTERVAL '1 day')"
 			args = append(args, *v)
 			argNum++
 		}
@@ -1338,12 +1332,7 @@ func (r *organizationRepository) ListLimitRequestsForAdmin(ctx context.Context, 
 	addAfter("lr.reviewed_at", search.ReviewedAfter)
 	addBefore("lr.reviewed_at", search.ReviewedBefore)
 
-	// Keyset on id (mirrors the org explorer; default sort is submitted_at).
-	if search.Cursor != nil {
-		where += " AND lr.id < $" + itoa(argNum)
-		args = append(args, *search.Cursor)
-		argNum++
-	}
+	offset := search.Offset
 
 	orderCol := "lr.submitted_at"
 	switch search.SortBy {
@@ -1379,7 +1368,7 @@ func (r *organizationRepository) ListLimitRequestsForAdmin(ctx context.Context, 
 		JOIN users u ON u.id = lr.submitted_by
 		` + where + `
 		` + orderBy + `
-		LIMIT $` + itoa(argNum)
+		` + adminLimitOffset("$"+itoa(argNum), offset)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1411,8 +1400,7 @@ func (r *organizationRepository) ListLimitRequestsForAdmin(ctx context.Context, 
 	}
 	if len(items) > limit {
 		result.Data = items[:limit]
-		last := items[limit-1].ID
-		result.Pagination.NextCursor = paging.UUIDString(last)
+		result.Pagination.NextCursor = adminNextCursor(offset, limit)
 	}
 
 	// Total count for the same filter — drop the trailing LIMIT arg.

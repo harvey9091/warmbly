@@ -427,7 +427,7 @@ func runUserRevokeAdmin(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	result, lerr := c.admins.ListAdmins(ctx, nil, 100)
+	result, lerr := c.admins.ListAdmins(ctx, 0, 100)
 	if lerr != nil {
 		return fmt.Errorf("counting the remaining platform admins: %w", lerr)
 	}

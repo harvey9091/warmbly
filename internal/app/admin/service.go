@@ -23,13 +23,13 @@ type AdminService interface {
 	BanUser(ctx context.Context, adminID, userID uuid.UUID, reason string, scope models.BanScope, ipAddress, userAgent string) *errx.Error
 	UnbanUser(ctx context.Context, adminID, userID uuid.UUID, reason string, ipAddress, userAgent string) *errx.Error
 	GetUserBans(ctx context.Context, userID uuid.UUID) ([]models.UserBan, *errx.Error)
-	GetUserCampaigns(ctx context.Context, userID uuid.UUID, cursor *uuid.UUID, limit int) (*models.AdminCampaignsResult, *errx.Error)
-	GetUserEmails(ctx context.Context, userID uuid.UUID, cursor *uuid.UUID, limit int) ([]models.AdminWorkerEmail, *models.Pagination, *errx.Error)
+	GetUserCampaigns(ctx context.Context, userID uuid.UUID, offset, limit int) (*models.AdminCampaignsResult, *errx.Error)
+	GetUserEmails(ctx context.Context, userID uuid.UUID, offset, limit int) ([]models.AdminWorkerEmail, *models.Pagination, *errx.Error)
 	GetUserRateLimits(ctx context.Context, userID uuid.UUID) (*models.AdminUserRateLimits, *errx.Error)
 	UpdateUserRateLimits(ctx context.Context, adminID, userID uuid.UUID, update *models.UpdateUserRateLimitsRequest, ipAddress, userAgent string) (*models.AdminUserRateLimits, *errx.Error)
 
 	// Worker Management
-	ListWorkers(ctx context.Context, cursor *uuid.UUID, limit int) (*models.AdminWorkersResult, *errx.Error)
+	ListWorkers(ctx context.Context, offset, limit int) (*models.AdminWorkersResult, *errx.Error)
 	GetWorkerDetail(ctx context.Context, workerID uuid.UUID) (*models.AdminWorkerDetail, *errx.Error)
 	UpdateWorker(ctx context.Context, adminID, workerID uuid.UUID, update *models.AdminUpdateWorker, ipAddress, userAgent string) *errx.Error
 	GetWorkerEmails(ctx context.Context, workerID uuid.UUID, beforeAt time.Time, beforeID uuid.UUID, limit int) ([]models.AdminWorkerEmail, *models.Pagination, *errx.Error)
@@ -38,13 +38,13 @@ type AdminService interface {
 
 	// Warmup Management
 	ListWarmupPools(ctx context.Context) ([]models.WarmupPoolInfo, *errx.Error)
-	GetPoolParticipants(ctx context.Context, poolType string, cursor *uuid.UUID, limit int) (*models.WarmupPoolParticipantsResult, *errx.Error)
-	ListBlockedAccounts(ctx context.Context, cursor *uuid.UUID, limit int) (*models.AdminBlockedAccountsResult, *errx.Error)
+	GetPoolParticipants(ctx context.Context, poolType string, offset, limit int) (*models.WarmupPoolParticipantsResult, *errx.Error)
+	ListBlockedAccounts(ctx context.Context, offset, limit int) (*models.AdminBlockedAccountsResult, *errx.Error)
 	BlockAccount(ctx context.Context, adminID, accountID uuid.UUID, reason string, ipAddress, userAgent string) *errx.Error
 	UnblockAccount(ctx context.Context, adminID, accountID uuid.UUID, ipAddress, userAgent string) *errx.Error
 
 	// Appeals
-	ListAppeals(ctx context.Context, status string, cursor *uuid.UUID, limit int) (*models.WarmupAppealsResult, *errx.Error)
+	ListAppeals(ctx context.Context, status string, offset, limit int) (*models.WarmupAppealsResult, *errx.Error)
 	GetAppeal(ctx context.Context, appealID uuid.UUID) (*models.WarmupAppeal, *errx.Error)
 	ReviewAppeal(ctx context.Context, adminID, appealID uuid.UUID, approved bool, notes string, ipAddress, userAgent string) *errx.Error
 
@@ -61,7 +61,7 @@ type AdminService interface {
 	GetUserGrowthStats(ctx context.Context, startDate, endDate time.Time) ([]models.UserGrowthStats, *errx.Error)
 
 	// Admin Management
-	ListAdmins(ctx context.Context, cursor *uuid.UUID, limit int) (*models.AdminsResult, *errx.Error)
+	ListAdmins(ctx context.Context, offset, limit int) (*models.AdminsResult, *errx.Error)
 	GrantAdminPermissions(ctx context.Context, adminID, targetUserID uuid.UUID, permissions models.AdminPermission, ipAddress, userAgent string) *errx.Error
 	RevokeAdminPermissions(ctx context.Context, adminID, targetUserID uuid.UUID, ipAddress, userAgent string) *errx.Error
 
@@ -262,10 +262,10 @@ func (s *adminService) GetUserBans(ctx context.Context, userID uuid.UUID) ([]mod
 	return bans, nil
 }
 
-func (s *adminService) GetUserCampaigns(ctx context.Context, userID uuid.UUID, cursor *uuid.UUID, limit int) (*models.AdminCampaignsResult, *errx.Error) {
+func (s *adminService) GetUserCampaigns(ctx context.Context, userID uuid.UUID, offset, limit int) (*models.AdminCampaignsResult, *errx.Error) {
 	search := &models.AdminCampaignSearch{
-		UserID: &userID,
-		Cursor: cursor,
+		UserID: &models.ParamUUID{UUID: userID},
+		Offset: offset,
 		Limit:  limit,
 	}
 	result, err := s.repo.SearchCampaigns(ctx, search)
@@ -276,8 +276,8 @@ func (s *adminService) GetUserCampaigns(ctx context.Context, userID uuid.UUID, c
 	return result, nil
 }
 
-func (s *adminService) GetUserEmails(ctx context.Context, userID uuid.UUID, cursor *uuid.UUID, limit int) ([]models.AdminWorkerEmail, *models.Pagination, *errx.Error) {
-	emails, pagination, err := s.repo.GetUserEmails(ctx, userID, cursor, limit)
+func (s *adminService) GetUserEmails(ctx context.Context, userID uuid.UUID, offset, limit int) ([]models.AdminWorkerEmail, *models.Pagination, *errx.Error) {
+	emails, pagination, err := s.repo.GetUserEmails(ctx, userID, offset, limit)
 	if err != nil {
 		errs.CaptureException(err)
 		return nil, nil, errx.New(errx.Internal, "failed to get user emails")
@@ -310,8 +310,8 @@ func (s *adminService) UpdateUserRateLimits(ctx context.Context, adminID, userID
 
 // Worker Management
 
-func (s *adminService) ListWorkers(ctx context.Context, cursor *uuid.UUID, limit int) (*models.AdminWorkersResult, *errx.Error) {
-	result, err := s.repo.ListWorkers(ctx, cursor, limit)
+func (s *adminService) ListWorkers(ctx context.Context, offset, limit int) (*models.AdminWorkersResult, *errx.Error) {
+	result, err := s.repo.ListWorkers(ctx, offset, limit)
 	if err != nil {
 		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to list workers")
@@ -380,8 +380,8 @@ func (s *adminService) ListWarmupPools(ctx context.Context) ([]models.WarmupPool
 	return pools, nil
 }
 
-func (s *adminService) GetPoolParticipants(ctx context.Context, poolType string, cursor *uuid.UUID, limit int) (*models.WarmupPoolParticipantsResult, *errx.Error) {
-	result, err := s.repo.GetPoolParticipants(ctx, poolType, cursor, limit)
+func (s *adminService) GetPoolParticipants(ctx context.Context, poolType string, offset, limit int) (*models.WarmupPoolParticipantsResult, *errx.Error) {
+	result, err := s.repo.GetPoolParticipants(ctx, poolType, offset, limit)
 	if err != nil {
 		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to get pool participants")
@@ -389,8 +389,8 @@ func (s *adminService) GetPoolParticipants(ctx context.Context, poolType string,
 	return result, nil
 }
 
-func (s *adminService) ListBlockedAccounts(ctx context.Context, cursor *uuid.UUID, limit int) (*models.AdminBlockedAccountsResult, *errx.Error) {
-	result, err := s.repo.ListBlockedAccounts(ctx, cursor, limit)
+func (s *adminService) ListBlockedAccounts(ctx context.Context, offset, limit int) (*models.AdminBlockedAccountsResult, *errx.Error) {
+	result, err := s.repo.ListBlockedAccounts(ctx, offset, limit)
 	if err != nil {
 		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to list blocked accounts")
@@ -420,8 +420,8 @@ func (s *adminService) UnblockAccount(ctx context.Context, adminID, accountID uu
 
 // Appeals
 
-func (s *adminService) ListAppeals(ctx context.Context, status string, cursor *uuid.UUID, limit int) (*models.WarmupAppealsResult, *errx.Error) {
-	result, err := s.repo.ListAppeals(ctx, status, cursor, limit)
+func (s *adminService) ListAppeals(ctx context.Context, status string, offset, limit int) (*models.WarmupAppealsResult, *errx.Error) {
+	result, err := s.repo.ListAppeals(ctx, status, offset, limit)
 	if err != nil {
 		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to list appeals")
@@ -580,8 +580,8 @@ func (s *adminService) GetUserGrowthStats(ctx context.Context, startDate, endDat
 
 // Admin Management
 
-func (s *adminService) ListAdmins(ctx context.Context, cursor *uuid.UUID, limit int) (*models.AdminsResult, *errx.Error) {
-	result, err := s.repo.ListAdmins(ctx, cursor, limit)
+func (s *adminService) ListAdmins(ctx context.Context, offset, limit int) (*models.AdminsResult, *errx.Error) {
+	result, err := s.repo.ListAdmins(ctx, offset, limit)
 	if err != nil {
 		errs.CaptureException(err)
 		return nil, errx.New(errx.Internal, "failed to list admins")
