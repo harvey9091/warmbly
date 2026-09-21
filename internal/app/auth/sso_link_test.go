@@ -40,6 +40,9 @@ type memoryIdentities struct {
 	known   map[string]uuid.UUID
 	linked  []models.UserIdentity
 	touched int
+	// taken makes Link answer as the repository does when another account
+	// already holds the identity.
+	taken bool
 }
 
 func (m *memoryIdentities) FindUserByIdentity(_ context.Context, issuer, subject string) (uuid.UUID, error) {
@@ -47,6 +50,9 @@ func (m *memoryIdentities) FindUserByIdentity(_ context.Context, issuer, subject
 }
 
 func (m *memoryIdentities) Link(_ context.Context, _ uuid.UUID, identity models.UserIdentity) error {
+	if m.taken {
+		return repository.ErrIdentityTaken
+	}
 	m.linked = append(m.linked, identity)
 	return nil
 }
@@ -169,5 +175,18 @@ func TestFederatedSignInAsksNothingWhenNothingCanBeLinked(t *testing.T) {
 	}
 	if res.LinkRequired || res.UserID != u.ID || len(ids.linked) != 0 {
 		t.Fatalf("link_required=%v user=%s links=%v with an empty subject", res.LinkRequired, res.UserID, ids.linked)
+	}
+}
+
+// An identity another account already holds is refused, and nobody is signed
+// in on it: the repository reports the foreign owner and the sign-in stops.
+func TestFederatedSignInRefusesAnIdentityAnotherAccountHolds(t *testing.T) {
+	s, _, ids := federatedFixture("", &config.AuthPolicy{})
+	ids.taken = true
+
+	_, err := s.resolveFederatedUser(context.Background(), models.IdentityProviderGoogle,
+		"https://accounts.google.com", "subject-1", &mail.Address{Address: "owner@example.com"}, "", "")
+	if err == nil || err.Code != errx.Forbidden {
+		t.Fatalf("got %v, want a Forbidden refusal", err)
 	}
 }

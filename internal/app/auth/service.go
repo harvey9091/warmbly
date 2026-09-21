@@ -26,8 +26,7 @@ import (
 // the auth package needs no import of twofa (no cycle).
 type TwoFAChallenger interface {
 	IsEnabled(ctx context.Context, userID uuid.UUID) (bool, error)
-	CreatePendingChallenge(ctx context.Context, userID uuid.UUID) (string, int, *errx.Error)
-	CreateLinkingChallenge(ctx context.Context, userID uuid.UUID, identity models.UserIdentity, authProvider string) (string, int, *errx.Error)
+	CreatePendingChallenge(ctx context.Context, userID uuid.UUID, authProvider string, link *models.UserIdentity) (string, int, *errx.Error)
 }
 
 // ReferralAttributor links a brand-new org to the referrer behind its signup

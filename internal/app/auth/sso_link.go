@@ -64,19 +64,16 @@ func (s *authService) createLinkChallenge(ctx context.Context, userID uuid.UUID,
 	}, nil
 }
 
-// SSOLinkConfirm takes the password for a parked federated sign-in. The
-// password is checked against the provider-asserted address on the sign-in
-// failure budget; the identity is attached only after the ban check and,
-// on a 2FA account, only once the second factor passes too.
+// SSOLinkConfirm takes the password for a parked federated sign-in, checked
+// against the provider-asserted address on the sign-in failure budget, then
+// completes the login with the identity attached behind the usual gates.
 func (s *authService) SSOLinkConfirm(ctx context.Context, data *SSOLinkData, ipaddr, userAgent string) (*models.LoginResult, *errx.Error) {
 	if data == nil || data.PendingToken == "" || data.Password == "" {
 		return nil, errx.ErrCredentials
 	}
+	// VerifyTokenFor requires an expiry and refuses an expired token.
 	claims, xerr := s.tokenService.VerifyTokenFor(token.PurposeSSOLink, data.PendingToken)
 	if xerr != nil {
-		return nil, errx.ErrSSOLinkExpired
-	}
-	if claims.ExpiresAt == nil || claims.ExpiresAt.Before(time.Now()) {
 		return nil, errx.ErrSSOLinkExpired
 	}
 	pend, xerr := s.getSSOLinkPending(ctx, claims.SessionID)
@@ -88,13 +85,15 @@ func (s *authService) SSOLinkConfirm(ctx context.Context, data *SSOLinkData, ipa
 	if pend == nil || pend.Nonce != claims.Nonce || pend.UserID != claims.UserID {
 		return nil, errx.ErrSSOLinkExpired
 	}
-	// Charged before the check, so concurrent guesses cannot share one try.
+	// A spent address budget is refused before a try is charged, so it costs
+	// the challenge nothing; a try is charged before the check, so concurrent
+	// guesses cannot share one.
+	if s.loginFailureExceeded(ctx, pend.Email) {
+		return nil, errx.ErrAuthLimit
+	}
 	if !s.reserveSSOLinkAttempt(ctx, claims.SessionID, time.Until(claims.ExpiresAt.Time)) {
 		s.deleteSSOLinkPending(ctx, claims.SessionID)
 		return nil, errx.ErrSSOLinkExpired
-	}
-	if s.loginFailureExceeded(ctx, pend.Email) {
-		return nil, errx.ErrAuthLimit
 	}
 
 	uid, cerr := s.authRepository.IsValidCredentials(ctx, pend.Email, data.Password)
@@ -111,10 +110,6 @@ func (s *authService) SSOLinkConfirm(ctx context.Context, data *SSOLinkData, ipa
 	// link and a retried request cannot mint a second session.
 	s.deleteSSOLinkPending(ctx, claims.SessionID)
 
-	if xerr := s.refuseSuspended(ctx, pend.UserID); xerr != nil {
-		return nil, xerr
-	}
-
 	identity := models.UserIdentity{
 		Provider: pend.Provider,
 		Issuer:   pend.Issuer,
@@ -125,26 +120,15 @@ func (s *authService) SSOLinkConfirm(ctx context.Context, data *SSOLinkData, ipa
 	if xerr != nil {
 		return nil, xerr
 	}
-	provider := sessionProvider(pend.Provider)
-	if needsLink && s.twofa != nil {
-		if enabled, _ := s.twofa.IsEnabled(ctx, pend.UserID); enabled {
-			pendTok, expiresIn, perr := s.twofa.CreateLinkingChallenge(ctx, pend.UserID, identity, provider)
-			if perr != nil {
-				return nil, perr
-			}
-			return &models.LoginResult{TwoFARequired: true, PendingToken: pendTok, ExpiresIn: expiresIn}, nil
-		}
-	}
+	var link *models.UserIdentity
 	if needsLink {
-		if xerr := s.linkIdentity(ctx, pend.UserID, identity); xerr != nil {
-			return nil, xerr
-		}
-	}
-	if s.identities != nil && identity.Issuer != "" && identity.Subject != "" {
+		link = &identity
+	} else if s.identities != nil && identity.Issuer != "" && identity.Subject != "" {
 		_ = s.identities.TouchLogin(ctx, identity.Issuer, identity.Subject)
 	}
 
-	return s.finishLoginAs(ctx, pend.UserID, ipaddr, userAgent, provider)
+	// The same gates as every other login; the link happens behind them.
+	return s.completeLogin(ctx, pend.UserID, ipaddr, userAgent, sessionProvider(pend.Provider), nil, link)
 }
 
 // identityUnclaimed reports whether the identity still has to be linked to

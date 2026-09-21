@@ -11,6 +11,7 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/idtoken"
+	"github.com/warmbly/warmbly/internal/repository"
 )
 
 // IDTokenVerifier checks a provider-signed ID token (signature, issuer,
@@ -205,16 +206,20 @@ func (s *authService) linkRequiresPassword(ctx context.Context, userID uuid.UUID
 	return hash != "", nil
 }
 
-// linkIdentity binds the identity to the account. A unique-index violation
-// means another account already owns it, and nobody is signed in on it.
+// linkIdentity binds the identity to the account; one another account owns
+// is refused and nobody is signed in on it.
 func (s *authService) linkIdentity(ctx context.Context, userID uuid.UUID, identity models.UserIdentity) *errx.Error {
 	if s.identities == nil || identity.Issuer == "" || identity.Subject == "" {
 		return nil
 	}
 	if lerr := s.identities.Link(ctx, userID, identity); lerr != nil {
+		if errors.Is(lerr, repository.ErrIdentityTaken) {
+			return errx.New(errx.Forbidden, "that identity is already linked to another account")
+		}
 		errs.CaptureException(lerr)
-		return errx.New(errx.Forbidden, "that identity is already linked to another account")
+		return errx.InternalError()
 	}
+	_ = s.identities.TouchLogin(ctx, identity.Issuer, identity.Subject)
 	return nil
 }
 

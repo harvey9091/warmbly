@@ -15,8 +15,4 @@ export default interface Session {
     two_fa_required?: boolean;
     pending_token?: string;
     expires_in?: number;
-    // Federated sign-in only; see LoginResult.
-    link_required?: boolean;
-    link_email?: string;
-    link_provider?: string;
 }

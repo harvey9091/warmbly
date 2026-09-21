@@ -2,32 +2,26 @@ package twofa
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
-
 	"github.com/warmbly/warmbly/internal/app/token"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/crypt"
+	"github.com/warmbly/warmbly/internal/repository"
 )
 
 // CreatePendingChallenge mints a short-lived single-use pending token bound to a
 // fresh nonce in Redis. The token carries no AccessNonce + has no DB session, so
 // it can never be used as an access token — only exchanged via VerifyLogin.
-func (s *service) CreatePendingChallenge(ctx context.Context, userID uuid.UUID) (string, int, *errx.Error) {
-	return s.createChallenge(ctx, &models.TwoFAPending{UserID: userID})
-}
-
-func (s *service) CreateLinkingChallenge(ctx context.Context, userID uuid.UUID, identity models.UserIdentity, authProvider string) (string, int, *errx.Error) {
-	if s.linker == nil {
+func (s *service) CreatePendingChallenge(ctx context.Context, userID uuid.UUID, authProvider string, link *models.UserIdentity) (string, int, *errx.Error) {
+	if link != nil && s.linker == nil {
 		return "", 0, errx.InternalError()
 	}
-	return s.createChallenge(ctx, &models.TwoFAPending{UserID: userID, LinkIdentity: &identity, AuthProvider: authProvider})
-}
-
-func (s *service) createChallenge(ctx context.Context, pend *models.TwoFAPending) (string, int, *errx.Error) {
-	userID := pend.UserID
+	pend := &models.TwoFAPending{UserID: userID, AuthProvider: authProvider, LinkIdentity: link}
 	sid := uuid.New()
 	nonce, err := crypt.Nonce()
 	if err != nil {
@@ -93,7 +87,11 @@ func (s *service) VerifyLogin(ctx context.Context, pendingToken, code, ipaddr, u
 			return nil, errx.InternalError()
 		}
 		if lerr := s.linker.Link(ctx, claims.UserID, *pend.LinkIdentity); lerr != nil {
-			return nil, errx.New(errx.Forbidden, "that identity is already linked to another account")
+			if errors.Is(lerr, repository.ErrIdentityTaken) {
+				return nil, errx.New(errx.Forbidden, "that identity is already linked to another account")
+			}
+			errs.CaptureException(lerr)
+			return nil, errx.InternalError()
 		}
 	}
 	provider := token.AuthProviderEmail
