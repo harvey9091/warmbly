@@ -122,7 +122,7 @@ func TestAdminWorkerQueriesLive(t *testing.T) {
 	}
 
 	admin := NewAdminRepository(pool)
-	res, err := admin.ListWorkers(ctx, nil, 5)
+	res, err := admin.ListWorkers(ctx, 0, 5)
 	if err != nil {
 		t.Fatalf("admin ListWorkers: %v", err)
 	}

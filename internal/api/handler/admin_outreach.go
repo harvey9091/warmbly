@@ -64,6 +64,11 @@ func (h *Handler) AdminListOutreach(c *gin.Context) {
 		errx.JSON(c, errx.New(errx.BadRequest, "invalid query parameters"))
 		return
 	}
+	offset, ok := offsetCursor(c)
+	if !ok {
+		return
+	}
+	search.Offset = offset
 	result, xerr := h.AdminOutreachService.Search(c.Request.Context(), &search)
 	if xerr != nil {
 		errx.JSON(c, xerr)

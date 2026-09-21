@@ -23,6 +23,11 @@ func (h *Handler) AdminSearchUsers(c *gin.Context) {
 		errx.JSON(c, errx.New(errx.BadRequest, "invalid query parameters"))
 		return
 	}
+	offset, ok := offsetCursor(c)
+	if !ok {
+		return
+	}
+	search.Offset = offset
 
 	result, xerr := h.AdminService.SearchUsers(c.Request.Context(), &search)
 	if xerr != nil {
@@ -150,10 +155,13 @@ func (h *Handler) AdminGetUserCampaigns(c *gin.Context) {
 		return
 	}
 
-	cursor := parseCursor(c.Query("cursor"))
+	offset, ok := offsetCursor(c)
+	if !ok {
+		return
+	}
 	limit := parseLimit(c.Query("limit"), 50)
 
-	result, xerr := h.AdminService.GetUserCampaigns(c.Request.Context(), userID, cursor, limit)
+	result, xerr := h.AdminService.GetUserCampaigns(c.Request.Context(), userID, offset, limit)
 	if xerr != nil {
 		errx.JSON(c, xerr)
 		return
@@ -170,10 +178,13 @@ func (h *Handler) AdminGetUserEmails(c *gin.Context) {
 		return
 	}
 
-	cursor := parseCursor(c.Query("cursor"))
+	offset, ok := offsetCursor(c)
+	if !ok {
+		return
+	}
 	limit := parseLimit(c.Query("limit"), 50)
 
-	emails, pagination, xerr := h.AdminService.GetUserEmails(c.Request.Context(), userID, cursor, limit)
+	emails, pagination, xerr := h.AdminService.GetUserEmails(c.Request.Context(), userID, offset, limit)
 	if xerr != nil {
 		errx.JSON(c, xerr)
 		return
@@ -232,10 +243,13 @@ func (h *Handler) AdminUpdateUserRateLimits(c *gin.Context) {
 
 // AdminListWorkers lists all workers
 func (h *Handler) AdminListWorkers(c *gin.Context) {
-	cursor := parseCursor(c.Query("cursor"))
+	offset, ok := offsetCursor(c)
+	if !ok {
+		return
+	}
 	limit := parseLimit(c.Query("limit"), 50)
 
-	result, xerr := h.AdminService.ListWorkers(c.Request.Context(), cursor, limit)
+	result, xerr := h.AdminService.ListWorkers(c.Request.Context(), offset, limit)
 	if xerr != nil {
 		errx.JSON(c, xerr)
 		return
@@ -391,10 +405,13 @@ func (h *Handler) AdminGetWarmupHealthSummary(c *gin.Context) {
 // AdminGetPoolParticipants gets participants in a warmup pool
 func (h *Handler) AdminGetPoolParticipants(c *gin.Context) {
 	poolType := c.Param("type")
-	cursor := parseCursor(c.Query("cursor"))
+	offset, ok := offsetCursor(c)
+	if !ok {
+		return
+	}
 	limit := parseLimit(c.Query("limit"), 50)
 
-	result, xerr := h.AdminService.GetPoolParticipants(c.Request.Context(), poolType, cursor, limit)
+	result, xerr := h.AdminService.GetPoolParticipants(c.Request.Context(), poolType, offset, limit)
 	if xerr != nil {
 		errx.JSON(c, xerr)
 		return
@@ -405,10 +422,13 @@ func (h *Handler) AdminGetPoolParticipants(c *gin.Context) {
 
 // AdminListBlockedAccounts lists blocked warmup accounts
 func (h *Handler) AdminListBlockedAccounts(c *gin.Context) {
-	cursor := parseCursor(c.Query("cursor"))
+	offset, ok := offsetCursor(c)
+	if !ok {
+		return
+	}
 	limit := parseLimit(c.Query("limit"), 50)
 
-	result, xerr := h.AdminService.ListBlockedAccounts(c.Request.Context(), cursor, limit)
+	result, xerr := h.AdminService.ListBlockedAccounts(c.Request.Context(), offset, limit)
 	if xerr != nil {
 		errx.JSON(c, xerr)
 		return
@@ -474,10 +494,13 @@ func (h *Handler) AdminUnblockAccount(c *gin.Context) {
 // AdminListAppeals lists warmup appeals
 func (h *Handler) AdminListAppeals(c *gin.Context) {
 	status := c.Query("status")
-	cursor := parseCursor(c.Query("cursor"))
+	offset, ok := offsetCursor(c)
+	if !ok {
+		return
+	}
 	limit := parseLimit(c.Query("limit"), 50)
 
-	result, xerr := h.AdminService.ListAppeals(c.Request.Context(), status, cursor, limit)
+	result, xerr := h.AdminService.ListAppeals(c.Request.Context(), status, offset, limit)
 	if xerr != nil {
 		errx.JSON(c, xerr)
 		return
@@ -570,6 +593,11 @@ func (h *Handler) AdminSearchCampaigns(c *gin.Context) {
 		errx.JSON(c, errx.New(errx.BadRequest, "invalid query parameters"))
 		return
 	}
+	offset, ok := offsetCursor(c)
+	if !ok {
+		return
+	}
+	search.Offset = offset
 
 	result, xerr := h.AdminService.SearchCampaigns(c.Request.Context(), &search)
 	if xerr != nil {
@@ -704,10 +732,13 @@ func (h *Handler) AdminGetUserGrowthStats(c *gin.Context) {
 
 // AdminListAdmins lists all admin users
 func (h *Handler) AdminListAdmins(c *gin.Context) {
-	cursor := parseCursor(c.Query("cursor"))
+	offset, ok := offsetCursor(c)
+	if !ok {
+		return
+	}
 	limit := parseLimit(c.Query("limit"), 50)
 
-	result, xerr := h.AdminService.ListAdmins(c.Request.Context(), cursor, limit)
+	result, xerr := h.AdminService.ListAdmins(c.Request.Context(), offset, limit)
 	if xerr != nil {
 		errx.JSON(c, xerr)
 		return
@@ -775,6 +806,10 @@ func (h *Handler) AdminSearchAuditLogs(c *gin.Context) {
 		errx.JSON(c, errx.New(errx.BadRequest, "invalid query parameters"))
 		return
 	}
+	if _, _, xerr := paging.DecodeTimeCursor(search.Cursor); xerr != nil {
+		errx.JSON(c, xerr)
+		return
+	}
 
 	result, xerr := h.AdminService.SearchAuditLogs(c.Request.Context(), &search)
 	if xerr != nil {
@@ -792,6 +827,17 @@ func (h *Handler) AdminGetPermissionList(c *gin.Context) {
 }
 
 // Helper functions
+
+// offsetCursor decodes an admin list's opaque ?cursor, answering 400 for a
+// malformed one rather than quietly serving the first page.
+func offsetCursor(c *gin.Context) (int, bool) {
+	offset, xerr := paging.DecodeOffsetCursor(c.Query("cursor"))
+	if xerr != nil {
+		errx.JSON(c, xerr)
+		return 0, false
+	}
+	return offset, true
+}
 
 func parseCursor(s string) *uuid.UUID {
 	if s == "" {

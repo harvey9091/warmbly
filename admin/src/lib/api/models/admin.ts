@@ -135,7 +135,7 @@ export interface AdminAuditLogsResult {
     // and typing it as an array is what let `data.data.length` crash the page.
     data: AdminAuditLog[] | null;
     pagination: {
-        cursor?: string;
+        next_cursor?: string | null;
         has_more?: boolean;
     };
 }

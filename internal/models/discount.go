@@ -159,7 +159,7 @@ type AdminDiscountSearch struct {
 
 	// Plan eligibility
 	PlanScope string     `form:"plan_scope"` // all|specific
-	PlanID    *uuid.UUID `form:"plan_id"`
+	PlanID    *ParamUUID `form:"plan_id"`
 
 	// Flag / relationship existence
 	HasRedemptions    bool `form:"has_redemptions"`

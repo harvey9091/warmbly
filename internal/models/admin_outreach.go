@@ -70,10 +70,10 @@ type AdminOutreachSearch struct {
 	SentAtAfter   *time.Time `form:"sent_at_after" time_format:"2006-01-02" time_utc:"true"`
 	SentAtBefore  *time.Time `form:"sent_at_before" time_format:"2006-01-02" time_utc:"true"`
 
-	Cursor   *uuid.UUID `form:"cursor"`
-	Limit    int        `form:"limit"`
-	SortBy   string     `form:"sort_by"` // created_at, sent_at, status, to_email, subject
-	SortDesc bool       `form:"sort_desc"`
+	Offset   int    `form:"-"` // decoded from ?cursor by the handler
+	Limit    int    `form:"limit"`
+	SortBy   string `form:"sort_by"` // created_at, sent_at, status, to_email, subject
+	SortDesc bool   `form:"sort_desc"`
 }
 
 // AdminOutreachResult is the paginated response for the admin outreach log.

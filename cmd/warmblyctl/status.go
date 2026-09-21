@@ -96,7 +96,7 @@ func collectStatus(ctx context.Context, c *conn) (*instanceStatus, error) {
 	}
 
 	admins := []string{}
-	result, aerr := c.admins.ListAdmins(ctx, nil, 100)
+	result, aerr := c.admins.ListAdmins(ctx, 0, 100)
 	if aerr != nil {
 		return nil, fmt.Errorf("listing platform admins: %w", aerr)
 	}

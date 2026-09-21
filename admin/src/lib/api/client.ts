@@ -31,6 +31,10 @@ export class APIError<T = unknown> extends Error {
     // failed page can show exactly what broke instead of a generic message.
     code?: string;
     requestId?: string;
+    // The call that failed, path only: no query string, so no filter value
+    // reaches an error report.
+    method?: string;
+    path?: string;
     body?: T;
     constructor(message: string, status: number, body?: T) {
         super(message);
@@ -148,8 +152,11 @@ export async function Request<T>(config: AuthRequestConfig): Promise<T> {
 // The path and nothing else about the call travels: no query string, no body,
 // no header.
 function noteFailure(config: AuthRequestConfig, failure: APIError): void {
-    const method = config.method?.toUpperCase() ?? "REQUEST";
+    // Axios sends an omitted method as GET.
+    const method = config.method?.toUpperCase() ?? "GET";
     const path = config.url?.split("?")[0] ?? "";
+    failure.method = method;
+    failure.path = path;
 
     const properties: Record<string, string | number | boolean> = {
         method,

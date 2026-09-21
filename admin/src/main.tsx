@@ -8,13 +8,14 @@ import {
     RouterProvider,
     useLocation,
 } from "react-router-dom";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 
 import "@fontsource/inter/400.css";
 import "@fontsource/inter/600.css";
 
 import { initErrorReporting } from "@/lib/observability";
+import { reportFailure } from "@/lib/api/reportFailure";
 
 import { Toaster } from "@/components/ui/sonner";
 import { AppShell } from "@/components/layout/AppShell";
@@ -65,6 +66,8 @@ import { AdminPerm } from "@/lib/auth/permissions";
 //     day; we don't want a thundering herd of refetches on focus
 //   - retry: 1 — same reasoning as the dashboard
 const queryClient = new QueryClient({
+    queryCache: new QueryCache({ onError: (error) => reportFailure(error, "query") }),
+    mutationCache: new MutationCache({ onError: (error) => reportFailure(error, "mutation") }),
     defaultOptions: {
         queries: {
             staleTime: 60_000,

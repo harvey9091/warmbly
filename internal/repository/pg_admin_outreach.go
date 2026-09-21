@@ -8,7 +8,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/warmbly/warmbly/internal/models"
-	"github.com/warmbly/warmbly/internal/utils/paging"
 )
 
 // AdminOutreachRepository is the persistence layer for the
@@ -112,7 +111,7 @@ func (r *adminOutreachRepository) Search(ctx context.Context, search *models.Adm
 	}
 	addBefore := func(col string, v *time.Time) {
 		if v != nil {
-			where += " AND " + col + " < ($" + itoa(argNum) + " + INTERVAL '1 day')"
+			where += " AND " + col + " < ($" + itoa(argNum) + "::timestamptz + INTERVAL '1 day')"
 			args = append(args, *v)
 			argNum++
 		}
@@ -127,11 +126,7 @@ func (r *adminOutreachRepository) Search(ctx context.Context, search *models.Adm
 	addAfter("m.sent_at", search.SentAtAfter)
 	addBefore("m.sent_at", search.SentAtBefore)
 
-	if search.Cursor != nil {
-		where += ` AND m.id < $` + itoa(argNum)
-		args = append(args, *search.Cursor)
-		argNum++
-	}
+	offset := search.Offset
 
 	orderCol := "m.created_at"
 	switch search.SortBy {
@@ -163,7 +158,7 @@ func (r *adminOutreachRepository) Search(ctx context.Context, search *models.Adm
 		LEFT JOIN users u ON u.id = m.to_user_id
 		` + where + `
 		` + orderBy + `
-		LIMIT $` + itoa(argNum)
+		` + adminLimitOffset("$"+itoa(argNum), offset)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -199,8 +194,7 @@ func (r *adminOutreachRepository) Search(ctx context.Context, search *models.Adm
 	}
 	if len(items) > limit {
 		result.Data = items[:limit]
-		last := items[limit-1].ID
-		result.Pagination.NextCursor = paging.UUIDString(last)
+		result.Pagination.NextCursor = adminNextCursor(offset, limit)
 	}
 
 	countQuery := `SELECT COUNT(*) FROM admin_outreach_messages m JOIN users s ON s.id = m.sent_by LEFT JOIN users u ON u.id = m.to_user_id ` + where

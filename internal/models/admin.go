@@ -16,7 +16,7 @@ type AdminUserSearch struct {
 	CreatedWithin int    `form:"created_within"`  // signup window, in days
 
 	// Plan / subscription
-	PlanID                *uuid.UUID `form:"plan_id"`             // subscribed to THIS plan
+	PlanID                *ParamUUID `form:"plan_id"`             // subscribed to THIS plan
 	SubscriptionStatus    string     `form:"subscription_status"` // trialing, active, past_due, ...
 	IsEnterprise          bool       `form:"is_enterprise"`
 	HasSubscription       bool       `form:"has_subscription"`
@@ -50,10 +50,10 @@ type AdminUserSearch struct {
 	UpdatedAfter       *time.Time `form:"updated_after" time_format:"2006-01-02" time_utc:"true"`
 	UpdatedBefore      *time.Time `form:"updated_before" time_format:"2006-01-02" time_utc:"true"`
 
-	Cursor   *uuid.UUID `form:"cursor"`
-	Limit    int        `form:"limit"`
-	SortBy   string     `form:"sort_by"` // created_at, email, name
-	SortDesc bool       `form:"sort_desc"`
+	Offset   int    `form:"-"` // decoded from ?cursor by the handler
+	Limit    int    `form:"limit"`
+	SortBy   string `form:"sort_by"` // created_at, email, name
+	SortDesc bool   `form:"sort_desc"`
 }
 
 // AdminUserDetail represents a user with admin-relevant statistics
@@ -308,8 +308,8 @@ type AdminCampaignsResult struct {
 // *time.Time with time_format/time_utc, mirroring AdminOrgSearch.
 type AdminCampaignSearch struct {
 	Query  string     `form:"q"`
-	UserID *uuid.UUID `form:"user_id"`
-	OrgID  *uuid.UUID `form:"org_id"`
+	UserID *ParamUUID `form:"user_id"`
+	OrgID  *ParamUUID `form:"org_id"`
 	Status string     `form:"status"` // draft, active, paused, completed, paused_trial_expired, paused_no_accounts, paused_guardrail, paused_undeliverable
 
 	// Boolean flags
@@ -340,10 +340,10 @@ type AdminCampaignSearch struct {
 	UpdatedAfter    *time.Time `form:"updated_after" time_format:"2006-01-02" time_utc:"true"`
 	UpdatedBefore   *time.Time `form:"updated_before" time_format:"2006-01-02" time_utc:"true"`
 
-	Cursor   *uuid.UUID `form:"cursor"`
-	Limit    int        `form:"limit"`
-	SortBy   string     `form:"sort_by"`
-	SortDesc bool       `form:"sort_desc"`
+	Offset   int    `form:"-"` // decoded from ?cursor by the handler
+	Limit    int    `form:"limit"`
+	SortBy   string `form:"sort_by"`
+	SortDesc bool   `form:"sort_desc"`
 }
 
 // AdminAuditLog represents an audit log entry for admin actions
@@ -370,13 +370,13 @@ type AdminAuditLogsResult struct {
 
 // AdminAuditLogSearch represents search parameters for audit logs
 type AdminAuditLogSearch struct {
-	AdminUserID *uuid.UUID `form:"admin_user_id"`
+	AdminUserID *ParamUUID `form:"admin_user_id"`
 	Action      string     `form:"action"`
 	TargetType  string     `form:"target_type"`
-	TargetID    *uuid.UUID `form:"target_id"`
-	StartDate   *time.Time `form:"start_date"`
-	EndDate     *time.Time `form:"end_date"`
-	Cursor      *uuid.UUID `form:"cursor"`
+	TargetID    *ParamUUID `form:"target_id"`
+	StartDate   *time.Time `form:"start_date" time_format:"2006-01-02" time_utc:"true"`
+	EndDate     *time.Time `form:"end_date" time_format:"2006-01-02" time_utc:"true"`
+	Cursor      string     `form:"cursor"`
 	Limit       int        `form:"limit"`
 }
 
@@ -440,11 +440,11 @@ type AdminMailboxSearch struct {
 	Provider      string     `form:"provider"`
 	Warmup        string     `form:"warmup"`         // "on", "off", or "" for any
 	CreatedWithin int        `form:"created_within"` // connected window, in days
-	OrgID         *uuid.UUID `form:"org_id"`         // browse a single org's mailboxes
+	OrgID         *ParamUUID `form:"org_id"`         // browse a single org's mailboxes
 
 	// Ownership / placement
-	UserID   *uuid.UUID `form:"user_id"`   // mailboxes owned by THIS user
-	WorkerID *uuid.UUID `form:"worker_id"` // mailboxes on THIS worker
+	UserID   *ParamUUID `form:"user_id"`   // mailboxes owned by THIS user
+	WorkerID *ParamUUID `form:"worker_id"` // mailboxes on THIS worker
 
 	// Classification
 	RiskBand       string `form:"risk_band"`        // clean, risky, quarantine
@@ -472,10 +472,10 @@ type AdminMailboxSearch struct {
 	LastSyncedAfter  *time.Time `form:"last_synced_after" time_format:"2006-01-02" time_utc:"true"`
 	LastSyncedBefore *time.Time `form:"last_synced_before" time_format:"2006-01-02" time_utc:"true"`
 
-	Cursor   *uuid.UUID `form:"cursor"`
-	Limit    int        `form:"limit"`
-	SortBy   string     `form:"sort_by"` // email, created_at, last_synced_at, campaign_limit
-	SortDesc bool       `form:"sort_desc"`
+	Offset   int    `form:"-"` // decoded from ?cursor by the handler
+	Limit    int    `form:"limit"`
+	SortBy   string `form:"sort_by"` // email, created_at, last_synced_at, campaign_limit
+	SortDesc bool   `form:"sort_desc"`
 }
 
 // DailyEmailStats represents daily email statistics for graphs
@@ -654,7 +654,7 @@ type WorkerStats struct {
 type AdminOrgSearch struct {
 	Query          string     `form:"q"`
 	Status         string     `form:"status"` // active, pending_deletion, all
-	PlanID         *uuid.UUID `form:"plan_id"`
+	PlanID         *ParamUUID `form:"plan_id"`
 	PlanVisibility string     `form:"plan_visibility"` // public, private, none
 	CreatedWithin  int        `form:"created_within"`  // days; 0 = any
 	HasOverrides   bool       `form:"has_overrides"`   // has organization_limit_overrides
@@ -707,10 +707,10 @@ type AdminOrgSearch struct {
 	HasAcquisition bool   `form:"has_acquisition"`
 	NoAcquisition  bool   `form:"no_acquisition"`
 
-	Cursor   *uuid.UUID `form:"cursor"`
-	Limit    int        `form:"limit"`
-	SortBy   string     `form:"sort_by"` // created_at, name, owner_email, member_count, campaign_count, email_account_count
-	SortDesc bool       `form:"sort_desc"`
+	Offset   int    `form:"-"` // decoded from ?cursor by the handler
+	Limit    int    `form:"limit"`
+	SortBy   string `form:"sort_by"` // created_at, name, owner_email, member_count, campaign_count, email_account_count
+	SortDesc bool   `form:"sort_desc"`
 }
 
 // AdminOrgListItem is one row in the admin org list. It carries enough
@@ -778,8 +778,8 @@ type AdminLimitRequestSearch struct {
 	Status string `form:"status"` // pending, approved, rejected, cancelled, all
 	Field  string `form:"field"`  // app-validated: max_email_accounts ... daily_campaign_limit
 
-	OrgID       *uuid.UUID `form:"org_id"`
-	SubmittedBy *uuid.UUID `form:"submitted_by"`
+	OrgID       *ParamUUID `form:"org_id"`
+	SubmittedBy *ParamUUID `form:"submitted_by"`
 
 	// Flags
 	Reviewed   bool `form:"reviewed"`   // reviewed_at IS NOT NULL
@@ -798,10 +798,10 @@ type AdminLimitRequestSearch struct {
 	ReviewedAfter   *time.Time `form:"reviewed_after" time_format:"2006-01-02" time_utc:"true"`
 	ReviewedBefore  *time.Time `form:"reviewed_before" time_format:"2006-01-02" time_utc:"true"`
 
-	Cursor   *uuid.UUID `form:"cursor"`
-	Limit    int        `form:"limit"`
-	SortBy   string     `form:"sort_by"` // submitted_at, requested, current_effective, reviewed_at, status, field, org_name
-	SortDesc bool       `form:"sort_desc"`
+	Offset   int    `form:"-"` // decoded from ?cursor by the handler
+	Limit    int    `form:"limit"`
+	SortBy   string `form:"sort_by"` // submitted_at, requested, current_effective, reviewed_at, status, field, org_name
+	SortDesc bool   `form:"sort_desc"`
 }
 
 // AdminLimitRequestsResult is the paginated admin limit-request response.
