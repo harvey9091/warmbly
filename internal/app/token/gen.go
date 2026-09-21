@@ -87,18 +87,18 @@ func (s *tokenService) GenerateSessionWithOrg(ctx context.Context, userID uuid.U
 
 // ReissueSession ends every one of the user's sessions, the caller's included,
 // then mints a fresh one for the caller's device that keeps its workspace,
-// sign-in method and MFA status. Revoke runs first so a failed mint leaves the
-// account signed out rather than reachable with the old token.
-func (s *tokenService) ReissueSession(ctx context.Context, userID, currentSessionID uuid.UUID, ipaddr, userAgent string) (*models.Token, *errx.Error) {
+// sign-in method and MFA status. The caller's session comes from the request
+// (nothing is looked up, so nothing can fail before the revoke), and revoke
+// runs before mint so a failed mint leaves the account signed out rather than
+// reachable with the old token.
+func (s *tokenService) ReissueSession(ctx context.Context, userID uuid.UUID, current *models.Session, ipaddr, userAgent string) (*models.Token, *errx.Error) {
 	provider := AuthProviderEmail
 	var orgID *uuid.UUID
 	mfaVerified := false
-	if currentSessionID != uuid.Nil {
-		if cur, err := s.GetSession(ctx, currentSessionID); err == nil && cur != nil && cur.UserID == userID {
-			provider = cur.AuthProvider
-			orgID = cur.CurrentOrganizationID
-			mfaVerified = cur.MFAVerified
-		}
+	if current != nil && current.UserID == userID {
+		provider = current.AuthProvider
+		orgID = current.CurrentOrganizationID
+		mfaVerified = current.MFAVerified
 	}
 
 	if err := s.RevokeOtherSessions(ctx, userID, uuid.Nil); err != nil {

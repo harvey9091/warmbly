@@ -1024,6 +1024,16 @@
               }
             }
           },
+          "409": {
+            "description": "The new password is stored but the calling device could not be issued a new session (code `password_changed_sign_in_again`). Discard the old tokens and sign in again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Rate limited.",
             "content": {

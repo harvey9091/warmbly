@@ -195,11 +195,17 @@ func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPassw
 	return nil
 }
 
+// ErrPasswordChangedSignInAgain answers a change whose password is already
+// stored when the device could not be given a new session. The client must
+// not keep its old tokens and must sign in again with the new password.
+var ErrPasswordChangedSignInAgain = errx.NewWithIdentifier(errx.Conflict, "password_changed_sign_in_again",
+	"Your password was changed, but this device could not be signed back in. Sign in again with your new password.")
+
 // ChangePassword updates a logged-in user's password. It verifies the current
 // password first (so a hijacked but unattended session can't silently change
 // it), rejects OAuth-only accounts, and enforces the password policy. Every
 // session ends with the change; the caller gets a new pair for its device.
-func (s *authService) ChangePassword(ctx context.Context, userID, currentSessionID uuid.UUID, ipaddr, userAgent string, data *ChangePassword) (*models.Token, *errx.Error) {
+func (s *authService) ChangePassword(ctx context.Context, userID uuid.UUID, current *models.Session, ipaddr, userAgent string, data *ChangePassword) (*models.Token, *errx.Error) {
 	hash, xerr := s.authRepository.GetPasswordHash(ctx, userID)
 	if xerr != nil {
 		return nil, xerr
@@ -236,11 +242,12 @@ func (s *authService) ChangePassword(ctx context.Context, userID, currentSession
 	if s.tokenService == nil {
 		return nil, nil
 	}
-	// Reported, not swallowed: the caller must not keep a token that may now be revoked.
-	tok, err := s.tokenService.ReissueSession(ctx, userID, currentSessionID, ipaddr, userAgent)
+	// The password is stored by now, so this failure is its own outcome, not
+	// an ordinary error: the caller must drop its tokens and sign in again.
+	tok, err := s.tokenService.ReissueSession(ctx, userID, current, ipaddr, userAgent)
 	if err != nil {
 		errs.CaptureException(err)
-		return nil, err
+		return nil, ErrPasswordChangedSignInAgain
 	}
 	return tok, nil
 }

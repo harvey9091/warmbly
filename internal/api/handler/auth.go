@@ -241,7 +241,7 @@ func (h *Handler) ChangePassword(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), authRequestTimeout)
 	defer cancel()
 
-	tok, xerr := h.AuthService.ChangePassword(ctx, uid, currentSessionID(c), c.ClientIP(), c.Request.UserAgent(), &data)
+	tok, xerr := h.AuthService.ChangePassword(ctx, uid, middleware.GetSession(c), c.ClientIP(), c.Request.UserAgent(), &data)
 	if xerr != nil {
 		errx.Handle(c, xerr)
 		return

@@ -7,7 +7,7 @@ import { Loader2Icon, XIcon } from "lucide-react";
 import toast from "react-hot-toast";
 import { Label, TextInput } from "@/components/ui/field";
 import changePassword from "@/lib/api/client/auth/changePassword";
-import { saveTokens } from "@/lib/auth";
+import { endSession, saveTokens } from "@/lib/auth";
 import { useQueryClient } from "@tanstack/react-query";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
@@ -47,7 +47,16 @@ export default function ChangePasswordDialog({ open, onClose }: { open: boolean;
             toast.success("Password changed. Every other device was signed out.");
             onClose();
         } catch (e) {
-            toast.error(buildError(e as AppError));
+            const err = e as AppError;
+            // The password is stored but this device got no new session: the
+            // old tokens are dead, so leave rather than keep using them.
+            if (err.code === "password_changed_sign_in_again") {
+                toast.error(err.message);
+                onClose();
+                endSession();
+                return;
+            }
+            toast.error(buildError(err));
         } finally {
             setPending(false);
         }
