@@ -153,7 +153,7 @@ const (
 
 // CreateOrganizationRequest represents the request to create a new organization
 type CreateOrganizationRequest struct {
-	Name string `json:"name" binding:"required,min=1,max=255"`
+	Name string `json:"name" binding:"required"`
 }
 
 // UpdateOrganizationRequest represents the request to update an organization

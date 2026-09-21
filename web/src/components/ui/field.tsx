@@ -139,6 +139,16 @@ export function Label({ children, className }: { children: React.ReactNode; clas
     );
 }
 
+// The line under a field saying why its value is refused; renders nothing when valid.
+export function FieldError({ message, className }: { message?: string | null; className?: string }) {
+    if (!message) return null;
+    return (
+        <p role="alert" className={cn("mt-1 text-[11.5px] text-red-600", className)}>
+            {message}
+        </p>
+    );
+}
+
 export function FieldRow({ children, className }: { children: React.ReactNode; className?: string }) {
     return (
         <div className={cn("space-y-1.5", className)}>

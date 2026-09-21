@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/crypt"
+	"github.com/warmbly/warmbly/internal/pkg/displayname"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -254,6 +256,11 @@ func NewService(
 
 // Create creates a new organization and adds the user as owner
 func (s *organizationService) Create(ctx context.Context, userID uuid.UUID, name string) (*models.Organization, *errx.Error) {
+	name, nerr := displayname.Validate("Workspace name", name, displayname.Workspace, false)
+	if nerr != nil {
+		return nil, nerr
+	}
+
 	// Ban-scope enforcement (migration 000045). Block new workspace
 	// creation when the admin's set the BanScopeOrgCreate bit, even
 	// if the user can otherwise log in.
@@ -398,9 +405,16 @@ func (s *organizationService) Update(ctx context.Context, orgID uuid.UUID, req *
 	}
 
 	if req.Name != nil {
-		org.Name = *req.Name
+		name, nerr := displayname.Validate("Workspace name", *req.Name, displayname.Workspace, false)
+		if nerr != nil {
+			return nil, nerr
+		}
+		org.Name = name
 	}
 	if req.Slug != nil {
+		if !slugPattern.MatchString(*req.Slug) {
+			return nil, errx.NewWithIdentifier(errx.BadRequest, "invalid_slug", "Slug must be 2 to 80 lowercase letters, numbers or dashes, starting and ending with a letter or number.")
+		}
 		// Validate slug uniqueness
 		existing, _ := s.orgRepo.GetBySlug(ctx, *req.Slug)
 		if existing != nil && existing.ID != orgID {
@@ -1245,6 +1259,8 @@ func (s *organizationService) CreateEnterpriseInquiry(ctx context.Context, inqui
 }
 
 // Helper functions
+
+var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,78}[a-z0-9]$`)
 
 func generateSlug(name string) string {
 	// Simple slug generation - lowercase, replace spaces with dashes

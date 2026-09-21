@@ -88,6 +88,10 @@ There is no rule about mixing upper case, digits and symbols. A long passphrase 
 
 Repeated wrong passwords are counted per account, not just per device, so guessing one account from many addresses does not buy an attacker more attempts. After ten failures the account stops accepting password attempts for an hour. Signing in correctly clears the count.
 
+## Names
+
+Your name and your workspace's name appear in emails Warmbly sends to other people, such as invitations. They are plain text only: a name that contains a link, a web address, an email address or invisible formatting characters is refused, and the field tells you why. The full rules are in [Name refusals](/api/error-codes/#name-refusals).
+
 ## Password and alerts
 
 Change your password under **Password**: current password, then a new one. **Changing it signs out every other device automatically**, while the device you change it on stays in. Accounts that only use Google, Apple, or a passkey have no password to change.

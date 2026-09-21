@@ -230,6 +230,16 @@ Everything else in section 3 of the evidence pack rests on this: no identifier f
 - the realtime websocket checks the browser's `Origin` against `CHECK_ORIGIN_HOSTS`. Non-browser clients send no origin and are unaffected. Adding a first-party origin means adding it to that list in every environment
 - webhook targets stay HTTPS and HMAC-signed, and SSRF-prone destinations are refused. Only a self-hosted or development instance may opt out
 
+### Input that other people see
+
+Anything one person types that Warmbly later shows to someone else is content injection waiting to happen, and platform email is the worst case: a mail client turns anything shaped like an address into a live link, sent under Warmbly's own domain. `html/template` escaping stops markup, not that. So:
+
+- **every name a person chooses goes through `internal/pkg/displayname`**: first and last names, workspace names, and any new name-like field that can reach another person. It refuses links, web addresses, email addresses, hostnames and IPs (after folding full-width and ideographic dots), control, invisible and bidi characters, markup characters and stacked combining marks, and it bounds length by `Kind`. The refusal is `400 invalid_name`, documented in `api/error-codes.mdx`
+- **the server is the authority and the check sits at every write**, not only the one the dashboard uses: the handler or service behind registration, setup, onboarding, profile, org create and rename, the admin panel, `warmblyctl` and an org-transfer import. A new path that writes one of these fields calls the same package. `web/src/lib/displayName.ts` mirrors the rules so a form can explain a refusal before the request, and it is never the only check
+- **a value nobody can be asked to correct is cleaned, not refused**: a name from an identity provider or an email local part goes through `displayname.Clean`/`FromEmail`, which drops what fails, so a hostile IdP claim costs the user a name, not a sign-in
+- **a stored value is untrusted at render time too.** Rows written before a rule existed are still in the database, so anything interpolated into an email body or subject goes through `displayname.Displayable` (or `FullName`) with a neutral fallback ("A team member", "Your workspace")
+- **tighten a rule in both places and in the docs together**: Go package, `displayName.ts`, their tests, and the `invalid_name` section of `api/error-codes.mdx`
+
 ### Errors, logging and data exposure
 
 - a server-class (`Internal`) error answers the caller with one fixed sentence and a request id. The real message is logged against that id. `errx.NewPublic` is the narrow exception, for a message an operator can act on, and never for one built from an underlying error

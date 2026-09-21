@@ -25,6 +25,7 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/notify"
 	"github.com/warmbly/warmbly/internal/notify/templates"
+	"github.com/warmbly/warmbly/internal/pkg/displayname"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -458,8 +459,8 @@ func (s *service) sendOrgScheduledEmail(ctx context.Context, org *models.Organiz
 	if len(recipients) == 0 {
 		return
 	}
-	subject := fmt.Sprintf("%s scheduled for deletion", org.Name)
-	body, err := templates.GenerateOrgDeletionScheduledHTML(org.Name, d.ExecuteAfter, d.GraceDays, s.frontendBaseURL+orgDangerZonePath)
+	subject := fmt.Sprintf("%s scheduled for deletion", emailOrgName(org))
+	body, err := templates.GenerateOrgDeletionScheduledHTML(emailOrgName(org), d.ExecuteAfter, d.GraceDays, s.frontendBaseURL+orgDangerZonePath)
 	if err != nil {
 		return
 	}
@@ -474,8 +475,8 @@ func (s *service) sendOrgCancelledEmail(ctx context.Context, org *models.Organiz
 	if len(recipients) == 0 {
 		return
 	}
-	subject := fmt.Sprintf("Deletion cancelled for %s", org.Name)
-	body, err := templates.GenerateOrgDeletionCancelledHTML(org.Name, d.ExecuteAfter)
+	subject := fmt.Sprintf("Deletion cancelled for %s", emailOrgName(org))
+	body, err := templates.GenerateOrgDeletionCancelledHTML(emailOrgName(org), d.ExecuteAfter)
 	if err != nil {
 		return
 	}
@@ -531,7 +532,7 @@ func (s *service) buildReminder(ctx context.Context, d *models.ScheduledDeletion
 			return nil, "", ""
 		}
 		recipients = s.orgRecipients(ctx, org)
-		resourceName = org.Name
+		resourceName = emailOrgName(org)
 	case models.DeletionResourceUser:
 		user, _ := s.userRepo.GetUser(ctx, d.ResourceID)
 		if user == nil {
@@ -613,8 +614,7 @@ func nilIfEmpty(s string) *string {
 }
 
 func displayName(u *models.User) string {
-	name := strings.TrimSpace(strings.TrimSpace(u.FirstName) + " " + strings.TrimSpace(u.LastName))
-	if name != "" {
+	if name := displayname.FullName(u.FirstName, u.LastName); name != "" {
 		return name
 	}
 	return u.Email
@@ -623,10 +623,18 @@ func displayName(u *models.User) string {
 // firstNameOrEmail is the friendly greeting name for deletion emails:
 // the user's first name when set, otherwise their email address.
 func firstNameOrEmail(u *models.User) string {
-	if strings.TrimSpace(u.FirstName) != "" {
-		return u.FirstName
+	if name := displayname.Displayable(u.FirstName); name != "" {
+		return name
 	}
 	return u.Email
+}
+
+// emailOrgName is the workspace name as deletion emails show it.
+func emailOrgName(org *models.Organization) string {
+	if name := displayname.Displayable(org.Name); name != "" {
+		return name
+	}
+	return "Your workspace"
 }
 
 // orgRecipients returns every member email for an org, owner first.

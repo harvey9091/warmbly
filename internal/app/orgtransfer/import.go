@@ -16,6 +16,7 @@ import (
 
 	"github.com/warmbly/warmbly/internal/app/cipher"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/displayname"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -529,6 +530,7 @@ func (s *service) mergeOrganization(ctx context.Context, tx pgx.Tx, orgID uuid.U
 	if len(m.Organization) == 0 {
 		return nil
 	}
+	cleanArchiveOrgName(m.Organization)
 	destCols, err := s.repo.TableColumns(ctx, "organizations")
 	if err != nil {
 		return err
@@ -573,6 +575,21 @@ func (s *service) mergeOrganization(ctx context.Context, tx pgx.Tx, orgID uuid.U
 		break
 	}
 	return nil
+}
+
+// cleanArchiveOrgName keeps the destination's name unless the archive's passes
+// the same rules as a rename.
+func cleanArchiveOrgName(org map[string]any) {
+	raw, ok := org["name"]
+	if !ok {
+		return
+	}
+	name, _ := raw.(string)
+	if clean := displayname.Clean(name, displayname.Workspace); clean != "" {
+		org["name"] = clean
+		return
+	}
+	delete(org, "name")
 }
 
 // orgMergeExcluded are the organization columns an archive may never set.

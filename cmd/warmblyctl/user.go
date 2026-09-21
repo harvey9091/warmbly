@@ -17,6 +17,7 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/pkg/argon2"
 	"github.com/warmbly/warmbly/internal/pkg/crypt"
+	"github.com/warmbly/warmbly/internal/pkg/displayname"
 )
 
 // resetSessionKeyPrefix must match getResetPasswordSessionKey in
@@ -94,6 +95,9 @@ func runUserCreate(ctx context.Context, args []string) error {
 	if *noOrg && strings.TrimSpace(*orgName) != "" {
 		return errors.New("--org and --no-org contradict each other. Pass one or neither.")
 	}
+	if _, nerr := displayname.Validate("--org", *orgName, displayname.Workspace, true); nerr != nil {
+		return errors.New(nerr.Message)
+	}
 
 	c, err := connect(ctx)
 	if err != nil {
@@ -135,9 +139,9 @@ func runUserCreate(ctx context.Context, args []string) error {
 	changed := []string{fmt.Sprintf("Created account %s (id %s)", created.Email, created.ID)}
 
 	if !*noOrg {
-		name := strings.TrimSpace(*orgName)
+		name := displayname.Normalize(*orgName)
 		if name == "" {
-			name = defaultOrgName(created.FirstName)
+			name = displayname.DefaultWorkspace(created.FirstName)
 		}
 		org, oerr := c.orgService().Create(ctx, created.ID, name)
 		if oerr != nil {
@@ -518,15 +522,6 @@ func lookupUser(ctx context.Context, c *conn, address string) (*models.User, err
 		return nil, fmt.Errorf("no account on this instance uses the address %s, so nothing was changed.\nSee who does:\n  warmblyctl user list", address)
 	}
 	return u, nil
-}
-
-// defaultOrgName mirrors the bootstrap owner's naming so an account created
-// here is indistinguishable from one claimed through the setup link.
-func defaultOrgName(firstName string) string {
-	if firstName == "" {
-		return "My Organization"
-	}
-	return firstName + "'s Organization"
 }
 
 func adminRoleNames() []string {
