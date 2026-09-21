@@ -16,13 +16,20 @@ import useUpdateOrganization from "@/lib/api/hooks/app/organizations/useUpdateOr
 import useCurrentOrganization from "@/lib/api/hooks/app/organizations/useCurrentOrganization";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
+import { PERSON_NAME_MAX, WORKSPACE_NAME_MAX, nameError, normalizeName, type NameKind } from "@/lib/displayName";
 
 /* ── Schema ─────────────────────── */
 
+const displayName = (label: string, kind: NameKind) =>
+    z.string().superRefine((value, ctx) => {
+        const message = nameError(label, value, kind);
+        if (message) ctx.addIssue({ code: "custom", message });
+    });
+
 const schema = z.object({
-    first_name: z.string().min(1, "First name is required").max(50, "50 characters max"),
-    last_name: z.string().min(1, "Last name is required").max(50, "50 characters max"),
-    workspace: z.string().min(1, "Workspace name is required").max(60, "60 characters max"),
+    first_name: displayName("First name", "person"),
+    last_name: displayName("Last name", "person"),
+    workspace: displayName("Workspace name", "workspace"),
     role: z.enum(["founder", "sales", "marketing", "agency", "recruiter", "other"], {
         error: "Pick the closest one",
     }),
@@ -186,16 +193,17 @@ export default function OnboardingPage() {
         try {
             // Rename the auto-created workspace if the user changed it. Best
             // effort: a rename hiccup must never block completing onboarding.
-            if (org?.name && org.name !== data.workspace) {
+            const workspace = normalizeName(data.workspace);
+            if (org?.name && org.name !== workspace) {
                 try {
-                    await updateOrganization.mutateAsync({ name: data.workspace });
+                    await updateOrganization.mutateAsync({ name: workspace });
                 } catch {
                     /* keep going — onboarding completion matters more */
                 }
             }
             await completeOnboarding.mutateAsync({
-                first_name: data.first_name,
-                last_name: data.last_name,
+                first_name: normalizeName(data.first_name),
+                last_name: normalizeName(data.last_name),
                 referral_source: data.referral_source,
                 role: data.role,
                 team_size: data.team_size,
@@ -273,12 +281,12 @@ export default function OnboardingPage() {
                             <div className="space-y-4">
                                 <div>
                                     <FieldLabel>First name</FieldLabel>
-                                    <input type="text" placeholder="John" className={INPUT} maxLength={50} autoFocus {...register("first_name")} />
+                                    <input type="text" placeholder="John" className={INPUT} maxLength={PERSON_NAME_MAX} autoComplete="given-name" autoFocus {...register("first_name")} />
                                     <FieldError message={errors.first_name?.message} />
                                 </div>
                                 <div>
                                     <FieldLabel>Last name</FieldLabel>
-                                    <input type="text" placeholder="Doe" className={INPUT} maxLength={50} {...register("last_name")} />
+                                    <input type="text" placeholder="Doe" className={INPUT} maxLength={PERSON_NAME_MAX} autoComplete="family-name" {...register("last_name")} />
                                     <FieldError message={errors.last_name?.message} />
                                 </div>
                             </div>
@@ -287,7 +295,7 @@ export default function OnboardingPage() {
                         {step === 1 && (
                             <div>
                                 <FieldLabel>Workspace name</FieldLabel>
-                                <input type="text" placeholder="Acme Inc." className={INPUT} maxLength={60} autoFocus {...register("workspace")} />
+                                <input type="text" placeholder="Acme Inc." className={INPUT} maxLength={WORKSPACE_NAME_MAX} autoFocus {...register("workspace")} />
                                 <FieldError message={errors.workspace?.message} />
                             </div>
                         )}

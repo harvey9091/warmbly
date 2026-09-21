@@ -201,6 +201,7 @@ Every instance that has not updated yet runs the code an attacker can read here.
 - TOTP verification records the step it consumed (`user_totp_settings.last_used_step`) and refuses a replay of it. Any new second factor needs equivalent single-use enforcement
 - **admin routes require a session that verified a second factor.** `middleware.RequireAdminPermission` refuses `!session.MFAVerified` with `admin_mfa_required`. Never add an admin route that bypasses it
 - an operation that changes who can get in, or moves money or ownership, requires a fresh authentication (`middleware.RequireFreshAuth`, `POST /v1/auth/reauth`). API-key and OAuth callers pass through, because they present a credential on every call and have no session to refresh
+- a federated identity (Google, Apple, OIDC) is bound to an account by `(issuer, subject)`. The email fallback that finds an existing account on a first sign-in attaches the identity to a password account only after that password is presented (`resolveFederatedUser` parks it as `link_required`, `SSOLinkConfirm` completes it through `finishLoginAs`). Only an account with no password links on the address alone
 
 ### Sessions and tokens
 
@@ -229,6 +230,16 @@ Everything else in section 3 of the evidence pack rests on this: no identifier f
 - `middleware.SecurityHeaders` sets HSTS, `X-Content-Type-Options`, `X-Frame-Options`, a referrer policy and a default-deny CSP on every API response. Do not remove a header to make a page work; scope the exception
 - the realtime websocket checks the browser's `Origin` against `CHECK_ORIGIN_HOSTS`. Non-browser clients send no origin and are unaffected. Adding a first-party origin means adding it to that list in every environment
 - webhook targets stay HTTPS and HMAC-signed, and SSRF-prone destinations are refused. Only a self-hosted or development instance may opt out
+
+### Input that other people see
+
+Anything one person types that Warmbly later shows to someone else is content injection waiting to happen, and platform email is the worst case: a mail client turns anything shaped like an address into a live link, sent under Warmbly's own domain. `html/template` escaping stops markup, not that. So:
+
+- **every name a person chooses goes through `internal/pkg/displayname`**: first and last names, workspace names, and any new name-like field that can reach another person. It refuses links, web addresses, email addresses, hostnames and IPs (after folding full-width and ideographic dots), control, invisible and bidi characters, markup characters and stacked combining marks, and it bounds length by `Kind`. The refusal is `400 invalid_name`, documented in `api/error-codes.mdx`
+- **the server is the authority and the check sits at every write**, not only the one the dashboard uses: the handler or service behind registration, setup, onboarding, profile, org create and rename, the admin panel, `warmblyctl` and an org-transfer import. A new path that writes one of these fields calls the same package. `web/src/lib/displayName.ts` mirrors the rules so a form can explain a refusal before the request, and it is never the only check
+- **a value nobody can be asked to correct is cleaned, not refused**: a name from an identity provider or an email local part goes through `displayname.Clean`/`FromEmail`, which drops what fails, so a hostile IdP claim costs the user a name, not a sign-in
+- **a stored value is untrusted at render time too.** Rows written before a rule existed are still in the database, so anything interpolated into an email body or subject goes through `displayname.Displayable` (or `FullName`) with a neutral fallback ("A team member", "Your workspace")
+- **tighten a rule in both places and in the docs together**: Go package, `displayName.ts`, their tests, and the `invalid_name` section of `api/error-codes.mdx`
 
 ### Errors, logging and data exposure
 

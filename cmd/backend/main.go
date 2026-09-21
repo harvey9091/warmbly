@@ -948,7 +948,12 @@ func main() {
 		// Federated identities keyed on (issuer, subject). Without this,
 		// external sign-in resolves accounts by email alone, which is only safe
 		// for issuers that control their own email namespace.
-		authService.WireIdentities(repository.NewIdentityRepository(primaryDB.Pool))
+		identityRepository := repository.NewIdentityRepository(primaryDB.Pool)
+		authService.WireIdentities(identityRepository)
+		// A federated identity on a 2FA account links inside the 2FA verify.
+		if twofaService != nil {
+			twofaService.WireIdentityLinker(identityRepository)
+		}
 		// Where a signup came from, written onto the new org once it exists.
 		authService.WireAcquisition(organizationRepository)
 

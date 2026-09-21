@@ -73,11 +73,20 @@ type Service interface {
 	// accounts often have none).
 	VerifyCurrentCode(ctx context.Context, userID uuid.UUID, code string) bool
 	// CreatePendingChallenge mints a short-lived single-use pending token for a
-	// 2FA login challenge (called from the login gate after the email code).
-	CreatePendingChallenge(ctx context.Context, userID uuid.UUID) (string, int, *errx.Error)
+	// 2FA login challenge. authProvider is what the session will record; link,
+	// when set, is a federated identity attached only once the code passes.
+	CreatePendingChallenge(ctx context.Context, userID uuid.UUID, authProvider string, link *models.UserIdentity) (string, int, *errx.Error)
 	// VerifyLogin exchanges a pending token + code (TOTP or recovery) for a
 	// real session.
 	VerifyLogin(ctx context.Context, pendingToken, code, ipaddr, userAgent string) (*models.Token, *errx.Error)
+	// WireIdentityLinker attaches the store a linking challenge writes to.
+	WireIdentityLinker(l IdentityLinker)
+}
+
+// IdentityLinker binds a federated identity to an account. Satisfied by
+// repository.IdentityRepository.
+type IdentityLinker interface {
+	Link(ctx context.Context, userID uuid.UUID, identity models.UserIdentity) error
 }
 
 type service struct {
@@ -86,7 +95,10 @@ type service struct {
 	tokens  token.TokenService
 	cache   *cache.Cache
 	sealKey [32]byte
+	linker  IdentityLinker
 }
+
+func (s *service) WireIdentityLinker(l IdentityLinker) { s.linker = l }
 
 func NewService(repo repository.TOTPRepository, users repository.UserRepository, tokens token.TokenService, c *cache.Cache, sealKey [32]byte) Service {
 	return &service{repo: repo, users: users, tokens: tokens, cache: c, sealKey: sealKey}

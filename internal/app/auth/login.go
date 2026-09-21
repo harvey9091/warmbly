@@ -226,18 +226,30 @@ func (s *authService) finishLoginAs(ctx context.Context, userID uuid.UUID, ipadd
 	return s.finishLoginAsWith(ctx, userID, ipaddr, userAgent, provider, nil)
 }
 
+// refuseSuspended is the ban-scope check (migration 000045): BanScopeLogin
+// means the account cannot authenticate, whatever it presents.
+func (s *authService) refuseSuspended(ctx context.Context, userID uuid.UUID) *errx.Error {
+	if scope, scopeErr := s.userRepository.GetBanState(ctx, userID); scopeErr == nil {
+		if models.BanScope(scope).Has(models.BanScopeLogin) {
+			return errx.New(errx.Forbidden, "this account has been suspended")
+		}
+	}
+	return nil
+}
+
 // finishLoginAsWith takes the verdict the caller already reached, if it has
 // one. A nil verdict is assessed here, which is right for the paths that
 // authenticate and complete in the same request.
 func (s *authService) finishLoginAsWith(ctx context.Context, userID uuid.UUID, ipaddr, userAgent, provider string, verdict *authrisk.Verdict) (*models.LoginResult, *errx.Error) {
-	// Ban-scope enforcement (migration 000045). The runtime treats
-	// BanScopeLogin as "this account cannot authenticate" — the row's
-	// banned_at is set in tandem so legacy callers still see the user
-	// as banned, but the bit makes the rule auditable.
-	if scope, scopeErr := s.userRepository.GetBanState(ctx, userID); scopeErr == nil {
-		if models.BanScope(scope).Has(models.BanScopeLogin) {
-			return nil, errx.New(errx.Forbidden, "this account has been suspended")
-		}
+	return s.completeLogin(ctx, userID, ipaddr, userAgent, provider, verdict, nil)
+}
+
+// completeLogin is the one path behind every sign-in: ban check, 2FA gate,
+// then the session. link, when set, is a federated identity attached only
+// once every gate has passed (inside the 2FA verify on a 2FA account).
+func (s *authService) completeLogin(ctx context.Context, userID uuid.UUID, ipaddr, userAgent, provider string, verdict *authrisk.Verdict, link *models.UserIdentity) (*models.LoginResult, *errx.Error) {
+	if xerr := s.refuseSuspended(ctx, userID); xerr != nil {
+		return nil, xerr
 	}
 
 	// 2FA gate: if the user has TOTP enabled, issue a single-use pending
@@ -245,11 +257,17 @@ func (s *authService) finishLoginAsWith(ctx context.Context, userID uuid.UUID, i
 	// two_fa_required and POSTs /auth/2fa/verify next.
 	if s.twofa != nil {
 		if enabled, _ := s.twofa.IsEnabled(ctx, userID); enabled {
-			pendTok, expiresIn, perr := s.twofa.CreatePendingChallenge(ctx, userID)
+			pendTok, expiresIn, perr := s.twofa.CreatePendingChallenge(ctx, userID, provider, link)
 			if perr != nil {
 				return nil, perr
 			}
 			return &models.LoginResult{TwoFARequired: true, PendingToken: pendTok, ExpiresIn: expiresIn}, nil
+		}
+	}
+
+	if link != nil {
+		if xerr := s.linkIdentity(ctx, userID, *link); xerr != nil {
+			return nil, xerr
 		}
 	}
 

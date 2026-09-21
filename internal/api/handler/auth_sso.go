@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -139,6 +140,28 @@ func (h *Handler) SSOExchange(c *gin.Context) {
 	}
 
 	result, err := h.AuthService.SSOExchange(c.Request.Context(), req.Code, req.Binding)
+	if err != nil {
+		errx.Handle(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// SSOLink takes the password for a federated sign-in that resolved to an
+// existing password account, attaches the identity and issues the session.
+// Public like /2fa/verify: the pending token is the proof of the completed
+// provider flow, and the password budget is enforced in the service.
+func (h *Handler) SSOLink(c *gin.Context) {
+	var data auth.SSOLinkData
+	if err := c.ShouldBindJSON(&data); err != nil {
+		errx.Handle(c, errx.ErrInvalid)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), authRequestTimeout)
+	defer cancel()
+
+	result, err := h.AuthService.SSOLinkConfirm(ctx, &data, c.ClientIP(), c.Request.UserAgent())
 	if err != nil {
 		errx.Handle(c, err)
 		return

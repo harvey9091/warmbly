@@ -14,6 +14,7 @@ import (
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/observability/analytics"
+	"github.com/warmbly/warmbly/internal/pkg/displayname"
 	"github.com/warmbly/warmbly/internal/pkg/signuprisk"
 )
 
@@ -101,10 +102,7 @@ func (s *authService) createAccount(ctx context.Context, address, passwordHash s
 	// Auto-create organization for new user
 	var org *models.Organization
 	if s.organizationService != nil {
-		orgName := u.FirstName + "'s Organization"
-		if u.FirstName == "" {
-			orgName = "My Organization"
-		}
+		orgName := displayname.DefaultWorkspace(u.FirstName)
 		var orgErr *errx.Error
 		org, orgErr = s.organizationService.Create(ctx, u.ID, orgName)
 		if orgErr != nil {
@@ -238,7 +236,7 @@ func (s *authService) notifyOperatorSignup(u *models.User, workspace string) {
 		"A new account finished signing up.",
 		map[string]string{
 			"Email":     u.Email,
-			"Name":      strings.TrimSpace(u.FirstName + " " + u.LastName),
+			"Name":      displayname.FullName(u.FirstName, u.LastName),
 			"Workspace": workspace,
 		},
 	)

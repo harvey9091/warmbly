@@ -9,6 +9,7 @@ import (
 	"github.com/warmbly/warmbly/internal/api/middleware"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
+	"github.com/warmbly/warmbly/internal/pkg/displayname"
 )
 
 type completeOnboardingRequest struct {
@@ -53,15 +54,12 @@ func (h *Handler) CompleteOnboarding(c *gin.Context) {
 		return
 	}
 
-	if req.FirstName == "" || req.LastName == "" {
-		errx.Handle(c, errx.New(errx.BadRequest, "First name and last name are required."))
+	first, last, xerr := validatePersonName(req.FirstName, req.LastName)
+	if xerr != nil {
+		errx.Handle(c, xerr)
 		return
 	}
-
-	if len(req.FirstName) > 50 || len(req.LastName) > 50 {
-		errx.Handle(c, errx.New(errx.BadRequest, "Name must be 50 characters or less."))
-		return
-	}
+	req.FirstName, req.LastName = first, last
 
 	if !validReferralSources[req.ReferralSource] {
 		errx.Handle(c, errx.New(errx.BadRequest, "Invalid referral source."))
@@ -108,14 +106,12 @@ func (h *Handler) UpdateUserProfile(c *gin.Context) {
 		return
 	}
 
-	if req.FirstName == "" || req.LastName == "" {
-		errx.Handle(c, errx.New(errx.BadRequest, "First name and last name are required."))
+	first, last, xerr := validatePersonName(req.FirstName, req.LastName)
+	if xerr != nil {
+		errx.Handle(c, xerr)
 		return
 	}
-	if len(req.FirstName) > 50 || len(req.LastName) > 50 {
-		errx.Handle(c, errx.New(errx.BadRequest, "Name must be 50 characters or less."))
-		return
-	}
+	req.FirstName, req.LastName = first, last
 
 	userID := middleware.GetUserID(c)
 	uid, err := uuid.Parse(userID)
@@ -166,4 +162,18 @@ func (h *Handler) UpdateSendPreferences(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"undo_send_seconds": req.UndoSendSeconds})
+}
+
+// validatePersonName applies the display-name rules to a first and last name,
+// returning their stored forms.
+func validatePersonName(first, last string) (string, string, *errx.Error) {
+	first, xerr := displayname.Validate("First name", first, displayname.Person, false)
+	if xerr != nil {
+		return "", "", xerr
+	}
+	last, xerr = displayname.Validate("Last name", last, displayname.Person, false)
+	if xerr != nil {
+		return "", "", xerr
+	}
+	return first, last, nil
 }

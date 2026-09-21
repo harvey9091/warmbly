@@ -15,6 +15,7 @@ import (
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/infrastructure/kms"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/displayname"
 )
 
 type UserRepository interface {
@@ -93,14 +94,8 @@ func (r *userRepository) CreateUser(ctx context.Context, email *mail.Address, pa
 	// case someone typed is a row no sign-in and no reset can find.
 	address := normalizeUserEmail(email.Address)
 
-	var firstName string
-
-	nameSplit := strings.SplitN(address, "@", 2)
-	if len(nameSplit) < 2 {
-		firstName = "Unknown"
-	} else {
-		firstName = nameSplit[0]
-	}
+	// Only a local part that passes the display-name rules becomes a name.
+	firstName := displayname.FromEmail(address)
 
 	var lastName string
 	now := time.Now()
@@ -369,10 +364,7 @@ func (r *userRepository) CreateExemptUser(ctx context.Context, email *mail.Addre
 
 	id := uuid.New()
 	address := normalizeUserEmail(email.Address)
-	firstName := "Unknown"
-	if parts := strings.SplitN(address, "@", 2); len(parts) == 2 {
-		firstName = parts[0]
-	}
+	firstName := displayname.FromEmail(address)
 	now := time.Now()
 	if _, ierr := tx.Exec(ctx, `
 		INSERT INTO users (id, email, password_hash, first_name, last_name, created_at, updated_at)

@@ -39,3 +39,10 @@ type ChangePassword struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
 }
+
+// SSOLinkData is what POST /auth/sso/link takes: the challenge a federated
+// sign-in came back with, and the password of the account it resolved to.
+type SSOLinkData struct {
+	PendingToken string `json:"pending_token"`
+	Password     string `json:"password"`
+}
