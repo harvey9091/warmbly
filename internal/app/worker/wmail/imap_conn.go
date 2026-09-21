@@ -55,6 +55,8 @@ type ImapConn interface {
 	// FindUIDByMessageID relocates a warmup message whose UID went void when an
 	// earlier engagement leg moved it.
 	FindUIDByMessageID(ctx context.Context, mailboxName, rfcMessageID string) (uint32, error)
+	// DeleteUID expunges one message: the retention window's deletion.
+	DeleteUID(ctx context.Context, mailboxName string, uid uint32) error
 }
 
 var _ ImapConn = (*imap.Client)(nil)

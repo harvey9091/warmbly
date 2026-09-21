@@ -2,12 +2,15 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/app/worker/wmail"
 	"github.com/warmbly/warmbly/internal/client/smtpimap/imap"
 	"github.com/warmbly/warmbly/internal/config"
+	"github.com/warmbly/warmbly/internal/infrastructure/storage"
 	"github.com/warmbly/warmbly/internal/models"
 )
 
@@ -65,12 +68,32 @@ func (w *WorkerService) runGoogleWarmupActions(ctx context.Context, mail *wmail.
 		label = ""
 	}
 
+	// The delete for the sender's own copy carries no Gmail id: the map is
+	// keyed by the provider's id and the control plane only knows the
+	// Message-ID, so it is resolved here.
+	gmailID := action.GmailID
+	if gmailID == "" && action.RFCMessageID != "" && hasWarmupAction(action.Actions, models.WarmupActionDelete) {
+		if id, err := mail.GoogleData.Client.FindByRFCMessageID(ctx, action.RFCMessageID); err != nil {
+			log.Warn().Err(err).Str("email_id", action.EmailID.String()).Msg("Could not search Gmail for the warmup message")
+		} else {
+			gmailID = id
+		}
+	}
+
 	for _, act := range action.Actions {
 		switch act {
 		case models.WarmupActionFile:
 			if err := mail.GoogleData.Client.FileWarmup(ctx, action.GmailID, label); err != nil {
 				log.Error().Err(err).Str("gmail_id", action.GmailID).Str("folder", label).Msg("Failed to file warmup message (Gmail)")
 			}
+		case models.WarmupActionDelete:
+			if gmailID != "" {
+				if err := mail.GoogleData.Client.Trash(ctx, gmailID); err != nil {
+					log.Error().Err(err).Str("gmail_id", gmailID).Msg("Failed to delete warmup message (Gmail)")
+					continue
+				}
+			}
+			w.dropWarmupBody(ctx, mail, action, gmailID)
 		case models.WarmupActionMarkRead:
 			if err := mail.GoogleData.Client.MarkAsRead(ctx, action.GmailID); err != nil {
 				log.Error().Err(err).Str("gmail_id", action.GmailID).Msg("Failed to mark as read")
@@ -154,6 +177,18 @@ func (w *WorkerService) runGraphWarmupActions(ctx context.Context, mail *wmail.W
 			if err := client.AddFlag(ctx, msgID); err != nil {
 				log.Error().Err(err).Str("graph_id", msgID).Msg("Failed to flag warmup message (Graph)")
 			}
+		case models.WarmupActionDelete:
+			if msgID != "" {
+				if err := client.Delete(ctx, msgID); err != nil {
+					log.Error().Err(err).Str("graph_id", msgID).Msg("Failed to delete warmup message (Graph)")
+					continue
+				}
+			}
+			// The map is keyed by the id the message had when it was
+			// synced, before our own filing moved it, so the live id
+			// resolved above rarely finds it; the control plane's internal
+			// id is what drops the body here.
+			w.dropWarmupBody(ctx, mail, action, action.GmailID)
 		default:
 			log.Warn().Str("action", act).Msg("Unknown warmup action")
 		}
@@ -252,9 +287,44 @@ func (w *WorkerService) runImapWarmupActions(ctx context.Context, mail *wmail.WM
 			// starring here would just re-flag the same message. Star is a
 			// Gmail-only distinct signal.
 			continue
+		case models.WarmupActionDelete:
+			if err := imapClient.DeleteUID(ctx, boxName, uid); err != nil {
+				log.Error().Err(err).Uint32("uid", uid).Str("folder", boxName).Msg("Failed to delete warmup message (IMAP)")
+				continue
+			}
+			moved = true
+			// The map is keyed by the RFC Message-ID on IMAP.
+			w.dropWarmupBody(ctx, mail, action, action.RFCMessageID)
 		default:
 			log.Warn().Str("action", act).Msg("Unknown warmup action")
 		}
+	}
+}
+
+// dropWarmupBody removes the platform's stored copy of a warmup message's
+// body once the message is gone from the mailbox. The body was written when
+// the message was synced, before anything knew it was warmup, and nothing
+// else ever comes back for it. The internal id keying the blob travels with
+// the action when the control plane has it; otherwise it is looked up from
+// the provider key the worker acted on. Finding neither leaves the blob to
+// the mailbox's erasure, which sweeps the whole prefix.
+func (w *WorkerService) dropWarmupBody(ctx context.Context, mail *wmail.WMail, action models.WarmupEmailAction, providerKey string) {
+	if mail.Storage == nil {
+		return
+	}
+	internalID, err := uuid.Parse(action.InternalID)
+	if err != nil && providerKey != "" && mail.EmailMessageMapRepository != nil {
+		if m, lerr := mail.EmailMessageMapRepository.Get(ctx, mail.UserID, mail.ID, providerKey); lerr == nil && m != nil {
+			internalID, err = uuid.Parse(m.ID)
+		}
+	}
+	if err != nil || internalID == uuid.Nil {
+		log.Debug().Str("email_id", action.EmailID.String()).Msg("Warmup body left in place: no internal id to key it by")
+		return
+	}
+	key := config.StorageEndpointEmailBody(mail.UserID, mail.ID, internalID)
+	if err := mail.Storage.Delete(ctx, key); err != nil && !errors.Is(err, storage.ErrNotFound) {
+		log.Warn().Err(err).Str("email_id", action.EmailID.String()).Msg("Failed to drop the stored warmup body")
 	}
 }
 

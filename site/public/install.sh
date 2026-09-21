@@ -100,6 +100,8 @@ SYNC_DAILY_ORG="${WARMBLY_SYNC_DAILY_ORG:-25000}"
 RET_ENGAGEMENT="${WARMBLY_RETENTION_ENGAGEMENT_DAYS:-365}"
 RET_FORMS="${WARMBLY_RETENTION_FORM_DAYS:-180}"
 RET_AUDIT="${WARMBLY_RETENTION_AUDIT_DAYS:-90}"
+RET_WARMUP_MAIL="${WARMBLY_RETENTION_WARMUP_MAIL_DAYS:-30}"
+RET_WARMUP_EVENTS="${WARMBLY_RETENTION_WARMUP_EVENT_DAYS:-365}"
 
 # S3 blob answers, only read when BLOBS=s3.
 S3_BUCKET="${WARMBLY_S3_BUCKET:-}"
@@ -1236,9 +1238,9 @@ FSEOF
 }
 
 render_settings_bootstrap() {
-    printf '{"sync":{"backfill_days":%s,"backfill_messages":%s,"daily_messages_per_mailbox":%s,"daily_messages_per_org":%s},"retention":{"engagement_event_days":%s,"form_event_days":%s,"audit_log_days":%s}}' \
+    printf '{"sync":{"backfill_days":%s,"backfill_messages":%s,"daily_messages_per_mailbox":%s,"daily_messages_per_org":%s},"retention":{"engagement_event_days":%s,"form_event_days":%s,"audit_log_days":%s,"warmup_mail_days":%s,"warmup_event_days":%s}}' \
         "$SYNC_BACKFILL_DAYS" "$SYNC_BACKFILL_MESSAGES" "$SYNC_DAILY_MAILBOX" "$SYNC_DAILY_ORG" \
-        "$RET_ENGAGEMENT" "$RET_FORMS" "$RET_AUDIT"
+        "$RET_ENGAGEMENT" "$RET_FORMS" "$RET_AUDIT" "$RET_WARMUP_MAIL" "$RET_WARMUP_EVENTS"
 }
 
 render_env_bootstrap_owner() {
@@ -2098,13 +2100,14 @@ wiz_retention() {
     out "  ${WHITE}Start from which posture?${R}"
     say ""
     choose 1 \
-        "Defaults|90 days imported; opens/clicks 365 days, forms 180, audit 90." \
-        "Minimal retention|30 days imported; every event log 30 days. Reports get shorter." \
-        "Let me set each one|Seven questions, each with its default already filled in."
+        "Defaults|90 days imported; opens/clicks 365 days, forms 180, audit 90, warmup mail 30." \
+        "Minimal retention|30 days imported; every event log 30 days, warmup mail 7. Reports get shorter." \
+        "Let me set each one|Nine questions, each with its default already filled in."
     case "$CHOICE" in
         2)
             SYNC_BACKFILL_DAYS=30; SYNC_BACKFILL_MESSAGES=2000
             RET_ENGAGEMENT=30; RET_FORMS=30; RET_AUDIT=30
+            RET_WARMUP_MAIL=7; RET_WARMUP_EVENTS=30
             ok "Minimal retention"
             ;;
         3)
@@ -2121,6 +2124,10 @@ wiz_retention() {
             ask_number "Opens and clicks (days)" "$RET_ENGAGEMENT" 1 3650; RET_ENGAGEMENT=$ANSWER
             ask_number "Form funnel events (days)" "$RET_FORMS" 1 3650; RET_FORMS=$ANSWER
             ask_number "Audit log, incl. IP addresses (days)" "$RET_AUDIT" 1 3650; RET_AUDIT=$ANSWER
+            say ""
+            out "  ${DIM}Warmup. Mail is deleted from each mailbox's warmup folder after the first window.${R}"
+            ask_number "Warmup mail in mailboxes (days)" "$RET_WARMUP_MAIL" 3 3650; RET_WARMUP_MAIL=$ANSWER
+            ask_number "Warmup records (days)" "$RET_WARMUP_EVENTS" 30 3650; RET_WARMUP_EVENTS=$ANSWER
             ;;
         *) ok "Defaults" ;;
     esac
@@ -2270,7 +2277,7 @@ summary_rows() {
 "${DIM}Database${R}       ${WHITE}$(db_label)${R}" \
 "${DIM}Blobs${R}          ${WHITE}$(blob_label)${R}" \
 "${DIM}Import${R}         ${WHITE}${SYNC_BACKFILL_DAYS} days, up to ${SYNC_BACKFILL_MESSAGES} messages per mailbox${R}" \
-"${DIM}Kept${R}           ${WHITE}opens/clicks ${RET_ENGAGEMENT}d, forms ${RET_FORMS}d, audit ${RET_AUDIT}d${R}" \
+"${DIM}Kept${R}           ${WHITE}opens/clicks ${RET_ENGAGEMENT}d, forms ${RET_FORMS}d, audit ${RET_AUDIT}d, warmup ${RET_WARMUP_MAIL}d${R}" \
 "${DIM}Backups${R}        ${WHITE}$(backup_label)${R}" \
 "${DIM}First owner${R}    ${WHITE}$(owner_label)${R}" \
 "${DIM}Sign-ups${R}       ${WHITE}$(registration_label)${R}" \
@@ -3053,7 +3060,7 @@ Answers                                        environment variable
   --registry PREFIX     Image namespace        WARMBLY_IMAGE_PREFIX [$DEFAULT_REGISTRY]
   --backup-dir PATH     Schedule backups into it     WARMBLY_BACKUP_DIR
   --backup-keep N       How many to keep             WARMBLY_BACKUP_KEEP  [14]
-  --retention-preset P  default|minimal              (sets the three windows)
+  --retention-preset P  default|minimal              (sets the five windows)
   --no-update-check     No outbound call at all      WARMBLY_UPDATE_CHECK
 
 Other
@@ -3106,6 +3113,7 @@ parse_args() {
                     minimal)
                         SYNC_BACKFILL_DAYS=30; SYNC_BACKFILL_MESSAGES=2000
                         RET_ENGAGEMENT=30; RET_FORMS=30; RET_AUDIT=30
+                        RET_WARMUP_MAIL=7; RET_WARMUP_EVENTS=30
                         ;;
                 esac
                 shift

@@ -252,6 +252,30 @@ const (
 	RetentionDaysMin = 1
 	RetentionDaysMax = 3650
 
+	// Warmup mail is real mail in the customer's mailbox, and nothing about
+	// it is worth keeping once its engagement has been recorded. The platform
+	// deletes it from the warmup folder after this many days (per mailbox
+	// override in email_accounts.warmup_retention_days), so a mailbox on a
+	// fixed quota never fills up with it and the deletion is the platform's
+	// own. The floor leaves room for the delayed engagement legs and for a
+	// reply-back in the thread to finish before its opener goes.
+	WarmupMailRetentionDaysDefault = 30
+	WarmupMailRetentionDaysMin     = 3
+
+	// WarmupEventRetentionDaysDefault is how long the per-message warmup
+	// records (tokens, receipts, tampering and spam reports) are kept. The
+	// health bands read at most thirty days, which is the floor; the daily
+	// warmup_statistics rows carry the analytics and are never pruned.
+	WarmupEventRetentionDaysDefault = 365
+	WarmupEventRetentionDaysMin     = 30
+
+	// WarmupDeletionStrikeHours is how soon after arrival a deletion of a
+	// warmup email still costs the pool its engagement and so counts as
+	// tampering. Later on it is housekeeping: the platform was going to delete
+	// it anyway, and a mailbox owner tidying a folder, a provider purging its
+	// Trash or a server retention rule must not read as harm.
+	WarmupDeletionStrikeHours = 24
+
 	// CampaignSendStampAttempts is how many times the control plane retries the
 	// sent_at stamp after a send is already on the bus. The reservation is what
 	// keeps the step from being re-sent, so a lost stamp is a pacing problem,

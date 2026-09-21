@@ -390,3 +390,44 @@ func (c *Client) SetSeen(ctx context.Context, mailboxName string, uids []uint32,
 	}
 	return nil
 }
+
+// DeleteUID removes one message from mailboxName for good: \Deleted, then an
+// expunge limited to that UID where the server offers UIDPLUS, so a message
+// somebody else flagged in the same folder is not taken along with it. This
+// is what the retention window asks for once a warmup message has served its
+// purpose, and IMAP has no Trash of its own to move it to instead.
+func (c *Client) DeleteUID(ctx context.Context, mailboxName string, uid uint32) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if merr := c.ensureConnected(); merr != nil {
+		return merr
+	}
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	defer c.begin()()
+	name := c.qualifyMailboxLocked(mailboxName)
+	if _, err := c.selectMailbox(name, nil); err != nil {
+		return fmt.Errorf("select %q: %w", name, err)
+	}
+
+	set := imap.UIDSetNum(imap.UID(uid))
+	storeCmd := c.client.Store(set, &imap.StoreFlags{
+		Op:     imap.StoreFlagsAdd,
+		Silent: true,
+		Flags:  []imap.Flag{imap.FlagDeleted},
+	}, nil)
+	if err := storeCmd.Close(); err != nil {
+		return fmt.Errorf("store \\Deleted on uid %d: %w", uid, err)
+	}
+	if c.client.Caps().Has(imap.CapUIDPlus) {
+		if err := c.client.UIDExpunge(set).Close(); err != nil {
+			return fmt.Errorf("uid expunge %d in %q: %w", uid, name, err)
+		}
+		return nil
+	}
+	if err := c.client.Expunge().Close(); err != nil {
+		return fmt.Errorf("expunge %q: %w", name, err)
+	}
+	return nil
+}

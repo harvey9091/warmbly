@@ -33,18 +33,21 @@ func (d Deps) registerMailboxTools(r *Registry) {
 		Name:        "update_mailbox",
 		Description: "Update a mailbox's settings: display name, reply-to, cold-send cap (campaign_limit), minimum gap between sends, status, and warmup parameters. Only provided fields change.",
 		InputSchema: objectSchema(map[string]any{
-			"email_account_id":  strProp("The mailbox UUID."),
-			"name":              strProp("Display name."),
-			"reply_to":          strProp("Reply-to address."),
-			"status":            enumProp("Mailbox status.", "active", "inactive"),
-			"campaign_limit":    intProp("Max cold-campaign emails per day for this mailbox, 0 to 5000. Default 50; 30-50/day is the safe cold-outreach band."),
-			"min_wait_time":     intProp("Minimum seconds between sends."),
-			"warmup":            boolProp("Enable or disable warmup."),
-			"warmup_base":       intProp("Warmup starting emails/day."),
-			"warmup_max":        intProp("Warmup ceiling emails/day."),
-			"warmup_increase":   intProp("Warmup daily ramp increment."),
-			"warmup_reply_rate": intProp("Warmup reply rate percent."),
-			"warmup_days":       intProp("Warmup active days bitmask."),
+			"email_account_id":      strProp("The mailbox UUID."),
+			"name":                  strProp("Display name."),
+			"reply_to":              strProp("Reply-to address."),
+			"status":                enumProp("Mailbox status.", "active", "inactive"),
+			"campaign_limit":        intProp("Max cold-campaign emails per day for this mailbox, 0 to 5000. Default 50; 30-50/day is the safe cold-outreach band."),
+			"min_wait_time":         intProp("Minimum seconds between sends."),
+			"warmup":                boolProp("Enable or disable warmup."),
+			"warmup_base":           intProp("Warmup starting emails/day."),
+			"warmup_max":            intProp("Warmup ceiling emails/day."),
+			"warmup_increase":       intProp("Warmup daily ramp increment."),
+			"warmup_reply_rate":     intProp("Warmup reply rate percent."),
+			"warmup_days":           intProp("Warmup active days bitmask."),
+			"warmup_placement":      enumProp("Where warmup mail is filed in the mailbox itself.", "folder", "inbox", "archive"),
+			"warmup_folder":         strProp("Folder (Gmail label) for warmup mail when warmup_placement is folder. Empty string means the instance default, Warmbly."),
+			"warmup_retention_days": intProp("Days warmup mail stays in the mailbox before Warmbly deletes it from the warmup folder: 3 to 3650, or 0 to follow the instance setting."),
 		}, "email_account_id"),
 		Risk:            generation.RiskWrite,
 		RequiredOrgPerm: models.PermManageEmails,
@@ -147,6 +150,9 @@ func (d Deps) updateMailbox(ctx context.Context, inv Invocation, args json.RawMe
 		WarmupIncrease  *int    `json:"warmup_increase"`
 		WarmupReplyRate *int    `json:"warmup_reply_rate"`
 		WarmupDays      *int    `json:"warmup_days"`
+		WarmupPlacement *string `json:"warmup_placement"`
+		WarmupFolder    *string `json:"warmup_folder"`
+		WarmupRetention *int    `json:"warmup_retention_days"`
 	}](args)
 	if err != nil {
 		return "", err
@@ -156,17 +162,20 @@ func (d Deps) updateMailbox(ctx context.Context, inv Invocation, args json.RawMe
 		return "", err
 	}
 	upd := &models.UpdateEmail{
-		Name:            in.Name,
-		ReplyTo:         in.ReplyTo,
-		Status:          in.Status,
-		CampaignLimit:   in.CampaignLimit,
-		MinWaitTime:     in.MinWaitTime,
-		Warmup:          in.Warmup,
-		WarmupBase:      in.WarmupBase,
-		WarmupMax:       in.WarmupMax,
-		WarmupIncrease:  in.WarmupIncrease,
-		WarmupReplyRate: in.WarmupReplyRate,
-		WarmupDays:      in.WarmupDays,
+		Name:                in.Name,
+		ReplyTo:             in.ReplyTo,
+		Status:              in.Status,
+		CampaignLimit:       in.CampaignLimit,
+		MinWaitTime:         in.MinWaitTime,
+		Warmup:              in.Warmup,
+		WarmupBase:          in.WarmupBase,
+		WarmupMax:           in.WarmupMax,
+		WarmupIncrease:      in.WarmupIncrease,
+		WarmupReplyRate:     in.WarmupReplyRate,
+		WarmupDays:          in.WarmupDays,
+		WarmupPlacement:     in.WarmupPlacement,
+		WarmupFolder:        in.WarmupFolder,
+		WarmupRetentionDays: in.WarmupRetention,
 	}
 	mb, xerr := d.Emails.Update(ctx, inv.OrgID.String(), inv.UserID.String(), in.EmailAccountID, upd)
 	if xerr != nil {

@@ -161,6 +161,9 @@ Auth: **Scope** `WRITE_EMAILS` · **Org permission** `manage_emails`
 | `warmup_start_time` | string | no | Daily warmup window start, `HH:MM`. |
 | `warmup_end_time` | string | no | Daily warmup window end, `HH:MM`. |
 | `warmup_days` | integer | no | Number of active warmup days per week. |
+| `warmup_placement` | string | no | Where warmup mail is filed in the mailbox itself: `folder` (default), `inbox`, or `archive`. See [Warmup](/guides/warmup/#in-your-mail-client). |
+| `warmup_folder` | string | no | Folder (Gmail label) warmup mail is filed into when `warmup_placement` is `folder`. Empty string means the instance default, `Warmbly`. No folder separators or control characters; 64 characters max. |
+| `warmup_retention_days` | integer | no | How many days warmup mail stays in this mailbox before Warmbly deletes it from the warmup folder: `3` to `3650`, or `0` to follow the instance setting (30 days unless the operator changed it). |
 | `tags` | string[] | no | Tag ids assigned to the mailbox. |
 
 ```json

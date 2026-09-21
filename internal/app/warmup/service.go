@@ -672,7 +672,9 @@ func moreSevere(a, b evaluationDecision) evaluationDecision {
 
 // evaluateTampering needs no sample: each strike is one deliberate act on mail
 // the mailbox verifiably received. A single deletion only warns, because the
-// most likely cause is someone tidying the folder by hand.
+// most likely cause is someone tidying the folder by hand. A deletion is only
+// recorded at all inside config.WarmupDeletionStrikeHours of arrival; past
+// that the platform's own retention would have removed the message anyway.
 func evaluateTampering(metrics *models.WarmupHealthMetrics, now time.Time) evaluationDecision {
 	strikes := metrics.TamperingStrikes()
 	score := maxFloat(float64(strikes)*10, metrics.SpamPlacementRate)
@@ -696,7 +698,7 @@ func evaluateTampering(metrics *models.WarmupHealthMetrics, now time.Time) evalu
 	case strikes >= tamperingWatchStrikes:
 		return evaluationDecision{
 			State:  models.WarmupHealthWatch,
-			Reason: "A warmup email was " + tamperingVerb(tamperingKind(metrics)) + ". Leave warmup mail where it is filed; a second one within 7 days pauses warmup.",
+			Reason: "A warmup email was " + tamperingVerb(tamperingKind(metrics)) + " soon after it arrived. Leave warmup mail where it is filed; Warmbly clears it on its own once its retention window passes. A second one within 7 days pauses warmup.",
 			Score:  score,
 		}
 	}

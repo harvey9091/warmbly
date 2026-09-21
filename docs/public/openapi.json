@@ -21425,6 +21425,10 @@
             "type": "string",
             "description": "Folder (Gmail label) warmup mail is filed into when warmup_placement is \"folder\". Empty means the instance default, \"Warmbly\"."
           },
+          "warmup_retention_days": {
+            "type": "integer",
+            "description": "How many days warmup mail stays in this mailbox before Warmbly deletes it from the warmup folder. 0 means the instance setting (30 days by default)."
+          },
           "timezone": {
             "type": "string"
           },
@@ -21567,6 +21571,10 @@
           "warmup_folder": {
             "type": "string",
             "description": "Folder (Gmail label) warmup mail is filed into when warmup_placement is \"folder\". Send an empty string to fall back to the instance default. No folder separators or control characters; 64 characters max."
+          },
+          "warmup_retention_days": {
+            "type": "integer",
+            "description": "How many days warmup mail stays in this mailbox before Warmbly deletes it from the warmup folder: 3 to 3650, or 0 to follow the instance setting."
           },
           "tags": {
             "type": "array",

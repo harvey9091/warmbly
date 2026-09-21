@@ -2,6 +2,8 @@ package msgraph
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"net/url"
 	"strings"
 )
@@ -195,4 +197,25 @@ func (c *Client) cacheFolder(name, id string) {
 // loops.
 func (c *Client) SetSeen(ctx context.Context, messageID string, seen bool) error {
 	return c.doJSON(ctx, "PATCH", c.messageURL(messageID), map[string]any{"isRead": seen}, nil)
+}
+
+// Delete removes a message the way Outlook's Delete key does: into Deleted
+// Items, where the mailbox's own retention policy takes it from. Exchange
+// answers a message that is already gone with 404, which is the state being
+// asked for, so that is not an error here.
+func (c *Client) Delete(ctx context.Context, messageID string) error {
+	resp, err := c.do(ctx, http.MethodDelete, c.messageURL(messageID), "", nil)
+	if err != nil {
+		return transportError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return HandleError(resp)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return nil
 }

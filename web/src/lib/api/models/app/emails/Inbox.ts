@@ -61,6 +61,11 @@ export default interface Inbox {
     warmup_placement?: "folder" | "inbox" | "archive";
     /** Folder (Gmail label) for warmup mail. Empty = the default, "Warmbly". */
     warmup_folder?: string;
+    /**
+     * Days warmup mail stays in this mailbox before Warmbly deletes it from
+     * the warmup folder. 0 = the instance setting (30 days by default).
+     */
+    warmup_retention_days?: number;
     created_at: Date;
     updated_at: Date;
 }

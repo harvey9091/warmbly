@@ -245,3 +245,35 @@ func TestPatchTracking(t *testing.T) {
 		t.Errorf("absent tracking section changed the document: %+v", kept.Tracking)
 	}
 }
+
+// The warmup windows carry floors of their own. Zero still resolves to the
+// default, so a document stored before they existed keeps every mailbox's
+// warmup mail for the compiled window rather than deleting it on the next
+// sweep, and a value under the floor is raised to it rather than refused.
+func TestRetentionNormalizeWarmupWindows(t *testing.T) {
+	tests := []struct {
+		name      string
+		mail      int
+		events    int
+		wantMail  int
+		wantEvent int
+	}{
+		{"zero resolves to the defaults", 0, 0, config.WarmupMailRetentionDaysDefault, config.WarmupEventRetentionDaysDefault},
+		{"below the floors clamps up", 1, 7, config.WarmupMailRetentionDaysMin, config.WarmupEventRetentionDaysMin},
+		{"in range is kept", 14, 120, 14, 120},
+		{"above the ceiling clamps down", config.RetentionDaysMax + 1, config.RetentionDaysMax + 1, config.RetentionDaysMax, config.RetentionDaysMax},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := Retention{WarmupMailDays: tt.mail, WarmupEventDays: tt.events}
+			r.Normalize()
+			if r.WarmupMailDays != tt.wantMail || r.WarmupEventDays != tt.wantEvent {
+				t.Errorf("Normalize() = (%d, %d), want (%d, %d)", r.WarmupMailDays, r.WarmupEventDays, tt.wantMail, tt.wantEvent)
+			}
+			// The three older windows are untouched by the new floors.
+			if r.EngagementEventDays != config.EngagementEventRetentionDaysDefault {
+				t.Errorf("EngagementEventDays = %d, want the default", r.EngagementEventDays)
+			}
+		})
+	}
+}
