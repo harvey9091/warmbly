@@ -2,6 +2,7 @@ package wmail
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	goimap "github.com/emersion/go-imap/v2"
@@ -241,5 +242,124 @@ func TestImapSyncBaselinesCountsOnFirstListing(t *testing.T) {
 			kinds = append(kinds, e.eventType)
 		}
 		t.Fatalf("removed %d rows on the second listing, want 1 (lookups=%d finds=%d events=%v listed=%+v)", len(removeIDs(*events)), ctx.calls, conn.finds, kinds, w.listed)
+	}
+}
+
+// A synced folder renamed into the skipped subtree keeps its UIDVALIDITY,
+// but the rename matcher never sees the new name because skipped folders
+// leave the listing first. The retirement still carries the marker, so the
+// mail stored under the old name is purged like any skipped folder's.
+func TestImapSyncMarksFolderRenamedIntoSkippedSubtree(t *testing.T) {
+	conn := &fakeImapConn{folders: []models.Mailbox{
+		{Name: "INBOX", UIDValidity: 7, HighestModSeq: 100, Delim: "/"},
+		{Name: "Warmer", UIDValidity: 9, HighestModSeq: 100, Delim: "/"},
+		{Name: "Warmer/Leads", UIDValidity: 21, HighestModSeq: 50, Delim: "/"},
+		{Name: "Receipts", UIDValidity: 33, HighestModSeq: 10, Delim: "/"},
+	}}
+	budget := &skipBudget{fixedBudget: &fixedBudget{allow: 10}, skip: []string{"Warmer"}}
+	w, events := newIMAPTestMail(conn, budget, &models.Mailbox{Name: "INBOX", UIDValidity: 7, HighestModSeq: 100})
+	w.SmtpImapData.Mailboxes = append(w.SmtpImapData.Mailboxes,
+		&models.Mailbox{Name: "Leads", UIDValidity: 21, HighestModSeq: 50},
+		// Gone for good, and its UIDVALIDITY matches nothing skipped.
+		&models.Mailbox{Name: "Old", UIDValidity: 44, HighestModSeq: 5},
+	)
+
+	if err := w.Sync(t.Context()); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	got := map[string]bool{}
+	for _, e := range mailboxEvents(*events, models.JobEventTypeMailboxDelete) {
+		del := e.body.(*models.JobEventMailboxDelete)
+		got[del.Mailbox] = del.Skipped
+	}
+	if skipped, ok := got["Leads"]; !ok || !skipped {
+		t.Fatalf("Leads retired as %v (present %v), want skipped", skipped, ok)
+	}
+	if skipped, ok := got["Old"]; !ok || skipped {
+		t.Fatalf("Old retired as %v (present %v), want a plain deletion", skipped, ok)
+	}
+	if len(mailboxEvents(*events, models.JobEventTypeMailboxRename)) != 0 {
+		t.Fatal("a rename into a skipped folder must not be followed")
+	}
+}
+
+// A row whose Message-ID was fetched this pass is live under a new UID,
+// whatever a copy in a skipped folder says; it is never removed.
+func TestImapSyncKeepsRowRefetchedThisPass(t *testing.T) {
+	conn := &fakeImapConn{
+		folders: []models.Mailbox{
+			{Name: "INBOX", UIDValidity: 7, HighestModSeq: 200, UIDNext: 12, Messages: 1, Delim: "/"},
+			{Name: "Warmer", UIDValidity: 9, HighestModSeq: 100, Delim: "/"},
+		},
+		changed:   []goimap.UID{11},
+		all:       []goimap.UID{11},
+		inSkipped: map[string]map[string]uint32{"Warmer": {"<11@fake.test>": 3}},
+	}
+	budget := &skipBudget{fixedBudget: &fixedBudget{allow: 10}, skip: []string{"Warmer"}}
+	w, events := newIMAPTestMail(conn, budget, &models.Mailbox{Name: "INBOX", UIDValidity: 7, HighestModSeq: 100, UIDNext: 10})
+	w.rememberListing(&models.Mailbox{Name: "INBOX", Messages: 1, UIDNext: 10})
+	w.EmailMessageMapRepository = knownMessageMap{id: uuid.New().String()}
+	// The stored row is the same message under its old UID: re-appended
+	// this pass as UID 11 (a warmup engagement leg moved it out and back).
+	w.SyncContext = &fakeSyncContext{stored: map[string][]repository.StoredFolderMessage{
+		"INBOX": {{UID: 5, MessageID: "<11@fake.test>", ID: uuid.New()}},
+	}}
+
+	if err := w.Sync(t.Context()); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if n := len(removeIDs(*events)); n != 0 {
+		t.Fatalf("removed %d rows, want none: the message is live under a new UID", n)
+	}
+	if conn.finds != 0 {
+		t.Fatalf("searched %d times for a row fetched this pass", conn.finds)
+	}
+}
+
+// The reconciliation spends at most imapSkipSearchesPerPass searches on one
+// folder per pass and continues on the next, so a folder emptied by hand is
+// examined in slices rather than in one long tick.
+func TestImapSyncCapsSkippedSearchesPerPass(t *testing.T) {
+	conn := &fakeImapConn{
+		folders: []models.Mailbox{
+			{Name: "INBOX", UIDValidity: 7, HighestModSeq: 100, UIDNext: 500, Messages: 0, Delim: "/"},
+			{Name: "Warmer", UIDValidity: 9, HighestModSeq: 100, Delim: "/"},
+		},
+		inSkipped: map[string]map[string]uint32{"Warmer": {}},
+	}
+	budget := &skipBudget{fixedBudget: &fixedBudget{allow: 10}, skip: []string{"Warmer"}}
+	w, events := newIMAPTestMail(conn, budget, &models.Mailbox{Name: "INBOX", UIDValidity: 7, HighestModSeq: 100, UIDNext: 500})
+	w.rememberListing(&models.Mailbox{Name: "INBOX", Messages: 120, UIDNext: 500})
+	w.EmailMessageMapRepository = knownMessageMap{id: uuid.New().String()}
+	stored := make([]repository.StoredFolderMessage, 0, 120)
+	for i := 1; i <= 120; i++ {
+		id := fmt.Sprintf("<%d@fake.test>", i)
+		stored = append(stored, repository.StoredFolderMessage{UID: uint32(i), MessageID: id, ID: uuid.New()})
+	}
+	// The last one is in the skipped folder; it is reached on the third pass.
+	conn.inSkipped["Warmer"]["<120@fake.test>"] = 9
+	ctx := &fakeSyncContext{stored: map[string][]repository.StoredFolderMessage{"INBOX": stored}}
+	w.SyncContext = ctx
+
+	for pass, wantFinds := range []int{imapSkipSearchesPerPass, 2 * imapSkipSearchesPerPass, 120} {
+		if err := w.Sync(t.Context()); err != nil {
+			t.Fatalf("pass %d: %v", pass+1, err)
+		}
+		if conn.finds != wantFinds {
+			t.Fatalf("pass %d: %d searches so far, want %d", pass+1, conn.finds, wantFinds)
+		}
+	}
+	if n := len(removeIDs(*events)); n != 1 {
+		t.Fatalf("removed %d rows over three passes, want the one found in Warmer", n)
+	}
+	if w.skipPending["INBOX"] {
+		t.Fatal("the folder is still marked pending after every row was examined")
+	}
+	// A fourth pass with nothing new does not look again.
+	if err := w.Sync(t.Context()); err != nil {
+		t.Fatalf("fourth pass: %v", err)
+	}
+	if conn.finds != 120 {
+		t.Fatalf("a settled folder was searched again (finds = %d)", conn.finds)
 	}
 }

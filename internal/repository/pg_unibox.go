@@ -924,12 +924,37 @@ func (r *uniboxRepository) Delete(ctx context.Context, userID, id uuid.UUID) err
 
 // DeleteByFolderPaths removes the mirror rows for whole source folders. The
 // mail stays where it is at the provider; only the platform's copy goes.
+// The message map entries go with the rows: the sync reads a mapped
+// Message-ID as already stored, so an entry left behind would keep the
+// message from ever being imported again if it moved back into a synced
+// folder. An arrival still parked on warmup verification is dropped too, or
+// it would surface into a folder nobody follows.
 func (r *uniboxRepository) DeleteByFolderPaths(ctx context.Context, emailID uuid.UUID, folderPaths []string) (int64, error) {
 	if len(folderPaths) == 0 {
 		return 0, nil
 	}
-	tag, err := r.db.Exec(ctx, `DELETE FROM unibox_emails WHERE email_id = $1 AND folder_path = ANY($2)`, emailID, folderPaths)
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM email_message_map m
+		USING unibox_emails u
+		WHERE u.email_id = $1 AND u.folder_path = ANY($2)
+		  AND m.email_id = u.email_id AND m.message_id = u.message_id`, emailID, folderPaths); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM unibox_pending_emails
+		WHERE email_account_id = $1 AND payload->'message'->>'folder_path' = ANY($2)`, emailID, folderPaths); err != nil {
+		return 0, err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM unibox_emails WHERE email_id = $1 AND folder_path = ANY($2)`, emailID, folderPaths)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}
 	return tag.RowsAffected(), nil

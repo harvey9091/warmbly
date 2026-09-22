@@ -2,6 +2,7 @@ package email
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -133,11 +134,10 @@ type EmailService interface {
 	// for a change outside the mailbox row (Warmbly Cloud enrollment).
 	SyncWarmupPool(ctx context.Context, accountID uuid.UUID)
 	// GetSyncState is the dashboard's view of a mailbox's sync: nil state when
-	// the worker has not reported yet.
-	GetSyncState(ctx context.Context, userID, emailID string) (*models.SyncState, models.SyncPolicy, *errx.Error)
-	// GetSyncFolders is the folders the sync has seen on the server, so a
-	// client can name one to skip. Empty for providers without folders.
-	GetSyncFolders(ctx context.Context, orgID, emailID string) ([]models.SyncFolder, *errx.Error)
+	// the worker has not reported yet, the policy in force, and the folders
+	// the sync has seen on the server so a client can name one to skip
+	// (empty for providers without folders).
+	GetSyncState(ctx context.Context, userID, emailID string) (*models.SyncState, models.SyncPolicy, []models.SyncFolder, *errx.Error)
 	// UpdateSyncSettings replaces the mailbox's skip list, drops the mail
 	// already stored from those folders, and re-ships the mailbox so the
 	// worker applies it on its next pass. Returns the list as stored.
@@ -366,29 +366,25 @@ func (s *emailService) publishAccountEvent(ctx context.Context, eventType pubsub
 // GetSyncState returns the persisted sync state and the policy currently in
 // force. It goes through Get so ownership is checked the same way as every
 // other per-mailbox read.
-func (s *emailService) GetSyncState(ctx context.Context, orgID, emailID string) (*models.SyncState, models.SyncPolicy, *errx.Error) {
+func (s *emailService) GetSyncState(ctx context.Context, orgID, emailID string) (*models.SyncState, models.SyncPolicy, []models.SyncFolder, *errx.Error) {
 	acc, xerr := s.Get(ctx, orgID, emailID)
 	if xerr != nil {
-		return nil, models.SyncPolicy{}, xerr
+		return nil, models.SyncPolicy{}, nil, xerr
 	}
-	data := s.syncDataFor(ctx, acc.ID)
-	return data.State, data.Policy, nil
+	data, err := s.syncDataFor(ctx, acc.ID)
+	if err != nil {
+		log.Error().Err(err).Str("email_id", acc.ID.String()).Msg("sync state: policy lookup failed")
+		return nil, models.SyncPolicy{}, nil, errx.InternalError()
+	}
+	return data.State, data.Policy, s.syncFoldersFor(ctx, acc), nil
 }
 
-// GetSyncFolders lists the IMAP folders the worker has reported for this
+// syncFoldersFor lists the IMAP folders the worker has reported for this
 // mailbox, INBOX first and then by name, each with the canonical folder it
 // files under. Gmail and Outlook mailboxes have no folder list here.
-func (s *emailService) GetSyncFolders(ctx context.Context, orgID, emailID string) ([]models.SyncFolder, *errx.Error) {
-	acc, xerr := s.Get(ctx, orgID, emailID)
-	if xerr != nil {
-		return nil, xerr
-	}
+func (s *emailService) syncFoldersFor(ctx context.Context, acc *models.Email) []models.SyncFolder {
 	out := []models.SyncFolder{}
-	userID, err := uuid.Parse(acc.UserID)
-	if acc.Provider != string(models.InboxProviderSMTPIMAP) || err != nil {
-		return out, nil
-	}
-	for _, box := range s.mailboxesFor(ctx, userID, acc.ID) {
+	for _, box := range s.imapFoldersFor(ctx, acc) {
 		out = append(out, models.SyncFolder{Name: box.Name, Folder: imap.CanonicalFolder(box)})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -398,14 +394,26 @@ func (s *emailService) GetSyncFolders(ctx context.Context, orgID, emailID string
 		}
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
-	return out, nil
+	return out
 }
 
-// UpdateSyncSettings stores a normalized skip list for an IMAP mailbox. The
-// purge of already-stored mail is exact-name: the worker retires each
-// subfolder it stops following by name on its next pass, and the re-ship
-// makes that pass apply the new list within a minute rather than at the
-// reconciler's next republish.
+// imapFoldersFor is the saved folder listing of an IMAP mailbox, and nothing
+// for any other provider.
+func (s *emailService) imapFoldersFor(ctx context.Context, acc *models.Email) []models.Mailbox {
+	userID, err := uuid.Parse(acc.UserID)
+	if acc.Provider != string(models.InboxProviderSMTPIMAP) || err != nil {
+		return nil
+	}
+	return s.mailboxesFor(ctx, userID, acc.ID)
+}
+
+// UpdateSyncSettings stores a normalized skip list for an IMAP mailbox and
+// drops the mail already stored from every saved folder the list covers,
+// decided by the same matcher the worker applies (case, subfolders), plus
+// the names themselves for a folder not listed yet. The re-ship makes the
+// worker's next pass apply the list within a minute rather than at the
+// reconciler's next republish; a folder it retires then is purged again by
+// name, which is idempotent.
 func (s *emailService) UpdateSyncSettings(ctx context.Context, orgID, emailID string, body *models.UpdateSyncSettings) ([]string, *errx.Error) {
 	acc, xerr := s.Get(ctx, orgID, emailID)
 	if xerr != nil {
@@ -425,7 +433,13 @@ func (s *emailService) UpdateSyncSettings(ctx context.Context, orgID, emailID st
 		return nil, xerr
 	}
 	if s.unibox != nil && len(folders) > 0 {
-		if n, err := s.unibox.DeleteByFolderPaths(ctx, acc.ID, folders); err != nil {
+		purge := append([]string(nil), folders...)
+		for _, box := range s.imapFoldersFor(ctx, acc) {
+			if imap.SkipsFolder(box, folders) && !slices.Contains(purge, box.Name) {
+				purge = append(purge, box.Name)
+			}
+		}
+		if n, err := s.unibox.DeleteByFolderPaths(ctx, acc.ID, purge); err != nil {
 			log.Warn().Err(err).Str("email_id", acc.ID.String()).Msg("sync skip folders: purge of stored mail failed; the worker retires the folders on its next pass")
 		} else if n > 0 {
 			log.Info().Str("email_id", acc.ID.String()).Int64("messages", n).Msg("sync skip folders: stored mail from skipped folders dropped")

@@ -3,9 +3,30 @@ package jobs
 import (
 	"context"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
 	"github.com/warmbly/warmbly/internal/models"
 )
+
+// publishFolderPurged tells open dashboards that rows left a mailbox in bulk.
+// One org-scoped EMAIL_DELETED with no message id: the client drops every
+// inbox list on that event whatever it names, and one event is what a purge
+// of a whole folder deserves rather than one per row.
+func (s *JobsService) publishFolderPurged(ctx context.Context, userID, emailID uuid.UUID) {
+	if s.StreamingPublisher == nil {
+		return
+	}
+	var orgID string
+	if account, err := s.EmailRepository.GetByID(ctx, emailID); err == nil && account != nil && account.OrganizationID != nil {
+		orgID = account.OrganizationID.String()
+	}
+	s.StreamingPublisher.PublishEmailDeleted(ctx, &pubsub.EmailInboxEvent{
+		BaseEvent:      pubsub.BaseEvent{UserID: userID.String()},
+		OrgID:          orgID,
+		EmailAccountID: emailID.String(),
+	})
+}
 
 // HandleMailboxDelete retires a folder the last listing no longer had.
 //
@@ -35,6 +56,9 @@ func (s *JobsService) HandleMailboxDelete(ctx context.Context, e *models.JobEven
 				Str("folder", e.Mailbox).
 				Int64("messages", n).
 				Msg("folder excluded from sync: stored mail dropped")
+			if n > 0 {
+				s.publishFolderPurged(ctx, e.UserID, e.EmailID)
+			}
 		}
 		return nil
 	}

@@ -34,12 +34,7 @@ func (h *Handler) GetEmailSync(c *gin.Context) {
 		errx.JSON(c, errx.ErrUnauthorized)
 		return
 	}
-	state, policy, xerr := h.EmailService.GetSyncState(c.Request.Context(), orgID.String(), c.Param("id"))
-	if xerr != nil {
-		errx.JSON(c, xerr)
-		return
-	}
-	folders, xerr := h.EmailService.GetSyncFolders(c.Request.Context(), orgID.String(), c.Param("id"))
+	state, policy, folders, xerr := h.EmailService.GetSyncState(c.Request.Context(), orgID.String(), c.Param("id"))
 	if xerr != nil {
 		errx.JSON(c, xerr)
 		return

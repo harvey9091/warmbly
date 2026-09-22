@@ -107,7 +107,12 @@ type WMail struct {
 	// folder is baselined on first sight and the stored cursor is not used,
 	// because a walked folder's cursor advances to the SELECT view and a
 	// server whose view lags its STATUS would read as departures every pass.
+	// A move that lands while the worker is down is therefore not seen; the
+	// row it leaves is retired by the next departure from that folder.
 	listed map[string]imapListed
+	// skipPending marks folders whose skipped-folder reconciliation hit the
+	// per-pass search cap, so the next pass continues it.
+	skipPending map[string]bool
 	// unmapPending holds map entries for unpublished arrivals whose removal
 	// failed, keyed by map key; every pass retries them before it looks.
 	unmapPending map[string]uuid.UUID

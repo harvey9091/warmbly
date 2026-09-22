@@ -2,6 +2,7 @@ package email
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -260,6 +261,10 @@ func (s *emailService) buildAddWorkerEmail(ctx context.Context, acc *models.Emai
 	provider := models.InboxProvider(acc.Provider)
 
 	saveToSent := acc.SaveToSent
+	sync, err := s.syncDataFor(ctx, acc.ID)
+	if err != nil {
+		return nil, err
+	}
 	out := &models.AddWorkerEmail{
 		ID:             acc.ID,
 		UserID:         userID,
@@ -268,7 +273,7 @@ func (s *emailService) buildAddWorkerEmail(ctx context.Context, acc *models.Emai
 		FirstName:      first,
 		LastName:       last,
 		Type:           provider,
-		Sync:           s.syncDataFor(ctx, acc.ID),
+		Sync:           sync,
 		// Only SMTP/IMAP acts on this; Gmail and Graph file their own copy.
 		SaveToSent: &saveToSent,
 	}
@@ -355,7 +360,7 @@ func (s *emailService) lastHistoryFor(ctx context.Context, userID, emailID uuid.
 // state a previous worker left behind. Policy comes from instance settings
 // (compiled defaults when none are wired), so an operator's change applies at
 // the next load: onboarding, reassignment, or the reconciler's republish.
-func (s *emailService) syncDataFor(ctx context.Context, emailID uuid.UUID) *models.AddWorkerEmailSyncData {
+func (s *emailService) syncDataFor(ctx context.Context, emailID uuid.UUID) (*models.AddWorkerEmailSyncData, error) {
 	budget := instancesettings.DefaultSync()
 	if s.syncBudget != nil {
 		budget = s.syncBudget.SyncBudget(ctx)
@@ -368,11 +373,15 @@ func (s *emailService) syncDataFor(ctx context.Context, emailID uuid.UUID) *mode
 			OrgDailyMessages: budget.DailyMessagesPerOrg,
 		},
 	}
-	if skip, xerr := s.emailRepository.GetSyncSkipFolders(ctx, emailID); xerr == nil {
-		data.Policy.SkipFolders = skip
-	} else {
-		log.Warn().Str("email_id", emailID.String()).Msg("sync skip folders lookup failed; worker syncs every folder until the next republish")
+	// The skip list is part of the policy a republish replaces on the loaded
+	// mailbox, so a failed read cannot fall back to "skip nothing": that
+	// would have the worker baseline and import the excluded folders until
+	// the next republish. The load fails instead and the reconciler retries.
+	skip, xerr := s.emailRepository.GetSyncSkipFolders(ctx, emailID)
+	if xerr != nil {
+		return nil, fmt.Errorf("sync skip folders lookup: %w", xerr)
 	}
+	data.Policy.SkipFolders = skip
 	// A pool-linked mailbox is a warmup-only mirror: no history import.
 	if s.poolLink != nil {
 		if linked, err := s.poolLink.GetMailboxByAccount(ctx, emailID); err == nil && linked != nil {
@@ -387,7 +396,7 @@ func (s *emailService) syncDataFor(ctx context.Context, emailID uuid.UUID) *mode
 			log.Warn().Err(err).Str("email_id", emailID.String()).Msg("sync state lookup failed; worker starts fresh")
 		}
 	}
-	return data
+	return data, nil
 }
 
 // mailboxesFor is the IMAP folder state (name, UIDVALIDITY, HIGHESTMODSEQ)
