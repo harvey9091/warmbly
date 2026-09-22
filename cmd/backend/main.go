@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconf "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/google/uuid"
+	"github.com/meszmate/apple-go"
 	"github.com/warmbly/warmbly/internal/api"
 	"github.com/warmbly/warmbly/internal/api/handler"
 	"github.com/warmbly/warmbly/internal/api/middleware"
@@ -538,9 +539,9 @@ func main() {
 		// Apple Sign in is optional. Skip it entirely when unconfigured (a
 		// self-host without Apple creds); only warn — never fatal — when creds
 		// are present but init fails, so Apple simply stays unavailable.
-		var appleAuthClient socialauth.AppleAuth
+		var appleAuthClient apple.AppleAuth
 		if authCfg.AppleAppID != "" || authCfg.AppleKeySecret != "" {
-			appleAuthInstance, appleErr := socialauth.NewB64(
+			appleAuthInstance, appleErr := apple.NewB64(
 				authCfg.AppleAppID,
 				authCfg.AppleTeamID,
 				authCfg.AppleKeyID,

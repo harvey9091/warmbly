@@ -2,7 +2,16 @@
 # touched. Everything here must also appear in the CASA evidence pack under
 # 6.1.1 with the same justification.
 #
-# Nothing is listed today: the four advisories with no upstream fix
+# github.com/dgrijalva/jwt-go CVE-2020-26160 (HIGH):
+# Accepted because this is a transitive dependency pulled in only by
+# github.com/meszmate/apple-go, and the vulnerable code path is JWT validation.
+# Our code uses apple-go solely for Apple client-secret signing, not for JWT
+# validation, so the vulnerable parser/validator is never reached. The package
+# is unmaintained and apple-go has not migrated; replacing it would require
+# application-code changes to Apple Sign-in. Tracked for replacement in a
+# dedicated auth improvement, not as a CI green-washing exercise.
+#
+# The four advisories with no upstream fix
 # (github.com/xuri/excelize GO-2026-6452 and the three hamba/avro decoder
 # advisories) are Go-module findings that govulncheck reports and Trivy's
 # severity filter does not raise, so suppressing them here would be
