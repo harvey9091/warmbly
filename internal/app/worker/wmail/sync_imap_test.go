@@ -36,12 +36,22 @@ type fakeImapConn struct {
 	// selectGen, when non-zero, is the UIDVALIDITY SELECT reports, which the
 	// reconciliation compares against the one the listing gave it.
 	selectGen uint32
+	// inSkipped is what FindUIDByMessageID answers per folder name, and
+	// finds counts how often it was asked.
+	inSkipped map[string]map[string]uint32
+	finds     int
+	failFinds bool
 	// view, when set, is the cursors SELECT reports in place of the listing's:
 	// a server whose selected view lags or leads its STATUS.
 	view *imap.Selected
 }
 
-func (c *fakeImapConn) Folders() ([]models.Mailbox, *errx.MailError) { return c.folders, nil }
+// Folders hands out a copy, like a real listing: the pass filters the slice
+// in place, and a fake that shared its backing array would lose folders
+// between passes.
+func (c *fakeImapConn) Folders() ([]models.Mailbox, *errx.MailError) {
+	return append([]models.Mailbox(nil), c.folders...), nil
+}
 
 func (c *fakeImapConn) FolderOverflow() int  { return c.overflow }
 func (c *fakeImapConn) FolderConflicts() int { return c.conflicts }

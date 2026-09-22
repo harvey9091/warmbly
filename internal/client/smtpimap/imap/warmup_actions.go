@@ -56,6 +56,49 @@ func (c *Client) FindUIDByMessageID(ctx context.Context, mailboxName, rfcMessage
 	return uint32(uids[len(uids)-1]), nil
 }
 
+// FindUIDsByMessageIDs is FindUIDByMessageID for many ids against one
+// folder: one SELECT, then one SEARCH per id. It answers only the ids it
+// found. A folder that does not exist answers nothing and is not an error.
+func (c *Client) FindUIDsByMessageIDs(ctx context.Context, mailboxName string, rfcMessageIDs []string) (map[string]uint32, error) {
+	found := make(map[string]uint32, len(rfcMessageIDs))
+	if mailboxName == "" || len(rfcMessageIDs) == 0 {
+		return found, nil
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if merr := c.ensureConnected(); merr != nil {
+		return nil, merr
+	}
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	defer c.begin()()
+	name := c.qualifyMailboxLocked(mailboxName)
+	if _, err := c.selectMailbox(name, nil); err != nil {
+		return found, nil
+	}
+	for _, raw := range rfcMessageIDs {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			continue
+		}
+		data, err := c.client.UIDSearch(&imap.SearchCriteria{
+			Header: []imap.SearchCriteriaHeaderField{{Key: "Message-Id", Value: "<" + strings.Trim(id, "<>") + ">"}},
+		}, nil).Wait()
+		if err != nil {
+			return nil, fmt.Errorf("search %q for message id: %w", name, err)
+		}
+		if uids := data.AllUIDs(); len(uids) > 0 {
+			found[raw] = uint32(uids[len(uids)-1])
+		}
+	}
+	return found, nil
+}
+
 // MarkAsRead sets the \Seen flag on the given UID in mailboxName.
 func (c *Client) MarkAsRead(ctx context.Context, mailboxName string, uid uint32) error {
 	c.mu.Lock()

@@ -642,7 +642,7 @@ function OverviewTab({ status, loading, mailbox }: { status?: import("@/lib/api/
             </div>
 
             {/* Sync: import progress and fair-use status */}
-            <SyncStatusCard mailboxId={mailbox.id} />
+            <SyncStatusCard mailboxId={mailbox.id} provider={mailbox.provider} />
 
             {/* Key stats */}
             <div className="grid grid-cols-2 divide-x divide-y divide-slate-200/60">

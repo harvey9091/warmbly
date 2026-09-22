@@ -1185,6 +1185,9 @@ func main() {
 		emailSyncStateRepository = repository.NewEmailSyncStateRepository(primaryDB)
 		emailService.WireSyncState(emailSyncStateRepository)
 		emailService.WireMailboxes(repository.NewMailboxRepository(primaryDB))
+		// A folder excluded from sync has its already-stored mail dropped at
+		// the moment of the change, not a pass later.
+		emailService.WireUnibox(repository.NewUniboxRepository(primaryDB))
 		if instanceSettings != nil {
 			emailService.WireSyncBudget(instanceSettings)
 		}

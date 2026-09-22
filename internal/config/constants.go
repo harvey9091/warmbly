@@ -95,6 +95,8 @@ const (
 	SyncBackfillPerMinute           = 240   // backfill pacing per mailbox
 	SyncFloodPerHour                = 5_000 // new live messages observed in one hour that mark a mailbox as flooding
 	SyncThrottleEscalationDays      = 3     // throttled UTC days out of the last 7 that deactivate a mailbox
+	SyncSkipFoldersMax              = 50    // folders one mailbox may exclude from sync
+	SyncSkipFolderNameMax           = 255   // characters in one excluded folder name
 
 	// Forms. Funnel events feed analytics ranges up to 90 days, so the default
 	// window keeps double coverage. Operator-editable under Instance settings.

@@ -661,9 +661,26 @@ so a removed alias stops being used instead of failing every send.`,
 				Success: "Sending identity refreshed.",
 			},
 			{
-				Name: "sync", Short: "The mailbox's sync state and backfill progress",
+				Name: "sync", Short: "The mailbox's sync state, backfill progress and skipped folders",
 				Method: http.MethodGet, Path: "/emails/{id}/sync",
 				Args: []argSpec{{Name: "id", Help: "The mailbox's id"}},
+			},
+			{
+				Name: "skip-folders", Short: "Choose the folders an IMAP mailbox's sync leaves alone",
+				Long: `Replaces the list of folders the sync never opens, named as the mail
+server lists them (see "mailbox sync" for the names). Each also covers its
+subfolders. Mail already imported from a folder is removed from Warmbly
+when it is skipped; the mail itself stays in the mailbox. Inbox, sent,
+drafts, spam, trash and archive cannot be skipped. Sending an empty list
+with --input follows every folder again from then on; the mail removed
+while a folder was skipped is not brought back.`,
+				Example: "  $ warmbly mailbox skip-folders MAILBOX_ID --folder Warmer\n  $ warmbly mailbox skip-folders MAILBOX_ID --folder Warmer --folder \"Clients/Acme\"\n  $ warmbly mailbox skip-folders MAILBOX_ID --input '{\"skip_folders\": []}'",
+				Method:  http.MethodPut, Path: "/emails/{id}/sync", Body: bodyRequired,
+				Args: []argSpec{{Name: "id", Help: "The mailbox's id"}},
+				Flag: []flagSpec{
+					{Name: "folder", Help: "A folder to skip, as the server lists it (repeatable)", Kind: flagStrings, Key: "skip_folders"},
+				},
+				Success: "Skipped folders updated.",
 			},
 			{
 				Name: "behavior", Short: "The mailbox's human-sending ranges",
