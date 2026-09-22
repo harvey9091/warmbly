@@ -36,6 +36,9 @@ type fakeImapConn struct {
 	// selectGen, when non-zero, is the UIDVALIDITY SELECT reports, which the
 	// reconciliation compares against the one the listing gave it.
 	selectGen uint32
+	// view, when set, is the cursors SELECT reports in place of the listing's:
+	// a server whose selected view lags or leads its STATUS.
+	view *imap.Selected
 }
 
 func (c *fakeImapConn) Folders() ([]models.Mailbox, *errx.MailError) { return c.folders, nil }
@@ -73,6 +76,19 @@ func (c *fakeImapConn) ReleaseMailbox() { c.released++ }
 
 func (c *fakeImapConn) SelectForSync(string) (uint32, *errx.MailError) {
 	return uint32(len(c.changed)), nil
+}
+
+func (c *fakeImapConn) SelectForSyncState(name string) (imap.Selected, *errx.MailError) {
+	sel := imap.Selected{Count: uint32(len(c.changed))}
+	for _, f := range c.folders {
+		if f.Name == name {
+			sel.UIDValidity, sel.UIDNext, sel.HighestModSeq = f.UIDValidity, f.UIDNext, f.HighestModSeq
+		}
+	}
+	if c.view != nil {
+		sel.UIDNext, sel.HighestModSeq = c.view.UIDNext, c.view.HighestModSeq
+	}
+	return sel, nil
 }
 
 func (c *fakeImapConn) SelectForSyncGen(name string) (uint32, uint32, *errx.MailError) {
@@ -788,5 +804,103 @@ func TestImapSyncDoesNotReconcileExpungesOutsideDrafts(t *testing.T) {
 	}
 	if ctx.calls != 0 {
 		t.Errorf("asked the backend about INBOX %d times; only drafts are reconciled", ctx.calls)
+	}
+}
+
+// The cursor is the selected view's, not the listing's. A server whose STATUS
+// is ahead of the view the search ran on (an APPEND to Sent landing between
+// the two) reported mail the search never returned, and advancing to the
+// listing skipped that mail for good (#645).
+func TestImapSyncAdvancesToTheSelectedViewNotTheListing(t *testing.T) {
+	conn := &fakeImapConn{
+		folders: []models.Mailbox{{Name: "Sent", Attrs: []string{"\\Sent"}, UIDValidity: 7, HighestModSeq: 300}},
+		changed: []goimap.UID{1, 2},
+		view:    &imap.Selected{HighestModSeq: 200},
+	}
+	w, _ := newIMAPTestMail(conn, &fixedBudget{allow: 10},
+		&models.Mailbox{Name: "Sent", Attrs: []string{"\\Sent"}, UIDValidity: 7, HighestModSeq: 100})
+
+	if err := w.Sync(t.Context()); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if got := w.SmtpImapData.Mailboxes[0].HighestModSeq; got != 200 {
+		t.Fatalf("mod-sequence = %d, want the selected view's 200", got)
+	}
+
+	// The view catches up; the folder still differs from the cursor, so the
+	// next pass walks it again and reaches the message the first one missed.
+	conn.view = nil
+	conn.changed = []goimap.UID{1, 2, 3}
+	if err := w.Sync(t.Context()); err != nil {
+		t.Fatalf("second Sync: %v", err)
+	}
+	if conn.fetches != 2 {
+		t.Errorf("fetched %d batches over two passes, want 2", conn.fetches)
+	}
+	if got := w.SmtpImapData.Mailboxes[0].HighestModSeq; got != 300 {
+		t.Errorf("mod-sequence = %d, want 300 once the view caught up", got)
+	}
+}
+
+func TestImapSyncAdvancesUIDNextToTheSelectedView(t *testing.T) {
+	conn := &fakeImapConn{
+		noCondStore: true,
+		folders:     []models.Mailbox{{Name: "Sent", Attrs: []string{"\\Sent"}, UIDValidity: 7, UIDNext: 104}},
+		changed:     []goimap.UID{101, 102},
+		view:        &imap.Selected{UIDNext: 103},
+	}
+	w, _ := newIMAPTestMail(conn, &fixedBudget{allow: 10},
+		&models.Mailbox{Name: "Sent", Attrs: []string{"\\Sent"}, UIDValidity: 7, UIDNext: 101})
+
+	if err := w.Sync(t.Context()); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if got := w.SmtpImapData.Mailboxes[0].UIDNext; got != 103 {
+		t.Errorf("UIDNEXT cursor = %d, want the selected view's 103", got)
+	}
+}
+
+// recordingMessageMap remembers what was added and removed.
+type recordingMessageMap struct {
+	fakeMessageMap
+	added, removed []string
+}
+
+func (m *recordingMessageMap) Add(_ context.Context, d repository.EmailMessageData) error {
+	m.added = append(m.added, d.MessageID)
+	return nil
+}
+
+func (m *recordingMessageMap) Del(_ context.Context, _, _ uuid.UUID, messageID string, _ uuid.UUID) error {
+	m.removed = append(m.removed, messageID)
+	return nil
+}
+
+// A message whose NEW_EMAIL never reached the bus must not stay in the map,
+// or every later pass reads it as known and it never reaches the unibox.
+func TestStoreNewDropsTheMapEntryWhenThePublishFails(t *testing.T) {
+	conn := &fakeImapConn{
+		folders: []models.Mailbox{{Name: "Sent", Attrs: []string{"\\Sent"}, UIDValidity: 7, HighestModSeq: 300}},
+		changed: []goimap.UID{1},
+	}
+	w, _ := newIMAPTestMail(conn, &fixedBudget{allow: 10},
+		&models.Mailbox{Name: "Sent", Attrs: []string{"\\Sent"}, UIDValidity: 7, HighestModSeq: 100})
+	m := &recordingMessageMap{}
+	w.EmailMessageMapRepository = m
+	w.onEvent = func(kind models.JobEventType, _ any) error {
+		if kind == models.JobEventTypeNewEmail {
+			return fmt.Errorf("bus unavailable")
+		}
+		return nil
+	}
+
+	if err := w.Sync(t.Context()); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if len(m.added) != 1 || len(m.removed) != 1 || m.removed[0] != m.added[0] {
+		t.Fatalf("added %v, removed %v: the unpublished message must leave the map", m.added, m.removed)
+	}
+	if got := w.SmtpImapData.Mailboxes[0].HighestModSeq; got != 100 {
+		t.Errorf("mod-sequence = %d, want the held 100", got)
 	}
 }

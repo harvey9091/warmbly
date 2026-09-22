@@ -181,11 +181,19 @@ func (w *WMail) storeNew(ctx context.Context, msg *models.EmailMessageData, data
 	}
 
 	// The consumer decodes NEW_EMAIL as JobEventNewEmail{user_id, message}.
-	return w.onEvent(models.JobEventTypeNewEmail, &models.JobEventNewEmail{
+	err := w.onEvent(models.JobEventTypeNewEmail, &models.JobEventNewEmail{
 		UserID:                  w.UserID,
 		Message:                 data,
 		ReportOriginalMessageID: reportAbout,
 	})
+	if err != nil {
+		// The entry would mark a message that never reached the unibox as
+		// known, and every later pass would skip it; drop it so it is re-offered.
+		if derr := w.EmailMessageMapRepository.Del(ctx, w.UserID, w.ID, mapKey, data.ID); derr != nil {
+			log.Warn().Err(derr).Str("email_id", w.ID.String()).Msg("sync: map entry for an unpublished message not removed")
+		}
+	}
+	return err
 }
 
 // capBody bounds a stored body part at MaxEmailBodySize. IMAP already reads

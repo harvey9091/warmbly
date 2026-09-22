@@ -26,6 +26,9 @@ type ImapConn interface {
 	HasCondStore() bool
 	ReleaseMailbox()
 	SelectForSync(mailbox string) (uint32, *errx.MailError)
+	// SelectForSyncState selects like SelectForSync and reports the selected
+	// view's cursors, which an incremental pass advances the folder to.
+	SelectForSyncState(mailbox string) (imap.Selected, *errx.MailError)
 	SearchChangedSince(modSeq uint64) ([]goimap.UID, *errx.MailError)
 	SearchNewSince(uidNext uint32) ([]goimap.UID, *errx.MailError)
 	// SearchAll is the folder's complete UID set, the presence side of the
