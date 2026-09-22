@@ -116,7 +116,9 @@ func TestImapSyncRemovesMailMovedIntoSkippedFolder(t *testing.T) {
 		inSkipped: map[string]map[string]uint32{"Warmer": {"<9@fake.test>": 3}},
 	}
 	budget := &skipBudget{fixedBudget: &fixedBudget{allow: 10}, skip: []string{"Warmer"}}
-	w, events := newIMAPTestMail(conn, budget, &models.Mailbox{Name: "INBOX", UIDValidity: 7, HighestModSeq: 100, UIDNext: 10, Messages: 3})
+	w, events := newIMAPTestMail(conn, budget, &models.Mailbox{Name: "INBOX", UIDValidity: 7, HighestModSeq: 100, UIDNext: 10})
+	// The previous pass of this session listed three messages.
+	w.rememberListing(&models.Mailbox{Name: "INBOX", Messages: 3, UIDNext: 10})
 	w.EmailMessageMapRepository = knownMessageMap{id: uuid.New().String()}
 	warmup, deleted, kept := uuid.New(), uuid.New(), uuid.New()
 	w.SyncContext = &fakeSyncContext{stored: map[string][]repository.StoredFolderMessage{
@@ -143,14 +145,16 @@ func TestImapSyncRemovesMailMovedIntoSkippedFolder(t *testing.T) {
 		t.Fatalf("searched the skipped folder %d times, want once per vanished row (2)", conn.finds)
 	}
 
-	// Next pass, nothing else changed: the row that was deleted for good is
-	// remembered and not searched for again.
-	conn.folders[0].Messages = 2
+	// Next pass another message leaves, for somewhere that is not skipped.
+	// Only that row is searched for: the one deleted for good last pass is
+	// remembered, and the one already removed is not looked for twice.
+	conn.folders[0].Messages = 1
+	conn.all = []goimap.UID{10}
 	if err := w.Sync(t.Context()); err != nil {
 		t.Fatalf("second Sync: %v", err)
 	}
-	if conn.finds != 2 {
-		t.Fatalf("a settled row was searched for again (finds = %d)", conn.finds)
+	if conn.finds != 3 {
+		t.Fatalf("searched %d times over two passes, want 3: a settled row was searched for again", conn.finds)
 	}
 	if len(removeIDs(*events)) != 1 {
 		t.Fatal("the second pass removed something")
@@ -164,7 +168,8 @@ func TestImapSyncLeavesVanishedMailAloneWithoutSkipList(t *testing.T) {
 		folders: []models.Mailbox{{Name: "INBOX", UIDValidity: 7, HighestModSeq: 100, UIDNext: 10, Messages: 1, Delim: "/"}},
 		all:     []goimap.UID{8},
 	}
-	w, events := newIMAPTestMail(conn, &fixedBudget{allow: 10}, &models.Mailbox{Name: "INBOX", UIDValidity: 7, HighestModSeq: 100, UIDNext: 10, Messages: 3})
+	w, events := newIMAPTestMail(conn, &fixedBudget{allow: 10}, &models.Mailbox{Name: "INBOX", UIDValidity: 7, HighestModSeq: 100, UIDNext: 10})
+	w.rememberListing(&models.Mailbox{Name: "INBOX", Messages: 3, UIDNext: 10})
 	ctx := &fakeSyncContext{stored: map[string][]repository.StoredFolderMessage{
 		"INBOX": {{UID: 7, MessageID: "<7@fake.test>", ID: uuid.New()}},
 	}}
@@ -180,20 +185,61 @@ func TestImapSyncLeavesVanishedMailAloneWithoutSkipList(t *testing.T) {
 
 func TestImapMovedOut(t *testing.T) {
 	cases := []struct {
-		name        string
-		before, now models.Mailbox
-		want        bool
+		name   string
+		before imapListed
+		now    models.Mailbox
+		want   bool
 	}{
-		{"nothing changed", models.Mailbox{Messages: 3, UIDNext: 10}, models.Mailbox{Messages: 3, UIDNext: 10}, false},
-		{"one arrived", models.Mailbox{Messages: 3, UIDNext: 10}, models.Mailbox{Messages: 4, UIDNext: 11}, false},
-		{"one left", models.Mailbox{Messages: 3, UIDNext: 10}, models.Mailbox{Messages: 2, UIDNext: 10}, true},
-		{"one arrived and one left", models.Mailbox{Messages: 3, UIDNext: 10}, models.Mailbox{Messages: 3, UIDNext: 11}, true},
-		{"no baseline from this session", models.Mailbox{Messages: 0, UIDNext: 10}, models.Mailbox{Messages: 2, UIDNext: 10}, false},
-		{"cursor went backwards", models.Mailbox{Messages: 3, UIDNext: 10}, models.Mailbox{Messages: 1, UIDNext: 5}, false},
+		{"nothing changed", imapListed{Messages: 3, UIDNext: 10}, models.Mailbox{Messages: 3, UIDNext: 10}, false},
+		{"one arrived", imapListed{Messages: 3, UIDNext: 10}, models.Mailbox{Messages: 4, UIDNext: 11}, false},
+		{"one left", imapListed{Messages: 3, UIDNext: 10}, models.Mailbox{Messages: 2, UIDNext: 10}, true},
+		{"one arrived and one left", imapListed{Messages: 3, UIDNext: 10}, models.Mailbox{Messages: 3, UIDNext: 11}, true},
+		{"empty before, two arrived, one left", imapListed{Messages: 0, UIDNext: 10}, models.Mailbox{Messages: 1, UIDNext: 12}, true},
+		{"cursor went backwards", imapListed{Messages: 3, UIDNext: 10}, models.Mailbox{Messages: 1, UIDNext: 5}, false},
 	}
 	for _, tc := range cases {
-		if got := imapMovedOut(&tc.before, &tc.now); got != tc.want {
+		if got := imapMovedOut(tc.before, &tc.now); got != tc.want {
 			t.Errorf("%s: imapMovedOut = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// The first listing of a session only baselines: a folder whose stored
+// cursor came from the control plane carries no count, so nothing is
+// reconciled until a second listing can be compared with the first.
+func TestImapSyncBaselinesCountsOnFirstListing(t *testing.T) {
+	conn := &fakeImapConn{
+		folders: []models.Mailbox{
+			{Name: "INBOX", UIDValidity: 7, HighestModSeq: 100, UIDNext: 10, Messages: 1, Delim: "/"},
+			{Name: "Warmer", UIDValidity: 9, HighestModSeq: 100, Delim: "/"},
+		},
+		all:       []goimap.UID{8},
+		inSkipped: map[string]map[string]uint32{"Warmer": {"<7@fake.test>": 3}},
+	}
+	budget := &skipBudget{fixedBudget: &fixedBudget{allow: 10}, skip: []string{"Warmer"}}
+	w, events := newIMAPTestMail(conn, budget, &models.Mailbox{Name: "INBOX", UIDValidity: 7, HighestModSeq: 100, UIDNext: 10})
+	ctx := &fakeSyncContext{stored: map[string][]repository.StoredFolderMessage{
+		"INBOX": {{UID: 7, MessageID: "<7@fake.test>", ID: uuid.New()}},
+	}}
+	w.SyncContext = ctx
+
+	if err := w.Sync(t.Context()); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if ctx.calls != 0 || len(removeIDs(*events)) != 0 {
+		t.Fatalf("reconciled on the first listing: lookups=%d removed=%d", ctx.calls, len(removeIDs(*events)))
+	}
+	// The second listing shows the departure against the first.
+	conn.folders[0].Messages = 0
+	conn.all = nil
+	if err := w.Sync(t.Context()); err != nil {
+		t.Fatalf("second Sync: %v", err)
+	}
+	if len(removeIDs(*events)) != 1 {
+		kinds := []models.JobEventType{}
+		for _, e := range *events {
+			kinds = append(kinds, e.eventType)
+		}
+		t.Fatalf("removed %d rows on the second listing, want 1 (lookups=%d finds=%d events=%v listed=%+v)", len(removeIDs(*events)), ctx.calls, conn.finds, kinds, w.listed)
 	}
 }

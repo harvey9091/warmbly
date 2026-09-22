@@ -80,6 +80,10 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 
 	for i := range folders {
 		box := &folders[i]
+		// The listing is remembered before anything is decided from it, so
+		// the departure check below reads the previous pass, never this one.
+		prevListing, listedBefore := w.listed[box.Name]
+		w.rememberListing(box)
 		befBox := w.SmtpImapData.FindPair(box)
 		if befBox == nil {
 			// First sight: baseline. Live sync starts from this cursor; the
@@ -112,9 +116,7 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 		}
 
 		changed := imapFolderChanged(befBox, box, condStore)
-		// Decided against the cursor the previous pass left, before the
-		// block below moves it.
-		movedOut := len(skipped) > 0 && imapMovedOut(befBox, box)
+		movedOut := len(skipped) > 0 && listedBefore && imapMovedOut(prevListing, box)
 		fullyProcessed := true
 		var touched map[string]struct{}
 		var view imap.Selected
@@ -164,7 +166,6 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 				return err
 			}
 		}
-		befBox.Messages = box.Messages
 
 		// Without CONDSTORE a message marked read elsewhere moves no cursor,
 		// so read state is mirrored by a periodic scan instead. It runs after
@@ -209,6 +210,7 @@ outer:
 	if len(deleted) > 0 {
 		for _, name := range deleted {
 			delete(w.flagScan, name)
+			delete(w.listed, name)
 			// The backfill floor goes with the folder. A name is reusable,
 			// and a floor left behind would be inherited by whatever is
 			// created under it next.
@@ -242,14 +244,28 @@ func (w *WMail) skipFolders() []string {
 	return w.gov.Policy().SkipFolders
 }
 
-// imapMovedOut reports whether messages left the folder since the last
-// pass: the count is below the previous count plus the arrivals the UIDNEXT
-// advance accounts for. An expunge moves neither cursor on every server, so
-// the count is the one signal that always carries it. Only a count taken by
-// this worker session counts: a folder seeded from the control plane has
-// none, and the first pass baselines it.
-func imapMovedOut(before, now *models.Mailbox) bool {
-	if before.Messages == 0 || now.UIDNext < before.UIDNext {
+// imapListed is what one listing said about a folder: the two numbers the
+// departure check compares between passes.
+type imapListed struct {
+	Messages uint32
+	UIDNext  uint32
+}
+
+func (w *WMail) rememberListing(box *models.Mailbox) {
+	if w.listed == nil {
+		w.listed = make(map[string]imapListed)
+	}
+	w.listed[box.Name] = imapListed{Messages: box.Messages, UIDNext: box.UIDNext}
+}
+
+// imapMovedOut reports whether messages left the folder between two
+// listings: the count is below the previous count plus the arrivals the
+// UIDNEXT advance accounts for. An expunge moves neither cursor on every
+// server, so the count is the one signal that always carries it. Both
+// numbers come from the listing, never from the SELECT view a walked
+// folder's cursor advances to.
+func imapMovedOut(before imapListed, now *models.Mailbox) bool {
+	if now.UIDNext < before.UIDNext {
 		return false
 	}
 	arrivals := now.UIDNext - before.UIDNext

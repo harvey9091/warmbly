@@ -45,7 +45,12 @@ type fakeImapConn struct {
 	view *imap.Selected
 }
 
-func (c *fakeImapConn) Folders() ([]models.Mailbox, *errx.MailError) { return c.folders, nil }
+// Folders hands out a copy, like a real listing: the pass filters the slice
+// in place, and a fake that shared its backing array would lose folders
+// between passes.
+func (c *fakeImapConn) Folders() ([]models.Mailbox, *errx.MailError) {
+	return append([]models.Mailbox(nil), c.folders...), nil
+}
 
 func (c *fakeImapConn) FolderOverflow() int  { return c.overflow }
 func (c *fakeImapConn) FolderConflicts() int { return c.conflicts }

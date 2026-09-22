@@ -102,6 +102,12 @@ type WMail struct {
 	// synced folder and were looked for in the skipped folders without being
 	// found, so they are not searched for again on every pass.
 	skipChecked map[string]struct{}
+	// listed is the previous listing's count and UIDNEXT per folder name,
+	// which is what tells a pass that mail left a folder. Session-local: a
+	// folder is baselined on first sight and the stored cursor is not used,
+	// because a walked folder's cursor advances to the SELECT view and a
+	// server whose view lags its STATUS would read as departures every pass.
+	listed map[string]imapListed
 	// unmapPending holds map entries for unpublished arrivals whose removal
 	// failed, keyed by map key; every pass retries them before it looks.
 	unmapPending map[string]uuid.UUID
