@@ -102,13 +102,8 @@ type WMail struct {
 	// synced folder and were looked for in the skipped folders without being
 	// found, so they are not searched for again on every pass.
 	skipChecked map[string]struct{}
-	// listed is the previous listing's count and UIDNEXT per folder name,
-	// which is what tells a pass that mail left a folder. Session-local: a
-	// folder is baselined on first sight and the stored cursor is not used,
-	// because a walked folder's cursor advances to the SELECT view and a
-	// server whose view lags its STATUS would read as departures every pass.
-	// A move that lands while the worker is down is therefore not seen; the
-	// row it leaves is retired by the next departure from that folder.
+	// listed is the previous listing's count and UIDNEXT per folder name:
+	// session-local, since the stored cursor advances to the SELECT view.
 	listed map[string]imapListed
 	// skipPending marks folders whose skipped-folder reconciliation hit the
 	// per-pass search cap, so the next pass continues it.

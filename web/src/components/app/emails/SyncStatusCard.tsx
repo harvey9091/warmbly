@@ -4,6 +4,7 @@ import { CheckCircle2Icon, DownloadIcon, HourglassIcon, PlusIcon, RefreshCwIcon 
 import toast from "react-hot-toast";
 import { CheckSquare } from "@/components/ui/check-square";
 import { TextInput } from "@/components/ui/field";
+import { useConfirm } from "@/hooks/context/confirm";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import useSync from "@/lib/api/hooks/app/emails/useSync";
 import useUpdateSyncSkipFolders from "@/lib/api/hooks/app/emails/useUpdateSyncSkipFolders";
@@ -55,6 +56,7 @@ function skippable(folders: SyncFolder[]): string[] {
 // synced) can be typed in.
 function SkipFoldersSection({ mailboxId, listed, skipped }: { mailboxId: string; listed: string[]; skipped: string[] }) {
     const mutation = useUpdateSyncSkipFolders(mailboxId);
+    const confirm = useConfirm();
     const [draft, setDraft] = useState("");
 
     const isSkipped = (name: string) => skipped.some((s) => s.toLowerCase() === name.toLowerCase());
@@ -67,14 +69,26 @@ function SkipFoldersSection({ mailboxId, listed, skipped }: { mailboxId: string;
             toast.error(buildError(e as AppError));
         }
     };
-    const toggle = (name: string) =>
-        save(isSkipped(name) ? skipped.filter((s) => s.toLowerCase() !== name.toLowerCase()) : [...skipped, name]);
+    // Skipping removes what was imported and nothing brings it back, so it
+    // asks first; following a folder again does not.
+    const skip = (name: string) =>
+        confirm.show(
+            `Stop syncing "${name}"? Mail already imported from it is removed from Warmbly. It stays in your mailbox, and is not imported again if you turn the folder back on.`,
+            () => save([...skipped, name]),
+        );
+    const toggle = (name: string) => {
+        if (isSkipped(name)) {
+            void save(skipped.filter((s) => s.toLowerCase() !== name.toLowerCase()));
+        } else {
+            skip(name);
+        }
+    };
     const add = () => {
         const name = draft.trim();
         if (!name) return;
         setDraft("");
         if (isSkipped(name)) return;
-        void save([...skipped, name]);
+        skip(name);
     };
 
     return (

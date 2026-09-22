@@ -671,8 +671,9 @@ so a removed alias stops being used instead of failing every send.`,
 server lists them (see "mailbox sync" for the names). Each also covers its
 subfolders. Mail already imported from a folder is removed from Warmbly
 when it is skipped; the mail itself stays in the mailbox. Inbox, sent,
-drafts, spam, trash and archive cannot be skipped. To sync everything
-again, send an empty list with --input.`,
+drafts, spam, trash and archive cannot be skipped. Sending an empty list
+with --input follows every folder again from then on; the mail removed
+while a folder was skipped is not brought back.`,
 				Example: "  $ warmbly mailbox skip-folders MAILBOX_ID --folder Warmer\n  $ warmbly mailbox skip-folders MAILBOX_ID --folder Warmer --folder \"Clients/Acme\"\n  $ warmbly mailbox skip-folders MAILBOX_ID --input '{\"skip_folders\": []}'",
 				Method:  http.MethodPut, Path: "/emails/{id}/sync", Body: bodyRequired,
 				Args: []argSpec{{Name: "id", Help: "The mailbox's id"}},

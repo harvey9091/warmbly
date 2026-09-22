@@ -40,6 +40,7 @@ type fakeImapConn struct {
 	// finds counts how often it was asked.
 	inSkipped map[string]map[string]uint32
 	finds     int
+	failFinds bool
 	// view, when set, is the cursors SELECT reports in place of the listing's:
 	// a server whose selected view lags or leads its STATUS.
 	view *imap.Selected

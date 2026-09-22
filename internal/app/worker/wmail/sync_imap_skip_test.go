@@ -11,9 +11,21 @@ import (
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
-func (c *fakeImapConn) FindUIDByMessageID(_ context.Context, folder, messageID string) (uint32, error) {
-	c.finds++
-	return c.inSkipped[folder][messageID], nil
+// FindUIDsByMessageIDs counts every id it was asked about, so finds is the
+// number of searches the reconciliation spent. failFinds makes it fail the
+// way a dropped connection does.
+func (c *fakeImapConn) FindUIDsByMessageIDs(_ context.Context, folder string, ids []string) (map[string]uint32, error) {
+	c.finds += len(ids)
+	if c.failFinds {
+		return nil, fmt.Errorf("connection dropped")
+	}
+	out := map[string]uint32{}
+	for _, id := range ids {
+		if uid := c.inSkipped[folder][id]; uid != 0 {
+			out[id] = uid
+		}
+	}
+	return out, nil
 }
 
 // skipBudget is fixedBudget with an owner's skip list in the policy.
@@ -361,5 +373,39 @@ func TestImapSyncCapsSkippedSearchesPerPass(t *testing.T) {
 	}
 	if conn.finds != 120 {
 		t.Fatalf("a settled folder was searched again (finds = %d)", conn.finds)
+	}
+}
+
+// A lookup that failed settles nothing: the row is looked for again on the
+// next pass, and retired once the skipped folder answers.
+func TestImapSyncRetriesRowsWhoseLookupFailed(t *testing.T) {
+	conn := &fakeImapConn{
+		folders: []models.Mailbox{
+			{Name: "INBOX", UIDValidity: 7, HighestModSeq: 100, UIDNext: 10, Messages: 0, Delim: "/"},
+			{Name: "Warmer", UIDValidity: 9, HighestModSeq: 100, Delim: "/"},
+		},
+		inSkipped: map[string]map[string]uint32{"Warmer": {"<7@fake.test>": 3}},
+		failFinds: true,
+	}
+	budget := &skipBudget{fixedBudget: &fixedBudget{allow: 10}, skip: []string{"Warmer"}}
+	w, events := newIMAPTestMail(conn, budget, &models.Mailbox{Name: "INBOX", UIDValidity: 7, HighestModSeq: 100, UIDNext: 10})
+	w.rememberListing(&models.Mailbox{Name: "INBOX", Messages: 1, UIDNext: 10})
+	w.EmailMessageMapRepository = knownMessageMap{id: uuid.New().String()}
+	w.SyncContext = &fakeSyncContext{stored: map[string][]repository.StoredFolderMessage{
+		"INBOX": {{UID: 7, MessageID: "<7@fake.test>", ID: uuid.New()}},
+	}}
+
+	if err := w.Sync(t.Context()); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if len(removeIDs(*events)) != 0 || !w.skipPending["INBOX"] {
+		t.Fatalf("a failed lookup settled the row: removed=%d pending=%v", len(removeIDs(*events)), w.skipPending["INBOX"])
+	}
+	conn.failFinds = false
+	if err := w.Sync(t.Context()); err != nil {
+		t.Fatalf("second Sync: %v", err)
+	}
+	if len(removeIDs(*events)) != 1 {
+		t.Fatalf("removed %d rows once the lookup worked, want 1", len(removeIDs(*events)))
 	}
 }

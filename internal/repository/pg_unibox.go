@@ -946,6 +946,13 @@ func (r *uniboxRepository) DeleteByFolderPaths(ctx context.Context, emailID uuid
 		return 0, err
 	}
 	if _, err := tx.Exec(ctx, `
+		DELETE FROM email_message_map m
+		USING unibox_pending_emails p
+		WHERE p.email_account_id = $1 AND p.payload->'message'->>'folder_path' = ANY($2)
+		  AND m.email_id = p.email_account_id AND m.message_id = p.payload->'message'->>'message_id'`, emailID, folderPaths); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
 		DELETE FROM unibox_pending_emails
 		WHERE email_account_id = $1 AND payload->'message'->>'folder_path' = ANY($2)`, emailID, folderPaths); err != nil {
 		return 0, err

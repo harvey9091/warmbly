@@ -15,6 +15,7 @@ import (
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/repository"
 )
 
 // Sync is one IMAP pass: follow every folder's CONDSTORE mod-sequence for
@@ -253,6 +254,11 @@ func imapRetiredIntoSkipped(box *models.Mailbox, gone []*models.Mailbox, skipped
 	if slices.ContainsFunc(skipped, func(s models.Mailbox) bool { return s.Name == box.Name }) {
 		return true
 	}
+	// A folder without a UIDVALIDITY cannot be matched on it, as in
+	// imapFollowRenames.
+	if box.UIDValidity == 0 {
+		return false
+	}
 	sameGone, sameSkipped := 0, 0
 	for _, g := range gone {
 		if g.UIDValidity == box.UIDValidity {
@@ -305,17 +311,12 @@ func imapMovedOut(before imapListed, now *models.Mailbox) bool {
 }
 
 // imapReconcileSkipped retires the platform's rows for mail that left this
-// folder for one the owner excluded from sync. Nothing else that leaves a
-// folder is touched: a message can go somewhere the sync does not follow
-// (Gmail's All Mail) and still be wanted, so a row goes only when its
-// Message-ID is found in a skipped folder. Rows checked once and found
-// nowhere are remembered for the session, so a folder the owner emptied by
-// hand does not cost a search per row on every later pass.
-//
-// The work is bounded per pass: at most imapSkipSearchesPerPass rows are
-// looked for, and a folder with more left over is marked pending so the next
-// pass continues where this one stopped. A row fetched this pass (touched)
-// is live under a new UID, whatever an older copy elsewhere says.
+// folder for one the owner excluded from sync. A row goes only when its
+// Message-ID is found in a skipped folder: mail can leave for somewhere the
+// sync does not follow (Gmail's All Mail) and still be wanted. Bounded per
+// pass by imapSkipSearchesPerPass searches; what is left is continued next
+// pass. A row looked for and found nowhere is remembered for the session; a
+// lookup that failed is not, so the row is looked for again.
 func (w *WMail) imapReconcileSkipped(ctx context.Context, box *models.Mailbox, skipped []models.Mailbox, touched map[string]struct{}, stats *tickStats) *errx.MailError {
 	if w.SyncContext == nil || len(skipped) == 0 {
 		return nil
@@ -336,8 +337,7 @@ func (w *WMail) imapReconcileSkipped(ctx context.Context, box *models.Mailbox, s
 	if serr != nil {
 		return serr
 	}
-	// The same guard as the drafts reconciliation: UIDs only mean anything
-	// inside one generation.
+	// UIDs only mean anything inside one generation.
 	if gen != box.UIDValidity {
 		return nil
 	}
@@ -352,7 +352,11 @@ func (w *WMail) imapReconcileSkipped(ctx context.Context, box *models.Mailbox, s
 	if w.skipChecked == nil || len(w.skipChecked) > imapSkipCheckedMax {
 		w.skipChecked = make(map[string]struct{})
 	}
-	searches := 0
+
+	// The rows worth a lookup: gone from the folder, not re-fetched this
+	// pass under a new UID, not settled earlier this session, and with a
+	// Message-ID that was ever on the wire.
+	var candidates []repository.StoredFolderMessage
 	for _, m := range stored {
 		if _, ok := live[m.UID]; ok {
 			continue
@@ -360,21 +364,58 @@ func (w *WMail) imapReconcileSkipped(ctx context.Context, box *models.Mailbox, s
 		if _, refiled := touched[m.MessageID]; refiled {
 			continue
 		}
-		if ctx.Err() != nil {
-			return nil
-		}
-		key := fmt.Sprintf("%s\x00%d\x00%d", box.Name, box.UIDValidity, m.UID)
-		if _, done := w.skipChecked[key]; done {
+		if _, done := w.skipChecked[w.skipKey(box, m.UID)]; done {
 			continue
 		}
-		if searches >= imapSkipSearchesPerPass {
+		if m.MessageID == "" || strings.HasPrefix(m.MessageID, "no-msgid/") {
+			w.skipChecked[w.skipKey(box, m.UID)] = struct{}{}
+			continue
+		}
+		candidates = append(candidates, m)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	// One SEARCH per row per skipped folder is the cost; the cap is on that.
+	batch := max(1, imapSkipSearchesPerPass/len(skipped))
+	if len(candidates) > batch {
+		w.skipPending[box.Name] = true
+		candidates = candidates[:batch]
+	}
+	ids := make([]string, 0, len(candidates))
+	for _, m := range candidates {
+		ids = append(ids, m.MessageID)
+	}
+
+	foundIn := make(map[string]string, len(ids))
+	complete := true
+	for i := range skipped {
+		if ctx.Err() != nil {
 			w.skipPending[box.Name] = true
 			return nil
 		}
-		searches++
-		folder := w.imapFindInSkipped(ctx, skipped, m.MessageID)
-		if folder == "" {
-			w.skipChecked[key] = struct{}{}
+		found, ferr := client.FindUIDsByMessageIDs(ctx, skipped[i].Name, ids)
+		if ferr != nil {
+			log.Debug().Err(ferr).Str("email_id", w.ID.String()).Str("folder", skipped[i].Name).Msg("sync: search in skipped folder failed")
+			complete = false
+			continue
+		}
+		for id := range found {
+			if _, ok := foundIn[id]; !ok {
+				foundIn[id] = skipped[i].Name
+			}
+		}
+	}
+
+	for _, m := range candidates {
+		folder, ok := foundIn[m.MessageID]
+		if !ok {
+			// Settled only when every skipped folder answered.
+			if complete {
+				w.skipChecked[w.skipKey(box, m.UID)] = struct{}{}
+			} else {
+				w.skipPending[box.Name] = true
+			}
 			continue
 		}
 		if err := w.onEvent(models.JobEventTypeRemoveEmail, &models.JobEventRemoveEmail{
@@ -385,15 +426,20 @@ func (w *WMail) imapReconcileSkipped(ctx context.Context, box *models.Mailbox, s
 		}); err != nil {
 			return w.controlPlaneError(err, stats)
 		}
-		// The map entry goes with the row: the sync reads a mapped
-		// Message-ID as already stored, and would never import the message
-		// again if it moved back into a synced folder.
+		// The map entry goes with the row, or the message could never be
+		// imported again after moving back into a synced folder.
 		if err := w.EmailMessageMapRepository.Del(ctx, w.UserID, w.ID, m.MessageID, m.ID); err != nil {
 			return w.controlPlaneError(err, stats)
 		}
-		w.skipChecked[key] = struct{}{}
+		w.skipChecked[w.skipKey(box, m.UID)] = struct{}{}
 	}
 	return nil
+}
+
+// skipKey identifies one stored row for the session memory: folder,
+// generation and UID.
+func (w *WMail) skipKey(box *models.Mailbox, uid uint32) string {
+	return fmt.Sprintf("%s\x00%d\x00%d", box.Name, box.UIDValidity, uid)
 }
 
 // imapSkipCheckedMax bounds the per-session memory of rows already looked
@@ -401,29 +447,8 @@ func (w *WMail) imapReconcileSkipped(ctx context.Context, box *models.Mailbox, s
 const imapSkipCheckedMax = 250_000
 
 // imapSkipSearchesPerPass caps the searches one folder's reconciliation
-// spends in one pass, so an owner emptying a large folder by hand costs a
-// bounded slice of every tick rather than one long one.
+// spends in one pass, across every skipped folder.
 const imapSkipSearchesPerPass = 50
-
-// imapFindInSkipped names the skipped folder holding the message, or "".
-// A key the sync made up for a message without a Message-ID was never on
-// the wire, so there is nothing to search for.
-func (w *WMail) imapFindInSkipped(ctx context.Context, skipped []models.Mailbox, messageID string) string {
-	if messageID == "" || strings.HasPrefix(messageID, "no-msgid/") {
-		return ""
-	}
-	for i := range skipped {
-		uid, err := w.SmtpImapData.ImapClient.FindUIDByMessageID(ctx, skipped[i].Name, messageID)
-		if err != nil {
-			log.Debug().Err(err).Str("email_id", w.ID.String()).Str("folder", skipped[i].Name).Msg("sync: search in skipped folder failed")
-			continue
-		}
-		if uid != 0 {
-			return skipped[i].Name
-		}
-	}
-	return ""
-}
 
 // imapFolderChanged reports whether a folder has anything new since the
 // cursor we hold for it. With CONDSTORE the mod-sequence answers for new mail
@@ -984,6 +1009,14 @@ func (w *WMail) imapFollowRenames(folders []models.Mailbox) error {
 		if scan, ok := w.flagScan[from.Name]; ok {
 			delete(w.flagScan, from.Name)
 			w.flagScan[to[0].Name] = scan
+		}
+		if l, ok := w.listed[from.Name]; ok {
+			delete(w.listed, from.Name)
+			w.listed[to[0].Name] = l
+		}
+		if w.skipPending[from.Name] {
+			delete(w.skipPending, from.Name)
+			w.skipPending[to[0].Name] = true
 		}
 		w.tracker.renameFolder(from.Name, to[0].Name)
 		from.Name = to[0].Name

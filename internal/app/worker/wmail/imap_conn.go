@@ -58,6 +58,9 @@ type ImapConn interface {
 	// FindUIDByMessageID relocates a warmup message whose UID went void when an
 	// earlier engagement leg moved it.
 	FindUIDByMessageID(ctx context.Context, mailboxName, rfcMessageID string) (uint32, error)
+	// FindUIDsByMessageIDs answers which of many ids one folder holds, with
+	// one SELECT: the skipped-folder reconciliation's lookup.
+	FindUIDsByMessageIDs(ctx context.Context, mailboxName string, rfcMessageIDs []string) (map[string]uint32, error)
 	// DeleteUID removes one message, the retention window's deletion: an
 	// expunge scoped to the UID, or a move into trashName where the server
 	// cannot scope one.

@@ -2,6 +2,7 @@ package email
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -429,16 +430,35 @@ func (s *emailService) UpdateSyncSettings(ctx context.Context, orgID, emailID st
 	if xerr != nil {
 		return nil, xerr
 	}
+	// The purge reaches exactly what the worker will stop following: every
+	// saved folder the matcher skips, plus a name no saved folder answers to
+	// (a folder not listed yet). A name that IS a saved folder the matcher
+	// refuses, by attribute, is refused here too rather than purged.
+	saved := s.imapFoldersFor(ctx, acc)
+	var purge []string
+	for _, name := range folders {
+		listed := false
+		for _, box := range saved {
+			if strings.EqualFold(box.Name, name) {
+				listed = true
+				if !imap.SkipsFolder(box, folders) {
+					return nil, errx.NewWithIdentifier(errx.BadRequest, "invalid_sync_folder", fmt.Sprintf("folder %q is a folder the sync always follows", box.Name))
+				}
+			}
+		}
+		if !listed {
+			purge = append(purge, name)
+		}
+	}
+	for _, box := range saved {
+		if imap.SkipsFolder(box, folders) && !slices.Contains(purge, box.Name) {
+			purge = append(purge, box.Name)
+		}
+	}
 	if xerr := s.emailRepository.SetSyncSkipFolders(ctx, orgID, emailID, folders); xerr != nil {
 		return nil, xerr
 	}
-	if s.unibox != nil && len(folders) > 0 {
-		purge := append([]string(nil), folders...)
-		for _, box := range s.imapFoldersFor(ctx, acc) {
-			if imap.SkipsFolder(box, folders) && !slices.Contains(purge, box.Name) {
-				purge = append(purge, box.Name)
-			}
-		}
+	if s.unibox != nil && len(purge) > 0 {
 		if n, err := s.unibox.DeleteByFolderPaths(ctx, acc.ID, purge); err != nil {
 			log.Warn().Err(err).Str("email_id", acc.ID.String()).Msg("sync skip folders: purge of stored mail failed; the worker retires the folders on its next pass")
 		} else if n > 0 {

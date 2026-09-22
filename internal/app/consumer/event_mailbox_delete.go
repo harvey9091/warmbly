@@ -9,11 +9,10 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 )
 
-// publishFolderPurged tells open dashboards that rows left a mailbox in bulk.
-// One org-scoped EMAIL_DELETED with no message id: the client drops every
-// inbox list on that event whatever it names, and one event is what a purge
-// of a whole folder deserves rather than one per row.
-func (s *JobsService) publishFolderPurged(ctx context.Context, userID, emailID uuid.UUID) {
+// publishInboxDeleted tells open dashboards a row is gone, org-scoped so
+// every teammate's inbox drops it live. An empty message id means a whole
+// folder went: the client drops every inbox list on the event either way.
+func (s *JobsService) publishInboxDeleted(ctx context.Context, userID, emailID uuid.UUID, messageID string) {
 	if s.StreamingPublisher == nil {
 		return
 	}
@@ -25,6 +24,7 @@ func (s *JobsService) publishFolderPurged(ctx context.Context, userID, emailID u
 		BaseEvent:      pubsub.BaseEvent{UserID: userID.String()},
 		OrgID:          orgID,
 		EmailAccountID: emailID.String(),
+		MessageID:      messageID,
 	})
 }
 
@@ -57,7 +57,7 @@ func (s *JobsService) HandleMailboxDelete(ctx context.Context, e *models.JobEven
 				Int64("messages", n).
 				Msg("folder excluded from sync: stored mail dropped")
 			if n > 0 {
-				s.publishFolderPurged(ctx, e.UserID, e.EmailID)
+				s.publishInboxDeleted(ctx, e.UserID, e.EmailID, "")
 			}
 		}
 		return nil
