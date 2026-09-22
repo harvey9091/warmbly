@@ -61,8 +61,8 @@ var Catalog = []EventDef{
 	},
 	{
 		Key: EventSubscriptionIssue, Group: "Sales",
-		Label:       "Payment failed",
-		Description: "A subscription went past due and sending is at risk.",
+		Label:       "Subscription billing issue",
+		Description: "A subscription invoice could not be finalized or paid, so sending may be at risk.",
 		Severity:    SeverityWarning,
 	},
 	{

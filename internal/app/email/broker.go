@@ -39,6 +39,20 @@ func (s *emailService) OAuthConnectWithCode(ctx context.Context, userID string, 
 	if err != nil {
 		return nil, errx.ErrEmailOnboardExchange
 	}
+
+	// The same two guards the first-party connect applies. Without them a
+	// brokered mailbox could be stored after a consent the person half granted,
+	// or with no refresh token at all, and it would read as connected until its
+	// first send failed days later.
+	if xerr := checkGrantedScopes(ctx, provider, cfg.Scopes, tok); xerr != nil {
+		return nil, xerr
+	}
+	if strings.TrimSpace(tok.RefreshToken) == "" {
+		return nil, errx.New(errx.BadRequest,
+			"The provider did not return a long-lived token for this mailbox, so it would stop working within the hour. "+
+				"Remove Warmbly's access in your account settings and connect it again.")
+	}
+
 	owner, xerr := fetchInboxOwner(ctx, provider, tok.AccessToken)
 	if xerr != nil {
 		return nil, xerr
@@ -65,6 +79,7 @@ func (s *emailService) OAuthConnectWithCode(ctx context.Context, userID string, 
 	if xerr != nil {
 		return nil, xerr
 	}
+	s.captureSendIdentity(ctx, acc, tok)
 	s.syncWarmupPoolMembership(ctx, acc)
 	s.publishAccountEvent(ctx, pubsub.EventAccountConnected, acc)
 	s.dispatchAccountConnected(ctx, orgID, acc)

@@ -1,3 +1,5 @@
+import type { WorkspaceSendCapacity } from "@/lib/api/models/app/campaigns/SendPlan"
+
 // GET /analytics/dashboard?period=7d|30d|90d — a single (un-enveloped) object
 // mirroring the backend models.DashboardAnalytics. The previous flat shape
 // (total_campaigns/total_contacts…) did not match the wire body.
@@ -62,4 +64,7 @@ export default interface DashboardOverview {
     top_campaigns: TopCampaignStats[]
     account_health: AccountHealthSummary
     daily_trend: DashboardDailyStats[]
+    // What the workspace's mailboxes can send today under the scheduler's
+    // clamps; the sidebar meter's denominator. Absent when not computed.
+    capacity_today?: WorkspaceSendCapacity
 }

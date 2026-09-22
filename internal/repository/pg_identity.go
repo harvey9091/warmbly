@@ -64,9 +64,21 @@ func (r *identityRepository) Link(ctx context.Context, userID uuid.UUID, identit
 			SET last_login_at = NOW(), email = EXCLUDED.email
 			WHERE user_identities.user_id = EXCLUDED.user_id
 	`
-	_, err := r.db.Exec(ctx, q, userID, identity.Provider, identity.Issuer, identity.Subject, identity.Email)
-	return err
+	tag, err := r.db.Exec(ctx, q, userID, identity.Provider, identity.Issuer, identity.Subject, identity.Email)
+	if err != nil {
+		return err
+	}
+	// The conflict branch updates only the owner's row, so zero rows means
+	// another account holds this identity.
+	if tag.RowsAffected() == 0 {
+		return ErrIdentityTaken
+	}
+	return nil
 }
+
+// ErrIdentityTaken is Link's answer when the (issuer, subject) pair already
+// belongs to a different account.
+var ErrIdentityTaken = errors.New("identity is linked to another account")
 
 func (r *identityRepository) HasIdentityForIssuer(ctx context.Context, userID uuid.UUID, issuer string) (bool, error) {
 	const q = `SELECT EXISTS (SELECT 1 FROM user_identities WHERE user_id = $1 AND issuer = $2)`

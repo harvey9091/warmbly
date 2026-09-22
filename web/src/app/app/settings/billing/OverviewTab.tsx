@@ -17,6 +17,7 @@ import {
     CheckIcon,
     CreditCardIcon,
     FileTextIcon,
+    FlameIcon,
     InfoIcon,
     Loader2Icon,
     PlayIcon,
@@ -32,6 +33,8 @@ import useTrialStatus from "@/lib/api/hooks/app/subscription/useTrialStatus";
 import useCancelSubscription from "@/lib/api/hooks/app/subscription/useCancelSubscription";
 import useOrganizationLimits from "@/lib/api/hooks/app/organizations/useOrganizationLimits";
 import useUsageOverview from "@/lib/api/hooks/app/analytics/useUsageOverview";
+import useAPIKeyUsageSummary from "@/lib/api/hooks/app/api-keys/useAPIKeyUsageSummary";
+import { usePermission } from "@/hooks/usePermission";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
 import { AnimatedNumber, DitherMeter, type DitherTone } from "@/components/ui/dither";
@@ -39,7 +42,7 @@ import { PLAN_ACCENT_CLASSES, getPlan } from "@/lib/plans";
 import type OrganizationLimits from "@/lib/api/models/app/organizations/OrganizationLimits";
 import { Section } from "../_components/SectionShell";
 
-export default function OverviewTab({ onChangePlan }: { onChangePlan: () => void }) {
+export default function OverviewTab({ onChangePlan, onWarmupPlan }: { onChangePlan: () => void; onWarmupPlan: () => void }) {
     const access = useFeatureAccess();
     const sub = useSubscription();
     const trial = useTrialStatus();
@@ -48,7 +51,9 @@ export default function OverviewTab({ onChangePlan }: { onChangePlan: () => void
     const counts = orgLimits.data?.counts;
     const mailboxes = orgLimits.data?.mailboxes;
     const storage = orgLimits.data?.storage;
-    const usage = useUsageOverview().data;
+    const usage = useUsageOverview("month").data;
+    const canManageAPIKeys = usePermission("MANAGE_API_KEYS");
+    const apiUsage = useAPIKeyUsageSummary(canManageAPIKeys).data;
     const cancel = useCancelSubscription();
     const flow = useUpgradeFlow();
     const confirm = useConfirm();
@@ -61,6 +66,7 @@ export default function OverviewTab({ onChangePlan }: { onChangePlan: () => void
         ? new Date(sub.data.current_period_end as unknown as string)
         : null;
     const onFreeTier = !access.paid;
+    const warmupPlan = getPlan("warmup");
 
     async function scheduleCancel() {
         confirm.show(
@@ -182,7 +188,7 @@ export default function OverviewTab({ onChangePlan }: { onChangePlan: () => void
                                 <SparklesIcon className="w-3 h-3" />
                                 {onFreeTier ? "Choose a plan" : "Change plan"}
                             </button>
-                            <button
+                            {flow.hasBillingCustomer && <button
                                 type="button"
                                 onClick={flow.openPortal}
                                 disabled={flow.portalPending}
@@ -194,8 +200,8 @@ export default function OverviewTab({ onChangePlan }: { onChangePlan: () => void
                                     <CreditCardIcon className="w-3 h-3" />
                                 )}
                                 Payment method
-                            </button>
-                            <button
+                            </button>}
+                            {flow.hasBillingCustomer && <button
                                 type="button"
                                 onClick={flow.openPortal}
                                 disabled={flow.portalPending}
@@ -203,7 +209,7 @@ export default function OverviewTab({ onChangePlan }: { onChangePlan: () => void
                             >
                                 <FileTextIcon className="w-3 h-3" />
                                 Invoices
-                            </button>
+                            </button>}
                             <Link
                                 to="/app/settings/limits"
                                 className="h-7 px-2.5 rounded-md border border-slate-200 hover:border-slate-300 text-[12px] text-slate-700 hover:text-slate-900 inline-flex items-center gap-1.5 transition-colors"
@@ -211,7 +217,7 @@ export default function OverviewTab({ onChangePlan }: { onChangePlan: () => void
                                 <SlidersHorizontalIcon className="w-3 h-3" />
                                 Request a limit increase
                             </Link>
-                            {!onFreeTier && (
+                            {flow.hasStripeSubscription && (
                                 <div className="ml-auto">
                                     {cancelAtEnd ? (
                                         <button
@@ -242,6 +248,29 @@ export default function OverviewTab({ onChangePlan }: { onChangePlan: () => void
                             )}
                         </div>
                     </div>
+                )}
+
+                {/* Only warming, no sending: the one plan that is not in the
+                    grid. Free workspaces only; anything paid already has it. */}
+                {!sub.isPending && onFreeTier && (
+                    <button
+                        type="button"
+                        onClick={onWarmupPlan}
+                        className="mt-3 w-full rounded-lg border border-slate-200 hover:border-sky-300 bg-white px-4 py-3 flex items-center gap-3 text-left transition-colors group"
+                    >
+                        <span className="size-8 rounded-md bg-sky-50 text-sky-600 inline-flex items-center justify-center shrink-0">
+                            <FlameIcon className="w-4 h-4" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                            <span className="block text-[12.5px] font-medium text-slate-900">
+                                Only need warmup? {warmupPlan.label} plan, ${warmupPlan.priceMonthly}/mo
+                            </span>
+                            <span className="block text-[12px] text-slate-500 leading-relaxed">
+                                {warmupPlan.description} Works for mailboxes connected here or on a linked instance.
+                            </span>
+                        </span>
+                        <ArrowRightIcon className="w-3.5 h-3.5 text-slate-400 group-hover:text-sky-600 shrink-0 transition-colors" />
+                    </button>
                 )}
             </Section>
 
@@ -306,16 +335,16 @@ export default function OverviewTab({ onChangePlan }: { onChangePlan: () => void
                             format={formatBytes}
                         />
                         <UsageMeter
-                            label="Sends this period"
-                            hint="Campaign emails delivered in the current billing period"
-                            current={usage?.campaigns.emails_sent ?? 0}
+                            label="Sends in the last month"
+                            hint="Campaign emails sent during the rolling one-month window"
+                            current={usage?.campaigns.emails_sent}
                             max={undefined}
                         />
                         <UsageMeter
-                            label="API calls today"
-                            hint="Requests made with API keys against the daily quota"
-                            current={usage?.api.total_calls ?? 0}
-                            max={usage?.api.daily_limit}
+                            label="API calls, last 24h"
+                            hint={canManageAPIKeys ? "Requests made with API keys during the rolling 24-hour window" : "Requires permission to manage API keys"}
+                            current={apiUsage?.requests_24h}
+                            max={undefined}
                         />
                     </div>
                 )}
@@ -432,22 +461,24 @@ function UsageMeter({
 }: {
     label: string;
     hint: string;
-    current: number;
+    current?: number;
     max?: number | null;
     /** The word shown instead of a cap when there is none. */
     unmetered?: string;
     /** Renders both numbers; defaults to a plain count. */
     format?: (n: number) => string;
 }) {
-    const capped = typeof max === "number" && max > 0 && Number.isFinite(max);
-    const pct = capped ? Math.min(100, Math.round((current / (max as number)) * 100)) : 0;
+    const value = current ?? 0;
+    const known = typeof current === "number" && Number.isFinite(current);
+    const capped = known && typeof max === "number" && max > 0 && Number.isFinite(max);
+    const pct = capped ? Math.min(100, Math.round((value / (max as number)) * 100)) : 0;
     const tone: DitherTone = pct >= 90 ? "rose" : pct >= 70 ? "amber" : "sky";
     return (
         <div>
             <div className="flex items-baseline justify-between gap-2 mb-1">
                 <span className="text-[12px] text-slate-700 font-medium">{label}</span>
                 <span className="text-[11.5px] font-mono tabular-nums text-slate-700">
-                    {format ? format(current) : <AnimatedNumber value={current} />}
+                    {!known ? "—" : format ? format(value) : <AnimatedNumber value={value} />}
                     <span className="text-slate-400">
                         {capped ? ` / ${format ? format(max as number) : (max as number).toLocaleString()}` : ` / ${unmetered}`}
                     </span>

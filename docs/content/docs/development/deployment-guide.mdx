@@ -317,6 +317,7 @@ DEPLOYMENT_MODE=self_hosted
 # POSTHOG_HOST=                     # empty means PostHog Cloud US
 # POSTHOG_ERROR_TRACKING=true       # false keeps the key for analytics only
 # WARMBLY_POSTHOG_KEY=              # the browser half, used by web + admin + form pages
+# WARMBLY_POSTHOG_SESSION_REPLAY=true # false keeps the key and records no sessions
 # SENTRY_DSN=                       # the other backend, alongside PostHog or instead
 # WARMBLY_SENTRY_DSN=
 
@@ -448,7 +449,7 @@ There are three ways to attach a sending mailbox. Only the OAuth ones need setup
 | Mailbox type | Setup needed | Variables |
 |--------------|--------------|-----------|
 | Any SMTP + IMAP provider | None | none |
-| Gmail / Google Workspace | A Google Cloud OAuth client | `BOX_GOOGLE_CLIENT_ID`, `BOX_GOOGLE_CLIENT_SECRET` |
+| Gmail / Google Workspace | None with an app password (the default). A Google Cloud OAuth client to offer Google sign-in | `BOX_GOOGLE_OAUTH_CONNECT`, `BOX_GOOGLE_CLIENT_ID`, `BOX_GOOGLE_CLIENT_SECRET` |
 | Outlook / Microsoft 365 | An Entra ID app registration | `BOX_OUTLOOK_CLIENT_ID`, `BOX_OUTLOOK_CLIENT_SECRET` |
 
 <Callout type="warn" title="These are not the sign-in variables">
@@ -460,6 +461,8 @@ There are three ways to attach a sending mailbox. Only the OAuth ones need setup
 Nothing to configure. Add the mailbox in the dashboard with its host, port, username, and password. SMTP must be port `587` or `465`; IMAP is typically `993`.
 
 ### Gmail and Google Workspace
+
+Nothing to configure by default: the connect dialog walks users through a Google app password over `smtp.gmail.com` and `imap.gmail.com`, see [the mailbox guide](/guides/mailboxes/#gmail-and-google-workspace). Set up a Google OAuth client only if you want to offer Google sign-in for new Gmail mailboxes, which also needs `BOX_GOOGLE_OAUTH_CONNECT=true`; without it the client still serves the mailboxes already connected that way, both refreshing their tokens and re-authorizing them when Google invalidates a grant.
 
 <Steps>
 
@@ -489,6 +492,7 @@ Put the client id and secret in your root `.env`:
 ```bash
 BOX_GOOGLE_CLIENT_ID=1234567890-abc123.apps.googleusercontent.com
 BOX_GOOGLE_CLIENT_SECRET=GOCSPX-your-secret-here
+BOX_GOOGLE_OAUTH_CONNECT=true
 ```
 
 Then `make up` to recreate the containers with the new values.

@@ -10,9 +10,8 @@ import (
 	"github.com/warmbly/warmbly/internal/errx"
 )
 
-// syncBackoffMax is the longest a mailbox waits between passes: while fair
-// use holds it, after the provider asked us to slow down, or while the mail
-// server is unreachable.
+// syncBackoffMax is the normal ceiling between passes. An explicit provider
+// Retry-After may be longer and takes precedence.
 const syncBackoffMax = 5 * time.Minute
 
 // StartSyncWorker runs the mail sync loop until the context is cancelled.
@@ -44,10 +43,15 @@ func (w *WMail) StartSyncWorker(ctx context.Context) {
 // nextSyncDelay picks the wait before the next pass.
 func (w *WMail) nextSyncDelay(base time.Duration, last *errx.MailError) time.Duration {
 	d := base
+	minimum := base / 2
 	switch {
 	case last != nil && last.Code == errx.MailErrorCodeSendingTooFast:
-		// The provider returned 429: back off well past the base interval.
+		// The provider returned 429. Respect its window when supplied.
 		d = syncBackoffMax
+		if last.RetryAfter > 0 {
+			d = max(last.RetryAfter, base)
+			minimum = d
+		}
 	case last != nil && isTransportError(last):
 		// The server is unreachable. Retry soon after the first failure (a
 		// dropped session reconnects on the next pass and costs one dial),
@@ -64,8 +68,8 @@ func (w *WMail) nextSyncDelay(base time.Duration, last *errx.MailError) time.Dur
 	// ±10% jitter.
 	spread := d / 10
 	d += time.Duration(rand.Int64N(int64(2*spread)+1)) - spread
-	if d < base/2 {
-		d = base / 2
+	if d < minimum {
+		d = minimum
 	}
 	return d
 }

@@ -154,7 +154,18 @@ export function route(url: string): unknown {
         return { data: [{ ...row, seen: true }], pagination: { has_more: false, next_cursor: null } };
     }
     if (url === "/unibox" || url.startsWith("/unibox?")) {
-        return { data: ROWS, pagination: { has_more: false, next_cursor: null } };
+        // Honour the free-text param so a suite can assert on a search that
+        // finds nothing. Substring over subject and snippet is enough here; the
+        // real matcher (people, body, prefixes) is the server's job and is
+        // covered in Go.
+        const params = new URL(url, "https://test.local").searchParams;
+        const subject = params.get("subject");
+        const rows = subject
+            ? ROWS.filter((r) =>
+                  `${r.subject} ${r.snippet}`.toLowerCase().includes(subject.toLowerCase()),
+              )
+            : ROWS;
+        return { data: rows, pagination: { has_more: false, next_cursor: null } };
     }
     if (url.startsWith("/analytics")) return { summary: {}, steps: [], data: [] };
     if (url.startsWith("/advisor")) return { findings: [], data: [], total: 0 };

@@ -84,6 +84,8 @@ type PlacementRequest struct {
 	// CurrentWorkerID is the incumbent, when this is a re-placement. The
 	// incumbent gets a large bonus: staying put is the default.
 	CurrentWorkerID *uuid.UUID
+	// IgnoreIncumbency lets the reconciliation loop correct measured concentration.
+	IgnoreIncumbency bool
 	// OrgMailboxesTotal is how many mailboxes the org owns in total, the
 	// denominator for the blast-radius term. Zero disables that term.
 	OrgMailboxesTotal int
@@ -96,8 +98,8 @@ type PlacementRequest struct {
 
 // Eligible reports whether a candidate may host the mailbox at all. Health is
 // the only hard constraint: capacity is a preference in the score, because
-// base_capacity is a flat 16 for every worker and refusing on it refused on a
-// guess. It also refused where placement mattered most - a full fleet returned
+// the operational target is a sizing estimate rather than a provider limit.
+// A hard ceiling also refused where placement mattered most: a full fleet returned
 // nil and fell through to selectFallback, which reads none of region, blast
 // radius or provider crowding.
 func (c PlacementCandidate) Eligible(req PlacementRequest) bool {
@@ -156,7 +158,7 @@ func (c PlacementCandidate) Score(req PlacementRequest) float64 {
 
 	// Stickiness: the incumbent wins ties and most non-ties. A mailbox that
 	// stays put keeps presenting the same client IP to its provider.
-	if req.CurrentWorkerID != nil && *req.CurrentWorkerID == c.WorkerID {
+	if !req.IgnoreIncumbency && req.CurrentWorkerID != nil && *req.CurrentWorkerID == c.WorkerID {
 		score += weightIncumbent
 	}
 

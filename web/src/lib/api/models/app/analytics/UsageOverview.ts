@@ -13,6 +13,7 @@ export interface CampaignsUsage {
     active: number;
     paused: number;
     draft: number;
+    /** Sent email steps in the requested period. */
     emails_sent: number;
 }
 

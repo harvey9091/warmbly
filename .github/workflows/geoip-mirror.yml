@@ -1,0 +1,84 @@
+name: GeoIP mirror
+
+# Keeps our own copy of the two MaxMind databases the fleet boots against.
+#
+# A GeoLite2 account gets 30 direct downloads per 24 hours. Every consumer boot
+# fetches GeoLite2-City and every tracking boot fetches GeoLite2-ASN, so a
+# release costs two and a crash loop costs as many as it restarts. Past the
+# limit MaxMind answers 429, and a container that starts into one has no geo
+# data for the rest of its life.
+#
+# Mirroring turns "two per release, unbounded" into "two per run, twice a week"
+# for the whole fleet however often it deploys. Tuesday and Friday is MaxMind's
+# own publish cadence.
+#
+# The bucket copy is not redistribution: it is private, and only our own
+# services read it. Nothing about GeoLite2 may be baked into the published
+# images, which is a licence constraint and not a convenience one.
+
+on:
+  schedule:
+    - cron: "17 4 * * 2,5"
+  workflow_dispatch:
+
+concurrency:
+  group: geoip-mirror
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: Refresh the mirror
+    runs-on: ubuntu-latest
+    # Without the account id there is nothing to authenticate with, so a fork
+    # or an instance that has not set the secrets skips rather than fails.
+    if: ${{ vars.MAXMIND_ACCOUNT_ID != '' }}
+    steps:
+      - name: Download from MaxMind
+        env:
+          ACCOUNT_ID: ${{ vars.MAXMIND_ACCOUNT_ID }}
+          LICENSE_KEY: ${{ secrets.MAXMIND_LICENSE_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          for edition in GeoLite2-City GeoLite2-ASN; do
+            echo "::group::$edition"
+            # Basic auth in the header rather than the URL: a credential in the
+            # URL reaches the process list and every redirect it follows.
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 \
+              -u "$ACCOUNT_ID:$LICENSE_KEY" \
+              "https://download.maxmind.com/geoip/databases/$edition/download?suffix=tar.gz" \
+              -o "$edition.tar.gz"
+            # The archive nests the database under a dated directory. Our
+            # services accept a bare .mmdb, a .gz or the tarball, but a bare
+            # file is the cheapest thing for them to boot against.
+            tar -xzf "$edition.tar.gz" --wildcards --no-anchored "*.mmdb" --strip-components=1
+            test -s "$edition.mmdb"
+            mv "$edition.mmdb" "out/$edition.mmdb"
+            echo "::endgroup::"
+          done
+          ls -l out
+
+      - name: Publish to the mirror bucket
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.GEOIP_MIRROR_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.GEOIP_MIRROR_AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.GEOIP_MIRROR_REGION }}
+          BUCKET: ${{ vars.GEOIP_MIRROR_BUCKET }}
+          PREFIX: ${{ vars.GEOIP_MIRROR_PREFIX }}
+        run: |
+          set -euo pipefail
+          for edition in GeoLite2-City GeoLite2-ASN; do
+            # No ACL. The bucket is private and the services authenticate; a
+            # canned ACL also fails outright on any bucket whose ownership is
+            # owner-enforced, which is every bucket made since April 2023.
+            aws s3api put-object \
+              --bucket "$BUCKET" \
+              --key "${PREFIX}${edition}.mmdb" \
+              --body "out/$edition.mmdb" \
+              --content-type application/octet-stream \
+              >/dev/null
+            echo "published ${PREFIX}${edition}.mmdb"
+          done

@@ -17,6 +17,7 @@ import (
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/pkg/mailhtml"
+	"github.com/warmbly/warmbly/internal/utils"
 	"github.com/warmbly/warmbly/internal/utils/paging"
 	"github.com/warmbly/warmbly/internal/utils/validate"
 )
@@ -41,7 +42,7 @@ type CampaignRepository interface {
 	// Overview returns status-bucket counts plus per-folder totals for the
 	// campaigns browser sidebar.
 	Overview(ctx context.Context, orgID string) (*models.CampaignsOverview, error)
-	Update(ctx context.Context, userID, query string, data *models.UpdateCampaign) (*models.Campaign, *errx.Error)
+	Update(ctx context.Context, orgID, query string, data *models.UpdateCampaign) (*models.Campaign, *errx.Error)
 	UpdateStatus(ctx context.Context, campaignID uuid.UUID, status string) error
 	UpdateStatusWithLock(ctx context.Context, campaignID uuid.UUID, status string) error
 	// Delete removes the campaign, its cascading data and every pending task
@@ -607,6 +608,7 @@ func (r *campaignRepository) Create(ctx context.Context, userID string, orgID *u
 	// a follow-up that is listed but not connected would never send.
 	if len(data.Sequences) > 0 {
 		stepIDs := make([]uuid.UUID, 0, len(data.Sequences))
+		threadDefaults := models.ThreadReplyDefaults(data.Sequences)
 		for i, seq := range data.Sequences {
 			waitAfter := 0
 			if i > 0 {
@@ -638,18 +640,22 @@ func (r *campaignRepository) Create(ctx context.Context, userID string, orgID *u
 			if bodyHTML == "" {
 				bodyHTML = emptyBodyHTML
 			}
+			threadReply := threadDefaults[i]
+			if seq.ThreadReply != nil {
+				threadReply = *seq.ThreadReply
+			}
 			seqInsert := `
 				INSERT INTO sequences (
 					campaign_id, organization_id, name, subject,
 					body_plain, body_html, body_sync, body_code,
-					wait_after, position
-				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+					wait_after, position, thread_reply
+				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 				RETURNING id
 			`
 			seqParams := []any{
 				campaign.ID, orgID, seq.Name, seq.Subject,
 				seq.BodyPlain, bodyHTML, bodySync, bodyCode,
-				waitAfter, i + 1,
+				waitAfter, i + 1, threadReply,
 			}
 			var stepID uuid.UUID
 			if err := tx.QueryRow(ctx, seqInsert, seqParams...).Scan(&stepID); err != nil {
@@ -923,9 +929,9 @@ func (r *campaignRepository) Overview(ctx context.Context, orgID string) (*model
 	return &overview, nil
 }
 
-func (r *campaignRepository) Update(ctx context.Context, userID, campaignID string, data *models.UpdateCampaign) (*models.Campaign, *errx.Error) {
+func (r *campaignRepository) Update(ctx context.Context, orgID, campaignID string, data *models.UpdateCampaign) (*models.Campaign, *errx.Error) {
 	setClauses := []string{}
-	args := []any{userID, campaignID}
+	args := []any{orgID, campaignID}
 	argPos := 3
 
 	if data.Name != nil {
@@ -1104,8 +1110,16 @@ func (r *campaignRepository) Update(ctx context.Context, userID, campaignID stri
 		argPos++
 	}
 	if data.ContactOrderField != nil {
+		// This is the order field that reaches an ORDER BY expression, so it is
+		// validated on the way in like the two allowlisted ones above. It is a
+		// custom-field key, so it answers to the same rule as every other
+		// custom-field key in the product.
+		field := utils.NormalizeJSONKey(*data.ContactOrderField)
+		if field != "" && !utils.IsValidJSONKey(field) {
+			return nil, errx.ErrInvalid
+		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "contact_order_field", argPos))
-		args = append(args, *data.ContactOrderField)
+		args = append(args, field)
 		argPos++
 	}
 
@@ -1161,8 +1175,8 @@ func (r *campaignRepository) Update(ctx context.Context, userID, campaignID stri
 		start, ceiling := 0, 0
 		if data.RampStart == nil || data.RampCeiling == nil {
 			err := r.DB.QueryRow(ctx,
-				"SELECT ramp_start, ramp_ceiling FROM campaigns WHERE user_id = $1 AND id = $2",
-				userID, campaignID).Scan(&start, &ceiling)
+				"SELECT ramp_start, ramp_ceiling FROM campaigns WHERE organization_id = $1 AND id = $2",
+				orgID, campaignID).Scan(&start, &ceiling)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return nil, errx.ErrNotFound
@@ -1324,14 +1338,14 @@ func (r *campaignRepository) Update(ctx context.Context, userID, campaignID stri
 		query = fmt.Sprintf(`
 			UPDATE campaigns
 			SET %s
-			WHERE user_id = $1 AND id = $2
+			WHERE organization_id = $1 AND id = $2
 			RETURNING %s
 		`, strings.Join(setClauses, ", "), CAMPAIGN_SELECT)
 	} else {
 		query = fmt.Sprintf(`
 			SELECT %s 
 			FROM campaigns
-			WHERE user_id = $1 AND id = $2
+			WHERE organization_id = $1 AND id = $2
 		`, CAMPAIGN_SELECT)
 	}
 
@@ -1390,7 +1404,7 @@ func (r *campaignRepository) Update(ctx context.Context, userID, campaignID stri
 	return &campaign, nil
 }
 
-// GetByID retrieves a campaign by ID without requiring userID (for internal service use)
+// GetByID retrieves a campaign by ID without requiring orgID (for internal service use)
 func (r *campaignRepository) GetByID(ctx context.Context, campaignID uuid.UUID) (*models.Campaign, error) {
 	var campaign models.Campaign
 
@@ -1445,7 +1459,7 @@ func (r *campaignRepository) GetByID(ctx context.Context, campaignID uuid.UUID) 
 // GetSequenceByID retrieves a sequence by ID
 func (r *campaignRepository) GetSequenceByID(ctx context.Context, sequenceID uuid.UUID) (*models.Sequence, error) {
 	query := `
-		SELECT id, name, subject, body_plain, body_html, body_sync, body_code, wait_after, kind, action, updated_at, created_at
+		SELECT id, name, subject, body_plain, body_html, body_sync, body_code, wait_after, thread_reply, kind, action, updated_at, created_at
 		FROM sequences
 		WHERE id = $1
 	`
@@ -1453,7 +1467,7 @@ func (r *campaignRepository) GetSequenceByID(ctx context.Context, sequenceID uui
 	var seq models.Sequence
 	err := r.DB.QueryRow(ctx, query, sequenceID).Scan(
 		&seq.ID, &seq.Name, &seq.Subject, &seq.BodyPlain, &seq.BodyHTML,
-		&seq.BodySync, &seq.BodyCode, &seq.WaitAfter, &seq.Kind, &seq.Action, &seq.UpdatedAt, &seq.CreatedAt,
+		&seq.BodySync, &seq.BodyCode, &seq.WaitAfter, &seq.ThreadReply, &seq.Kind, &seq.Action, &seq.UpdatedAt, &seq.CreatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1469,7 +1483,7 @@ func (r *campaignRepository) GetSequenceByID(ctx context.Context, sequenceID uui
 // GetSequencesByCampaignID retrieves all sequences for a campaign ordered by position
 func (r *campaignRepository) GetSequencesByCampaignID(ctx context.Context, campaignID uuid.UUID) ([]models.Sequence, error) {
 	query := `
-		SELECT id, name, subject, body_plain, body_html, body_sync, body_code, wait_after, position, kind, updated_at, created_at
+		SELECT id, name, subject, body_plain, body_html, body_sync, body_code, wait_after, position, thread_reply, kind, updated_at, created_at
 		FROM sequences
 		WHERE campaign_id = $1
 		ORDER BY position ASC, created_at ASC
@@ -1487,7 +1501,7 @@ func (r *campaignRepository) GetSequencesByCampaignID(ctx context.Context, campa
 		var seq models.Sequence
 		err := rows.Scan(
 			&seq.ID, &seq.Name, &seq.Subject, &seq.BodyPlain, &seq.BodyHTML,
-			&seq.BodySync, &seq.BodyCode, &seq.WaitAfter, &seq.Position, &seq.Kind, &seq.UpdatedAt, &seq.CreatedAt,
+			&seq.BodySync, &seq.BodyCode, &seq.WaitAfter, &seq.Position, &seq.ThreadReply, &seq.Kind, &seq.UpdatedAt, &seq.CreatedAt,
 		)
 		if err != nil {
 			db.CaptureError(err, "", nil, "scan")

@@ -10,10 +10,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
+	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/cache"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/pkg/crypt"
+	"github.com/warmbly/warmbly/internal/repository"
 )
 
 // Cloud-managed mailboxes: the consent runs on this deployment's OAuth app,
@@ -76,6 +78,10 @@ func (s *service) StartOAuth(ctx context.Context, inst *models.PoolLinkInstance,
 	}
 	if req.Provider != models.InboxProviderGoogle && req.Provider != models.InboxProviderOutlook {
 		return nil, errx.ErrEmailOnboardProvider
+	}
+	// The cloud's own Google app decides here, not the linked instance's.
+	if req.Provider == models.InboxProviderGoogle && !config.GoogleOAuthConnect() {
+		return nil, errx.ErrEmailOnboardGoogleOAuthDisabled
 	}
 	if !returnURLAllowed(req.ReturnURL, inst.URL) {
 		return nil, ErrOAuthReturnURL
@@ -173,16 +179,16 @@ func (s *service) connectBrokered(ctx context.Context, st brokerState, code stri
 	}
 	remoteID := uuid.New()
 	if err := s.repo.EnrollMailbox(ctx, &models.PoolLinkMailbox{InstanceID: inst.ID, RemoteID: remoteID, EmailAccountID: acc.ID, Managed: true}); err != nil {
-		_ = s.emailSvc.Delete(ctx, userID, acc.ID.String())
+		_ = s.emailSvc.Delete(ctx, orgID.String(), acc.ID.String())
 		return uuid.Nil, errx.InternalError()
 	}
-	s.startWarmup(ctx, userID, acc.ID)
+	s.startWarmup(ctx, orgID.String(), acc.ID)
 	return remoteID, nil
 }
 
 // startWarmup: failures here are retried by the reconciler.
-func (s *service) startWarmup(ctx context.Context, userID string, accountID uuid.UUID) {
-	if _, xerr := s.emailSvc.SetWarmupLifecycle(ctx, userID, accountID.String(), "start"); xerr != nil {
+func (s *service) startWarmup(ctx context.Context, orgID string, accountID uuid.UUID) {
+	if _, xerr := s.emailSvc.SetWarmupLifecycle(ctx, orgID, accountID.String(), "start"); xerr != nil {
 		log.Warn().Str("account_id", accountID.String()).Msg("pool link: warmup start failed after enrollment")
 	}
 	if err := s.emailSvc.LoadAccountOntoWorker(ctx, accountID); err != nil {
@@ -302,7 +308,7 @@ func (s *service) VerifyWarmupToken(ctx context.Context, inst *models.PoolLinkIn
 	if err != nil {
 		return false, errx.InternalError()
 	}
-	return t != nil && t.RecipientAccountID == m.EmailAccountID, nil
+	return t != nil && (t.RecipientAccountID == m.EmailAccountID || t.SenderAccountID == m.EmailAccountID), nil
 }
 
 // VerifyWarmupDelivery answers for warmup mail whose verify header did not
@@ -318,7 +324,25 @@ func (s *service) VerifyWarmupDelivery(ctx context.Context, inst *models.PoolLin
 	if s.warmup == nil {
 		return false, nil
 	}
+	// A reply typed by hand in a warmup thread has no token and no known id of
+	// its own; it is warmup by what it answers. Recorded so the turn answering
+	// it is recognised too, exactly as the cloud's own consumer would.
+	if len(q.InReplyTo) > 0 {
+		reply, err := s.warmup.IsWarmupThreadReply(ctx, m.EmailAccountID, q.InReplyTo)
+		if err != nil {
+			return false, errx.InternalError()
+		}
+		if reply {
+			if err := s.warmup.RecordWarmupThreadMessage(ctx, m.EmailAccountID, q.MessageID); err != nil {
+				return false, errx.InternalError()
+			}
+			return true, nil
+		}
+	}
 	ok, err := s.warmup.IsWarmupDelivery(ctx, m.EmailAccountID, q.Sender, q.MessageID, q.Subject)
+	if errors.Is(err, repository.ErrWarmupDeliveryPending) {
+		return false, errx.ErrServiceDown
+	}
 	if err != nil {
 		return false, errx.InternalError()
 	}

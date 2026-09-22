@@ -35,7 +35,9 @@ import {
     BanIcon,
     HourglassIcon,
     XCircleIcon,
+    HelpCircleIcon,
     RefreshCwIcon,
+    TrashIcon,
     type LucideIcon,
 } from "lucide-react";
 import toast from "react-hot-toast";
@@ -46,18 +48,24 @@ import type { AccountError } from "@/lib/api/models/app/analytics/AccountStatus"
 import useAccountStatus from "@/lib/api/hooks/app/analytics/useAccountStatus";
 import useWarmupAnalytics from "@/lib/api/hooks/app/analytics/useWarmupAnalytics";
 import useUpdateEmail from "@/lib/api/hooks/app/emails/useUpdateEmail";
+import useRemoveEmail from "@/lib/api/hooks/app/emails/useRemoveEmail";
 import useWarmupLifecycle from "@/lib/api/hooks/app/emails/useWarmupLifecycle";
 import useSendHold from "@/lib/api/hooks/app/emails/useSendHold";
 import useWarmupBanStatus from "@/lib/api/hooks/app/emails/useWarmupBanStatus";
 import useAppealWarmupBan from "@/lib/api/hooks/app/emails/useAppealWarmupBan";
 import useAuthCheck from "@/lib/api/hooks/app/emails/useAuthCheck";
 import useRefreshAuthCheck from "@/lib/api/hooks/app/emails/useRefreshAuthCheck";
+import useSendIdentity from "@/lib/api/hooks/app/emails/useSendIdentity";
+import useRefreshSendIdentity from "@/lib/api/hooks/app/emails/useRefreshSendIdentity";
+import getEmail from "@/lib/api/client/app/emails/getEmail";
+import { SelectMenu, type SelectOption } from "@/components/ui/select-menu";
+import { OptionSelect } from "@/components/app/campaigns/preferences/components/CampaignPreferenceBoolBox";
 import useUpdateEmailTrackingDomain from "@/lib/api/hooks/app/emails/useUpdateEmailTrackingDomain";
 import useEmailTrackingDomain from "@/lib/api/hooks/app/emails/useEmailTrackingDomain";
 import useVerifyEmailTrackingDomain from "@/lib/api/hooks/app/emails/useVerifyEmailTrackingDomain";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import reauthEmailOAuth from "@/lib/api/client/app/emails/reauthEmailOAuth";
 import onboardOAuthFinish from "@/lib/api/client/app/emails/onboardOAuthFinish";
 import { openEmailOAuthPopup } from "@/lib/emails/emailOAuthPopup";
@@ -66,8 +74,10 @@ import EmailEditor from "../EmailEditor";
 import SendingBehaviorTab from "./SendingBehaviorTab";
 import SyncStatusCard from "./SyncStatusCard";
 import CloudWarmupCard from "./CloudWarmupCard";
+import WarmupPartnerDiversity from "./WarmupPartnerDiversity";
 import useCloudPool from "@/hooks/useCloudPool";
 import { Toggle } from "@/components/app/campaigns/preferences/components/CampaignPreferenceBoolBox";
+import setDirectTracking from "@/lib/api/client/app/emails/setDirectTracking";
 import useSendingBehavior from "@/lib/api/hooks/app/emails/useSendingBehavior";
 import useSendingPlan from "@/lib/api/hooks/app/emails/useSendingPlan";
 import { minutesToClock, secondsToLabel } from "@/lib/api/models/app/emails/SendingBehavior";
@@ -77,6 +87,7 @@ import { DitherBarChart } from "@/components/ui/dither";
 import WeekdayBitmask from "../campaigns/schedule/WeekdayBitmask";
 import { Loading } from "@/components/loader";
 import { NumberInput, TextInput } from "@/components/ui/field";
+import { clampWarmupRetentionDays } from "@/lib/warmupRetention";
 import { useConfirm } from "@/hooks/context/confirm";
 import { usePresenceResource } from "@/hooks/PresenceProvider";
 import ResourceViewers from "@/components/app/presence/ResourceViewers";
@@ -363,9 +374,11 @@ export default function InboxDetails({
 /* ── editable fields tracked for the save bar ─────────────────────── */
 const EDITABLE: (keyof Inbox)[] = [
     "name", "signature_html", "signature_plain", "signature_sync", "signature_code",
+    "send_as_email",
     "tags", "campaign_limit", "min_wait_time", "reply_to", "save_to_sent",
     "warmup_base", "warmup_max", "warmup_increase", "warmup_reply_rate",
     "warmup_tag", "warmup_start_time", "warmup_end_time", "warmup_days",
+    "warmup_placement", "warmup_folder", "warmup_retention_days",
 ];
 
 function Detail({ mailbox, onClose, initialTab = "overview", canWarmup = true }: { mailbox: Inbox; onClose: () => void; initialTab?: string; canWarmup?: boolean }) {
@@ -461,7 +474,7 @@ function Detail({ mailbox, onClose, initialTab = "overview", canWarmup = true }:
                 {tab === "analytics" && <AnalyticsTab warmup={warmup.data} loading={warmup.isPending} />}
                 {tab === "warmup" && <WarmupTab form={form} update={update} status={status.data} mailbox={mailbox} canWarmup={canWarmup} />}
                 {tab === "sending" && <SendingBehaviorTab mailboxId={mailbox.id} />}
-                {tab === "settings" && <SettingsTab form={form} update={update} mailbox={mailbox} />}
+                {tab === "settings" && <SettingsTab form={form} update={update} mailbox={mailbox} onDisconnected={onClose} />}
             </div>
 
             {/* Save bar — only when something changed */}
@@ -647,7 +660,7 @@ function OverviewTab({ status, loading, mailbox }: { status?: import("@/lib/api/
                     }
                 />
                 <StatCard label="Warmup today" value={ws ? ws.current_volume : (usage?.warmup_sent ?? "—")} sub={ws ? `target ${ws.target_volume}` : undefined} accent />
-                <StatCard label="Reply rate" value={ws ? `${ws.reply_rate}%` : "—"} sub="warmup replies" />
+                <StatCard label="Reply target" value={ws ? `${ws.reply_rate}%` : "—"} sub="configured warmup share" />
                 <StatCard label="Days warming" value={ws ? ws.days_active : "—"} sub={ws ? `max ${ws.max_volume}/day` : undefined} />
             </div>
 
@@ -735,18 +748,23 @@ function AnalyticsTab({ warmup, loading }: { warmup?: import("@/lib/api/models/a
     const chartData = warmup.daily_stats.map((d) => ({
         key: d.date,
         value: d.emails_sent,
-        hint: `${d.date}: ${d.emails_sent} sent / ${d.target_volume} target · ${d.emails_replied} replies`,
+        hint: `${d.date}: ${d.emails_sent} sent / ${d.target_volume} target · ${d.emails_received ?? 0} received · ${d.emails_replied} replies`,
     }));
+    const received = s.total_received ?? 0;
+    const exchange = s.total_sent > 0 ? `${Math.round((received / s.total_sent) * 100)}% of what it sent` : "from the pool";
     const targets = warmup.daily_stats.map((d) => d.target_volume);
     const selectedIndex = selectedDay ? warmup.daily_stats.findIndex((d) => d.date === selectedDay) : -1;
 
     return (
         <div className="divide-y divide-slate-200/60">
             <div className="grid grid-cols-2 divide-x divide-y divide-slate-200/60">
-                <StatCard label="Total sent" value={s.total_sent} sub={`${s.average_daily.toFixed(1)}/day avg`} />
-                <StatCard label="Replies" value={s.total_replied} sub={`${s.reply_rate.toFixed(1)}% reply rate`} accent />
-                <StatCard label="Target progress" value={`${Math.round(s.target_progress)}%`} sub="toward max volume" />
-                <StatCard label="Days active" value={s.days_active} sub={`${warmup.date_range.from} → ${warmup.date_range.to}`} />
+                <StatCard label="Total sent" value={s.total_sent} sub={`${s.average_daily.toFixed(1)}/active day`} />
+                <StatCard label="Received" value={received} sub={exchange} accent />
+                <StatCard label="Replies" value={s.total_replied} sub={`${s.reply_rate.toFixed(1)}% reply rate`} />
+                <StatCard label="Target met" value={`${Math.round(s.target_progress)}%`} sub="of planned volume" />
+                <div className="col-span-2">
+                    <StatCard label="Days active" value={s.days_active} sub={`${warmup.date_range.from} → ${warmup.date_range.to}`} />
+                </div>
             </div>
 
             <div className="px-5 py-4">
@@ -774,7 +792,7 @@ function AnalyticsTab({ warmup, loading }: { warmup?: import("@/lib/api/models/a
                     if (!d) return null;
                     return (
                         <p className="mt-2 text-[11px] text-slate-500 font-mono tabular-nums">
-                            {d.date}: {d.emails_sent} sent / {d.target_volume} target · {d.emails_replied} replies
+                            {d.date}: {d.emails_sent} sent / {d.target_volume} target · {d.emails_received ?? 0} received · {d.emails_replied} replies
                         </p>
                     );
                 })()}
@@ -913,19 +931,28 @@ function WarmupBanBanner({ emailId }: { emailId: string }) {
 
 /* ── Domain authentication (SPF / DKIM / DMARC live check) ─────────────────────── */
 
-// One row per auth record. Green check when present/aligned, red cross when
-// missing. Optional detail (selectors, the SPF record, the DMARC policy) is
-// shown muted underneath.
-function AuthRecordRow({ label, ok, detail }: { label: string; ok: boolean; detail?: React.ReactNode }) {
+// One row per auth record, in one of three states. "unverified" is not a
+// softer "missing": DKIM keys sit at a selector DNS cannot enumerate, so a
+// probe that finds nothing says nothing about whether the domain signs, and
+// showing that as a red Missing tells an owner whose DKIM is fine to go fix it.
+type AuthRecordState = "found" | "missing" | "unverified";
+
+function AuthRecordRow({ label, state, detail }: { label: string; state: AuthRecordState; detail?: React.ReactNode }) {
+    const badge = {
+        found: { className: "text-emerald-600", icon: <CheckCircle2Icon className="w-3.5 h-3.5" />, text: "Found" },
+        missing: { className: "text-rose-600", icon: <XCircleIcon className="w-3.5 h-3.5" />, text: "Missing" },
+        unverified: { className: "text-slate-400", icon: <HelpCircleIcon className="w-3.5 h-3.5" />, text: "Not verified" },
+    }[state];
+
     return (
         <div className="flex items-start justify-between gap-3 py-2 border-b border-slate-200/60 last:border-b-0">
             <div className="min-w-0">
                 <div className="text-[12.5px] font-medium text-slate-900">{label}</div>
-                {detail && <div className="mt-0.5 text-[10.5px] text-slate-500 font-mono break-all leading-relaxed">{detail}</div>}
+                {detail && <div className="mt-0.5 text-[10.5px] text-slate-500 leading-relaxed">{detail}</div>}
             </div>
-            <span className={cn("inline-flex items-center gap-1 shrink-0 text-[11px] font-medium", ok ? "text-emerald-600" : "text-rose-600")}>
-                {ok ? <CheckCircle2Icon className="w-3.5 h-3.5" /> : <XCircleIcon className="w-3.5 h-3.5" />}
-                {ok ? "Found" : "Missing"}
+            <span className={cn("inline-flex items-center gap-1 shrink-0 text-[11px] font-medium", badge.className)}>
+                {badge.icon}
+                {badge.text}
             </span>
         </div>
     );
@@ -960,6 +987,18 @@ function AuthCheckPanel({ mailbox }: { mailbox: Inbox }) {
     const refresh = useRefreshAuthCheck(emailId);
     const data = refresh.data ?? check.data;
     const busy = check.isFetching || refresh.isPending;
+
+    // The verdict follows what the check can actually prove. SPF and DMARC are
+    // discoverable, so a miss there is a real miss; DKIM is not, so a domain
+    // with both of those in place is aligned as far as anyone can tell, and
+    // saying "needs attention" over an unverifiable DKIM is a false alarm.
+    const verdict = !data
+        ? null
+        : data.all_aligned
+          ? { ok: true, tone: "text-emerald-700", title: "Authentication aligned" }
+          : data.spf_found && data.dmarc_found
+            ? { ok: true, tone: "text-emerald-700", title: "SPF and DMARC aligned, DKIM unverified" }
+            : { ok: false, tone: "text-amber-700", title: "Authentication needs attention" };
 
     return (
         <div className="px-5 py-4">
@@ -997,31 +1036,41 @@ function AuthCheckPanel({ mailbox }: { mailbox: Inbox }) {
                         <div className="rounded-md border border-slate-200 bg-slate-50/70 px-3 py-3 flex items-center gap-2 text-[12px] text-slate-500">
                             <Loading className="!w-3.5 h-3.5" /> Looking up DNS records…
                         </div>
-                    ) : data ? (
+                    ) : data && verdict ? (
                         <div className="rounded-md border border-slate-200 bg-white">
-                            <div className={cn("flex items-start gap-2 px-3 py-2.5 border-b border-slate-200/60", data.all_aligned ? "text-emerald-700" : "text-amber-700")}>
-                                {data.all_aligned ? <ShieldCheckIcon className="w-4 h-4 shrink-0 mt-0.5" /> : <ShieldAlertIcon className="w-4 h-4 shrink-0 mt-0.5" />}
+                            <div className={cn("flex items-start gap-2 px-3 py-2.5 border-b border-slate-200/60", verdict.tone)}>
+                                {verdict.ok ? <ShieldCheckIcon className="w-4 h-4 shrink-0 mt-0.5" /> : <ShieldAlertIcon className="w-4 h-4 shrink-0 mt-0.5" />}
                                 <div className="min-w-0">
-                                    <div className="text-[12px] font-medium">{data.all_aligned ? "Authentication aligned" : "Authentication needs attention"}</div>
+                                    <div className="text-[12px] font-medium">{verdict.title}</div>
                                     {data.summary && <div className="mt-0.5 text-[11px] text-slate-500 leading-relaxed">{data.summary}</div>}
                                 </div>
                             </div>
                             <div className="px-3">
-                                <AuthRecordRow label="SPF" ok={data.spf_found} detail={data.spf_record} />
+                                <AuthRecordRow
+                                    label="SPF"
+                                    state={data.spf_found ? "found" : "missing"}
+                                    detail={data.spf_record ? <span className="font-mono break-all">{data.spf_record}</span> : undefined}
+                                />
                                 <AuthRecordRow
                                     label="DKIM"
-                                    ok={data.dkim_found}
-                                    detail={data.dkim_selectors && data.dkim_selectors.length > 0 ? `selectors: ${data.dkim_selectors.join(", ")}` : undefined}
+                                    state={data.dkim_found ? "found" : "unverified"}
+                                    detail={
+                                        data.dkim_found ? (
+                                            <span className="font-mono break-all">selectors: {(data.dkim_selectors ?? []).join(", ")}</span>
+                                        ) : (
+                                            "A DKIM key sits at a selector only your provider knows, and DNS cannot be asked to list them, so this is unconfirmed rather than absent. Confirm signing is on in your provider's console. It never affects whether this mailbox may send."
+                                        )
+                                    }
                                 />
                                 <AuthRecordRow
                                     label="DMARC"
-                                    ok={data.dmarc_found}
+                                    state={data.dmarc_found ? "found" : "missing"}
                                     detail={
-                                        data.dmarc_found && data.dmarc_policy
-                                            ? data.dmarc_inherited
-                                                ? `policy: ${data.dmarc_policy} (inherited from ${data.dmarc_domain})`
-                                                : `policy: ${data.dmarc_policy}`
-                                            : undefined
+                                        data.dmarc_found && data.dmarc_policy ? (
+                                            <span className="font-mono break-all">
+                                                {data.dmarc_inherited ? `policy: ${data.dmarc_policy} (inherited from ${data.dmarc_domain})` : `policy: ${data.dmarc_policy}`}
+                                            </span>
+                                        ) : undefined
                                     }
                                 />
                             </div>
@@ -1172,6 +1221,7 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
                     {wh.blocked_until && (
                         <p className="mt-1 text-[11px] text-rose-600">Paused from the pool until {new Date(wh.blocked_until).toLocaleDateString()}.</p>
                     )}
+                    <WarmupPartnerDiversity health={wh} />
                 </div>
             )}
 
@@ -1220,6 +1270,11 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
                 </FieldShell>
             </div>
 
+            {/* Where warmup mail lands in the real mail client */}
+            <div className="px-5 py-5 space-y-4">
+                <WarmupPlacementFields form={form} update={update} provider={mailbox.provider} />
+            </div>
+
             {/* Schedule */}
             <div className="px-5 py-5 space-y-5">
                 <Eyebrow>Sending window</Eyebrow>
@@ -1240,6 +1295,162 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
                         />
                     </div>
                 </FieldShell>
+            </div>
+        </div>
+    );
+}
+
+/* ── Where warmup mail lands in the customer's own mail client ────────── */
+
+// Warmup mail is hidden from the unibox, but it is real mail in a real mailbox,
+// and the mailbox owner does see it. These two settings are the only thing that
+// decides what they see: mail they received AND the copy of what this mailbox
+// sent are both filed the same way, so one folder holds all of it and nothing
+// else does. That is also how someone tells a warmup message apart from a
+// stranger's email, which is why the folder is named rather than hidden.
+function WarmupPlacementFields({
+    form,
+    update,
+    provider,
+}: {
+    form: Inbox;
+    update: (patch: Partial<Inbox>) => void;
+    provider: string;
+}) {
+    const gmail = provider === "gmail";
+    const noun = gmail ? "label" : "folder";
+    const placement = form.warmup_placement ?? "folder";
+    const folder = form.warmup_folder ?? "";
+
+    return (
+        <>
+            <Eyebrow>In this mailbox</Eyebrow>
+            <FieldShell
+                label="Where warmup mail goes"
+                hint={`Applies to warmup mail this inbox receives and to the copy of every warmup message it sends, so warmup never shows up in ${gmail ? "your inbox or Sent" : "your inbox or Sent folder"}.`}
+            >
+                <OptionSelect<"folder" | "inbox" | "archive">
+                    aria-label="Warmup filing"
+                    value={placement}
+                    onChange={(v) => update({ warmup_placement: v })}
+                    options={[
+                        {
+                            value: "folder",
+                            label: `Its own ${noun}`,
+                            hint: "Recommended. Everything warmup in one place you can open, search and ignore.",
+                        },
+                        {
+                            value: "inbox",
+                            label: "Leave it in the inbox",
+                            hint: "Warmup mail stays where the provider put it. Mail that landed in spam is still rescued.",
+                        },
+                        {
+                            value: "archive",
+                            label: "Archive it",
+                            hint: `Out of the inbox with no ${noun} of its own. Findable by search only.`,
+                        },
+                    ]}
+                />
+            </FieldShell>
+            {placement === "folder" && (
+                <FieldShell
+                    label={`${gmail ? "Label" : "Folder"} name`}
+                    hint={`Created on first use. Leave empty for "Warmbly". Point it at a ${noun} you already use for this if another tool set one up.`}
+                >
+                    <TextInput
+                        value={folder}
+                        placeholder="Warmbly"
+                        maxLength={64}
+                        onChange={(v) => update({ warmup_folder: v.replace(/[/\\.%*"]/g, "") })}
+                        className="w-full h-9"
+                    />
+                </FieldShell>
+            )}
+            <WarmupRetentionField form={form} update={update} gmail={gmail} />
+        </>
+    );
+}
+
+/* ── How long warmup mail stays in the mailbox ─────────────────────────── */
+
+// Warmup mail is deleted by Warmbly once it has served its purpose, so a
+// mailbox on a fixed quota never fills with it and the owner never has to
+// clear the folder by hand. The window is per mailbox; empty follows the
+// instance setting (30 days unless the operator changed it).
+function WarmupRetentionField({
+    form,
+    update,
+    gmail,
+}: {
+    form: Inbox;
+    update: (patch: Partial<Inbox>) => void;
+    gmail: boolean;
+}) {
+    const days = form.warmup_retention_days ?? 0;
+    const where = gmail ? "moved to Trash, which Gmail empties after 30 days" : "deleted";
+    return (
+        <FieldShell
+            label="Keep warmup mail for (days)"
+            hint={`Warmup mail older than this is ${where} by Warmbly wherever the setting above keeps it, and the copy Warmbly stores goes with it. 0 follows the instance setting (30 days unless changed); otherwise 3 to 3650. A message is never deleted before its engagement is recorded.`}
+        >
+            <NumberInput
+                value={days}
+                min={0}
+                max={3650}
+                suffix="days"
+                onChange={(n) => update({ warmup_retention_days: clampWarmupRetentionDays(n) })}
+                className="w-full h-9"
+            />
+        </FieldShell>
+    );
+}
+
+/* ── Direct-mail open/click tracking (per mailbox, off by default) ────── */
+
+// Campaign mail has always carried a pixel and wrapped links. A reply written
+// by hand went out clean, which is the right default for one-to-one mail and
+// the reason this is opt-in rather than a platform-wide switch.
+function DirectMailTrackingControl({ mailbox }: { mailbox: Inbox }) {
+    const queryClient = useQueryClient();
+    // Optimistic: the switch paints immediately and the write follows, so the
+    // toggle never feels like it round-trips.
+    const [enabled, setEnabled] = useState(!!mailbox.track_direct_mail);
+
+    const save = useMutation({
+        mutationFn: (next: boolean) => setDirectTracking(mailbox.id, next),
+        onSuccess: (_res, next) => {
+            queryClient.invalidateQueries({ queryKey: ["emails"] });
+            queryClient.invalidateQueries({ queryKey: ["analytics", "direct"] });
+            toast.success(next ? "Tracking direct mail from this mailbox" : "Direct mail is no longer tracked");
+        },
+        onError: (e, next) => {
+            setEnabled(!next);
+            toast.error(buildError(e as unknown as AppError));
+        },
+    });
+
+    const toggle = (next: boolean) => {
+        setEnabled(next);
+        save.mutate(next);
+    };
+
+    return (
+        <div className="px-5 py-4 flex items-start justify-between gap-3 border-t border-slate-200">
+            <div className="min-w-0">
+                <div className="text-[12.5px] font-medium text-slate-900">Track opens and clicks on direct mail</div>
+                <div className="text-[11px] text-slate-400">
+                    Adds the same open pixel and link tracking your campaigns use to replies you write by hand in the inbox. Off by
+                    default: it costs a little deliverability and it would also track mail to people you know. Applies to mail sent
+                    from now on, and the results show up under Direct mail in Analytics.
+                </div>
+            </div>
+            <div className="shrink-0">
+                <Toggle
+                    value={enabled}
+                    onChange={toggle}
+                    disabled={save.isPending}
+                    ariaLabel="Track opens and clicks on direct mail"
+                />
             </div>
         </div>
     );
@@ -1477,9 +1688,209 @@ function TrackingDomainCard({ mailbox }: { mailbox: Inbox }) {
     );
 }
 
+
+/* ── sending identity ─────────────────────────────────────────────── */
+
+/**
+ * Which of the mailbox's verified addresses its mail goes out as, and the
+ * signature its owner already wrote at the provider.
+ *
+ * Both come from the same place (Gmail's settings API) and are refreshed by
+ * the same press, so they live in one card. Only Gmail exposes either, so the
+ * card is absent for Outlook and SMTP/IMAP rather than showing a control that
+ * cannot do anything.
+ *
+ * The alias is part of the drawer's shared form and saves with the save bar.
+ * The signature import is not: it writes immediately, then hands the imported
+ * text back so the editor above shows what was stored instead of quietly
+ * saving the old text over it.
+ */
+function SendIdentityCard({
+    mailbox,
+    value,
+    onChange,
+    onSignatureImported,
+}: {
+    mailbox: Inbox;
+    value: string;
+    onChange: (v: string) => void;
+    onSignatureImported: (html: string, plain: string) => void;
+}) {
+    const isGmail = mailbox.provider === "gmail";
+    const identity = useSendIdentity(mailbox.id, isGmail);
+    const refresh = useRefreshSendIdentity(mailbox.id);
+    const [importing, setImporting] = useState(false);
+
+    const data = identity.data;
+    const aliases = (data?.identities ?? []).filter((i) => i.email !== data?.mailbox_email);
+
+    const options: SelectOption[] = [
+        { value: "", label: `${mailbox.email} (mailbox address)` },
+        ...aliases.map((a) => ({
+            value: a.email,
+            label: a.verified ? (a.name ? `${a.name} · ${a.email}` : a.email) : `${a.email} (not verified)`,
+            disabled: !a.verified,
+        })),
+    ];
+
+    // A stored choice the provider has since stopped verifying is cleared on
+    // the next refresh, but until then it is still what mail goes out as, so
+    // it stays selectable rather than disappearing from its own dropdown.
+    if (value && !options.some((o) => o.value === value)) {
+        options.push({ value, label: `${value} (no longer listed)` });
+    }
+
+    const reload = async (importSignature: boolean) => {
+        try {
+            if (importSignature) setImporting(true);
+            const next = await refresh.mutateAsync(importSignature);
+            if (importSignature) {
+                // The import wrote the row; read it back so the editor holds
+                // what was stored and the save bar cannot undo it.
+                const fresh = await getEmail(mailbox.id);
+                onSignatureImported(fresh.signature_html, fresh.signature_plain);
+                toast.success(
+                    fresh.signature_html.trim()
+                        ? "Signature imported from Gmail"
+                        : "Your Gmail signature is empty, so nothing was changed",
+                );
+            } else {
+                toast.success(
+                    next.identities.length > 1
+                        ? `Found ${next.identities.length} addresses you can send as`
+                        : "No other send-as addresses on this mailbox",
+                );
+            }
+        } catch (e) {
+            toast.error(buildError(e as AppError));
+        } finally {
+            setImporting(false);
+        }
+    };
+
+    const busy = refresh.isPending || importing;
+
+    if (!isGmail) return null;
+
+    return (
+        <div className="px-5 py-5 space-y-3 border-b border-slate-100">
+            <Eyebrow>Sending identity</Eyebrow>
+
+            <FieldShell
+                label="Send mail as"
+                hint="Any address Google has verified this mailbox to send as. Add and verify one in Gmail's settings first, then refresh. Warmup always uses the mailbox address."
+            >
+                <SelectMenu
+                    value={value}
+                    onChange={onChange}
+                    options={options}
+                    fullWidth
+                    disabled={busy}
+                    aria-label="Send mail as"
+                />
+            </FieldShell>
+
+            <div className="flex flex-wrap items-center gap-2">
+                <button
+                    type="button"
+                    onClick={() => reload(false)}
+                    disabled={busy}
+                    className="h-8 px-3 rounded-md border border-slate-200 hover:border-slate-300 text-[12px] text-slate-600 hover:text-slate-900 inline-flex items-center gap-1.5 transition-colors disabled:opacity-60"
+                >
+                    {refresh.isPending && !importing ? <Loading className="!w-3.5 h-3.5" /> : <RefreshCwIcon className="w-3.5 h-3.5" />}
+                    Refresh addresses
+                </button>
+                <button
+                    type="button"
+                    onClick={() => reload(true)}
+                    disabled={busy}
+                    className="h-8 px-3 rounded-md border border-slate-200 hover:border-slate-300 text-[12px] text-slate-600 hover:text-slate-900 inline-flex items-center gap-1.5 transition-colors disabled:opacity-60"
+                >
+                    {importing ? <Loading className="!w-3.5 h-3.5" /> : <SendIcon className="w-3.5 h-3.5" />}
+                    Import signature from Gmail
+                </button>
+            </div>
+
+            <p className="text-[10.5px] text-slate-400 leading-relaxed">
+                {data?.signature_source === "provider" && data?.signature_imported_at
+                    ? `Signature imported from Gmail on ${new Date(data.signature_imported_at).toLocaleDateString()}. Editing it below makes it yours again.`
+                    : "Importing replaces the signature below with the one set in Gmail."}
+            </p>
+        </div>
+    );
+}
+
 /* ── Settings (editable) ─────────────────────── */
 
-function SettingsTab({ form, update, mailbox }: { form: Inbox; update: (p: Partial<Inbox>) => void; mailbox: Inbox }) {
+/* ── disconnect ───────────────────────────────────────────────────── */
+
+/**
+ * The only per-mailbox delete in the product, at the bottom of the tab the
+ * row's "More" button opens.
+ *
+ * It was previously reachable only by ticking a row's checkbox in the list and
+ * finding the selection bar, which nobody looks for when they want to remove
+ * one mailbox. The action is destructive and unrecoverable, so it says what it
+ * takes before asking, and the copy differs by provider because what happens to
+ * the connection does: Google accepts a revocation and Microsoft does not.
+ */
+function DisconnectCard({ mailbox, onDisconnected }: { mailbox: Inbox; onDisconnected: () => void }) {
+    const confirm = useConfirm();
+    const remove = useRemoveEmail(mailbox.id);
+
+    const revocation =
+        mailbox.provider === "gmail"
+            ? "Warmbly's access to your Google account is revoked, so it disappears from your third-party access list."
+            : mailbox.provider === "outlook"
+              ? "The stored Microsoft tokens are destroyed. Microsoft has no way for us to remove the app itself, so do that in your Microsoft account privacy settings."
+              : "The stored SMTP and IMAP credentials are destroyed.";
+
+    const ask = () =>
+        confirm.show(
+            `Disconnect ${mailbox.email}? This deletes its imported mail, warmup history and credentials, and cannot be undone. Set the mailbox inactive instead if you only want it to stop sending.`,
+            async () => {
+                try {
+                    await remove.mutateAsync();
+                    toast.success(`${mailbox.email} disconnected`);
+                    // The drawer is showing a mailbox that no longer exists.
+                    onDisconnected();
+                } catch (e) {
+                    toast.error(buildError(e as AppError));
+                }
+            },
+        );
+
+    return (
+        <div className="px-5 py-5 space-y-3">
+            <Eyebrow>Danger zone</Eyebrow>
+            <div className="flex flex-col sm:flex-row gap-2 sm:gap-4 sm:items-center border-l-2 border-red-200 pl-3">
+                <div className="min-w-0 flex-1">
+                    <div className="text-[12.5px] font-medium text-red-700 leading-tight flex items-center gap-1.5">
+                        <TrashIcon className="w-3 h-3" />
+                        Disconnect this mailbox
+                    </div>
+                    <div className="text-[11.5px] text-red-700/70 leading-tight mt-0.5">
+                        Deletes its imported mail, warmup history, credentials and any scheduled send.
+                        {" "}
+                        {revocation}
+                        {" "}
+                        There is no recovery window, so export the workspace first if you want a copy.
+                    </div>
+                </div>
+                <button
+                    type="button"
+                    onClick={ask}
+                    disabled={remove.isPending}
+                    className="self-start sm:ml-auto h-7 px-2.5 rounded-md border border-red-300 hover:border-red-400 text-red-700 hover:text-red-800 hover:bg-red-100/60 text-[12px] font-medium transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    {remove.isPending ? "Disconnecting…" : "Disconnect…"}
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function SettingsTab({ form, update, mailbox, onDisconnected }: { form: Inbox; update: (p: Partial<Inbox>) => void; mailbox: Inbox; onDisconnected: () => void }) {
     return (
         <div className="divide-y divide-slate-200/60">
             <div className="px-5 py-5 space-y-4">
@@ -1533,6 +1944,13 @@ function SettingsTab({ form, update, mailbox }: { form: Inbox; update: (p: Parti
                 </div>
             )}
 
+            <SendIdentityCard
+                mailbox={mailbox}
+                value={form.send_as_email}
+                onChange={(v) => update({ send_as_email: v })}
+                onSignatureImported={(html, plain) => update({ signature_html: html, signature_plain: plain })}
+            />
+
             <div className="px-5 py-5 space-y-2">
                 <Eyebrow>Signature</Eyebrow>
                 <div className="overflow-x-auto">
@@ -1580,6 +1998,10 @@ function SettingsTab({ form, update, mailbox }: { form: Inbox; update: (p: Parti
             </div>
 
             <TrackingDomainCard mailbox={mailbox} />
+
+            <DirectMailTrackingControl mailbox={mailbox} />
+
+            <DisconnectCard mailbox={mailbox} onDisconnected={onDisconnected} />
 
             <div className="flex flex-wrap items-center gap-1.5 px-5 py-3 text-[11px] text-slate-400">
                 <SendIcon className="w-3 h-3" /> Changes apply to new sends. <ReplyIcon className="w-3 h-3 ml-1" /> Signature applies to replies too.

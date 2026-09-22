@@ -55,6 +55,9 @@ export const refreshToken = async () => {
   })
   if (!resp.ok) {
     const { error } = await resp.json()
+    // The server has refused this pair, so keeping it only means every later
+    // call retries a token that is already revoked.
+    deleteTokens();
     if (resp.status === 400) {
       throw new UnauthorizedError(error)
     } else {
@@ -62,7 +65,9 @@ export const refreshToken = async () => {
     }
   } else {
     const data = await resp.json()
-    console.log('Refreshed tokens', data);
+    // Deliberately not logged. Console output is captured into session replay,
+    // so printing the response put both the access and the refresh token into
+    // a recording in plaintext.
     saveTokens(data)
   }
 }

@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import getUsageOverview from "@/lib/api/client/app/analytics/getUsageOverview";
 
-export default function useUsageOverview() {
+export default function useUsageOverview(period: "day" | "week" | "month" = "day") {
     return useQuery({
-        queryKey: ["analytics", "usage"],
-        queryFn: () => getUsageOverview(),
+        queryKey: ["analytics", "usage", period],
+        queryFn: () => getUsageOverview(period),
     })
 }

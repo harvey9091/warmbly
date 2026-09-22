@@ -156,15 +156,42 @@ func TestLivePlacementAndRotation(t *testing.T) {
 		placed[mb] = first
 	}
 
-	// 3. Load accounting follows MailboxWeight: 1.0 + 0.05 + 1.0.
+	// 3. Load accounting counts every assigned mailbox equally.
 	var testLoad float64
 	if err := pool.QueryRow(ctx,
 		`SELECT COALESCE(sum(load_score),0) FROM workers WHERE id = ANY($1)`,
 		[]uuid.UUID{first, second}).Scan(&testLoad); err != nil {
 		t.Fatal(err)
 	}
-	if testLoad < 2.04 || testLoad > 2.06 {
-		t.Fatalf("load_score on the test workers = %.2f, want 2.05 (smtp 1.0 + gmail 0.05 + smtp 1.0)", testLoad)
+	if testLoad != 3 {
+		t.Fatalf("load_score on the test workers = %.2f, want 3 assigned mailboxes", testLoad)
+	}
+
+	// 3b. A target-capacity write failure rolls the complete move back.
+	if _, err := pool.Exec(ctx, `UPDATE workers SET load_score = 99999999.99 WHERE id = $1`, second); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.MoveMailbox(ctx, mailboxes[0], &first, second); err == nil {
+		t.Fatal("move into an overflowing load_score unexpectedly succeeded")
+	}
+	var assignedWorker *uuid.UUID
+	var firstCount, secondCount int
+	var firstLoad, secondLoad float64
+	if err := pool.QueryRow(ctx, `SELECT worker_id FROM email_accounts WHERE id = $1`, mailboxes[0]).Scan(&assignedWorker); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT account_count, load_score FROM workers WHERE id = $1`, first).Scan(&firstCount, &firstLoad); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT account_count, load_score FROM workers WHERE id = $1`, second).Scan(&secondCount, &secondLoad); err != nil {
+		t.Fatal(err)
+	}
+	if assignedWorker == nil || *assignedWorker != first || firstCount != 3 || firstLoad != 3 || secondCount != 0 || secondLoad != 99999999.99 {
+		t.Fatalf("failed move was not atomic: assigned=%v source=(%d, %.2f) target=(%d, %.2f)",
+			assignedWorker, firstCount, firstLoad, secondCount, secondLoad)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE workers SET load_score = 0 WHERE id = $1`, second); err != nil {
+		t.Fatal(err)
 	}
 
 	rot := &Rotator{

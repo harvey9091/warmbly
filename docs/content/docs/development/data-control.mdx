@@ -36,7 +36,7 @@ Two keys, and they are not interchangeable.
 
 | Key | Opens | Read by |
 |---|---|---|
-| `CREDENTIALS_ENCRYPTION_KEY` | Mailbox SMTP and IMAP credentials | Backend and workers, without an organization context |
+| `CREDENTIALS_ENCRYPTION_KEY` | Mailbox SMTP and IMAP credentials, and OAuth tokens | Backend and workers, without an organization context |
 | `KMS_LOCAL_MASTER_KEY` | The per-organization data keys, which in turn open everything else | Backend and consumer |
 
 Both are unrecoverable. A database backup without them restores an instance whose mailboxes authenticate against nothing, and there is no way back from that. They are in `.env`, and `install.sh` also writes them to `keys-backup.txt` next to the install, which is on the same disk as the database and therefore not a backup either. Copy them somewhere else.
@@ -72,6 +72,21 @@ Every window below lives in the database, not the environment, and is edited und
 
 Mail over a daily budget is deferred, never dropped: the provider cursor is held and the mail is re-offered on the next pass. Replies to the mailbox's own outreach ride a separate budget of the same size and keep landing regardless.
 
+### TypeSafe judgments
+
+`TYPESAFE_API_KEY` turns on a family of typed judgments, each of which sends a bounded piece of text to TypeSafe and stores a verdict. Without the key none of them runs and no content leaves the instance. What each one sends:
+
+| Judgment | On by | What is sent | Where the verdict lives |
+|---|---|---|---|
+| Automatic inbox tagging | `INBOX_TAGGING_ENABLED=true` | The inbound subject and bounded plain-text body, plus the previous outbound message in the thread when one exists | `inbox_tag_results`, with the raw probabilities and the actions taken. Completed results travel with the Inbox group in a workspace export; processing claims do not |
+| Reply classification | The key alone | The subject and body of a reply to a campaign, only when no tagging verdict exists for it and the offline layers could not decide | `campaign_contact_progress.reply_class` and `reply_intent` |
+| Copy judgment | The key alone | The subject and body of a campaign step, at Advisor evaluation and on the editor's re-check | `copy_judgments`, keyed by a hash of the copy and never exported |
+| Warmup content lint | The key alone | A generated warmup thread before it enters the bank | Rejected threads are counted on the generation job; nothing else is kept |
+| Bounce classification | The key alone | The bounce reason text, only when it does not name the recipient | `deliverability_events.metadata` |
+| Form triage | A per-form switch | The submitted answers, labelled by field; never the visitor's address, agent or URL | `form_submissions.triage`, which travels with the Contacts group |
+
+See [Automatic inbox tagging](/guides/inbox-tagging/), [Advisor](/guides/advisor/), [Warmup](/guides/warmup/), [Deliverability](/guides/deliverability/) and [Forms](/guides/forms/).
+
 ### Event history
 
 | Setting | Default | What it holds |
@@ -79,8 +94,10 @@ Mail over a daily budget is deferred, never dropped: the provider cursor is held
 | `retention.engagement_event_days` | 365 | Per-event open and click logs: client, device, approximate location |
 | `retention.form_event_days` | 180 | Form funnel events: views, starts, field-level drop-off |
 | `retention.audit_log_days` | 90 | The audit trail: actor, IP address, user agent, change payload |
+| `retention.warmup_mail_days` | 30 | Warmup mail in the mailboxes themselves, and the stored copy of each message's body. Deleted by the platform once older than this, wherever the mailbox files it; a mailbox can set its own window |
+| `retention.warmup_event_days` | 365 | Per-message warmup records: tokens, receipts, tampering events, spam reports. The daily sent and received counts behind the analytics are kept |
 
-Each is between 1 and 3,650 days. These are the three settings a retention or privacy policy applies to, because each window is also how long the personal data in that log is held.
+The first three are between 1 and 3,650 days, and they are the settings a retention or privacy policy applies to, because each window is also how long the personal data in that log is held. The warmup mail window starts at 3 days and the warmup records window at 30, the least the engagement legs and the pool health bands need.
 
 None of them change a number anyone reads. Campaign progress keeps its own summary of opens and clicks that outlives the per-event log, so counts, filters and branching are unaffected by shortening any of these. What gets shorter is what a contact's timeline can show, how far a funnel report reaches, and how far back an admin can audit.
 
@@ -88,11 +105,34 @@ None of them change a number anyone reads. Campaign progress keeps its own summa
 There is no grace period and no copy. Take a backup first if you are not sure.
 </Callout>
 
-The **minimal retention** preset in the admin panel and in the installer sets all three to 30 days.
+The **minimal retention** preset in the admin panel and in the installer sets the three event logs to 30 days, warmup mail to 7 and warmup records to 30.
+
+### Warmup mail in mailboxes
+
+Warmup mail is real mail in a real mailbox, filed into the warmup folder in both directions, and it is the platform's job to clear it. Once a message is older than the mailbox's window it is deleted where it sits: moved to Trash on Gmail, which Gmail empties after 30 days, and removed outright on Outlook and IMAP. The platform's stored copy of the body goes with it. Nothing about a deletion the platform made is ever held against the mailbox, and a message deleted by its owner after the first day is treated the same way. See [Warmup](/guides/warmup/#retention) for what the mailbox owner sees.
 
 ### Warmup standing by address
 
 Warmup keeps the standing of every penalised mailbox (score, state, and any block) against its address as well as its row, so removing the mailbox or dropping out of the pool and coming back does not start it clean. The copy is cleared as soon as the mailbox recovers, and once the mailbox is gone it is kept for 90 days after the block ends or after the removal, whichever is later; a block that requires review is kept until an operator lifts it. A mailbox in good standing has no such copy. The window is fixed rather than a setting, and the rows are purged by the same sweep.
+
+### Pending inbox verification
+
+Mail whose warmup verification is temporarily unavailable waits in the `unibox_pending_emails` Postgres table. It holds the sync event, including message metadata and bounded searchable body text, until verification succeeds or the mailbox is deleted. The consumer retries it automatically after restarts. Full bodies remain in blob storage. This pending queue is included in instance backups but excluded from workspace exports, whose destination re-syncs provider mail.
+
+### Disconnecting a mailbox
+
+Disconnecting a mailbox, or deleting the workspace holding it, removes its rows from Postgres straight away through the database's own cascades. Two things cannot be done in that instant and are queued instead, then worked off within about a minute:
+
+| Owed | What happens |
+|---|---|
+| The OAuth grant | A Gmail mailbox's refresh token is sent to Google's revocation endpoint, which invalidates it and removes the instance from the customer's third-party access list. Microsoft publishes no per-application revocation endpoint, so an Outlook mailbox's tokens are destroyed locally and the customer removes the app themselves |
+| The message bodies | Everything the mailbox wrote under `users/<user>/emails/<mailbox>/` in the blob store is deleted, whether that is a filesystem path or an S3 bucket |
+
+While an erasure is outstanding its row holds a copy of the mailbox's OAuth refresh token, still sealed under `CREDENTIALS_ENCRYPTION_KEY`, because the row it was read from goes with the mailbox and the token is what the revocation sends. It is destroyed with the rest of the row when the erasure finishes.
+
+The queue is the `mailbox_erasures` table, and it holds only work still owed: a finished erasure is removed rather than kept, because the row names the address the customer asked to have forgotten. A failure is retried with a widening backoff, capped at six hours, and never abandoned, so an unreachable provider or store delays the erasure instead of losing it. Anything still outstanding after a day is reported by the `mailbox_erasure` job, visible under scheduled jobs in the admin panel.
+
+This runs on the control plane, which is the only place holding both the credential key and a credential for the blob store. A worker cannot do it: it signs one object at a time through the control plane and holds no bucket credential at all.
 
 ### Set them at install time
 
@@ -231,9 +271,9 @@ Leave them unset, which is the default the installer writes, and nothing leaves 
 
 What a reported error carries is the exception, its stack trace, the service, the environment and the build, plus enough context to answer it:
 
-- **Which workspace and user.** A browser exception carries the organization id and user id of whoever hit it, and a server-side one carries them for the request that panicked, along with its route and request id. That is what makes "this customer says campaigns are broken" a search rather than a guess. It is a property on the exception, not an identity: no `identify` call is ever made, no person profile is created, and nothing is stored in the visitor's browser.
-- **What led to it.** The last routes visited and the last API calls that failed, with their method, route, status and request id. Ids in a path are masked to `:id` first, so a report names the screen and never the record.
-- **Nothing else about the request.** No headers, no bodies, no query strings, and no session recording: the dashboard renders mailboxes and contacts, so it is never recorded.
+- **Which workspace and user.** A browser exception carries the organization id and user id of whoever hit it, and a server-side one carries them for the request that panicked, along with its route and request id. That is what makes "this customer says campaigns are broken" a search rather than a guess. On the server side that is a property and nothing more: no person is identified. In the dashboard and the admin panel, with a browser key set, the signed-in user is identified to PostHog (a person profile with their email and name, and an identifier in local storage and a cookie), so the exception belongs to that person; see usage analytics below.
+- **What led to it.** The last routes visited and the last API calls that failed, with their method, path, status and request id.
+- **Nothing else about the request.** No headers, no bodies, no query strings. Session replay exists only in the dashboard and the admin panel, only with a browser key set, and `WARMBLY_POSTHOG_SESSION_REPLAY=false` turns it off; the marketing site and public form pages are never recorded.
 
 Server-side reports that belong to no request, a scheduled job or a worker, are attributed to the process that raised them and to nobody.
 
@@ -243,9 +283,9 @@ The `warmbly` CLI runs on your own machine and reports nowhere, ever. It has not
 
 There are none. A self-hosted instance loads no analytics script and sends no usage data, not aggregated, not anonymised, not "to help us improve the product".
 
-The hosted service at warmbly.com does measure its own marketing site and dashboard, and the code for that ships in the same images you run. It is inert without a key: the installer never asks for one, the `.env` template does not mention it, and a build without one contains no analytics script for you to block. If you want to check, `grep posthog` the served assets of your own dashboard.
+The hosted service at warmbly.com does measure its own marketing site, dashboard and admin panel, including session replay in the two apps, and the code for that ships in the same images you run. It is inert without a key: the installer never asks for one, the `.env` template does not mention it, and a build without one contains no analytics script for you to block. If you want to check, `grep posthog` the served assets of your own dashboard.
 
-If you do want product analytics on your own instance, the variables are on [configuration](/development/configuration/#product-analytics) and they accept a self-hosted PostHog. It is the same key as the error tracking above, so setting one for errors also enables the handful of product events; `POSTHOG_ERROR_TRACKING` and the analytics variables are separate switches if you want only one of the two. That is your decision to make, and nothing about it points at us.
+If you do want product analytics on your own instance, the variables are on [configuration](/development/configuration/#product-analytics-and-session-replay) and they accept a self-hosted PostHog. The server-side `POSTHOG_KEY` carries the backend's error tracking and its product events; the browser-side `WARMBLY_POSTHOG_KEY` is what turns on the dashboard's and the admin panel's analytics, session replay and browser errors, and `WARMBLY_POSTHOG_ERROR_TRACKING` and `WARMBLY_POSTHOG_SESSION_REPLAY` switch those last two off separately. That is your decision to make, and nothing about it points at us.
 
 ## See also
 

@@ -76,6 +76,8 @@ Returned when the request cannot be processed due to invalid syntax.
 | `code` | Meaning |
 |--------|---------|
 | `invalid_lead_status` | `POST /contacts/search` or `POST /contacts/export` was given a `lead_status` that is not one of the documented values |
+| `invalid_sort_by` | `POST /contacts/search`, `POST /contacts/export` or a bulk action's `all` selection was given a `sort_by` of the form `custom:<key>` whose key could never be a custom-field name (letters, numbers, underscores, spaces or dashes) |
+| `invalid_column`, `duplicate_column`, `too_many_columns`, `invalid_sort` | `PUT /me/views/:view` was given a column id that view cannot render, the same column twice, more than 64 columns, or a sort that names neither a sortable contact column nor a well-formed `custom:<key>` |
 | `invalid_engagement` | `POST /contacts/search` or `POST /contacts/export` was given an `engagement` that is not one of the documented values |
 | `lead_filter_requires_campaign` | `lead_status` or `engagement` was set without exactly one `campaign_ids` entry; both filters describe a contact inside one campaign |
 | `unknown_verification_status` | A contact's `verification_status` is not a value any known verification service writes |
@@ -87,7 +89,54 @@ Returned when the request cannot be processed due to invalid syntax.
 | `empty_step_body` | `POST /campaigns/:id/start` found an email step with nothing in either body, so it would send a blank message to every lead it reached. Write the step's body and start again |
 | `no_leads` | `POST /campaigns/:id/start` on a campaign that has never had a lead, with `continuous` off. Add contacts, or set `continuous` so it starts empty and waits for them. A campaign whose leads have all finished is a different case: it starts and waits |
 | `no_remaining_leads` | A platform-initiated restart of a campaign with nothing left to send and `continuous` off found nothing to do; the campaign is `completed` again. A start you request never answers this: it turns `continuous` on and waits |
+| `too_many_tasks` | `PATCH /crm/tasks` or `DELETE /crm/tasks` was given more than `1000` ids in one request, or more than `50,000` exclusions. Split it into batches |
+| `selection_too_large` | A `"all": true` bulk selection resolved to more than `50,000` rows. Narrow the filter and run it in parts; nothing was changed |
+| `invalid_filter` | A task filter carried an id that is not one: `assigned_to`, `contact_id` and `deal_id` name records, and are matched against id columns. Sent by `POST /crm/tasks/search`, `POST /crm/tasks/summary`, and the `filters` of a `"all": true` bulk selection |
+| `invalid_setting` | `PATCH /outreach/settings` (or a campaign's advanced settings) carried a value outside the documented vocabulary, for example a `reply_intent.crm_task_intents` entry that is not a reply intent |
+| `invalid_slug` | `PATCH /organizations/current` was given a `slug` that is not 2 to 80 lowercase letters, numbers or dashes starting and ending with a letter or number |
 | `no_organization` | The request needs a workspace and the caller has none selected. Every entitlement, limit and suppression rule is scoped to a workspace, so a write that would run unscoped is refused rather than run without those checks. API keys always carry their workspace; a dashboard session picks one at sign-in, so this normally means the session predates the workspace being chosen. Select a workspace and retry |
+
+#### Password refusals
+
+| `code` | Status | Meaning |
+|--------|--------|---------|
+| `password_breached` | 400 | The password appears in a public list of breached passwords and was refused. Choose one that does not |
+| `sso_link_expired` | 400 | The pending token from a `link_required` sign-in is unknown, expired (ten minutes), already used, or has had three wrong passwords. Start the provider sign-in again |
+
+A password must be 8 to 128 characters. There is no composition rule, but it is checked against the 100,000 most commonly breached passwords published by the UK National Cyber Security Centre, case-insensitively.
+
+```json
+{
+  "error": "Bad Request",
+  "message": "This password appears in a public list of breached passwords. Choose one that does not.",
+  "code": "password_breached",
+  "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
+}
+```
+
+#### Name refusals
+
+| `code` | Status | Meaning |
+|--------|--------|---------|
+| `invalid_name` | 400 | A first name, last name, workspace name or company name broke the naming rules. The `message` names the field and the rule |
+
+Names are shown to other people, including in invitation and notification emails, so they carry plain text only. The same rules apply to the dashboard, the API, the setup page and `warmblyctl`:
+
+- a first or last name is at most 50 characters and contains a letter; a workspace or company name is at most 64 characters and contains a letter or a number
+- no links, web addresses or email addresses: nothing with `@`, `//`, `www.` or a scheme such as `https:`, no hostname such as `example.com`, and no IP address. Full-width and ideographic dots count as dots
+- no control characters, invisible formatting characters (zero-width and bidirectional overrides), `<`, `>`, `` ` `` or `\`, and no more than three stacked combining marks
+- leading and trailing spaces are trimmed and runs of spaces become one, and that is the form stored
+
+```json
+{
+  "error": "Bad Request",
+  "message": "First name cannot contain a link, web address or email address.",
+  "code": "invalid_name",
+  "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
+}
+```
+
+A name from Google, Apple or a single sign-on provider that breaks these rules is dropped rather than refusing the sign-in, and you are asked for it during onboarding.
 
 ### 401 Unauthorized
 
@@ -163,6 +212,23 @@ Returned when authenticated but lacking necessary permissions.
 - Verify IP restrictions if configured
 - Request additional permissions if needed
 
+#### `mailbox_gmail_oauth_disabled`
+
+A `403` whose `code` is `mailbox_gmail_oauth_disabled` comes from `POST /emails/onboarding/oauth/start` with `provider: "gmail"`. The deployment routes new Gmail mailboxes through an app password over IMAP and SMTP instead of Google sign-in, which is the default; `GET /auth/config` announces it as `gmail_oauth_connect: false`. Nothing about the caller's permissions is wrong. Re-authorizing an existing Gmail mailbox (`POST /emails/onboarding/oauth/reauth/:id`) is never refused this way.
+
+```json
+{
+  "error": "Forbidden",
+  "message": "New Gmail mailboxes connect with an app password over IMAP and SMTP on this deployment, not with Google sign-in.",
+  "code": "mailbox_gmail_oauth_disabled",
+  "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
+}
+```
+
+**How to fix:**
+- Connect the mailbox through `POST /emails/onboarding/smtp-imap` with `smtp.gmail.com:465` and `imap.gmail.com:993`, both TLS, and a Google app password. See [Gmail and Google Workspace](/guides/mailboxes/#gmail-and-google-workspace)
+- A self-hosted instance with its own Google app can set `BOX_GOOGLE_OAUTH_CONNECT=true` to allow Google sign-in for new mailboxes
+
 #### Registration and invitation refusals
 
 Signup and invitation refusals carry their own `code`, so a client can branch on the specific condition instead of matching on text. They describe the deployment's policy and never say anything about whether a given address exists.
@@ -184,6 +250,40 @@ Signup and invitation refusals carry their own `code`, so a client can branch on
 ```
 
 **How to fix:** on a self-hosted deployment these are configuration, not faults. See [accounts and access](/development/accounts-and-access/#registration-modes).
+
+#### Confirmation required
+
+| `code` | Status | Meaning |
+|--------|--------|---------|
+| `reauth_required` | 403 | The action needs a proof of identity newer than the session. Confirm with `POST /v1/auth/reauth`, then retry |
+| `reauth_no_factor` | 400 | The account has neither a password nor two-factor authentication, so there is nothing to confirm with. Enrol one first |
+| `admin_mfa_required` | 403 | An admin route was reached by a session that did not present a second factor. Turn on 2FA or add a passkey, then sign in again |
+| `two_fa_invalid_code` | 400 | The authenticator or recovery code did not match. Wait for a fresh code and try again; the login challenge allows five attempts per pending session |
+| `password_changed_sign_in_again` | 409 | `POST /auth/me/password` stored the new password but could not issue the calling device a new session. Every earlier token is invalid; discard them and sign in again with the new password |
+
+`reauth_required` guards the changes that hand out a durable credential or cannot be undone: creating an API key, adding or removing a passkey, transferring a workspace, and scheduling a workspace or account for deletion. Confirm with a password or a current two-factor code:
+
+```bash
+curl -X POST "https://api.warmbly.com/v1/auth/reauth" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"password": "..."}'
+```
+
+```json
+{ "valid_for_seconds": 300 }
+```
+
+The confirmation is recorded on the session and lasts for the window returned, so a run of related changes only asks once. API keys and OAuth tokens have no session to confirm, so these routes are reachable only with a signed-in session; that is deliberate for key creation, which otherwise lets one leaked key mint more.
+
+```json
+{
+  "error": "Forbidden",
+  "message": "Confirm it is you before making this change.",
+  "code": "reauth_required",
+  "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
+}
+```
 
 ### 404 Not Found
 
@@ -211,6 +311,12 @@ Returned when the requested resource doesn't exist.
 - Check that the resource hasn't been deleted
 - Ensure you're using the correct endpoint
 
+**Specific 404 codes:**
+
+| `code` | Meaning |
+|--------|---------|
+| `unknown_view` | `/me/views/:view` was given a view name other than `contacts` or `campaign_leads` |
+
 ### 409 Conflict
 
 Returned when the request conflicts with existing data.
@@ -230,6 +336,15 @@ Returned when the request conflicts with existing data.
   "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
 }
 ```
+
+One conflict carries its own `code`. A contact's email address has to be free, so changing one to an address another contact already holds is refused rather than merging the two:
+
+| `code` | Status | Meaning |
+|--------|--------|---------|
+| `contact_email_taken` | 409 | The address given to [update a contact](/api/reference/contacts/#update-a-contact) already belongs to another contact |
+| `mailbox_cloud_unenroll_failed` | 409 | The mailbox is linked to [Warmbly Cloud](/guides/warmbly-cloud/) and its link could not be released, so `DELETE /emails/{id}` would leave Warmbly Cloud holding its credential or its claim on it. The mailbox record remains, and restoration onto its worker is attempted |
+
+`mailbox_cloud_unenroll_failed` is a self-hosted instance losing contact with Warmbly Cloud mid-delete. Deleting an enrolled mailbox has to revoke its enrollment before the record goes, because the pool holds the mailbox's own SMTP/IMAP credentials and that record is the only thing that knows the enrollment exists. The same call releases a cloud-managed mirror before the record goes, so the mailbox returns to the cloud workspace and can be adopted again instead of staying claimed by an instance that no longer keeps it. The mailbox record remains. Warmbly attempts to restore it onto its worker immediately, and the worker reconciler may restore it later if that attempt fails. Retry the delete once the instance can reach the cloud again. Unenrolling under **Settings > Warmbly Cloud** first does not help: it makes the same call.
 
 ### 422 Unprocessable
 
@@ -271,7 +386,9 @@ Returned when an unexpected error occurs on the server.
 - Retry the request after a short delay
 - If persistent, contact support with request details
 
-One `internal_error` variant is worth distinguishing. When an authentication endpoint cannot send its email, the message names that specifically rather than reporting a generic fault:
+A 500 always carries this same message. The underlying detail is not returned, because it is usually database or provider output naming tables, columns and hosts, none of which helps a caller. It is logged against the `request_id` in the response, so quoting that id in a support request is what connects the two.
+
+One `internal_error` variant is worth distinguishing. When an authentication endpoint cannot send its email, the message names that specifically rather than reporting a generic fault, because on a self-hosted instance the person reading it is often the one who can fix it:
 
 ```json
 {
@@ -373,6 +490,97 @@ A `400` whose `code` is `storage_limit_reached` comes from `POST /campaigns/:id/
 - `GET /organization/current/limits` reports `storage.used_bytes` and `storage.limit_bytes`, and `storage.over_quota` when a plan change left the workspace above the quota. Existing attachments keep sending either way
 - Delete attachments you no longer need (`DELETE /campaigns/:id/attachments/:attachmentId`) or images (`DELETE /email-images/:id`), or move to a paid plan for the larger quota
 
+#### `mailbox_validation_timeout`
+
+A `400` whose `code` is `mailbox_validation_timeout` comes from the SMTP and IMAP connect and re-authorize endpoints. Warmbly proves credentials by opening a real connection to the mail server before it stores anything, and a connection stayed silent inside that window. The message names the leg that did not answer and says whether the other one signed in. Nothing was saved and no mailbox was created.
+
+```json
+{
+  "error": "Bad Request",
+  "message": "SMTP (smtp.gmail.com:465) did not answer in time. IMAP (imap.gmail.com:993) signed in. Nothing was saved. Check the host and port, then try again. Port 465 did not answer and the worker could not use 587 with STARTTLS on the same server either. Some networks block outbound mail ports; check that the server is reachable from outside and which port it listens on.",
+  "code": "mailbox_validation_timeout",
+  "request_id": "6f3c0a1e-2d47-4c6b-9a1f-2b7c5f0e8d31"
+}
+```
+
+The same code with a message that begins `Warmbly's worker did not report back` means no worker answered the check at all, so the mail server was never tested. On the hosted product, retry and contact support if it persists. On a self-hosted instance, check that a worker is running, heartbeating, and reaching the same Redis as the backend.
+
+**How to fix:**
+- Read which leg stayed silent. One leg passing and the other hanging is the network between the worker and that port, not the password: a port that nothing listens on, or that a firewall drops, takes the full timeout rather than refusing straight away
+- When 465 never answers, the worker also tries 587 with STARTTLS on the same server and uses it if it connects; a passing check is then stored with port 587. This error means neither port answered, so check that the server is reachable from outside your network and which port it listens on
+- Retry. A mail server under load can be slow once and answer immediately on the next attempt
+- Confirm the server accepts connections from outside your network, and that the security setting matches the port: `tls` for 465 and 993, `starttls` for 587 and 143
+
+#### `mailbox_auth_refused`
+
+A `400` whose `code` is `mailbox_auth_refused` comes from the SMTP and IMAP connect and re-authorize endpoints. The mail server answered and refused the sign-in. The message names the leg and the server, quotes the server's own reply, and for Google's servers says what an app password is. Nothing was saved.
+
+```json
+{
+  "error": "Bad Request",
+  "message": "SMTP (smtp.gmail.com:587) refused the sign-in: 535 5.7.8 Username and Password not accepted. IMAP (imap.gmail.com:993) refused the sign-in: imap: NO [AUTHENTICATIONFAILED] Invalid credentials (Failure). Nothing was saved. Google itself refused this address and password. Use a 16-letter app password from myaccount.google.com/apppasswords, created while signed in to the Google account that owns this address, and enter the account's own sign-in address rather than an alias or a group. A deleted app password stops working at once, and on Google Workspace the administrator can block app passwords or IMAP.",
+  "code": "mailbox_auth_refused",
+  "request_id": "6f3c0a1e-2d47-4c6b-9a1f-2b7c5f0e8d31"
+}
+```
+
+**How to fix:**
+- Read the server's reply in the message: it says which leg refused and usually why (a wrong password, an app password required, IMAP switched off for the domain)
+- The username is normally the full address. The password is the provider's app password when the account has two-step verification on, never the account password
+- Whitespace is not the problem: Warmbly trims the password on every path, and removes every space from one bound for a Google server
+- On Google, a refusal with a real app password nearly always means the address is not the account that issued it: enter the account's own sign-in address rather than an alias or a group, create the app password while signed in to that account, and check it has not been deleted since. On Google Workspace the administrator can also block app passwords or IMAP for the organization
+
+#### `mailbox_unreachable`
+
+A `400` whose `code` is `mailbox_unreachable` comes from the same endpoints. The worker could not open a connection to the server at all: the name did not resolve, the port refused, or a firewall dropped the packets. The message says which server and which of those it was. Nothing was saved.
+
+```json
+{
+  "error": "Bad Request",
+  "message": "SMTP (smtp.example.com:465) could not be reached from the worker: the port refused the connection. Nothing was saved.",
+  "code": "mailbox_unreachable",
+  "request_id": "6f3c0a1e-2d47-4c6b-9a1f-2b7c5f0e8d31"
+}
+```
+
+**How to fix:**
+- Check the host and port for typos
+- The connection leaves from the worker, not from your browser or from the API host: the worker's network has to reach the server on that port. Some hosting providers block outbound mail ports until asked
+
+#### `mailbox_tls_failed`
+
+A `400` whose `code` is `mailbox_tls_failed` comes from the same endpoints. The server was reached but no secure connection could be made: the certificate did not verify for that host name, the handshake failed, or the port expects a different mode (`tls` on a STARTTLS port, or the reverse) and no STARTTLS was offered. Nothing was saved.
+
+```json
+{
+  "error": "Bad Request",
+  "message": "IMAP (mail.example.com:143) did not complete a secure connection: the server offers no STARTTLS on this port. Nothing was saved.",
+  "code": "mailbox_tls_failed",
+  "request_id": "6f3c0a1e-2d47-4c6b-9a1f-2b7c5f0e8d31"
+}
+```
+
+**How to fix:**
+- Match the security setting to the port: `tls` for 465 and 993, `starttls` for 587 and 143, unless the provider documents otherwise
+- Use the host name the certificate is issued for, which is the one in the provider's documentation rather than an alias or an IP address
+
+#### `mailbox_server_declined`
+
+A `400` whose `code` is `mailbox_server_declined` comes from the same endpoints. The sign-in could not be completed for a reason other than the credentials: the server asked for a retry later (a `4xx` reply, often a login rate limit), it offers no sign-in method Warmbly implements, it answered with a `5xx` that is not about the password (a mechanism it does not support, a STARTTLS it insists on), the conversation broke, or the probe itself failed before a reply arrived. The message carries the server's reply when there is one. Nothing was saved.
+
+```json
+{
+  "error": "Bad Request",
+  "message": "SMTP (smtp.example.com:587) declined the sign-in for now and asks for a retry: 454 4.7.0 Too many login attempts, please try again later. Nothing was saved.",
+  "code": "mailbox_server_declined",
+  "request_id": "6f3c0a1e-2d47-4c6b-9a1f-2b7c5f0e8d31"
+}
+```
+
+**How to fix:**
+- For a `4xx` reply, wait a few minutes and retry
+- For a server that offers only mechanisms Warmbly does not implement (NTLM, GSSAPI), use the provider's documented SMTP submission host, which normally offers `LOGIN` or `PLAIN`; a different password does not add a mechanism
+
 #### `mailbox_worker_unreachable`
 
 A `503` whose `code` is `mailbox_worker_unreachable` comes from `DELETE /emails/{id}`. Disconnecting a mailbox has to reach the machine that syncs it before the record goes, because once the record is gone nothing can tell that machine to stop. When the instruction cannot be delivered, nothing is removed and the mailbox is left exactly as it was.
@@ -388,6 +596,74 @@ A `503` whose `code` is `mailbox_worker_unreachable` comes from `DELETE /emails/
 
 **How to fix:**
 - Retry the delete. It is safe to repeat: a mailbox that is already gone returns `404`, and one that is still there is untouched
+
+#### `mailbox_send_as_unsupported`
+
+A `400` whose `code` is `mailbox_send_as_unsupported` comes from `POST /emails/{id}/identity/refresh` and from a `PATCH /emails/{id}` that sets `send_as_email`. Only Gmail and Google Workspace mailboxes publish the addresses they are allowed to send as; an Outlook or SMTP/IMAP mailbox has no such list, so there is nothing to refresh and nothing to choose from.
+
+```json
+{
+  "error": "Bad Request",
+  "message": "This mailbox's provider does not expose send-as addresses. Only Gmail and Google Workspace mailboxes do.",
+  "code": "mailbox_send_as_unsupported",
+  "request_id": "9f0a6f21-2c7e-4f2d-9d0e-1f7b9a2c4e55"
+}
+```
+
+**How to fix:**
+- Read `GET /emails/{id}/identity` first. Its `supported` field is `false` for these mailboxes, and `identities` is empty
+- Send from the mailbox's own address, which is what an empty `send_as_email` means
+
+#### `mailbox_send_as_unknown`
+
+A `400` whose `code` is `mailbox_send_as_unknown` comes from a `PATCH /emails/{id}` that sets `send_as_email` to an address the provider has not verified for that mailbox. The choice is refused here rather than at send time, where the provider's own refusal arrives days later against a campaign step and names nothing you could act on.
+
+```json
+{
+  "error": "Bad Request",
+  "message": "That address is not one your provider has verified this mailbox to send as. Refresh the list, or add and verify the address in your provider first.",
+  "code": "mailbox_send_as_unknown",
+  "request_id": "b71c3f88-0b3e-4a41-9a52-2f4f1fd0c0aa"
+}
+```
+
+**How to fix:**
+- Add the alias in Gmail (Settings, Accounts, "Send mail as") and finish its verification
+- Call `POST /emails/{id}/identity/refresh` so Warmbly re-reads the list, then set `send_as_email` to an address whose `verified` is `true`
+
+#### `mailbox_signature_too_large`
+
+A `400` whose `code` is `mailbox_signature_too_large` comes from `POST /emails/{id}/identity/refresh` with `import_signature` set. The provider's signature is larger than Warmbly stores (`20000` characters of HTML), and it is refused rather than truncated: half a signature is worse than none. The send-as list is not stored either, so the call changes nothing.
+
+```json
+{
+  "error": "Bad Request",
+  "message": "The signature on this mailbox is larger than Warmbly stores (20000 characters). Shorten it in your provider and import it again.",
+  "code": "mailbox_signature_too_large",
+  "request_id": "2d5e9a13-7c41-4f9b-bb17-a0f1d9c6e332"
+}
+```
+
+**How to fix:**
+- Shorten the signature in Gmail, usually by linking an image rather than embedding it, and import again
+- Or write the signature in Warmbly directly with `PATCH /emails/{id}`
+
+#### `mailbox_identity_unavailable`
+
+A `503` whose `code` is `mailbox_identity_unavailable` comes from `POST /emails/{id}/identity/refresh`. Reading a mailbox's sending addresses is an account operation, so it runs on the worker holding that mailbox, never from the API itself. It is unavailable exactly when that machine is: while the mailbox is being moved between workers, just after a worker restart, or before a newly connected mailbox has been placed. Nothing was changed.
+
+```json
+{
+  "error": "Service Unavailable",
+  "message": "Warmbly could not reach the machine running this mailbox, so its sending addresses were not refreshed. Nothing was changed; try again in a moment.",
+  "code": "mailbox_identity_unavailable",
+  "request_id": "6e2f1a90-5d13-4a77-9c0b-73f0b5a2e118"
+}
+```
+
+**How to fix:**
+- Retry. Placement happens within moments, so a second attempt usually succeeds
+- `GET /emails/{id}` reports the mailbox's `status`; an `inactive` mailbox is not placed on a worker at all and will keep refusing until it is reactivated
 
 ## Error handling best practices
 

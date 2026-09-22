@@ -104,8 +104,8 @@ func (s *service) mirror(ctx context.Context, l *models.CloudLink, orgID, userID
 		return nil, xerr
 	}
 	if _, err := s.repo.Enroll(ctx, acc.ID, state.RemoteID, true); err != nil {
-		if s.emailSvc != nil {
-			_ = s.emailSvc.Delete(ctx, userID.String(), acc.ID.String())
+		if s.emailSvc != nil && acc.OrganizationID != nil {
+			_ = s.emailSvc.Delete(ctx, acc.OrganizationID.String(), acc.ID.String())
 		}
 		// Release the cloud side too: a mailbox left linked to this instance
 		// with no mirror here is hidden from the adoptable list and refused on
@@ -193,7 +193,7 @@ func (s *service) forgetToken(accountID uuid.UUID) {
 }
 
 // removeManaged deletes the local mirror; the cloud keeps the mailbox in the workspace.
-func (s *service) removeManaged(ctx context.Context, userID string, m *models.CloudLinkMailbox) *errx.Error {
+func (s *service) removeManaged(ctx context.Context, orgID string, m *models.CloudLinkMailbox) *errx.Error {
 	if l, err := s.repo.Get(ctx); err == nil && l != nil {
 		if xerr := s.clientFor(l).do(ctx, http.MethodDelete, "/instance/mailboxes/"+m.RemoteID.String(), nil, nil); xerr != nil && xerr.Identifier != "pool_link_mailbox_not_found" {
 			return xerr
@@ -201,7 +201,7 @@ func (s *service) removeManaged(ctx context.Context, userID string, m *models.Cl
 	}
 	s.forgetToken(m.EmailAccountID)
 	if s.emailSvc != nil {
-		if xerr := s.emailSvc.Delete(ctx, userID, m.EmailAccountID.String()); xerr != nil && xerr != errx.ErrNotFound {
+		if xerr := s.emailSvc.Delete(ctx, orgID, m.EmailAccountID.String()); xerr != nil && xerr != errx.ErrNotFound {
 			return xerr
 		}
 	}
@@ -247,6 +247,31 @@ func (s *service) IsCloudWarmupDelivery(ctx context.Context, accountID uuid.UUID
 		Valid bool `json:"valid"`
 	}
 	q := models.PoolLinkWarmupDeliveryQuery{Sender: sender, MessageID: messageID, Subject: subject}
+	if xerr := s.clientFor(l).do(ctx, http.MethodPost, "/instance/mailboxes/"+m.RemoteID.String()+"/warmup-deliveries", q, &out); xerr != nil {
+		return false, xerr
+	}
+	return out.Valid, nil
+}
+
+// IsCloudWarmupThreadReply asks the cloud whether a tokenless message answers
+// a turn of one of its warmup conversations. The cloud records a yes itself,
+// so the turn answering this one is recognised on the next ask.
+func (s *service) IsCloudWarmupThreadReply(ctx context.Context, accountID uuid.UUID, messageID string, inReplyTo []string) (bool, error) {
+	if len(inReplyTo) == 0 {
+		return false, nil
+	}
+	m, err := s.repo.GetByAccount(ctx, accountID)
+	if err != nil || m == nil {
+		return false, err
+	}
+	l, xerr := s.link(ctx)
+	if xerr != nil {
+		return false, xerr
+	}
+	var out struct {
+		Valid bool `json:"valid"`
+	}
+	q := models.PoolLinkWarmupDeliveryQuery{MessageID: messageID, InReplyTo: inReplyTo}
 	if xerr := s.clientFor(l).do(ctx, http.MethodPost, "/instance/mailboxes/"+m.RemoteID.String()+"/warmup-deliveries", q, &out); xerr != nil {
 		return false, xerr
 	}

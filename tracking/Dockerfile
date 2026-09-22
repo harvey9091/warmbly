@@ -7,7 +7,12 @@
 #
 # Build with --build-arg CARGO_FEATURES=kafka to include the Kafka + Avro
 # publisher (re-adds the librdkafka build chain; slower).
-FROM rust:1.93-alpine AS builder
+# The floor is set by the dependency tree, not by anything this crate uses: the
+# AWS SDK declares rust-version 1.94.1. CI builds with `stable`, so it cannot
+# catch a builder that has fallen behind; only the image build does, and it does
+# so as a release failure. Raise this when `cargo build` here says a package is
+# not supported.
+FROM rust:1.96-alpine AS builder
 
 ARG CARGO_FEATURES=""
 RUN apk add --no-cache musl-dev perl && \

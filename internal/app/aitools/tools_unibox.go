@@ -16,12 +16,13 @@ func (d Deps) registerUniboxTools(r *Registry) {
 		Name:        "list_threads",
 		Description: "List unified-inbox conversation threads (received/synced mail), newest first, with optional filters. The inbox only contains synced mailbox mail; to find leads that never replied or went cold, use list_campaign_leads instead. If a filtered call returns 0, retry without filters before concluding the inbox is empty.",
 		InputSchema: objectSchema(map[string]any{
-			"subject":        strProp("Optional subject contains filter."),
-			"sender":         strProp("Optional sender email filter."),
-			"folder":         strProp("Optional folder: inbox, sent, drafts, archive, spam or trash. Omit for every folder except spam and trash."),
-			"unseen_only":    boolProp("Only threads with unread messages."),
-			"awaiting_reply": boolProp("Only threads whose LATEST message was sent by one of our mailboxes (we spoke last, still waiting on them)."),
-			"limit":          intProp("Max threads (1-50, default 20)."),
+			"subject":          strProp("Optional subject contains filter."),
+			"sender":           strProp("Optional sender email filter."),
+			"folder":           strProp("Optional folder: inbox, sent, drafts, archive, spam or trash. Omit for every working folder (spam, trash and archive stay out)."),
+			"include_archived": boolProp("Put archived conversations back into an unscoped list, the way the All mail view does. Ignored when folder is set."),
+			"unseen_only":      boolProp("Only threads with unread messages."),
+			"awaiting_reply":   boolProp("Only threads whose LATEST message was sent by one of our mailboxes (we spoke last, still waiting on them)."),
+			"limit":            intProp("Max threads (1-50, default 20)."),
 		}),
 		Risk:            generation.RiskRead,
 		RequiredOrgPerm: models.PermAccessUnibox,
@@ -78,12 +79,13 @@ func (d Deps) listThreads(ctx context.Context, inv Invocation, args json.RawMess
 		return "", err
 	}
 	in, err := decodeArgs[struct {
-		Subject       string `json:"subject"`
-		Sender        string `json:"sender"`
-		Folder        string `json:"folder"`
-		UnseenOnly    bool   `json:"unseen_only"`
-		AwaitingReply bool   `json:"awaiting_reply"`
-		Limit         int    `json:"limit"`
+		Subject         string `json:"subject"`
+		Sender          string `json:"sender"`
+		Folder          string `json:"folder"`
+		IncludeArchived bool   `json:"include_archived"`
+		UnseenOnly      bool   `json:"unseen_only"`
+		AwaitingReply   bool   `json:"awaiting_reply"`
+		Limit           int    `json:"limit"`
 	}](args)
 	if err != nil {
 		return "", err
@@ -104,6 +106,10 @@ func (d Deps) listThreads(ctx context.Context, inv Invocation, args json.RawMess
 	}
 	if in.Folder != "" {
 		params.Folder = &in.Folder
+	}
+	if in.IncludeArchived {
+		t := true
+		params.IncludeArchived = &t
 	}
 	if in.UnseenOnly {
 		t := true

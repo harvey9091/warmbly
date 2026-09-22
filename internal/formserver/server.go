@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/warmbly/warmbly/internal/api/middleware"
 	"github.com/warmbly/warmbly/internal/formwire"
 )
 
@@ -47,10 +48,13 @@ type Config struct {
 	BackendURL    string
 	InternalToken string
 	// BrowserPostHogKey and BrowserPostHogHost are stamped into the page shell
-	// so the form app can report browser errors to PostHog. An empty key, which
-	// is the default, means the app never loads the SDK.
-	BrowserPostHogKey  string
-	BrowserPostHogHost string
+	// so the form app can report pageviews, web vitals and browser errors to
+	// PostHog. An empty key, which is the default, means the app never loads
+	// the SDK. BrowserPostHogErrorTracking false keeps the analytics and
+	// reports no exceptions.
+	BrowserPostHogKey           string
+	BrowserPostHogHost          string
+	BrowserPostHogErrorTracking bool
 	// BrowserSentryDSN is the same for an operator who reports to Sentry
 	// instead. Either backend, both, or neither.
 	BrowserSentryDSN string
@@ -96,6 +100,9 @@ func New(cfg Config) (*Server, error) {
 	// placeholders stay empty and the page loads no reporting SDK at all.
 	shell = stampMeta(shell, "wf-posthog-key", cfg.BrowserPostHogKey)
 	shell = stampMeta(shell, "wf-posthog-host", cfg.BrowserPostHogHost)
+	if !cfg.BrowserPostHogErrorTracking {
+		shell = stampMeta(shell, "wf-posthog-errors", "false")
+	}
 	shell = stampMeta(shell, "wf-sentry-dsn", cfg.BrowserSentryDSN)
 	shell = stampMeta(shell, "wf-release", cfg.Release)
 	shell = stampMeta(shell, "wf-environment", cfg.Environment)
@@ -115,7 +122,20 @@ func New(cfg Config) (*Server, error) {
 }
 
 func (s *Server) Router(trustedProxies []string) (*gin.Engine, error) {
-	r := gin.Default()
+	// Not gin.Default(): its logger prints the full request URI, and the form
+	// page carries the per-contact prefill ticket as ?t=<uuid>. That ticket
+	// discloses the contact's name, address, company and phone to whoever
+	// holds it, so it must not be written to an access log.
+	//
+	// Release mode too, unless the operator asked for otherwise: this is an
+	// internet-facing service, and debug mode prints the route table and a
+	// warning banner on every start.
+	if env := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV"))); os.Getenv("GIN_MODE") == "" &&
+		env != "" && env != "dev" && env != "development" && env != "local" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+	r := gin.New()
+	r.Use(middleware.RequestLogger(), gin.Recovery())
 	// Same posture as the backend: trust no proxy unless the operator names
 	// it, so a forged X-Forwarded-For cannot dodge the submit limiter.
 	if len(trustedProxies) > 0 {
@@ -126,8 +146,19 @@ func (s *Server) Router(trustedProxies []string) (*gin.Engine, error) {
 		return nil, err
 	}
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
+	r.GET("/", rootPage)
 	r.GET("/forms.js", s.ServeFormsEmbedJS)
 	r.GET("/f/:publicID", s.ServeFormShell)
+
+	// A scripted caller under /api expects JSON; a human anywhere else gets the
+	// page.
+	r.NoRoute(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not_found"})
+			return
+		}
+		notFoundPage(c)
+	})
 
 	// Hashed filenames, so the bundles are immutable by construction.
 	assets := r.Group("/assets", func(c *gin.Context) {

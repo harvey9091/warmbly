@@ -127,7 +127,9 @@ func (h *Handler) CreateCreditCheckoutSession(c *gin.Context) {
 	}
 
 	session, xerr := h.StripeService.CreateCreditCheckoutSession(
-		c.Request.Context(), uid, *orgID, pack.Key, pack.Credits, req.SuccessURL, req.CancelURL,
+		c.Request.Context(), uid, *orgID, pack.Key, pack.Credits,
+		billingReturnURL(req.SuccessURL, "/app/settings/billing?credits=done"),
+		billingReturnURL(req.CancelURL, "/app/settings/billing"),
 	)
 	if xerr != nil {
 		errx.JSON(c, xerr)

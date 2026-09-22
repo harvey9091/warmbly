@@ -43,6 +43,10 @@ func liveCampaignDB(t *testing.T) *db.DB {
 		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(func() { handle.Pool.Close() })
+	var version int64
+	if err := handle.Pool.QueryRow(context.Background(), `SELECT version FROM schema_migrations LIMIT 1`).Scan(&version); err != nil || version < 156 {
+		t.Fatalf("WARMBLY_TEST_DB is at schema version %d (err %v); this branch needs 156 or later", version, err)
+	}
 	return handle
 }
 
@@ -244,6 +248,9 @@ type recordingSender struct {
 	mu   sync.Mutex
 	sent int
 	fail error
+	// msgs is every message handed over, in order, so a test can assert on
+	// what the recipient would actually receive (headers included).
+	msgs []EmailMessage
 }
 
 func (r *recordingSender) Send(ctx context.Context, taskID uuid.UUID, msg EmailMessage, account models.Email) error {
@@ -253,7 +260,19 @@ func (r *recordingSender) Send(ctx context.Context, taskID uuid.UUID, msg EmailM
 		return r.fail
 	}
 	r.sent++
+	r.msgs = append(r.msgs, msg)
 	return nil
+}
+
+// message returns the i-th message handed over.
+func (r *recordingSender) message(t *testing.T, i int) EmailMessage {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if i >= len(r.msgs) {
+		t.Fatalf("wanted message %d, only %d were sent", i, len(r.msgs))
+	}
+	return r.msgs[i]
 }
 
 // count reads the send tally under the lock.

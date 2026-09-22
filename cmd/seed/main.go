@@ -38,13 +38,17 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
+	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/pkg/argon2"
+	"github.com/warmbly/warmbly/internal/repository"
 	"github.com/warmbly/warmbly/internal/seed"
 )
 
@@ -70,6 +74,18 @@ var (
 )
 
 func main() {
+	// This seeder plants accounts with published passwords (dev@warmbly.com and
+	// a super-admin with a known API key), which is exactly what it is for. The
+	// binary ships inside the release backend image, so the one thing it must
+	// never do is run against a real deployment by accident.
+	//
+	// APP_ENV unset counts as dev, matching cmd/backend/boot.go, so `make dev`
+	// keeps working with no extra variable.
+	if env := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV"))); env != "" &&
+		env != "dev" && env != "development" && env != "local" {
+		log.Fatalf("Refusing to seed: APP_ENV=%s. This seeder creates accounts with published credentials and is only for local development.", env)
+	}
+
 	dsn := os.Getenv("PRIMARY_DB")
 	if dsn == "" {
 		dsn = "postgres://warmbly:warmbly@localhost:5432/warmbly_dev?sslmode=disable"
@@ -450,12 +466,13 @@ func joinWarmupPool(ctx context.Context, pool *pgxpool.Pool, accountID uuid.UUID
 	if poolType == "" {
 		return nil
 	}
-	_, err := pool.Exec(ctx, `
-		INSERT INTO warmup_pool_participants (pool_id, email_account_id)
-		SELECT id, $1 FROM warmup_pools WHERE pool_type = $2::warmup_pool_type
-		ON CONFLICT DO NOTHING`,
-		accountID, poolType)
-	return err
+	poolID, ok := models.WarmupPoolID(poolType)
+	if !ok {
+		return fmt.Errorf("unknown warmup pool type %q", poolType)
+	}
+	// MoveToPool moves a mailbox that sits in the other pool rather than
+	// skipping it, which the one-membership-per-mailbox index requires.
+	return repository.NewWarmupRepository(pool).MoveToPool(ctx, poolID, accountID, "sender_receiver")
 }
 
 func upsertDevTrialSubscription(ctx context.Context, pool *pgxpool.Pool) error {

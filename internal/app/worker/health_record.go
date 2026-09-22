@@ -10,9 +10,8 @@ import (
 
 // recordSendAttempt + recordSendLatency + recordSendOutcome are the
 // integration points the send hot path calls. They classify a
-// wmail.SendResult into the right Record* shim so the rolling 1m
-// counters feed the QuarantineEvaluator's band classification with the
-// granularity that matters (bounce vs complaint vs auth vs rate limit).
+// wmail.SendResult into the rolling activity counters with the granularity
+// operators and provider-aware backoff need.
 
 func (s *WorkerService) recordSendAttempt() {
 	s.RecordSendAttempt()

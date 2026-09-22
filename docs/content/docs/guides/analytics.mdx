@@ -5,6 +5,8 @@ description: "Campaign and account performance metrics."
 
 Analytics rolls every send, open, click, reply, bounce, and complaint into rates you can act on, by workspace, campaign, and mailbox. For health bands and the thresholds Warmbly acts on, see [Deliverability](/guides/deliverability/).
 
+Campaign analytics are shared across the workspace. With **View analytics**, you can see the overview, daily and hourly statistics, step performance and comparisons for campaigns created by any member of the selected workspace. The campaign author does not need to grant separate access.
+
 ## What is counted
 
 | Metric | Counts | Feeds |
@@ -16,12 +18,13 @@ Analytics rolls every send, open, click, reply, bounce, and complaint into rates
 | Bounces | Hard and soft bounces | Bounce rate |
 | Complaints | Marked as spam | Complaint rate |
 
-Six rules govern the counts:
+Seven rules govern the counts:
 
 - **Tracking must be on.** Opens and clicks need open or link tracking enabled on the campaign, and a tracking host on the install. A [custom tracking domain](/guides/mailboxes/#custom-tracking-domain) per mailbox is optional; without one they go through the shared host and still count. With tracking off they stay at zero while sends and replies still count.
-- **Replies are human replies.** Out-of-office and autoresponders never count, never stamp the contact as replied, and never trip stop-on-reply.
-- **Bots are filtered.** Crawlers, CLI agents, prefetches, chat link previews, and security gateways that announce themselves are served normally but never counted. The ones that do not announce themselves are caught by where they came from and by what they do. Requests from a known mail-filtering network are treated as automated whatever their user agent claims, and a click from one is still redirected, just without the ticket that would file the visit against the recipient. Microsoft 365's own filtering layer, where Safe Links and delivery-time link scanning run, is recognised out of the box, as is Barracuda's. The rest are caught by behaviour: an open within a minute of the send, or a click within thirty seconds, and clicks on two or more links of one email from the same source within five seconds (a scanner walking the message). The clock on the first two starts when the send is handed to a worker, before the mail has even been delivered, so those windows cover the sending provider's queue and the transit to the recipient as well as reading time. A self-hosted instance can change both under Instance settings when its recipients' gateways are slower or faster than that. Otherwise one corporate scanner would "click" every link seconds after delivery. A self-hosted instance can name its own scanner networks; see [tracking service configuration](/development/configuration/).
-- **Auto-opens are labeled, not hidden.** Privacy proxies like Apple Mail Privacy Protection, and instant opens, still count (they confirm delivery) but are tagged and shown separately (`12 auto`). A later real open upgrades them to human. **Auto-opens never trigger opened-based branches or automations.**
+- **Reading in Warmbly does not count as an open.** Unibox removes Warmbly's tracking pixels from the displayed message, including quoted history. This applies to sent messages and every other folder; recipient copies retain their pixels.
+- **Replies are human replies.** Out-of-office and autoresponders never count, never stamp the contact as replied, and never trip stop-on-reply. A reply is attributed by the thread it answers, so a person who replies from a different address than the one you mailed (a "send as" alias, a forward, a colleague answering on their behalf) still counts as a reply for that lead. In a campaign that rotates across several mailboxes, each lead's reply is expected in the mailbox that wrote to them (the one their follow-ups come from too), so that mailbox has to be connected with inbox sync in the same workspace for the reply to be seen; a reply that reaches another mailbox in the pool stays in the Unibox and is not counted. Reply detection is always on; the reply-intent switch in Settings governs only what happens after a reply is detected. A reply that was missed is not lost: once a day, and whenever it starts, the platform re-checks recent inbound mail that was never attributed and marks the lead replied if it should have been.
+- **Bots are filtered.** Crawlers, CLI agents, prefetches, chat link previews, and security gateways that announce themselves are served normally but never counted. The ones that do not announce themselves are caught by where they came from and by what they do. Requests from a known mail-filtering network are treated as automated whatever their user agent claims, and a click from one is still redirected, just without the ticket that would file the visit against the recipient. Microsoft 365's own filtering layer, where Safe Links and delivery-time link scanning run, is recognised out of the box, as is Barracuda's. Proofpoint, Mimecast and Cisco Secure Email are recognised too, with one difference: those three also offer browser isolation, which renders a clicked page in the vendor's cloud for the recipient to read, so a click from them can be a real person. A match there is treated as automated only when it also arrives soon enough after the send to be the delivery-time scan, and a recipient who clicks through isolation later still counts as a person. The rest are caught by behaviour: an open within a minute of the send, or a click within thirty seconds, and clicks on two or more links of one email from the same source within five seconds (a scanner walking the message). The clock on the first two starts when the send is handed to a worker, before the mail has even been delivered, so those windows cover the sending provider's queue and the transit to the recipient as well as reading time. A self-hosted instance can change those windows under Instance settings, including the one the isolation vendors are measured against, when its recipients' gateways are slower or faster than that. Otherwise one corporate scanner would "click" every link seconds after delivery. A self-hosted instance can name its own scanner networks; see [tracking service configuration](/development/configuration/).
+- **Auto-opens are logged, not counted.** Privacy proxies like Apple Mail Privacy Protection, and instant opens, are kept as proof of delivery and shown separately (`12 auto, not counted`), and an open counts only once per email however many times it is fetched. Every open count and open rate, on the campaign overview, per step, per day and per hour, and on the dashboard, counts a person's opens only, which is how the Leads tab already reads a lead: not opened until a person opens it. A stripped WebKit user agent is shared by Apple privacy fetching and Outlook image loading, so it is treated as a privacy prefetch only when it also arrives inside the automated-open window. A later request with that signature counts as a person's open, and its client is shown as **Image proxy** because the header cannot identify which service fetched it. **Auto-opens never trigger opened-based branches or automations.**
 - **A click is an open.** Opens need the mail client to load images, and many clients block them. A click by the person proves the email was read, so it counts as an open as well, and a lead can never read "clicked, not opened".
 - **Auto-clicks are kept but never counted.** A click classified as automated is logged on the contact's activity with the link it hit and the rule that caught it, and the campaign overview shows how many steps had only automated clicks (`3 auto`). It never makes the step clicked, never fires a clicked branch or automation, and never sends a webhook. A person clicking the same link later counts normally. A burst is only recognisable from its second click, so a click that looks human waits for the burst window plus one second (six seconds) before it fires anything (clicked branches, automations, webhooks, the live feed): if a second link follows inside that window, both clicks are relabeled, the stamp is withdrawn and nothing fires.
 
@@ -34,13 +37,38 @@ Live, scoped by `7d`, `30d`, or `90d` tabs.
 | Headline rates | Total sent, open rate, reply rate, bounce rate |
 | Email performance | One metric per day (sent, opens, clicks, replies), for spotting the day something moved |
 | Breakdown | Raw window totals behind the rates |
-| Account health | Mailboxes counted as Healthy, At risk, Issues |
+| Account health | Each mailbox counted once as Healthy, At risk, or Issues, using its most severe current connection, sync, or warmup-reputation state |
 | Top campaigns | Best performers with sent, open rate, reply rate, and a status dot |
-| Recent activity | A live feed of individual sends, opens, clicks, replies, and bounces |
+| Recent activity | A live feed of individual opens, clicks, replies, and bounces |
+
+Sending totals, trends, comparisons, and top-campaign rates count email steps only. Completed wait and action steps move a sequence forward but never inflate the number of messages sent.
+
+## Direct mail
+
+The rest of this page measures campaigns. **Direct mail** measures what you write by hand in the [unified inbox](/guides/unified-inbox/), which most workspaces do far more of than they expect.
+
+It is built from two different sources, and they are shown apart because they cover different sets of messages.
+
+**Volume and replies** come from your synced mailboxes, so they cover direct messages written in Warmbly, Gmail, or your phone and include history from before this feature existed. Synced campaign and warmup sends are excluded from the outgoing figures. Nothing has to be switched on.
+
+| Figure | Means |
+|--------|-------|
+| Sent by hand | Messages in the Sent folder of every connected mailbox, in range |
+| Received | Messages that arrived in the inbox, in range |
+| Reply rate | Of the threads you started, how many got an answer |
+| Median reply time | How long the other person took to answer, across answered threads |
+
+A thread counts as yours when the first message in it was one you sent, and as answered when a message came back after it. The delay is measured from your first send to their first reply, so a long exchange is one data point rather than many.
+
+**Opens and clicks** are opt-in and measured differently. They come from completed send records, so they only cover HTML mail sent through Warmbly from a mailbox with tracking switched on, and only from the moment you switched it on. Plain-text-only messages cannot carry a pixel or wrapped link and remain untracked. That is why the card states its own denominator rather than reusing "sent by hand" above: dividing opens by messages that were never tracked would invent a rate.
+
+To switch it on, open the mailbox and turn on **Track opens and clicks on direct mail**. See [Mailboxes](/guides/mailboxes/#tracking-direct-mail).
+
+**Per mailbox** ranks your mailboxes by how many messages each mailbox sent and received, and marks the ones that are tracking. **Top correspondents** ranks the people you exchange the most mail with. Your own mailboxes are excluded from that list, so a copy to yourself is not a correspondent.
 
 ## Per-campaign
 
-Each campaign reports its own totals: contacts, sent, pending, unique opens and clicks, replies, bounces, unsubscribes, and the four rates.
+Each campaign reports its own totals: enrolled contacts, sent email steps, remaining planned email-step sends, unique opens and clicks, replies, bounces, unsubscribes, and the four rates. Wait and action steps do not count as messages.
 
 **Per-step stats** break sent, opens, clicks, replies, and bounces down by sequence step, which is how you find the touch pulling replies and the follow-ups that are dead weight. Each count carries the step's own rate underneath it, measured against that step's sends rather than the campaign's, so a fourth touch that reached 11 contacts still compares against a first touch that reached 337. A step that has sent nothing shows a dash rather than 0%, and a dotted rate means some of those events were automated: hover it for the split. Daily stats drive the trend chart, and hourly stats show when sends land and get engagement. Campaigns can also be compared side by side on the same metrics.
 
@@ -58,8 +86,10 @@ These records back the engagement rows on a contact's [activity timeline](/guide
 |--------|-------------------|
 | Health | Healthy, warning, or error, with a score and specific issues |
 | Daily usage | Campaign emails sent today against `campaign_limit` (default `50`/day), plus warmup sent and limit |
-| Warmup status | Whether warmup is on, current volume, target, and max |
-| Warmup health | Pool standing: healthy, watch, throttled, quarantined, or blocked, with spam score and block expiry |
+| Warmup status | Whether warmup is on, actual volume today, the target the scheduler is using, max volume, configured reply target, and elapsed warmup days |
+| Warmup health | Pool standing: healthy, watch, throttled, quarantined, or blocked, with the score and reason the band decided, and the block expiry |
+
+The overview calls the configured percentage **Reply target** because it controls how much synthetic warmup mail should receive a reply. The Analytics tab reports the measured reply rate from actual sends and replies. Its **Target met** percentage is actual warmup sends divided by planned target volume across the active days in the selected range; it can exceed 100% when volume beats the plan.
 
 Use this to find the one mailbox dragging down a campaign's bounce rate instead of blaming the campaign.
 

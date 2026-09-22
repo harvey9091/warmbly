@@ -242,7 +242,7 @@ func (r *discountCodeRepository) List(ctx context.Context, search *models.AdminD
 	}
 	if search.PlanID != nil {
 		whereClause += " AND EXISTS (SELECT 1 FROM discount_code_plans dcp WHERE dcp.discount_code_id = dc.id AND dcp.plan_id = $" + itoa(argNum) + ")"
-		args = append(args, *search.PlanID)
+		args = append(args, search.PlanID.UUID)
 		argNum++
 	}
 	if search.HasRedemptions {
@@ -274,7 +274,7 @@ func (r *discountCodeRepository) List(ctx context.Context, search *models.AdminD
 	}
 	addBefore := func(col string, v *time.Time) {
 		if v != nil {
-			whereClause += " AND " + col + " < ($" + itoa(argNum) + " + INTERVAL '1 day')"
+			whereClause += " AND " + col + " < ($" + itoa(argNum) + "::timestamptz + INTERVAL '1 day')"
 			args = append(args, *v)
 			argNum++
 		}

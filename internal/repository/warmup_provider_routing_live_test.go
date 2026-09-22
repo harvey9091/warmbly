@@ -7,6 +7,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/warmbly/warmbly/internal/models"
 )
 
 // Issue #143: partner selection needs THIS sender's record per recipient
@@ -16,9 +18,8 @@ import (
 //	WARMBLY_TEST_DB=postgres://warmbly:warmbly@localhost:15432/warmbly_dev?sslmode=disable \
 //	  go test ./internal/repository/ -run LiveProviderRouting -v
 
-// premiumPoolID is the seeded premium pool. Pools are seed data, not migration
-// data, so a database without them skips rather than fails.
-const premiumPoolID = "77777777-aaaa-0000-0000-000000000002"
+// premiumPoolID is the premium pool migration 000156 seeds on every instance.
+var premiumPoolID = models.WarmupPoolPremiumID
 
 type providerRoutingFixture struct {
 	pool      *pgxpool.Pool
@@ -34,11 +35,6 @@ func newProviderRoutingFixture(t *testing.T) *providerRoutingFixture {
 	t.Helper()
 	_, pool := liveContactDB(t)
 	ctx := context.Background()
-
-	var pools int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM warmup_pools WHERE id = $1`, premiumPoolID).Scan(&pools); err != nil || pools == 0 {
-		t.Skip("premium warmup pool not seeded in this database")
-	}
 
 	f := &providerRoutingFixture{
 		pool: pool, user: uuid.New(), org: uuid.New(),

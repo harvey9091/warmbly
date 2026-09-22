@@ -177,7 +177,7 @@ export default function TextareaAICaret({
         const ta = textareaRef.current;
         if (!ta) return;
         const onKey = (e: KeyboardEvent) => {
-            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j") {
+            if ((e.metaKey || e.ctrlKey) && e.key?.toLowerCase() === "j") {
                 // A non-collapsed selection belongs to the edit pill's ⌘J.
                 if (ta.selectionStart !== ta.selectionEnd) return;
                 e.preventDefault();

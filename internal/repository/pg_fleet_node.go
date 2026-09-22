@@ -52,7 +52,7 @@ func NewFleetNodeRepository(d *db.DB) FleetNodeRepository {
 // mail a worker is carrying without a second round trip. It is NULL for a
 // consumer, which carries none.
 const fleetNodeSelect = `
-	SELECT n.id, n.role, n.name, n.notes, n.region, n.address, n.version, n.pinned_version,
+	SELECT n.id, n.role, n.name, n.notes, n.region, n.address, n.capacity_target, n.version, n.pinned_version,
 	       n.active, n.last_seen_at, n.enrolled_at,
 	       n.cpu_percent, n.memory_mb, n.goroutines, n.uptime_seconds,
 	       n.last_error, n.created_at, n.updated_at,
@@ -63,7 +63,7 @@ const fleetNodeSelect = `
 func scanFleetNode(row pgx.Row) (*models.FleetNode, error) {
 	var n models.FleetNode
 	err := row.Scan(
-		&n.ID, &n.Role, &n.Name, &n.Notes, &n.Region, &n.Address,
+		&n.ID, &n.Role, &n.Name, &n.Notes, &n.Region, &n.Address, &n.CapacityTarget,
 		&n.Version, &n.PinnedVersion,
 		&n.Active, &n.LastSeenAt, &n.EnrolledAt,
 		&n.Usage.CPUPercent, &n.Usage.MemoryMB, &n.Usage.Goroutines, &n.Usage.UptimeSeconds,
@@ -87,9 +87,9 @@ func (r *fleetNodeRepository) UpsertOnHeartbeat(ctx context.Context, beat models
 	}
 	const q = `
 		INSERT INTO fleet_nodes (
-			id, role, name, region, address, version, active, last_seen_at,
+			id, role, name, region, address, capacity_target, version, active, last_seen_at,
 			cpu_percent, memory_mb, goroutines, uptime_seconds, last_error
-		) VALUES ($1, $2, $3, $4, $5, $6, TRUE, now(), $7, $8, $9, $10, $11)
+		) VALUES ($1, $2, $3, $4, $5, COALESCE(NULLIF($6, 0), 100), $7, TRUE, now(), $8, $9, $10, $11, $12)
 		ON CONFLICT (id) DO UPDATE SET
 			-- Role is NOT updated. A node that re-registers under a different
 			-- role would keep its workers row and the mailboxes assigned to
@@ -99,6 +99,7 @@ func (r *fleetNodeRepository) UpsertOnHeartbeat(ctx context.Context, beat models
 			-- mailboxes properly.
 			region       = CASE WHEN EXCLUDED.region  <> '' THEN EXCLUDED.region  ELSE fleet_nodes.region  END,
 			address      = CASE WHEN EXCLUDED.address <> '' THEN EXCLUDED.address ELSE fleet_nodes.address END,
+			capacity_target = CASE WHEN $6 > 0 THEN $6 ELSE fleet_nodes.capacity_target END,
 			version      = CASE WHEN EXCLUDED.version <> '' THEN EXCLUDED.version ELSE fleet_nodes.version END,
 			active       = TRUE,
 			last_seen_at = now(),
@@ -110,7 +111,7 @@ func (r *fleetNodeRepository) UpsertOnHeartbeat(ctx context.Context, beat models
 			updated_at   = now()
 	`
 	_, err := r.db.Exec(ctx, q,
-		beat.NodeID, string(beat.Role), name, beat.Region, beat.Address, beat.Version,
+		beat.NodeID, string(beat.Role), name, beat.Region, beat.Address, beat.CapacityTarget, beat.Version,
 		beat.Usage.CPUPercent, beat.Usage.MemoryMB, beat.Usage.Goroutines, beat.Usage.UptimeSeconds,
 		beat.LastError,
 	)

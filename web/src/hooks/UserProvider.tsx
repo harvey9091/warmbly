@@ -1,3 +1,7 @@
+import { clearClientSession } from "@/lib/session";
+import { SESSION_ENDED_EVENT } from "@/lib/auth";
+import { TOKEN_KEY } from "@/lib/information";
+import getToken from "@/lib/helper/getToken";
 import React, { useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { UserContext } from './context/user';
@@ -10,7 +14,6 @@ import useTimezones from '@/lib/api/hooks/app/useTimezones';
 import type { AppError } from '@/lib/api/client/normalizeError';
 import { AuthError } from '@/lib/errors/auth';
 import { Navigate } from 'react-router-dom';
-import { clearTokens } from '@/lib/auth';
 import type Access from '@/lib/api/models/app/admin/Access';
 import type Timezone from '@/lib/api/models/app/Timezone';
 import type User from '@/lib/api/models/auth/User';
@@ -37,6 +40,29 @@ export const UserProvider = ({ children }: { children: React.ReactNode }) => {
             roles: Array.isArray(user.data.roles) ? user.data.roles : [],
         };
     }, [user.data]);
+
+    // The api client ends a session from outside React, and the three queries
+    // below are cached and never poll, so without this the tokens went and the
+    // app stayed put on a page it could no longer authenticate.
+    const [sessionEnded, setSessionEnded] = React.useState(false);
+    React.useEffect(() => {
+        const ended = () => setSessionEnded(true);
+        window.addEventListener(SESSION_ENDED_EVENT, ended);
+        // Signing out in one tab takes the token away from all of them, and the
+        // event above is dispatched only in the tab that did it. The storage
+        // event fires only in the others, which is exactly the set left holding
+        // a rendered app it can no longer authenticate. A null key is storage
+        // being cleared wholesale.
+        const stored = (e: StorageEvent) => {
+            if (e.key !== null && e.key !== TOKEN_KEY) return;
+            if (!getToken()) setSessionEnded(true);
+        };
+        window.addEventListener("storage", stored);
+        return () => {
+            window.removeEventListener(SESSION_ENDED_EVENT, ended);
+            window.removeEventListener("storage", stored);
+        };
+    }, []);
 
     const error = useMemo(() => {
         const errs = [user.error, access.error, timezones.error].filter(Boolean);
@@ -67,8 +93,10 @@ export const UserProvider = ({ children }: { children: React.ReactNode }) => {
         ));
     }, [queryClient]);
 
-    if (error?.redirect) {
-        clearTokens();
+    if (sessionEnded || error?.redirect) {
+        // Same teardown as an explicit sign-out: being signed out must not
+        // leave the previous person's drafts and workspace selection behind.
+        clearClientSession(queryClient);
         return <Navigate to="/auth/login" replace />;
     }
 

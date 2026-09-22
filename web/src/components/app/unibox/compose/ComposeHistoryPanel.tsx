@@ -59,9 +59,12 @@ export default function ComposeHistoryPanel({
             address,
             direction: tab === "sent" ? "sent" : undefined,
             query: search.trim() || undefined,
-            // History is reference material: include snoozed threads too.
+            // History is reference material: include snoozed and filed
+            // threads too.
             snoozed: "any",
+            includeArchived: true,
         },
+        `history:${address}:${tab}`,
         !!address,
     );
 

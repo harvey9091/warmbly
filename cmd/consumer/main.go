@@ -24,6 +24,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/creditwatch"
 	"github.com/warmbly/warmbly/internal/app/feature"
 	"github.com/warmbly/warmbly/internal/app/inboxagent"
+	"github.com/warmbly/warmbly/internal/app/inboxtag"
 	"github.com/warmbly/warmbly/internal/app/instancesettings"
 	"github.com/warmbly/warmbly/internal/app/integration"
 	"github.com/warmbly/warmbly/internal/app/nativeactions"
@@ -54,6 +55,7 @@ import (
 	"github.com/warmbly/warmbly/internal/pkg/generation"
 	"github.com/warmbly/warmbly/internal/pkg/geo"
 	"github.com/warmbly/warmbly/internal/pkg/nodeagent"
+	"github.com/warmbly/warmbly/internal/pkg/typesafe"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -225,7 +227,7 @@ func main() {
 	// integration actions in-process (cipher + Postgres are available here; the
 	// consumer is control-plane, not a worker). Suppression already lives in the
 	// advanced repo, so no separate suppression repo is wired here.
-	webhookRepoC := repository.NewWebhookRepository(primaryDB.Pool)
+	webhookRepoC := repository.NewWebhookRepositorySealed(primaryDB.Pool, credEncrypter)
 	webhookService := webhook.NewService(webhookRepoC)
 	// The consumer dispatches lower-volume reply/warmup events (not per-contact
 	// campaign fan-out), so a generous static cap is enough here; the plan-based
@@ -269,6 +271,12 @@ func main() {
 	}
 	integrationServiceC.SetAI(aiProviderC, creditServiceC)
 	integrationServiceC.SetAISearch(aiSearchC)
+	// One TypeSafe client for every typed judgment in this process. Nil when
+	// no key is configured, and every feature that reads it stays off.
+	var typeSafeClient *typesafe.Client
+	if key := config.TypeSafeAPIKey(); key != "" {
+		typeSafeClient = typesafe.NewClient(key)
+	}
 	if aiProviderC != nil {
 		replyclassify.SetModelClassifier(func(ctx context.Context, system, user string) (string, error) {
 			res, err := aiProviderC.Complete(ctx, generation.CompletionRequest{System: system, Prompt: user, MaxTokens: 16, Temperature: generation.Deterministic()})
@@ -400,6 +408,11 @@ func main() {
 		streamingPublisher,
 	)
 	advancedService.WireInboxAgent(inboxAgentServiceC)
+	if typeSafeClient != nil {
+		// A bounce whose reason does not name the recipient is classified, so a
+		// reputation or policy block does not suppress a good address.
+		advancedService.WireBounceJudge(typeSafeClient)
+	}
 
 	eventsPublisher := events.NewPublisher(consumerBus, s3Client, consumerCodec, cipherService)
 
@@ -408,6 +421,34 @@ func main() {
 	jobrun.Configure(repository.NewJobRunRepository(primaryDB), "consumer")
 
 	// JobsService
+	// Follow-up labels use stored mailbox facts and run without TypeSafe.
+	// Message classification still requires both the key and opt-in switch.
+	tagCategories := repository.NewTagCategoryStore(primaryDB.Pool)
+	inboxTagRepo := repository.NewInboxTagRepository(primaryDB.Pool)
+	var tagAsker inboxtag.Asker
+	classify := config.InboxTaggingEnabled() && typeSafeClient != nil
+	if classify {
+		tagAsker = inboxtag.NewAsker(typeSafeClient)
+		log.Printf("automatic inbox tagging enabled (model %s)", inboxtag.Model)
+	} else {
+		log.Printf("automatic inbox classification off; timestamp-based follow-up labels still run locally")
+	}
+	inboxTagger := inboxtag.NewService(
+		tagAsker,
+		inboxTagRepo,
+		tagCategories,
+		tagCategories,
+		classify,
+	)
+	if typeSafeClient != nil {
+		// The reply classifier's model layer and the inbox agent's gate both
+		// read the verdict the tagger stored moments earlier, so a reply is
+		// paid for once. Without tagging the classifier asks one question.
+		replyclassify.SetTypedClassifier(inboxtag.ReplyClassifier(typeSafeClient, inboxTagRepo))
+		inboxAgentServiceC.WireDraftGate(inboxtag.NewDraftGate(inboxTagRepo))
+	}
+	advancedService.WireInboxTags(inboxTagRepo)
+
 	jobsService := &jobs.JobsService{
 		Bus:                         consumerBus,
 		Codec:                       consumerCodec,
@@ -430,7 +471,9 @@ func main() {
 		Publisher:                   eventsPublisher,
 		StreamingPublisher:          streamingPublisher,
 		AdvancedService:             advancedService,
+		InboxTagger:                 inboxTagger,
 		Cache:                       redisCache,
+		Retention:                   instancesettings.NewService(instancesettings.NewStore(primaryDB.Pool)),
 		AdminRepo:                   repository.NewAdminRepository(primaryDB.Pool),
 		AssignmentService:           workerAssignmentSvc,
 		Notifier:                    notificationService,
@@ -469,6 +512,14 @@ func main() {
 	// recipient-side dwell survives worker restarts. Short interval keeps the
 	// effective dwell close to the requested value.
 	go jobsService.StartWarmupEngagementPoller(ctx, 30*time.Second)
+	go jobsService.StartWarmupInboxCleanup(ctx)
+	// Deletes warmup mail past its retention window from the mailbox itself
+	// and prunes the per-message warmup records after theirs.
+	go jobsService.StartWarmupMailRetention(ctx)
+	go jobsService.StartPendingWarmupVerification(ctx)
+	// Re-offers inbound mail that reply processing never claimed, so a
+	// reply refused by a since-fixed check is still attributed to its lead.
+	go jobsService.StartIncomingReplyRepair(ctx)
 
 	// Start dead worker detection (every 5 minutes)
 	go jobsService.StartDeadWorkerDetection(ctx, 5*time.Minute)
@@ -507,12 +558,12 @@ func main() {
 	// (Avro on Kafka, JSON on NATS).
 	// GeoIP is optional here as on the backend: it only turns an open or
 	// click's source network into a country and city on the logs.
+	// Nothing waits for the database: opens and clicks are recorded either way
+	// and only their country and city label depends on it, so a mirror that is
+	// slow or gone must not delay this service coming up.
 	geoPath, _ := cfg.LoadGeoDBPath(ctx)
-	geoloc, gerr := geo.New(geoPath)
-	if gerr != nil {
-		log.Printf("GeoIP database not found at %s; engagement locations are disabled.", geoPath)
-		geoloc, _ = geo.New("")
-	}
+	geoloc, _ := geo.New("")
+	geo.Start(ctx, geoloc, geoPath, cfg.LoadGeoDBURL(ctx))
 	if trackingCfg, terr := cfg.LoadTrackingConsumerConfig(ctx); terr != nil {
 		log.Println("tracking consumer config unavailable; opens/clicks not consumed:", terr)
 	} else if trackingConsumer, terr := jobs.NewTrackingConsumer(
@@ -543,6 +594,7 @@ func main() {
 		trackingSettings := instancesettings.NewService(instancesettings.NewStore(primaryDB.Pool))
 		trackingConsumer.WireRetention(trackingSettings)
 		trackingConsumer.WireTrackingPolicy(trackingSettings)
+		trackingConsumer.WireDirectMail(emailRepo)
 		defer trackingConsumer.Close()
 		go func() {
 			if err := trackingConsumer.Start(ctx); err != nil {

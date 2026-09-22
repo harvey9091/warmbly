@@ -4,7 +4,7 @@ import { ArrowRightIcon, CalendarClockIcon, CalendarRangeIcon, GlobeIcon, Hourgl
 import { addDays, differenceInCalendarDays, format } from "date-fns";
 import DateSelect from "@/components/app/campaigns/schedule/ScheduleDateSelect";
 import WeekScheduleGrid, { type Interval } from "@/components/app/campaigns/schedule/WeekScheduleGrid";
-import EntryDelayPicker from "@/components/app/campaigns/schedule/EntryDelay";
+import EntryDelayPicker from "@/components/app/campaigns/schedule/EntryDelayPicker";
 import { entryDelayLabel } from "@/components/app/campaigns/schedule/entryDelay";
 import { Loading } from "@/components/loader";
 import {

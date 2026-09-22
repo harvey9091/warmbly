@@ -7,6 +7,7 @@ import { Loader2Icon, XIcon } from "lucide-react";
 import toast from "react-hot-toast";
 import { Label, TextInput } from "@/components/ui/field";
 import changePassword from "@/lib/api/client/auth/changePassword";
+import { endSession, saveTokens } from "@/lib/auth";
 import { useQueryClient } from "@tanstack/react-query";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
@@ -38,14 +39,24 @@ export default function ChangePasswordDialog({ open, onClose }: { open: boolean;
         if (!valid || pending) return;
         setPending(true);
         try {
-            await changePassword({ current_password: current, new_password: next });
-            // Other sessions are revoked server-side; refresh the list so they
-            // drop out of the Sessions panel live.
+            const token = await changePassword({ current_password: current, new_password: next });
+            // The session this request ran on is gone with every other one;
+            // store the new pair before anything else asks the API.
+            saveTokens(token as unknown as Record<string, unknown>);
             void queryClient.invalidateQueries({ queryKey: ["sessions"] });
-            toast.success("Password changed. Other devices were signed out.");
+            toast.success("Password changed. Every other device was signed out.");
             onClose();
         } catch (e) {
-            toast.error(buildError(e as AppError));
+            const err = e as AppError;
+            // The password is stored but this device got no new session: the
+            // old tokens are dead, so leave rather than keep using them.
+            if (err.code === "password_changed_sign_in_again") {
+                toast.error(err.message);
+                onClose();
+                endSession();
+                return;
+            }
+            toast.error(buildError(err));
         } finally {
             setPending(false);
         }
@@ -100,7 +111,7 @@ export default function ChangePasswordDialog({ open, onClose }: { open: boolean;
                                 )}
                             </div>
                             <p className="text-[11px] text-slate-400 leading-relaxed pt-1">
-                                Changing your password signs out every other device. This one stays signed in.
+                                Changing your password ends every session, including this one. This device is signed back in with a new session.
                             </p>
                         </div>
 

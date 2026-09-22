@@ -21,6 +21,7 @@ type SessionView struct {
 	Country      string    `json:"location_country"`
 	CountryCode  string    `json:"country_code"`
 	AuthProvider string    `json:"auth_provider"`
+	MFAVerified  bool      `json:"mfa_verified"`
 	CreatedAt    time.Time `json:"created_at"`
 	LastActiveAt time.Time `json:"last_active_at"`
 }
@@ -40,6 +41,7 @@ func toSessionView(sess *models.Session, currentID uuid.UUID) SessionView {
 		Country:      sess.LocationCountry,
 		CountryCode:  sess.LocationCountryCode,
 		AuthProvider: sess.AuthProvider,
+		MFAVerified:  sess.MFAVerified,
 		CreatedAt:    sess.CreatedAt,
 		LastActiveAt: lastActive,
 	}
@@ -99,15 +101,34 @@ func (s *tokenService) RevokeOtherSessions(ctx context.Context, userID, currentS
 		return err
 	}
 
+	now := time.Now()
 	if err := s.tokenRepository.RevokeOtherSessions(ctx, userID, currentSessionID); err != nil {
 		return err
 	}
 
+	// Every id is evicted even when one fails, and a failed eviction is
+	// overwritten with a revoked tombstone, so no cached copy outlives the row.
+	var first *errx.Error
 	for _, id := range ids {
-		if err := s.deleteSession(ctx, id); err != nil {
-			return err
+		if err := s.evictRevoked(ctx, id, userID, now); err != nil && first == nil {
+			first = err
 		}
 	}
 
+	return first
+}
+
+// evictRevoked drops a revoked session from the cache. When the delete is
+// refused it stores a revoked tombstone instead: a reader that would have
+// served the stale copy for the rest of SessionTTL sees revoked_at set, and a
+// short TTL sends the next read to the row.
+func (s *tokenService) evictRevoked(ctx context.Context, id, userID uuid.UUID, revokedAt time.Time) *errx.Error {
+	if err := s.deleteSession(ctx, id); err == nil {
+		return nil
+	}
+	tomb := &models.Session{ID: id, UserID: userID, RevokedAt: &revokedAt}
+	if err := s.saveSession(ctx, tomb, revokedTombstoneTTL); err != nil {
+		return err
+	}
 	return nil
 }

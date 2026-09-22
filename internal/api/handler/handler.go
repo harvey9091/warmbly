@@ -64,12 +64,14 @@ import (
 	"github.com/warmbly/warmbly/internal/app/unsublink"
 	"github.com/warmbly/warmbly/internal/app/updates"
 	"github.com/warmbly/warmbly/internal/app/user"
+	"github.com/warmbly/warmbly/internal/app/viewprefs"
 	"github.com/warmbly/warmbly/internal/app/warmup"
 	"github.com/warmbly/warmbly/internal/app/warmupcontent"
 	"github.com/warmbly/warmbly/internal/app/webhook"
 	"github.com/warmbly/warmbly/internal/app/websitetracking"
 	"github.com/warmbly/warmbly/internal/app/worker"
 	"github.com/warmbly/warmbly/internal/pkg/generation"
+	"github.com/warmbly/warmbly/internal/pkg/typesafe"
 
 	"github.com/warmbly/warmbly/internal/infrastructure/encryptedkeys"
 	"github.com/warmbly/warmbly/internal/infrastructure/kms"
@@ -119,6 +121,8 @@ type Handler struct {
 	TasksService        tasks.TasksService
 	NotificationService notification.Service
 	TwoFAService        twofa.Service
+	// ViewPreferencesService keeps each member's saved list layouts.
+	ViewPreferencesService viewprefs.Service
 
 	// New services
 	APIKeyService    apikey.APIKeyService
@@ -174,6 +178,9 @@ type Handler struct {
 	// UnsubscribeLinks verifies the signed tokens on recipient unsubscribe
 	// links. Nil when the instance has no public API URL to mint them on.
 	UnsubscribeLinks *unsublink.Signer
+	// UnsubscribeTickets resolves the short form of those links. Nil means
+	// only the self-contained signed tokens are honoured.
+	UnsubscribeTickets repository.UnsubscribeLinkRepository
 
 	// Website tracking snippet: settings and the page-view ingest path.
 	WebsiteTrackingService websitetracking.Service
@@ -207,7 +214,11 @@ type Handler struct {
 	// shared by the dashboard agent, research, automation AI nodes, and the
 	// inbox agent. Nil when no LLM provider is configured.
 	AIProvider generation.Provider
-	AISearch   generation.SearchClient
+	// TypeSafe is the shared typed-judgment client. Nil when no key is
+	// configured; every endpoint that reads it degrades to its rules-only
+	// answer.
+	TypeSafe typesafe.Asker
+	AISearch generation.SearchClient
 
 	// AITools is the shared tool registry the dashboard agent and MCP server
 	// run on. Handlers bound to the invoking user's permissions.
@@ -294,6 +305,11 @@ type Handler struct {
 	// Click-link store, served to the tracking service over HTTPS at
 	// /api/v1/internal/tracked-links/:id (same no-direct-Postgres rule).
 	TrackedLinks repository.TrackedLinkRepository
+
+	// InboxTagRepo backs the automatic-tagging review page. Optional: nil when
+	// the feature was never configured, and the endpoint says so rather than
+	// failing.
+	InboxTagRepo repository.InboxTagRepository
 
 	// Verified custom tracking and forms domains, read by the on-demand TLS
 	// gate at /tls/authorize so a reverse proxy can obtain a certificate for a

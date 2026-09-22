@@ -229,15 +229,26 @@ Nodes are checking in from more than one machine, and `NATS_URL`, `REDIS` or `EN
 
 More than one machine is read as more than one distinct address among live nodes, so scaled replicas on a single host do not trigger it.
 
-### codec_not_json
+### codec_registry
 
-`CODEC_PROVIDER` is something other than `json` while workers are registered. Worker command and result envelopes carry untyped bodies that Avro cannot serialize, so every worker command fails to encode. Set `CODEC_PROVIDER=json`. See [event bus](/development/configuration/#event-bus).
+`CODEC_PROVIDER` is `avro` and `SCHEMA_REGISTRY_URL` is empty. Avro resolves every event against a registry, so there is nothing to encode against. Set it, or set `CODEC_PROVIDER=json`, which needs no registry. See [event bus](/development/configuration/#event-bus).
 
 ## Database
 
 ### migrations_dirty
 
 The `schema_migrations` row is marked dirty. The backend applies migrations at boot; a dirty row means one failed halfway and must be resolved before the instance is used. The message carries the version it stopped at.
+
+### warmup_pools_missing
+
+Fewer than two warmup pools exist, so warmup cannot place a mailbox and every warmup task fails. Migration `000156` creates the free and premium pools on every instance and nothing else does; a data-only restore or a manual delete removes them, and the migration will not run a second time. Put them back under their fixed ids:
+
+```sql
+INSERT INTO warmup_pools (id, pool_type, name)
+VALUES ('77777777-aaaa-0000-0000-000000000001', 'free', 'Free warmup pool'),
+       ('77777777-aaaa-0000-0000-000000000002', 'premium', 'Premium warmup pool')
+ON CONFLICT (id) DO NOTHING;
+```
 
 ## Redis
 

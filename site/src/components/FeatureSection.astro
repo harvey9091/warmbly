@@ -213,13 +213,10 @@ const mockCol = wide ? `lg:col-span-8 ${side === 'left' ? 'lg:-ml-10' : 'lg:-mr-
 
             <div class={`feat-fit absolute z-10 overflow-hidden ring-1 ring-white/25 ${fitPos[anchor]} ${fitCorner[anchor]} ${fitShadow[anchor]}`}>
               <div class="feat-track absolute inset-0">
+                <!-- Explicit width keeps offset slides from collapsing and clips overflowing screens. -->
                 {allSlides.map((s, i) => {
                   const { domain, path } = splitUrl(s.url);
                   return (
-                    <!-- Explicit width: inset-0 plus a left offset would collapse
-                         every slide after the first to zero width. Each slide clips
-                         its own window, so a right-anchored screen that overflows
-                         to the left cannot bleed over the slide before it. -->
                     <div class="feat-slide absolute top-0 bottom-0 w-full overflow-hidden" style={`left:${i * 100}%`}>
                       <div class={`feat-screen absolute w-[1280px] ${screenPos[anchor]}`} data-zoom={zoom} aria-hidden="true">
                         <!-- Browser chrome is part of the screenshot, so it
@@ -463,7 +460,7 @@ const mockCol = wide ? `lg:col-span-8 ${side === 'left' ? 'lg:-ml-10' : 'lg:-mr-
       run();
       requestAnimationFrame(run);
       const shell = screen.closest<HTMLElement>('.feat-frame-shell');
-      if (shell) new ResizeObserver(run).observe(shell);
+      if (shell) new ResizeObserver(() => requestAnimationFrame(run)).observe(shell);
     });
     window.addEventListener('load', fitAll);
     window.addEventListener('resize', fitAll);

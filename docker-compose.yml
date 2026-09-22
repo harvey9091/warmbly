@@ -357,6 +357,12 @@ services:
       # every notification and digest email in this stack.
       TRACKING_DOMAIN: ${TRACKING_DOMAIN:-${PUBLIC_HOST:-localhost}:3000}
       GEODB_PATH: ${GEODB_PATH:-/app/data/GeoLite2-City.mmdb}
+      GEODB_URL: ${GEODB_URL:-}
+      # Automatic inbox tagging. Optional and off: the backend only serves the
+      # review page from it, the consumer does the classifying. Both halves are
+      # required, so an instance that sets neither never reaches the network.
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      INBOX_TAGGING_ENABLED: ${INBOX_TAGGING_ENABLED:-false}
       # Gmail mailbox OAuth (leave unset to connect only SMTP/IMAP + Outlook
       # mailboxes). See the self-hosting docs for the Google Cloud setup.
       BOX_GOOGLE_CLIENT_ID: ${BOX_GOOGLE_CLIENT_ID:-}
@@ -468,6 +474,12 @@ services:
       # Optional, as on the backend: turns an open or click's network into a
       # country and city on the contact's timeline.
       GEODB_PATH: ${GEODB_PATH:-/app/data/GeoLite2-City.mmdb}
+      GEODB_URL: ${GEODB_URL:-}
+      # Automatic inbox tagging. This is where inbound mail is classified, so a
+      # key set only here still works; the backend needs it to report whether
+      # the feature is on. Off unless both are set.
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      INBOX_TAGGING_ENABLED: ${INBOX_TAGGING_ENABLED:-false}
     volumes:
       - ${WARMBLY_BLOBS:-blobs}:/data/blobs
     depends_on:
@@ -539,6 +551,14 @@ services:
       TRACKING_SCANNER_NETWORKS: ${TRACKING_SCANNER_NETWORKS:-}
       TRACKING_SCANNER_CLICK_NETWORKS: ${TRACKING_SCANNER_CLICK_NETWORKS:-}
       TRACKING_SCANNER_ASN_HEADER: ${TRACKING_SCANNER_ASN_HEADER:-}
+      # A GeoLite2-ASN database, which makes the catalogue's asn: entries match
+      # with no edge configuration. Left unset by default because the file has
+      # to be mounted in: point it at a path inside the container and bind the
+      # file there. Separate from GEODB_PATH, which is the City database.
+      TRACKING_SCANNER_ASN_DB: ${TRACKING_SCANNER_ASN_DB:-}
+      # Or let the service fetch that database itself, which is what a host with
+      # nothing to bind a file from needs. Held in memory, so no writable path.
+      TRACKING_SCANNER_ASN_DB_URL: ${TRACKING_SCANNER_ASN_DB_URL:-}
       TRACKING_IP_HASH_KEY: ${TRACKING_IP_HASH_KEY:-}
       POSTHOG_KEY: ${POSTHOG_KEY:-}
       POSTHOG_HOST: ${POSTHOG_HOST:-}
@@ -571,8 +591,14 @@ services:
       JWT_SECRET: ${AUTH_SECRET:-local-dev-auth-secret-minimum-32-characters-long}
       SECRET_KEY_BASE: ${SECRET_KEY_BASE:-local-development-secret-key-base-minimum-64-characters-for-phoenix}
       PUBSUB_ENABLED: ${PUBSUB_ENABLED:-false}
-      # Behind a reverse proxy set CHECK_ORIGIN=true once PHX_HOST matches the
-      # public websocket hostname.
+      # The origins a browser connects FROM, comma separated, e.g.
+      # "https://app.example.com,https://admin.example.com". Not this service's
+      # own host: the browser's Origin on a websocket upgrade is the dashboard's.
+      # Empty leaves the check off, which is right for a LAN install where the
+      # origin is whatever host was typed; the socket still requires a
+      # short-lived ticket either way.
+      CHECK_ORIGIN_HOSTS: ${CHECK_ORIGIN_HOSTS:-}
+      # Legacy host-based form, consulted only when CHECK_ORIGIN_HOSTS is empty.
       CHECK_ORIGIN: ${CHECK_ORIGIN:-false}
       # The environment label events are tagged with, matching every other
       # service in this file.
@@ -616,6 +642,7 @@ services:
       WARMBLY_POSTHOG_KEY: ${WARMBLY_POSTHOG_KEY:-}
       WARMBLY_POSTHOG_HOST: ${WARMBLY_POSTHOG_HOST:-}
       WARMBLY_POSTHOG_ERROR_TRACKING: ${WARMBLY_POSTHOG_ERROR_TRACKING:-}
+      WARMBLY_POSTHOG_SESSION_REPLAY: ${WARMBLY_POSTHOG_SESSION_REPLAY:-}
       # The other error-tracking backend. Unset means the dashboard contacts no
       # Sentry host. Point it at your own project to collect browser errors.
       WARMBLY_SENTRY_DSN: ${WARMBLY_SENTRY_DSN:-}
@@ -640,6 +667,7 @@ services:
       WARMBLY_POSTHOG_KEY: ${WARMBLY_POSTHOG_KEY:-}
       WARMBLY_POSTHOG_HOST: ${WARMBLY_POSTHOG_HOST:-}
       WARMBLY_POSTHOG_ERROR_TRACKING: ${WARMBLY_POSTHOG_ERROR_TRACKING:-}
+      WARMBLY_POSTHOG_SESSION_REPLAY: ${WARMBLY_POSTHOG_SESSION_REPLAY:-}
       WARMBLY_SENTRY_DSN: ${WARMBLY_SENTRY_DSN:-}
     depends_on:
       backend: { condition: service_healthy }

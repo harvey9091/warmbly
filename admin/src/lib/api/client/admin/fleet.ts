@@ -24,7 +24,7 @@ export interface AdminFleetWorkerRow {
     health_multiplier: number;
     age_multiplier: number;
     effective_capacity: number;
-    /** Load over effective capacity; the rotation loop calls a worker hot above 0.85. */
+    /** Weighted load over the worker's local workload target. */
     utilization: number;
     sends_attempted_1h: number;
     sends_succeeded_1h: number;

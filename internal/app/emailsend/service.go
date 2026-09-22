@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/app/dailythrottle"
 	"github.com/warmbly/warmbly/internal/app/feature"
 	"github.com/warmbly/warmbly/internal/config"
@@ -13,6 +14,7 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/repository"
 	"github.com/warmbly/warmbly/internal/scheduler"
+	"github.com/warmbly/warmbly/internal/tasks"
 	"github.com/warmbly/warmbly/internal/tasks/proto"
 	"github.com/warmbly/warmbly/internal/tasksched"
 )
@@ -61,6 +63,21 @@ type emailSendService struct {
 	// orgRiskRepo stops a suspended workspace sending. Optional/nil-safe: no
 	// repository means no organization is ever gated on risk.
 	orgRiskRepo repository.OrgRiskRepository
+	// trackedLinkRepo stores the click tickets a tracked direct send mints.
+	// Optional: without it the pixel still goes on and links ship untouched.
+	trackedLinkRepo repository.TrackedLinkRepository
+}
+
+// WireTrackedLinks attaches the click-ticket store. Off the constructor for the
+// same reason as org risk: the service stays constructible without it.
+func (s *emailSendService) WireTrackedLinks(r repository.TrackedLinkRepository) {
+	s.trackedLinkRepo = r
+}
+
+// TrackedLinksAware is the optional capability the caller uses to attach the
+// click-ticket store.
+type TrackedLinksAware interface {
+	WireTrackedLinks(r repository.TrackedLinkRepository)
 }
 
 // WireOrgRisk attaches the organization risk posture. Kept off the constructor
@@ -117,10 +134,15 @@ func (s *emailSendService) SendEmail(ctx context.Context, userID, orgID, account
 		}
 	}
 
-	// Validate email account exists and belongs to user/org
-	_, xerr := s.emailRepo.GetByID(ctx, accountID)
+	// GetByID is unscoped (the org-scoped Get omits worker_id, which the
+	// send needs), so the tenant check lives here: a foreign mailbox id is
+	// indistinguishable from a missing one.
+	account, xerr := s.emailRepo.GetByID(ctx, accountID)
 	if xerr != nil {
 		return nil, xerr
+	}
+	if account == nil || account.OrganizationID == nil || *account.OrganizationID != orgID {
+		return nil, errx.New(errx.NotFound, "email account not found")
 	}
 
 	// Check CanUseUnibox feature gate
@@ -238,6 +260,8 @@ func (s *emailSendService) SendEmail(ctx context.Context, userID, orgID, account
 		threadID = &req.ThreadID
 	}
 
+	bodyHTML, tracked := s.applyDirectTracking(ctx, account, taskID, req.BodyHTML)
+
 	emailTask := &repository.EmailTask{
 		TaskID:    taskID,
 		To:        req.To,
@@ -246,11 +270,12 @@ func (s *emailSendService) SendEmail(ctx context.Context, userID, orgID, account
 		InReplyTo: req.InReplyTo,
 		Subject:   req.Subject,
 		Body:      req.BodyPlain,
-		BodyHTML:  req.BodyHTML,
+		BodyHTML:  bodyHTML,
 		BodyPlain: req.BodyPlain,
 		ThreadID:  threadID,
 		SendMode:  sendMode,
 		Encrypted: false,
+		Tracked:   tracked,
 	}
 
 	if err := s.taskRepo.CreateEmailTaskFull(ctx, task, emailTask); err != nil {
@@ -279,4 +304,45 @@ func (s *emailSendService) SendEmail(ctx context.Context, userID, orgID, account
 		ScheduledAt: scheduledAt,
 		SendMode:    sendMode,
 	}, nil
+}
+
+// applyDirectTracking adds the open pixel and click tickets to a hand-written
+// send, when the sending mailbox has opted in. Returns the body to send and
+// whether anything was actually injected.
+//
+// Unlike a campaign, a direct send has no contact or sequence, so clicks are
+// counted on the send itself rather than written to email_link_clicks. The
+// tickets still need a row to resolve against, minted with a nil campaign id;
+// tracked_links carries no foreign key on that column.
+func (s *emailSendService) applyDirectTracking(ctx context.Context, account *models.Email, taskID uuid.UUID, bodyHTML string) (string, bool) {
+	if account == nil || !account.TrackDirectMail || bodyHTML == "" {
+		return bodyHTML, false
+	}
+	host := tasks.MailboxTrackingHost(account)
+	if host == "" {
+		// No tracking host on this install: a pixel would point nowhere and
+		// every wrapped link would 404. Send it clean.
+		return bodyHTML, false
+	}
+
+	body := tasks.AddOpenTrackingPixel(bodyHTML, taskID, host)
+
+	if s.trackedLinkRepo != nil {
+		wrapped, links := tasks.TrackLinks(body, tasks.LinkTracking{
+			TaskID:         taskID,
+			TrackingDomain: host,
+			Wrap:           true,
+		})
+		if len(links) == 0 {
+			body = wrapped
+		} else if err := s.trackedLinkRepo.CreateBatch(ctx, links); err != nil {
+			// Same posture as the campaign path: working links beat tickets
+			// that would 404. The pixel is unaffected.
+			log.Warn().Err(err).Str("task_id", taskID.String()).Msg("failed to store direct-mail link tickets; sending links untracked")
+		} else {
+			body = wrapped
+		}
+	}
+
+	return body, true
 }

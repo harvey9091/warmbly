@@ -56,6 +56,8 @@ type CRMRepository interface {
 	TasksSummary(ctx context.Context, orgID uuid.UUID, filters models.SearchTasks) (*models.TasksSummary, error)
 	UpdateCRMTask(ctx context.Context, orgID, taskID uuid.UUID, data *models.UpdateCRMTask) (*models.CRMTask, error)
 	DeleteCRMTask(ctx context.Context, orgID, taskID uuid.UUID) error
+	BulkDeleteCRMTasks(ctx context.Context, orgID uuid.UUID, sel models.TaskSelection, cap int) (matched, affected int64, err error)
+	BulkUpdateCRMTasks(ctx context.Context, orgID uuid.UUID, userID *uuid.UUID, sel models.TaskSelection, data *models.BulkUpdateTasks, cap int) (matched, affected int64, err error)
 
 	// CRM Task Types (user-managed)
 	ListTaskTypes(ctx context.Context, orgID uuid.UUID) ([]models.CRMTaskType, error)
@@ -77,6 +79,10 @@ func NewCRMRepository(db *pgxpool.Pool) CRMRepository {
 // =====================
 
 func (r *crmRepository) CreateNote(ctx context.Context, orgID, contactID, userID uuid.UUID, content string) (*models.ContactNote, error) {
+	if err := r.verifyRefs(ctx, orgID, crmRefs{ContactID: &contactID}); err != nil {
+		return nil, err
+	}
+
 	query := `
 		INSERT INTO contact_notes (contact_id, organization_id, user_id, content)
 		VALUES ($1, $2, $3, $4)
@@ -328,7 +334,7 @@ func (r *crmRepository) GetPipeline(ctx context.Context, orgID, pipelineID uuid.
 		SELECT ps.id, ps.pipeline_id, ps.name, ps.color, ps.position, ps.created_at, ps.updated_at,
 		       COUNT(d.id) AS deal_count
 		FROM pipeline_stages ps
-		LEFT JOIN deals d ON d.stage_id = ps.id AND d.status = 'open'
+		LEFT JOIN deals d ON d.stage_id = ps.id AND d.pipeline_id = ps.pipeline_id AND d.status = 'open'
 		WHERE ps.pipeline_id = $1
 		GROUP BY ps.id
 		ORDER BY ps.position ASC
@@ -403,7 +409,7 @@ func (r *crmRepository) ListPipelines(ctx context.Context, orgID uuid.UUID) ([]m
 		SELECT ps.id, ps.pipeline_id, ps.name, ps.color, ps.position, ps.created_at, ps.updated_at,
 		       COUNT(d.id) AS deal_count
 		FROM pipeline_stages ps
-		LEFT JOIN deals d ON d.stage_id = ps.id AND d.status = 'open'
+		LEFT JOIN deals d ON d.stage_id = ps.id AND d.pipeline_id = ps.pipeline_id AND d.status = 'open'
 		WHERE ps.pipeline_id = ANY($1)
 		GROUP BY ps.id
 		ORDER BY ps.position ASC
@@ -552,11 +558,70 @@ func (r *crmRepository) DeleteStage(ctx context.Context, orgID, stageID uuid.UUI
 	return nil
 }
 
+// crmRefs names the foreign rows a deal, task or note can point at. Every one
+// of them arrives in the request body, and the read path joins them back onto
+// the row and returns their fields, so each has to be proven to live in the
+// caller's organization before it is stored. The joins carry the tenant
+// predicate as well: a stored reference and a read of it are two separate
+// chances to get this wrong.
+type crmRefs struct {
+	PipelineID      *uuid.UUID
+	StageID         *uuid.UUID
+	ContactID       *uuid.UUID
+	DealID          *uuid.UUID
+	AssignedTo      *uuid.UUID
+	AssignedTeamID  *uuid.UUID
+	CampaignID      *uuid.UUID
+	SourceMailboxID *uuid.UUID
+}
+
+// verifyRefs answers ErrNotFound for a reference outside the organization, so a
+// probe cannot tell an id that exists elsewhere from one that exists nowhere.
+func (r *crmRepository) verifyRefs(ctx context.Context, orgID uuid.UUID, refs crmRefs) error {
+	checks := []struct {
+		id  *uuid.UUID
+		sql string
+	}{
+		{refs.PipelineID, `SELECT EXISTS(SELECT 1 FROM pipelines WHERE id = $1 AND organization_id = $2)`},
+		{refs.StageID, `SELECT EXISTS(SELECT 1 FROM pipeline_stages ps JOIN pipelines p ON p.id = ps.pipeline_id WHERE ps.id = $1 AND p.organization_id = $2)`},
+		{refs.ContactID, `SELECT EXISTS(SELECT 1 FROM contacts WHERE id = $1 AND organization_id = $2)`},
+		{refs.DealID, `SELECT EXISTS(SELECT 1 FROM deals WHERE id = $1 AND organization_id = $2)`},
+		{refs.AssignedTo, `SELECT EXISTS(SELECT 1 FROM organization_members WHERE user_id = $1 AND organization_id = $2)`},
+		{refs.AssignedTeamID, `SELECT EXISTS(SELECT 1 FROM teams WHERE id = $1 AND organization_id = $2)`},
+		{refs.CampaignID, `SELECT EXISTS(SELECT 1 FROM campaigns WHERE id = $1 AND organization_id = $2)`},
+		{refs.SourceMailboxID, `SELECT EXISTS(SELECT 1 FROM email_accounts WHERE id = $1 AND organization_id = $2)`},
+	}
+	for _, c := range checks {
+		if c.id == nil || *c.id == uuid.Nil {
+			continue
+		}
+		var ok bool
+		if err := r.db.QueryRow(ctx, c.sql, *c.id, orgID).Scan(&ok); err != nil {
+			return err
+		}
+		if !ok {
+			return errx.ErrNotFound
+		}
+	}
+	return nil
+}
+
 // =====================
 // Deals
 // =====================
 
 func (r *crmRepository) CreateDeal(ctx context.Context, orgID uuid.UUID, data *models.CreateDeal) (*models.Deal, error) {
+	if err := r.verifyRefs(ctx, orgID, crmRefs{
+		PipelineID:      &data.PipelineID,
+		StageID:         &data.StageID,
+		ContactID:       data.ContactID,
+		AssignedTo:      data.AssignedTo,
+		CampaignID:      data.CampaignID,
+		SourceMailboxID: data.SourceMailboxID,
+	}); err != nil {
+		return nil, err
+	}
+
 	currency := data.Currency
 	if currency == "" {
 		currency = "USD"
@@ -680,6 +745,14 @@ func (r *crmRepository) ListDeals(ctx context.Context, orgID uuid.UUID, pipeline
 }
 
 func (r *crmRepository) UpdateDeal(ctx context.Context, orgID, dealID uuid.UUID, data *models.UpdateDeal) (*models.Deal, error) {
+	if err := r.verifyRefs(ctx, orgID, crmRefs{
+		StageID:    data.StageID,
+		ContactID:  data.ContactID,
+		AssignedTo: data.AssignedTo,
+	}); err != nil {
+		return nil, err
+	}
+
 	setClauses := []string{}
 	args := []any{orgID, dealID}
 	argPos := 3
@@ -925,9 +998,9 @@ func (r *crmRepository) SearchDeals(ctx context.Context, orgID uuid.UUID, filter
 		       ps.name, ps.color, ps.position,
 		       cam.name
 		FROM deals d
-		LEFT JOIN contacts co ON co.id = d.contact_id
-		LEFT JOIN pipeline_stages ps ON ps.id = d.stage_id
-		LEFT JOIN campaigns cam ON cam.id = d.campaign_id
+		LEFT JOIN contacts co ON co.id = d.contact_id AND co.organization_id = d.organization_id
+		LEFT JOIN pipeline_stages ps ON ps.id = d.stage_id AND ps.pipeline_id = d.pipeline_id
+		LEFT JOIN campaigns cam ON cam.id = d.campaign_id AND cam.organization_id = d.organization_id
 		WHERE %s
 		ORDER BY %s %s NULLS LAST, d.id DESC
 		LIMIT $%d OFFSET $%d
@@ -1067,6 +1140,15 @@ func (r *crmRepository) DealsSummary(ctx context.Context, orgID uuid.UUID, filte
 // =====================
 
 func (r *crmRepository) CreateCRMTask(ctx context.Context, orgID, userID uuid.UUID, data *models.CreateCRMTask) (*models.CRMTask, error) {
+	if err := r.verifyRefs(ctx, orgID, crmRefs{
+		ContactID:      data.ContactID,
+		DealID:         data.DealID,
+		AssignedTo:     data.AssignedTo,
+		AssignedTeamID: data.AssignedTeamID,
+	}); err != nil {
+		return nil, err
+	}
+
 	priority := data.Priority
 	if priority == "" {
 		priority = "medium"
@@ -1243,12 +1325,14 @@ func taskSearchWhere(orgID uuid.UUID, f models.SearchTasks) ([]string, []any) {
 		pos++
 	}
 
-	if f.ContactID != nil {
+	// Empty means "not filtering", not "the task whose contact is the empty
+	// string": the column is a uuid and Postgres refuses the comparison.
+	if f.ContactID != nil && strings.TrimSpace(*f.ContactID) != "" {
 		clauses = append(clauses, fmt.Sprintf("t.contact_id = $%d", pos))
 		args = append(args, *f.ContactID)
 		pos++
 	}
-	if f.DealID != nil {
+	if f.DealID != nil && strings.TrimSpace(*f.DealID) != "" {
 		clauses = append(clauses, fmt.Sprintf("t.deal_id = $%d", pos))
 		args = append(args, *f.DealID)
 		pos++
@@ -1387,7 +1471,180 @@ func (r *crmRepository) TasksSummary(ctx context.Context, orgID uuid.UUID, filte
 	return &s, nil
 }
 
+// taskSelectionWhere builds the WHERE clause naming the tasks a bulk action
+// applies to, aliased `t` like taskSearchWhere. An id list becomes a plain
+// ANY(); a select-all reuses the search's own WHERE so the set acted on is
+// exactly the set the list was showing, minus the rows unticked afterwards.
+func taskSelectionWhere(orgID uuid.UUID, sel models.TaskSelection) (string, []any, error) {
+	if !sel.All {
+		ids, err := parseUUIDs(sel.Tasks)
+		if err != nil {
+			return "", nil, err
+		}
+		return "t.organization_id = $1 AND t.id = ANY($2)", []any{orgID, ids}, nil
+	}
+	if sel.Filters == nil {
+		return "", nil, errx.New(errx.BadRequest, "a select-all request must carry the filters it applies to")
+	}
+	clauses, args := taskSearchWhere(orgID, *sel.Filters)
+	if len(sel.Exclude) > 0 {
+		excluded, err := parseUUIDs(sel.Exclude)
+		if err != nil {
+			return "", nil, err
+		}
+		clauses = append(clauses, fmt.Sprintf("t.id <> ALL($%d)", len(args)+1))
+		args = append(args, excluded)
+	}
+	return strings.Join(clauses, " AND "), args, nil
+}
+
+func parseUUIDs(raw []string) ([]uuid.UUID, error) {
+	out := make([]uuid.UUID, 0, len(raw))
+	for _, v := range raw {
+		id, err := uuid.Parse(strings.TrimSpace(v))
+		if err != nil {
+			return nil, errx.ErrUuid
+		}
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+// BulkDeleteCRMTasks deletes every task in the selection, returning how many
+// the selection matched and how many were deleted. The cap is enforced inside
+// the statement, so an over-cap selection deletes nothing.
+//
+// The candidate set stops at cap+1 rows: one more than the cap is all it takes
+// to know the selection is over it, and a broad filter would otherwise lock
+// every matching row in the workspace only to refuse the delete.
+func (r *crmRepository) BulkDeleteCRMTasks(ctx context.Context, orgID uuid.UUID, sel models.TaskSelection, cap int) (matched, affected int64, err error) {
+	where, args, err := taskSelectionWhere(orgID, sel)
+	if err != nil {
+		return 0, 0, err
+	}
+	capPos := len(args) + 1
+	args = append(args, cap, cap+1)
+	query := fmt.Sprintf(`
+		WITH candidate AS (
+			SELECT t.id FROM crm_tasks t WHERE %s FOR UPDATE LIMIT $%d
+		), bounded AS (
+			SELECT c.id, (SELECT COUNT(*) FROM candidate) AS matched FROM candidate c
+		), del AS (
+			DELETE FROM crm_tasks t
+			USING bounded b
+			WHERE t.id = b.id AND b.matched <= $%d
+			RETURNING t.id
+		)
+		SELECT (SELECT COUNT(*) FROM candidate), (SELECT COUNT(*) FROM del)
+	`, where, capPos+1, capPos)
+
+	if err := r.db.QueryRow(ctx, query, args...).Scan(&matched, &affected); err != nil {
+		return 0, 0, err
+	}
+	return matched, affected, nil
+}
+
+// BulkUpdateCRMTasks writes the given fields onto every task in the selection,
+// returning how many the selection matched and how many were written.
+//
+// One statement, not a read followed by a write: it locks the selected rows,
+// counts them, updates them, and records the completion activity for exactly
+// the rows this statement moved into "completed". Reading the candidates
+// separately let two concurrent bulk completes both see the same pending row
+// and both log it, left the stamp below keyed on a status that could change
+// underneath it, and let a selection grow past the cap between the count and
+// the write. Over the cap, matched comes back and nothing is written.
+func (r *crmRepository) BulkUpdateCRMTasks(ctx context.Context, orgID uuid.UUID, userID *uuid.UUID, sel models.TaskSelection, data *models.BulkUpdateTasks, cap int) (matched, affected int64, err error) {
+	where, args, err := taskSelectionWhere(orgID, sel)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	completing := data.Status != nil && *data.Status == string(models.CRMTaskStatusCompleted)
+	setClauses := []string{}
+	pos := len(args) + 1
+	if data.Status != nil {
+		setClauses = append(setClauses, fmt.Sprintf("status = $%d", pos))
+		args = append(args, *data.Status)
+		pos++
+		if completing {
+			// Only the transition stamps the time. A selection routinely covers
+			// rows that are already done, and repeating the action must not
+			// rewrite when they were finished.
+			setClauses = append(setClauses,
+				"completed_at = CASE WHEN b.old_status <> 'completed' THEN NOW() ELSE b.old_completed_at END")
+		} else {
+			// Off completed there is no completion time, same as the
+			// single-task update.
+			setClauses = append(setClauses, "completed_at = NULL")
+		}
+	}
+	if data.Priority != nil {
+		setClauses = append(setClauses, fmt.Sprintf("priority = $%d", pos))
+		args = append(args, *data.Priority)
+		pos++
+	}
+	if len(setClauses) == 0 {
+		return 0, 0, errx.ErrNotEnough
+	}
+	setClauses = append(setClauses, "updated_at = NOW()")
+
+	// A data-modifying CTE always runs to completion whether or not the outer
+	// query reads it, so the activity insert needs no second round trip.
+	activity := ""
+	if completing {
+		activity = fmt.Sprintf(`, act AS (
+			INSERT INTO contact_activities (contact_id, organization_id, user_id, activity_type, metadata)
+			SELECT u.contact_id, u.organization_id, $%d, $%d,
+			       jsonb_build_object('task_id', u.id::text, 'task_title', u.title)
+			FROM upd u
+			WHERE u.contact_id IS NOT NULL AND u.old_status <> 'completed'
+		)`, pos, pos+1)
+		args = append(args, userID, models.ActivityTaskCompleted)
+	}
+
+	// The cap is enforced HERE rather than by a COUNT beforehand: between a
+	// separate count and this write, a concurrent action can add matching rows
+	// and carry the selection past the limit. Joining on `matched <= cap` makes
+	// the refusal part of the same statement, so an over-cap selection writes
+	// nothing at all. FOR UPDATE cannot sit beside a window function, hence the
+	// second CTE for the count. Stopping the candidate set at cap+1 keeps the
+	// lock footprint bounded: over the cap is over the cap, and the rows past
+	// it are never written.
+	capPos := len(args) + 1
+	args = append(args, cap, cap+1)
+	query := fmt.Sprintf(`
+		WITH candidate AS (
+			SELECT t.id, t.status AS old_status, t.completed_at AS old_completed_at
+			FROM crm_tasks t
+			WHERE %s
+			FOR UPDATE
+			LIMIT $%d
+		), bounded AS (
+			SELECT c.*, (SELECT COUNT(*) FROM candidate) AS matched FROM candidate c
+		), upd AS (
+			UPDATE crm_tasks t SET %s
+			FROM bounded b
+			WHERE t.id = b.id AND b.matched <= $%d
+			RETURNING t.id, t.contact_id, t.organization_id, t.title, b.old_status
+		)%s
+		SELECT (SELECT COUNT(*) FROM candidate), (SELECT COUNT(*) FROM upd)
+	`, where, capPos+1, strings.Join(setClauses, ", "), capPos, activity)
+
+	if err := r.db.QueryRow(ctx, query, args...).Scan(&matched, &affected); err != nil {
+		return 0, 0, err
+	}
+	return matched, affected, nil
+}
+
 func (r *crmRepository) UpdateCRMTask(ctx context.Context, orgID, taskID uuid.UUID, data *models.UpdateCRMTask) (*models.CRMTask, error) {
+	if err := r.verifyRefs(ctx, orgID, crmRefs{
+		AssignedTo:     data.AssignedTo,
+		AssignedTeamID: data.AssignedTeamID,
+	}); err != nil {
+		return nil, err
+	}
+
 	setClauses := []string{}
 	args := []any{orgID, taskID}
 	argPos := 3
@@ -1434,6 +1691,11 @@ func (r *crmRepository) UpdateCRMTask(ctx context.Context, orgID, taskID uuid.UU
 
 		if *data.Status == "completed" {
 			setClauses = append(setClauses, "completed_at = NOW()")
+		} else {
+			// completed_at is when the task was finished, so a task moved back
+			// off completed has no such time; leaving the old one behind shows
+			// a pending task as having been finished days ago.
+			setClauses = append(setClauses, "completed_at = NULL")
 		}
 	}
 

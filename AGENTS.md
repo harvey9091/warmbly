@@ -177,9 +177,85 @@ Do not:
 - do not run the Go test suite as a default gate unless the task is specifically about those tests.
 - do not push hoping CI passes; a `gofmt -l` / `make lint` / `pnpm typecheck` failure is always a real CI failure.
 
+## Security And Compliance Invariants
+
+Warmbly's Google OAuth client is assessed against **ADA CASA v2.1.1 at Assurance Level 1**, which maps to OWASP ASVS 4.0.3. The evidence pack is a claim about the code on `main`: a change that breaks one of the invariants below does not just introduce a bug, it makes a submitted statement untrue and puts the OAuth client's verification at risk. Treat them as constraints on every change, not as a checklist run before an audit.
+
+**The pack is not in this repository and must not be added to it.** It maps every control to the file that implements it and lists the advisories still open with the exact conditions under which each is reachable. That is a reconnaissance document for anyone attacking a self-hosted instance that has not updated, which is the same reason the disclosure rule below exists. It lives outside the tree, at `CASA_EVIDENCE_DIR` (default `~/warmbly-casa-private/casa`), and `make casa-evidence` refuses to write anywhere inside the repository.
+
+What stays here is this section: the invariants themselves, stated as what the code does rather than as what it would otherwise allow. When a change alters a control, update the pack in the same sitting, because nothing in CI can tell you the pack has gone stale.
+
+### Disclosure: this repository is public and the product self-hosts
+
+Every instance that has not updated yet runs the code an attacker can read here. So:
+
+- **describe the invariant, never the gap.** A comment, commit subject, PR body or doc that says what used to be possible is a working exploit for every unpatched instance. Write "every read of an organization's data is scoped by `organization_id`", not "before this, X could read Y"
+- do not add a before-and-after account of a security fix to the repository. Keep that out of tree
+- a security fix ships like any other change: a normal subject line naming what the code now does
+
+### Authentication
+
+- passwords are hashed with **Argon2id** and nothing else. No change may introduce a second scheme, weaken the parameters, or store a password in any reversible form
+- `crypt.CheckPassword` (`internal/pkg/crypt/validation.go`) is the only gate on a new or changed password, and it refuses anything on the embedded NCSC breached list (`internal/pkg/crypt/passwords/breached.txt`). Every path that accepts a password must call it: registration, reset, change, invitation acceptance, and any future one
+- every auth-sensitive entry point is behind CAPTCHA (`internal/pkg/captcha/turnstile.go`): login, registration, password reset, confirmation
+- TOTP verification records the step it consumed (`user_totp_settings.last_used_step`) and refuses a replay of it. Any new second factor needs equivalent single-use enforcement
+- **admin routes require a session that verified a second factor.** `middleware.RequireAdminPermission` refuses `!session.MFAVerified` with `admin_mfa_required`. Never add an admin route that bypasses it
+- an operation that changes who can get in, or moves money or ownership, requires a fresh authentication (`middleware.RequireFreshAuth`, `POST /v1/auth/reauth`). API-key and OAuth callers pass through, because they present a credential on every call and have no session to refresh
+- a federated identity (Google, Apple, OIDC) is bound to an account by `(issuer, subject)`. The email fallback that finds an existing account on a first sign-in attaches the identity to a password account only after that password is presented (`resolveFederatedUser` parks it as `link_required`, `SSOLinkConfirm` completes it through `finishLoginAs`). Only an account with no password links on the address alone
+
+### Sessions and tokens
+
+- **every token carries a purpose** and is verified against the one purpose its consumer accepts (`internal/app/token/config.go`: `access`, `refresh`, `ws`, `login`, `registration`, `reset`, `2fa`). A token minted for one flow must never verify in another. A new token type gets a new purpose constant, not a reused one
+- `VerifyToken` pins the algorithm to HS256 and requires an expiry. Do not relax either, and do not add a verification path that skips `token.VerifyToken`
+- `AUTH_SECRET` has a hard floor of `config.MinAuthSecretLength` (32 bytes) and the backend refuses to boot below it. The realtime service applies the same floor to `JWT_SECRET`, which is the same value. Neither check may become a warning
+- banning a user, changing a password and revoking a session all terminate the sessions they invalidate. A new "lock this account" path must revoke too, or it locks nothing
+
+### Access control: the rule that is easiest to get wrong
+
+**The route's permission gate and the service's data scope must agree, and both must be the organization.** Mailboxes, contacts, campaigns, tokens and message content are organization assets; they are not owned by the member who created them.
+
+A route gated on an organization permission whose service then filters by `user_id` produces the worst kind of failure: the resource is listed, the caller passes the gate, and the write returns "not found". It reads as data corruption and it strands resources permanently when the member who created them leaves. Going the other way, a user-scoped gate with an organization-scoped query is a tenant leak.
+
+So, for anything organization-owned:
+
+- the SQL predicate is `organization_id = $1`. A helper that takes a "scope" fragment gets the organization one
+- the handler resolves the tenant with `middleware.GetOrganizationID(c)` and refuses when it is absent
+- ownership is checked against the caller's organization before any side effect is published, not after
+- `user_id` stays on the row as a record of who connected it, and is used for attribution and for addressing worker events. It is not an authorization key
+
+Everything else in section 3 of the evidence pack rests on this: no identifier from the request body may select a row without a tenant predicate, and a reference to another entity (a campaign, a contact, a task) is verified to belong to the same organization before it is accepted.
+
+### Communications
+
+- `middleware.SecurityHeaders` sets HSTS, `X-Content-Type-Options`, `X-Frame-Options`, a referrer policy and a default-deny CSP on every API response. Do not remove a header to make a page work; scope the exception
+- the realtime websocket checks the browser's `Origin` against `CHECK_ORIGIN_HOSTS`. Non-browser clients send no origin and are unaffected. Adding a first-party origin means adding it to that list in every environment
+- webhook targets stay HTTPS and HMAC-signed, and SSRF-prone destinations are refused. Only a self-hosted or development instance may opt out
+
+### Input that other people see
+
+Anything one person types that Warmbly later shows to someone else is content injection waiting to happen, and platform email is the worst case: a mail client turns anything shaped like an address into a live link, sent under Warmbly's own domain. `html/template` escaping stops markup, not that. So:
+
+- **every name a person chooses goes through `internal/pkg/displayname`**: first and last names, workspace names, and any new name-like field that can reach another person. It refuses links, web addresses, email addresses, hostnames and IPs (after folding full-width and ideographic dots), control, invisible and bidi characters, markup characters and stacked combining marks, and it bounds length by `Kind`. The refusal is `400 invalid_name`, documented in `api/error-codes.mdx`
+- **the server is the authority and the check sits at every write**, not only the one the dashboard uses: the handler or service behind registration, setup, onboarding, profile, org create and rename, the admin panel, `warmblyctl` and an org-transfer import. A new path that writes one of these fields calls the same package. `web/src/lib/displayName.ts` mirrors the rules so a form can explain a refusal before the request, and it is never the only check
+- **a value nobody can be asked to correct is cleaned, not refused**: a name from an identity provider or an email local part goes through `displayname.Clean`/`FromEmail`, which drops what fails, so a hostile IdP claim costs the user a name, not a sign-in
+- **a stored value is untrusted at render time too.** Rows written before a rule existed are still in the database, so anything interpolated into an email body or subject goes through `displayname.Displayable` (or `FullName`) with a neutral fallback ("A team member", "Your workspace")
+- **tighten a rule in both places and in the docs together**: Go package, `displayName.ts`, their tests, and the `invalid_name` section of `api/error-codes.mdx`
+
+### Errors, logging and data exposure
+
+- a server-class (`Internal`) error answers the caller with one fixed sentence and a request id. The real message is logged against that id. `errx.NewPublic` is the narrow exception, for a message an operator can act on, and never for one built from an underlying error
+- no secret, credential, token or full DSN may reach a log line, an error message or an analytics event. Errors sent to PostHog go through `internal/observability/errs`, and the database wrapper strips parameter values
+- ciphertext columns carry the right key domain. `KeyDomainInstance` is `CREDENTIALS_ENCRYPTION_KEY`, `KeyDomainOrgDEK` is the per-organization DEK. They are not interchangeable
+
+### Dependencies and configuration
+
+- `make casa-evidence` runs `govulncheck`, the Node, Rust and Elixir audits and a Trivy scan, writing outside the repository. A reachable vulnerability with an upstream fix is fixed; one without gets a written justification in the pack, not silence. Do not paste scanner output, an advisory id or a reachability note into this repository
+- no credential of any kind is committed. A node in the fleet holds no cloud credential: the privileged operations are brokered through the internal API
+- a new environment variable is documented in `docs/content/docs/development/configuration.mdx` in the same change
+
 ## Local Development
 
-Event codec: `CODEC_PROVIDER=json` is required wherever workers are exercised (the worker command/result envelopes carry untyped bodies Avro cannot serialize); the Makefile and docker-compose set it everywhere. `tracking-events` reads the same setting: the consumer decodes both of its topics with one codec, so the Rust publisher honours `CODEC_PROVIDER` on Kafka as well as on NATS. Avro there needs a Schema Registry and is refused at boot without one; JSON needs nothing.
+Event codec: `json` is the default the Makefile and docker-compose set, because it needs nothing. `avro` works too: the worker command and result envelopes carry an `any` body, and a schema is derived for each from the declared registry in `internal/models/event_variants.go` (see `event_schema.go`), so a new event type is not carried until it is added there. It is only compiled into the `-kafka` images and resolves every event against `SCHEMA_REGISTRY_URL`. `tracking-events` reads the same setting: the consumer decodes both of its topics with one codec, so the Rust publisher honours `CODEC_PROVIDER` on Kafka as well as on NATS. Avro there needs a Schema Registry and is refused at boot without one; JSON needs nothing.
 
 Infra runs in docker; the Go services and frontends run natively on the host for fast iteration — no docker image rebuilds when you change app code. Targets live in the `Makefile`.
 
@@ -226,7 +302,7 @@ Everything in the dashboard must use our own theme, not browser/library defaults
 - Multi-select tables: when rows are selected, show a floating bottom-center selection bar with the count + bulk actions (mirror `SelectionBar` in contacts `ContactsTable.tsx`).
 - Row actions must be reachable on touch: never hide the only affordance behind `opacity-0 group-hover` with no mobile fallback. Use `opacity-100 md:opacity-0 md:group-hover:opacity-100`, or surface actions in the detail drawer.
 - Confirmations: never use the native `window.confirm` / `alert` / `prompt`. Use the in-app confirm: `const confirm = useConfirm()` (from `@/hooks/context/confirm`), then `confirm.show(text, onSubmit)`. `onSubmit` is awaited and the provider renders its own loading spinner, so pass an `async` callback (prefer `mutateAsync` over callback-style `mutate`). For the synchronous `if (!window.confirm(x)) return; act()` pattern, restructure to `confirm.show(x, act)`; for close-while-dirty guards, route every close path (Escape handler, backdrop `onMouseDown`, close button) through one `requestClose()` that calls `confirm.show(...)` when dirty. ConfirmProvider is mounted in `app/app/layout.tsx`, so `useConfirm()` works anywhere under `/app`.
-- Row interactions: list rows behave like the campaigns list — clicking anywhere on a row opens that item's detail (drawer or page); right-side action buttons (3-dots / "More") open a relevant detail/tab (e.g. the mailbox 3-dots opens the Settings tab of `InboxDetails`). Inner interactive controls (checkbox, dropdown trigger, action buttons) must `e.stopPropagation()` so they don't also fire the row's open handler.
+- Row interactions: list rows behave like the campaigns list — clicking anywhere on a row opens that item's detail (drawer or page); right-side action buttons (3-dots / "More") either open a relevant detail/tab or drop a short menu of the actions for that row (the mailbox 3-dots menus Settings and Disconnect). A destructive action belongs in that menu as a `danger` item as well as in the detail's own danger zone, because the selection bar is not where anyone looks to remove one row. Inner interactive controls (checkbox, dropdown trigger, action buttons) must `e.stopPropagation()` so they don't also fire the row's open handler.
 - Prefer realtime over polling: subscribe to the socket and `queryClient.invalidateQueries(...)` on the relevant event instead of `refetchInterval` where an event exists (see `useRealtimeEvents` / `RealtimeManager`).
 - Interaction details are part of "done". Before calling a dashboard change finished, walk the small things a user hits in the first minute, because these are what make the product feel broken even when the data flow is right:
   - every dropdown / popover / picker closes on click-away and on Escape, including when it sits inside a dialog or drawer. Dialog cards stop `mousedown` propagation so the backdrop does not close them; React's `stopPropagation` also stops the native event, so any click-outside listener must be registered in the **capture** phase (`document.addEventListener("mousedown", fn, true)`, as `PopoverMenu` and `useClickOutside` do), never the bubble phase. Escape must close only the innermost layer: the dialog's Escape handler bails out while a `[data-floating]` popover or the `[role="alertdialog"]` confirm is on screen
@@ -390,9 +466,16 @@ Warmup traffic is also separated by pool:
 
 This is modeled in:
 
-- `internal/infrastructure/db/migrations/000010_warmup_pools.up.sql`
+- `internal/infrastructure/db/migrations/000001_baseline.up.sql` (the `warmup_pools` and `warmup_pool_participants` tables)
+- `internal/infrastructure/db/migrations/000156_seed_warmup_pools.up.sql`
 - `internal/repository/pg_warmup.go`
 - `internal/tasks/email_task.go`
+
+Migration 000156 guarantees exactly one pool per type on every instance, under `models.WarmupPoolFreeID` and `models.WarmupPoolPremiumID` (`warmup_pools_pool_type_key` makes it structural, and the migration moves any pre-existing pool onto those ids). Nothing else may insert into `warmup_pools`: not the sandbox, not the dev scripts, not a test fixture.
+
+Crossing tiers is an exchange and lives in one place: `WarmupPartnerCandidates` in `pg_warmup.go` returns a sender's own tier plus, when premium is thin (fewer than `WarmupPoolTierFallbackFloor` other recipients), up to that many proven free mailboxes (healthy, never blocked, members for `WarmupPoolFallbackMinAgeDays`, workspace not restricted or suspended), and for a free sender that meets the same bar, the premium mailboxes that verifiably wrote to it within `WarmupPoolReturnVisitDays`. `models.WarmupPoolBorrowsFrom` and `models.WarmupPoolReturnsTo` are the two directions and mirror each other, so nothing unsolicited from the free tier reaches a paying inbox: the paying side always opens the exchange. Before this half existed a thin premium tier sent into the free tier and received almost nothing (#633). Every candidate carries the pool it was drawn from (`PoolType`) and how it got there (`Origin`); the selector and the scheduler both read that one method, so they cannot disagree about who is reachable. A routing rule of weight 0 is an exclusion, not a weight: the candidate is dropped before the draw (and refused on the reply-back path), so a pool of one cannot smuggle it back, and a tick with nothing left ends in `errAllPartnersExcluded` rather than mailing an excluded address (#501). The selector draws its own tier's fresh partners before a borrowed one, but a return visit ranks with the own tier, or a free mailbox with a hundred fresh siblings would never pay a paying inbox back. Every candidate is gated with `CanParticipate` pinned to the pool it was drawn from; gating a borrowed recipient against the sender's pool is what made borrowing dead for months (#495). The reply-back (`directedWarmupPartner`) crosses tiers on the same terms and is refused when the free workspace is restricted.
+
+Reciprocity is a weight and a cap, both read off the candidate. Each carries its verified sends and arrivals over seven days; `Starvation` (how far behind an inbox is on what it sent) multiplies its draw weight by up to `1 + reciprocityBoostK`, fading to nothing at parity, so the pool's traffic flows to whoever is owed the most and settles there instead of overshooting. `InboundDailyCap` (`WarmupInboundDailyMultiple` times daily sends, between `WarmupInboundDailyFloor` and `WarmupInboundDailyCeiling`) is applied inside `WarmupPartnerCandidates`, so a recipient at its cap is offered to nobody for the rest of the day and the scheduler's per-day volume cap (`min(target, len(candidates))`) sees the same set. A sender with nobody left to write to sends nothing that tick and rechecks later; do not add a fallback that mails somebody anyway.
 
 Keep this separation intact. Free-tier accounts should not silently mix into premium warmup traffic, and dedicated-worker accounts should still follow the intended warmup pool policy explicitly rather than by accident.
 
@@ -563,7 +646,7 @@ Relevant code:
 - `internal/tasks/email_task.go`
 - `internal/scheduler/warmup_scheduler.go`
 - `internal/repository/pg_warmup.go`
-- `internal/infrastructure/db/migrations/000010_warmup_pools.up.sql`
+- `internal/infrastructure/db/migrations/000156_seed_warmup_pools.up.sql`
 
 ### Pool behavior
 
@@ -572,7 +655,7 @@ Warmup pools are mailbox pools, not campaign lists.
 The intent is:
 
 - only other participating mailboxes are used as warmup recipients
-- recipients can be blocked from the pool if their spam score or their treatment of received warmup mail looks bad
+- recipients can be blocked from the pool if their placement and complaint rates or their treatment of received warmup mail look bad
 - repeated pairings should be reduced
 - warmup should look like low-volume natural traffic, not repetitive synthetic blasting
 
@@ -684,19 +767,20 @@ Signals used:
 
 - every warmup email carries a verification token, minted by the platform, single-use, bound to its recipient
 - no inbound token is evidence against the mailbox that received it. It did not present the token; its worker synced whatever landed in its inbox, and inbound mail is attacker-controlled: every pool member holds tokens naming itself and a partner, and forwarding three to another member used to block that member for 30 days. The recipient check already makes a token worthless anywhere but its own destination, so nothing is charged on that path (#468, #481). Do not reintroduce a charge there, whether gated by a window, a folder check, a clock or by which pair the token names; each of those was tried and each was a way to be wrong (#477, #480)
-- tampering with warmup mail a mailbox verifiably received (deleting it, flagging it as spam) is attributed to that mailbox, because only its owner can do it
-- spam score is accumulated for abusive or suspicious behavior
+- tampering with warmup mail a mailbox verifiably received (deleting it, flagging it as spam) is attributed to that mailbox, because only its owner can do it. It is a ladder, not a first-strike ban: `evaluateMetrics` weighs a deletion as one strike and a spam flag as two over the seven-day window, and warns at one, quarantines at two and blocks at four (`tampering*Strikes` in `internal/app/warmup/service.go`). One deletion is someone tidying the folder by hand until proven otherwise (#635). `RecordTampering` only records the event and re-evaluates, so a sweep reaches the same answer; a tampering block carries a term like every other band and never requires review
+- a deletion is a strike only inside `config.WarmupDeletionStrikeHours` of arrival (`warmupDeletionCounts` in `internal/app/consumer/event_remove_email.go`), and never for a receipt the retention sweep has retired. The engagement a message earns happens in its first hours; after that the platform deletes it itself (#637), so a later removal, whichever of the owner, Gmail's Trash purge, a server retention rule or our own sweep did it, is housekeeping. Gmail's Delete arrives as the `TRASH` label and is judged there on the same rule, because the `messagesDeleted` history record only comes when Trash is emptied, weeks later and in a burst. Do not widen the window or count a removal past it: every mailbox on a fixed quota has to be able to clear the folder
+- warmup mail is retained by the platform, not the owner: `StartWarmupMailRetention` (`internal/app/consumer/warmup_mail_retention.go`) retires every received copy and every sender's copy past the mailbox's window (`email_accounts.warmup_retention_days`, else `retention.warmup_mail_days`) and publishes `WarmupActionDelete` to the worker, which trashes it on Gmail, deletes it on Graph, expunges it on IMAP and drops the stored body. The row is retired only after the action is on the bus, so a failed publish is re-offered. The same loop prunes tokens, receipts, tampering events and spam reports past `retention.warmup_event_days`; `warmup_statistics` carries the analytics and is never pruned
 - accounts can be auto-blocked from warmup pools
 
 Current auto-block thresholds in code:
 
-- spam score `> 50` is documented intent, not code: nothing reads `spam_score` to decide a state (#491); the bands that act are placement, complaint, bounce and tampering
+- there is no accumulating spam score. It was a ratchet fed +5 a placement and +10 a complaint with no denominator, so a busy healthy mailbox and a small struggling one reached the same number and no threshold could separate them; nothing ever read it and it is gone (#491, migration 000157). The bands that act are placement, complaint, bounce and tampering, each with a sample floor, and `last_health_score` carries the severity they decided
 
 Relevant code:
 
 - `internal/app/consumer/event_new_email.go`
 - `internal/repository/pg_warmup.go`
-- `internal/infrastructure/db/migrations/000010_warmup_pools.up.sql`
+- `internal/infrastructure/db/migrations/000156_seed_warmup_pools.up.sql`
 
 ### Paid pool protection policy
 
@@ -774,7 +858,7 @@ Do not automatically restore a blocked mailbox just because time elapsed.
 Two mechanisms make the sentence real, and both are easy to undo by accident:
 
 - a quarantine or block holds until `blocked_until` whatever fresh metrics say. The floor is inside `UpdateParticipantHealth`'s SQL (`internal/repository/pg_warmup.go`), decided against the row at write time, so it is compare-and-swap and an admin unblock landing mid-sweep is not overwritten by the block the sweep read earlier. Equal severity keeps the later end (a 90-day catastrophic block is not cut to 30 by a milder reading); throttled is not floored because the docs promise it lifts on recovery. The bands read windows shorter than the terms they hand out (seven days of placement against a 30-day block), so without this every block cleared within a week, and a re-added mailbox with no history on the next sweep
-- the standing follows the address within the workspace: `warmup_reputation_ledger` is a mirror of the address's worst live standing, written only by the `warmup_reputation_mirror` trigger on `warmup_pool_participants` (migration 000152), so every path that writes a standing keeps it current and no caller can bypass it. The pool row dies on paths that never touch the mailbox (`LeaveAllPools` on an auth error, a lapsed plan, warmup toggled off) and on `HardDeleteUser`'s cascade, which is why a snapshot at mailbox deletion was not enough. `MoveToPool` seeds a new row from it and never consumes it; `Delete` and `LeaveAllPools` only restart its retention window (`config.WarmupReputationLedgerDays`, applied by the purge in `EvaluateAllParticipants`, never while a live row backs it). A review-required block (`blocked_until NULL`) never lapses. A mailbox in good standing has no row, and recovery clears it (#476)
+- the standing follows the address within the workspace: `warmup_reputation_ledger` is a mirror of the address's worst live standing, written only by the `warmup_reputation_mirror` trigger on `warmup_pool_participants` (migration 000152, scoped to the standing columns by 000156 so a pool move does not restart the retention window), so every path that writes a standing keeps it current and no caller can bypass it. The pool row dies on paths that never touch the mailbox (`LeaveAllPools` on an auth error, a lapsed plan, warmup toggled off) and on `HardDeleteUser`'s cascade, which is why a snapshot at mailbox deletion was not enough. `MoveToPool` seeds a new row from it and never consumes it; `Delete` and `LeaveAllPools` only restart its retention window (`config.WarmupReputationLedgerDays`, applied by the purge in `EvaluateAllParticipants`, never while a live row backs it). A review-required block (`blocked_until NULL`) never lapses. A mailbox in good standing has no row, and recovery clears it (#476)
 
 Require the mailbox to pass re-entry checks such as:
 

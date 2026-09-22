@@ -29,6 +29,7 @@ export function TextInput({
     onBlur,
     invalid,
     title,
+    maxLength,
 }: {
     value: string;
     onChange: (v: string) => void;
@@ -48,6 +49,9 @@ export function TextInput({
     // readers. Pair it with `title` (or nearby text) saying what is wrong.
     invalid?: boolean;
     title?: string;
+    // Caps the value in the field itself, for the cases where the server has a
+    // hard limit and silently truncating or failing the save would be worse.
+    maxLength?: number;
 }) {
     return (
         <input
@@ -57,6 +61,7 @@ export function TextInput({
             disabled={disabled}
             autoFocus={autoFocus}
             autoComplete={autoComplete}
+            maxLength={maxLength}
             onChange={(e) => onChange(e.target.value)}
             onKeyDown={onKeyDown}
             onBlur={onBlur}
@@ -131,6 +136,16 @@ export function Label({ children, className }: { children: React.ReactNode; clas
         )}>
             {children}
         </label>
+    );
+}
+
+// The line under a field saying why its value is refused; renders nothing when valid.
+export function FieldError({ message, className }: { message?: string | null; className?: string }) {
+    if (!message) return null;
+    return (
+        <p role="alert" className={cn("mt-1 text-[11.5px] text-red-600", className)}>
+            {message}
+        </p>
     );
 }
 

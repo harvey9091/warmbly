@@ -47,6 +47,15 @@ func (s *emailService) Get(ctx context.Context, orgID, emailAccountID string) (*
 }
 
 func (s *emailService) Update(ctx context.Context, orgID, userID, emailAccountID string, udata *models.UpdateEmail) (*models.Email, *errx.Error) {
+	// A send-as address is checked against what the provider last reported
+	// before it is stored: an alias the provider will not accept produces a
+	// refusal on every send, days later, naming nothing a customer could fix.
+	if udata.SendAsEmail != nil {
+		if xerr := s.validateSendAsChoice(ctx, orgID, emailAccountID, *udata.SendAsEmail); xerr != nil {
+			return nil, xerr
+		}
+	}
+
 	account, err := s.emailRepository.Update(ctx, orgID, emailAccountID, udata)
 	if err != nil {
 		return nil, err
@@ -96,8 +105,11 @@ func (s *emailService) BulkUpdateTags(ctx context.Context, orgID string, emailID
 // live. Seeding the actual warmup task chain is the caller's responsibility
 // (the API handler triggers EnsureWarmupScheduled) — this service has no
 // Cloud Tasks client.
-func (s *emailService) SetWarmupLifecycle(ctx context.Context, userID, emailAccountID, action string) (*models.Email, *errx.Error) {
-	account, err := s.emailRepository.SetWarmupLifecycle(ctx, userID, emailAccountID, action)
+// Scoped to the workspace for the same reason Delete is: warmup is a property
+// of an organization's mailbox, and the route's gate is already the
+// organization's manage-emails permission.
+func (s *emailService) SetWarmupLifecycle(ctx context.Context, orgID, emailAccountID, action string) (*models.Email, *errx.Error) {
+	account, err := s.emailRepository.SetWarmupLifecycle(ctx, orgID, emailAccountID, action)
 	if err != nil {
 		return nil, err
 	}
@@ -282,10 +294,18 @@ func (s *emailService) RefreshDomainAuth(ctx context.Context, orgID, emailAccoun
 
 	// Persist best-effort: the caller asked for a live check and gets the live
 	// answer either way. A failed write only means the sweep re-derives it.
-	_, _ = s.emailRepository.UpdateDomainAuthState(
-		ctx, domain, res.State(), res.SPFFound, res.DKIMFound, res.DMARCFound,
-		res.DMARCPolicy, res.Summary, time.Now(),
-	)
+	//
+	// Confined to the caller's workspace. The verdict comes from public DNS so
+	// it cannot be poisoned, but one workspace pressing "check again" should
+	// not rewrite auth state on every other workspace's mailboxes that happen
+	// to sit on the same domain (gmail.com, say). The background sweep still
+	// covers them all.
+	if org, perr := uuid.Parse(orgID); perr == nil {
+		_, _ = s.emailRepository.UpdateDomainAuthStateForOrg(
+			ctx, org, domain, res.State(), res.SPFFound, res.DKIMFound, res.DMARCFound,
+			res.DMARCPolicy, res.Summary, time.Now(),
+		)
+	}
 	return res, nil
 }
 
@@ -312,25 +332,37 @@ func (s *emailService) resolveDomainAuth(ctx context.Context, orgID, emailAccoun
 // Delete disconnects a mailbox. The worker is told to drop it BEFORE the row
 // goes, because afterwards no assignment is left to read and nothing can repair
 // a missed removal, so a removal that cannot be sent fails the whole delete.
-func (s *emailService) Delete(ctx context.Context, userID, emailAccountID string) *errx.Error {
+//
+// Scoped to the workspace, not to whoever connected the mailbox. A mailbox is
+// an organization asset: the list, the permission gate and every other mutation
+// are organization-scoped, so keying the delete on the connecting user left a
+// mailbox that every admin could see and only one member could ever remove.
+func (s *emailService) Delete(ctx context.Context, orgID, emailAccountID string) *errx.Error {
 	accountID, err := uuid.Parse(emailAccountID)
 	if err != nil {
 		return errx.ErrUuid
 	}
 
-	// Read by id: Get is scoped by organization and was being handed a user id,
-	// so it never found the mailbox and every side effect below was skipped.
-	// Ownership moves here, or the removal below would be publishable for a
-	// mailbox the caller does not own.
+	// Read by id, then check the tenant here: the removal below is published
+	// before the row goes, so it must not be publishable for a mailbox the
+	// caller's workspace does not hold.
 	account, xerr := s.emailRepository.GetByID(ctx, accountID)
 	if xerr != nil {
 		return xerr
 	}
-	if account == nil || !sameUser(account.UserID, userID) {
+	if account == nil || !sameOrg(account.OrganizationID, orgID) {
 		return errx.ErrNotFound
 	}
 
-	if xerr := s.dropFromWorker(ctx, userID, accountID); xerr != nil {
+	// The worker event carries the mailbox's own owner, not the caller: an
+	// admin removing a teammate's mailbox is still removing that teammate's.
+	if xerr := s.dropFromWorker(ctx, account.UserID, accountID); xerr != nil {
+		return xerr
+	}
+
+	// Revoke the cloud credential while the local enrollment is still retryable.
+	if xerr := s.unenrollFromCloud(ctx, account); xerr != nil {
+		s.loadAccountBestEffort(ctx, accountID)
 		return xerr
 	}
 
@@ -338,7 +370,7 @@ func (s *emailService) Delete(ctx context.Context, userID, emailAccountID string
 	// nulls worker_id, so a worker not credited here stays charged for a
 	// mailbox that no longer exists, unrepairably.
 	refund := worker.MailboxWeight(account.Provider, account.Warmup != nil)
-	if xerr := s.emailRepository.Delete(ctx, userID, emailAccountID, refund); xerr != nil {
+	if xerr := s.emailRepository.Delete(ctx, orgID, emailAccountID, refund); xerr != nil {
 		// The removal already went out and the mailbox is still active: put it
 		// back now instead of leaving it dark until the reconciler's next pass.
 		s.loadAccountBestEffort(ctx, accountID)
@@ -358,12 +390,51 @@ func (s *emailService) Delete(ctx context.Context, userID, emailAccountID string
 	return nil
 }
 
-// sameUser compares user ids as uuids, the way the delete's own WHERE clause
-// does, so formatting alone never reads as a different owner.
-func sameUser(a, b string) bool {
-	left, aerr := uuid.Parse(a)
-	right, berr := uuid.Parse(b)
-	return aerr == nil && berr == nil && left == right
+// ErrCloudEnrollmentStuck keeps the local mailbox when its cloud link cannot be released.
+var ErrCloudEnrollmentStuck = errx.NewWithIdentifier(
+	errx.Conflict,
+	"mailbox_cloud_unenroll_failed",
+	"This mailbox is linked to Warmbly Cloud and its link could not be released, so deleting it would leave Warmbly Cloud holding its credential or its claim on it. The mailbox record remains. Worker restoration is retried automatically; try the delete again once this instance can reach Warmbly Cloud.",
+)
+
+// unenrollFromCloud releases the mailbox on Warmbly Cloud before its local
+// record goes, so a managed mirror returns to the cloud workspace instead of
+// staying claimed by an instance that no longer holds it.
+func (s *emailService) unenrollFromCloud(ctx context.Context, account *models.Email) *errx.Error {
+	if account.OrganizationID == nil {
+		return nil
+	}
+	if s.cloudUnenroll == nil || s.cloudLink == nil {
+		log.Error().Str("account_id", account.ID.String()).Msg("cloud enrollment dependencies missing; delete refused")
+		return ErrCloudEnrollmentStuck
+	}
+	link, err := s.cloudLink.GetByAccount(ctx, account.ID)
+	if err != nil {
+		log.Warn().Err(err).Str("account_id", account.ID.String()).Msg("cloud enrollment unreadable; delete refused rather than leaving the credential in the pool")
+		return ErrCloudEnrollmentStuck
+	}
+	// RevokeForDelete is a leaf: unlike removeManaged it never calls back into
+	// this delete, so the managed mirror can revoke here without recursing.
+	if link == nil {
+		return nil
+	}
+	if xerr := s.cloudUnenroll.RevokeForDelete(ctx, *account.OrganizationID, account.ID); xerr != nil {
+		log.Warn().Str("account_id", account.ID.String()).Str("error", xerr.Message).Msg("cloud unenroll failed; mailbox delete refused")
+		return ErrCloudEnrollmentStuck
+	}
+	return nil
+}
+
+// sameOrg compares a mailbox's workspace against the caller's as uuids, the way
+// the delete's own WHERE clause does, so formatting alone never reads as a
+// different workspace. A mailbox with no workspace belongs to none and is
+// refused rather than matched.
+func sameOrg(a *uuid.UUID, b string) bool {
+	if a == nil {
+		return false
+	}
+	right, err := uuid.Parse(b)
+	return err == nil && *a == right
 }
 
 func (s *emailService) syncWarmupPoolMembership(ctx context.Context, account *models.Email) {
@@ -466,4 +537,11 @@ func (s *emailService) resolveWarmupPoolType(ctx context.Context, account *model
 		}
 	}
 	return "premium"
+}
+
+// UpdateTrackDirectMail switches open/click tracking on this mailbox's
+// hand-written sends. It only affects mail sent from now on: a message already
+// delivered carries whatever it carried when it left.
+func (s *emailService) UpdateTrackDirectMail(ctx context.Context, orgID, emailAccountID string, enabled bool) *errx.Error {
+	return s.emailRepository.UpdateTrackDirectMail(ctx, orgID, emailAccountID, enabled)
 }

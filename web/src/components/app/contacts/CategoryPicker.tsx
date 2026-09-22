@@ -25,6 +25,8 @@ import useFlipPlacement from "@/hooks/useFlipPlacement";
 import clippedTitle from "@/lib/helper/clippedTitle";
 import useCreateCategory from "@/lib/api/hooks/app/categories/useCreateCategory";
 import type Category from "@/lib/api/models/app/Category";
+import { TagMeaningTooltip } from "@/components/ui/tag-meaning-tooltip";
+import { errorMessage } from "@/lib/errors/message";
 
 interface Props {
     // Selected ids — kept as ids so the consumer can store them in the
@@ -99,7 +101,7 @@ export default function CategoryPicker({
             onChange([...value, c.id]);
             setQuery("");
         } catch (err) {
-            toast.error(err instanceof Error ? err.message : "Failed to create category");
+            toast.error(errorMessage(err, "Failed to create category"));
         }
     }
 
@@ -225,38 +227,40 @@ export function CategoryChip({
     compact?: boolean;
 }) {
     return (
-        <span
-            className={`inline-flex items-center gap-1 min-w-0 ${compact ? "h-4 pl-1 pr-1 text-[10px]" : "h-5 pl-1.5 pr-1 text-[11px]"} rounded font-medium`}
-            style={{
-                backgroundColor: hexToRgba(category.color, 0.12),
-                color: category.color,
-                border: `1px solid ${hexToRgba(category.color, 0.25)}`,
-            }}
-        >
+        <TagMeaningTooltip title={category.title}>
             <span
-                className={`${compact ? "size-1.5" : "size-2"} rounded-full shrink-0`}
-                style={{ backgroundColor: category.color }}
-            />
-            <span
-                className="truncate min-w-0 max-w-[72px] md:max-w-none"
-                {...clippedTitle}
+                className={`inline-flex items-center gap-1 min-w-0 ${compact ? "h-4 pl-1 pr-1 text-[10px]" : "h-5 pl-1.5 pr-1 text-[11px]"} rounded font-medium`}
+                style={{
+                    backgroundColor: hexToRgba(category.color, 0.12),
+                    color: category.color,
+                    border: `1px solid ${hexToRgba(category.color, 0.25)}`,
+                }}
             >
-                {category.title}
-            </span>
-            {onRemove && (
-                <button
-                    type="button"
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        onRemove();
-                    }}
-                    className="opacity-70 hover:opacity-100"
-                    aria-label={`Remove ${category.title}`}
+                <span
+                    className={`${compact ? "size-1.5" : "size-2"} rounded-full shrink-0`}
+                    style={{ backgroundColor: category.color }}
+                />
+                <span
+                    className="truncate min-w-0 max-w-[72px] md:max-w-none"
+                    {...clippedTitle}
                 >
-                    <XIcon className="w-2.5 h-2.5" />
-                </button>
-            )}
-        </span>
+                    {category.title}
+                </span>
+                {onRemove && (
+                    <button
+                        type="button"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onRemove();
+                        }}
+                        className="opacity-70 hover:opacity-100"
+                        aria-label={`Remove ${category.title}`}
+                    >
+                        <XIcon className="w-2.5 h-2.5" />
+                    </button>
+                )}
+            </span>
+        </TagMeaningTooltip>
     );
 }
 

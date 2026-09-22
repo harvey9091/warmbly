@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	workerapp "github.com/warmbly/warmbly/internal/app/worker"
 	"github.com/warmbly/warmbly/internal/jobrun"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/repository"
@@ -51,20 +52,7 @@ func (s *Scaler) tick(ctx context.Context) error {
 		return err
 	}
 
-	var totalLoad, totalCap float64
-	for _, row := range rows {
-		eff := row.BaseCapacity * row.HealthMultiplier * row.AgeMultiplier
-		if eff <= 0 {
-			eff = 1
-		}
-		totalCap += eff
-		totalLoad += row.LoadScore
-	}
-
-	var util float64
-	if totalCap > 0 {
-		util = totalLoad / totalCap
-	}
+	totalLoad, totalCap, util := fleetUtilization(rows)
 
 	severity := ""
 	switch {
@@ -98,4 +86,21 @@ func (s *Scaler) tick(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func fleetUtilization(rows []repository.WorkerCapacityRowDB) (load, capacity, utilization float64) {
+	for _, row := range rows {
+		c := workerapp.ComputeCapacity(workerapp.WorkerCapacityRow{
+			BaseCapacity:     row.BaseCapacity,
+			HealthMultiplier: row.HealthMultiplier,
+			AgeMultiplier:    row.AgeMultiplier,
+			LoadScore:        row.LoadScore,
+		})
+		load += row.LoadScore
+		capacity += c.Target
+	}
+	if capacity > 0 {
+		utilization = load / capacity
+	}
+	return load, capacity, utilization
 }

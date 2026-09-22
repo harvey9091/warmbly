@@ -27,6 +27,7 @@ const (
 	docsSSO        = "/development/accounts-and-access/#single-sign-on"
 	docsFirstOwner = "/development/accounts-and-access/#first-owner"
 	docsUpdates    = "/development/updates/"
+	docsAI         = "/development/configuration/#ai-and-search"
 	// The database-backed settings document, which is the one tier the
 	// environment does not own.
 	docsSettingsDoc = "/development/configuration/#settings-stored-in-the-database"
@@ -129,6 +130,18 @@ var table = []Entry{
 		DocsAnchor: docsDeployment,
 		Resolve:    envValue("AI_API_KEY"),
 	},
+	{
+		Key: "TYPESAFE_API_KEY", Group: GroupDeployment, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Credential for the TypeSafe judgments: reply classification, copy judgment, warmup content lint, bounce classification and form triage. Inbox tagging also needs INBOX_TAGGING_ENABLED.",
+		DocsAnchor: docsAI,
+		Resolve:    envValue("TYPESAFE_API_KEY"),
+	},
+	{
+		Key: "INBOX_TAGGING_ENABLED", Group: GroupDeployment, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Enables TypeSafe classification of inbound message content when its API key is configured.",
+		DocsAnchor: docsAI,
+		Resolve:    boolOr("INBOX_TAGGING_ENABLED", false),
+	},
 
 	// Addresses.
 	{
@@ -196,6 +209,12 @@ var table = []Entry{
 		Effect:     "Path to a GeoLite2 database. It must be set on the backend in every environment; a missing file at that path is tolerated and only costs city labels.",
 		DocsAnchor: docsGeoIP,
 		Resolve:    envValue("GEODB_PATH"),
+	},
+	{
+		Key: "GEODB_URL", Group: GroupDatabase, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Where to download the database at GEODB_PATH from when that path holds no file. A file already there is never replaced.",
+		DocsAnchor: docsGeoIP,
+		Resolve:    envValue("GEODB_URL"),
 	},
 	{
 		Key: "REDIS", Group: GroupCache, RuntimeChangeable: ChangeBootOnly,
@@ -635,7 +654,7 @@ var table = []Entry{
 	},
 	{
 		Key: "CODEC_PROVIDER", Group: GroupEventBus, RuntimeChangeable: ChangeBootOnly,
-		Effect:     "json is required wherever workers run: worker command and result envelopes carry untyped bodies Avro cannot serialize.",
+		Effect:     "json needs nothing; avro resolves every event against SCHEMA_REGISTRY_URL and is only compiled into the -kafka images. Producers and consumers have to agree, so it is changed by draining the bus, not in place.",
 		DocsAnchor: docsEventBus,
 		Resolve:    func(*Runtime) string { return config.CodecProvider() },
 	},
@@ -726,6 +745,16 @@ var table = []Entry{
 		Resolve:    envValue("BOX_GOOGLE_CLIENT_SECRET"),
 	},
 	{
+		Key: "BOX_GOOGLE_OAUTH_CONNECT", Group: GroupWorkers, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "true lets new Gmail mailboxes connect with Google sign-in. Off, the connect dialog walks through an app password over IMAP and SMTP instead; mailboxes already on Google sign-in keep working and can be re-authorized either way.",
+		DocsAnchor: docsWorkers,
+		// Through the config helper, not boolOr: boolOr accepts yes/on and
+		// GoogleOAuthConnect parses with strconv.ParseBool, which does not, so
+		// reading the raw value here would report true on a setting the gate
+		// treats as false.
+		Resolve: func(*Runtime) string { return yesNo(config.GoogleOAuthConnect()) },
+	},
+	{
 		Key: "BOX_OUTLOOK_CLIENT_ID", Group: GroupWorkers, RuntimeChangeable: ChangeBootOnly,
 		Effect:     "Your Microsoft 365 OAuth client for connecting Outlook mailboxes.",
 		DocsAnchor: docsWorkers,
@@ -795,9 +824,21 @@ var table = []Entry{
 	},
 	{
 		Key: "TRACKING_SCANNER_ASN_HEADER", Group: GroupTracking, RuntimeChangeable: ChangeBootOnly,
-		Effect:     "Header a trusted proxy sets with the source ASN. Empty means asn: entries cannot match.",
+		Effect:     "Header a trusted proxy sets with the source ASN. Where it is set it wins over the database below.",
 		DocsAnchor: docsAddresses,
 		Resolve:    envValue("TRACKING_SCANNER_ASN_HEADER"),
+	},
+	{
+		Key: "TRACKING_SCANNER_ASN_DB", Group: GroupTracking, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Path to a GeoLite2-ASN database on the tracking service, which makes asn: entries match with no ASN header and no edge transform rule. It reads the client address, so behind a reverse proxy it still needs TRACKING_TRUSTED_PROXIES. A separate file from GEODB_PATH; missing is tolerated and only costs ASN matching.",
+		DocsAnchor: docsGeoIP,
+		Resolve:    envValue("TRACKING_SCANNER_ASN_DB"),
+	},
+	{
+		Key: "TRACKING_SCANNER_ASN_DB_URL", Group: GroupTracking, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Where the tracking service downloads its GeoLite2-ASN database from. It holds the result in memory, so it needs no writable path and TRACKING_SCANNER_ASN_DB can stay unset.",
+		DocsAnchor: docsGeoIP,
+		Resolve:    envValue("TRACKING_SCANNER_ASN_DB_URL"),
 	},
 
 	// Observability.

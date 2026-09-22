@@ -147,6 +147,11 @@ func (h *Handler) PoolLinkListInstances(c *gin.Context) {
 		errx.JSON(c, xerr)
 		return
 	}
+	// A nil slice marshals to JSON null, not [], and the dashboard reads
+	// `data.length` off it. An empty list is a list.
+	if list == nil {
+		list = []models.PoolLinkInstance{}
+	}
 	c.JSON(http.StatusOK, gin.H{"data": list, "plan": plan})
 }
 

@@ -12,22 +12,26 @@ interface MarkSeenInput {
     ids?: string[];
     folder?: string;
     seen?: boolean;
-    /** Conversation the ids belong to, so the open list can be patched in place. */
-    threadId?: string;
+    /**
+     * Conversations to flip. The open list is patched in place, and the server
+     * flips every message in each, which a list row could not name.
+     */
+    threadIds?: string[];
 }
 
 export default function useMarkSeen() {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: (data: MarkSeenInput) => markSeen(data),
+        mutationFn: ({ ids, folder, seen, threadIds }: MarkSeenInput) =>
+            markSeen({ ids, threadIds, folder, seen }),
         // Reading a thread must not move the list the user is reading from.
         // Refetching every loaded page of ["unibox","search"] would re-order
         // rows around whatever arrived since, so the read/unread flip is
         // written straight into the cache instead; only the counters, which no
         // pointer is aimed at, are refetched.
-        onMutate: async ({ ids, threadId, seen = true, folder }) => {
-            if (folder || (!threadId && !ids?.length)) return;
+        onMutate: async ({ ids, threadIds, seen = true, folder }) => {
+            if (folder || (!threadIds?.length && !ids?.length)) return;
             // A refetch already in flight would land on top of the patch below
             // and put the row back to unread. Only refetches: cancelling a
             // first load would leave that list with no data and nothing queued
@@ -37,8 +41,11 @@ export default function useMarkSeen() {
                 predicate: (query) => query.state.data !== undefined,
             });
             const idSet = new Set(ids ?? []);
+            // Rows with no thread id of their own are keyed by message id, the
+            // same fallback the list and the server collapse on.
+            const threadSet = new Set(threadIds ?? []);
             const matches = (row: { id: string; thread_id?: string }) =>
-                (threadId != null && row.thread_id === threadId) || idSet.has(row.id);
+                threadSet.has(row.thread_id || row.id) || idSet.has(row.id);
 
             queryClient.setQueriesData<InfiniteData<SearchPage>>(
                 { queryKey: ["unibox", "search"] },
@@ -58,7 +65,7 @@ export default function useMarkSeen() {
                           },
             );
 
-            if (threadId) {
+            for (const threadId of threadIds ?? []) {
                 queryClient.setQueriesData<UniboxThread>(
                     { queryKey: ["unibox", "thread", threadId] },
                     (old) =>

@@ -1,6 +1,7 @@
 package models
 
 import (
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,6 +29,16 @@ func (r NodeRole) Valid() bool {
 // pause or a brief network blip never looks like a dead machine.
 const NodeLivenessWindow = 5 * time.Minute
 
+// WorkerOperationalCapacity returns the assigned-mailbox target and utilization.
+func WorkerOperationalCapacity(load, base, health float64) (target, utilization float64) {
+	health = math.Max(0, math.Min(1, health))
+	target = math.Floor(base * health)
+	if target < 1 {
+		target = 1
+	}
+	return target, load / target
+}
+
 // FleetNode is one Warmbly process running on a machine you own.
 //
 // Everything here is reported BY the node or resolved FOR it. Nothing is
@@ -40,10 +51,12 @@ type FleetNode struct {
 	Name  string    `json:"name"`
 	Notes string    `json:"notes"`
 
-	// Region is the sign-in geography hint placement scores on. Address is
-	// whatever the node reports as its outbound address.
+	// Region is the sign-in geography hint placement scores on. Address is the
+	// public IPv4 the control plane observes, with the node report as fallback.
 	Region  string `json:"region"`
 	Address string `json:"address"`
+	// CapacityTarget is the machine's operator-set assigned-mailbox target.
+	CapacityTarget float64 `json:"capacity_target"`
 
 	// Version is what the node reports it is running. DesiredVersion is what
 	// the control plane wants it to run, resolved per role unless
@@ -108,8 +121,11 @@ type NodeHeartbeat struct {
 	Name    string    `json:"name,omitempty"`
 	Region  string    `json:"region,omitempty"`
 	Address string    `json:"address,omitempty"`
-	Version string    `json:"version,omitempty"`
-	Usage   NodeUsage `json:"usage"`
+	// CapacityTarget is reported by workers. Zero means no opinion, which
+	// preserves the stored/default target for older node versions.
+	CapacityTarget float64   `json:"capacity_target,omitempty"`
+	Version        string    `json:"version,omitempty"`
+	Usage          NodeUsage `json:"usage"`
 	// LastError is whatever went wrong since the previous beat, for the
 	// dashboard. Empty clears it.
 	LastError string `json:"last_error,omitempty"`

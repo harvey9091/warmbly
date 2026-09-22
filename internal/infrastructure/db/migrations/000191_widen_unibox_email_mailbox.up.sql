@@ -1,0 +1,18 @@
+-- unibox_emails.mailbox holds the folder's UIDVALIDITY, which RFC 3501 defines
+-- as an unsigned 32-bit value. The column is int4, so every value at or above
+-- 2^31 fails to bind at all:
+--
+--   unable to encode 0xb8b769d8 into binary format for int4 (OID 23):
+--   3099027928 is greater than maximum value for int4
+--
+-- 000179 widened unibox_mailboxes.uid_validity and unibox_emails.uid for this
+-- exact reason and left this one behind, so a server that stamps UIDVALIDITY
+-- with anything other than a Unix timestamp still cannot have its mail filed:
+-- the sync asks what the folder already holds, and the query never reaches the
+-- database. Nothing stored is out of range, because nothing out of range could
+-- ever be written, so widening is the whole repair.
+--
+-- int4 to int8 is a table rewrite and takes ACCESS EXCLUSIVE, so the unibox
+-- stalls for the length of it. Rehearsed against production inside a rolled
+-- back transaction: 3.4s, most of it rebuilding the body_text index.
+ALTER TABLE unibox_emails ALTER COLUMN mailbox TYPE bigint;

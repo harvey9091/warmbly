@@ -8,7 +8,7 @@
 
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ArrowLeft, Pin, PinOff, RefreshCw, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -91,9 +91,12 @@ export default function WorkerDetailPage() {
         enabled: !!node && node.role === "worker",
     });
 
-    const emailsQ = useQuery({
+    const emailsQ = useInfiniteQuery({
         queryKey: ["admin", "workers", id, "emails"],
-        queryFn: () => getWorkerEmails(id),
+        queryFn: ({ pageParam }) => getWorkerEmails(id, pageParam),
+        initialPageParam: undefined as string | undefined,
+        getNextPageParam: (lastPage) =>
+            lastPage.pagination.has_more ? lastPage.pagination.next_cursor ?? undefined : undefined,
         enabled: !!node && node.role === "worker",
     });
 
@@ -133,7 +136,8 @@ export default function WorkerDetailPage() {
     }
 
     const state = nodeState(node);
-    const mailboxes = emailsQ.data?.data ?? [];
+    const mailboxes = emailsQ.data?.pages.flatMap((page) => page.data) ?? [];
+    const mailboxTotal = Math.max(node.mailbox_count ?? 0, mailboxes.length);
 
     return (
         <div className="space-y-4">
@@ -182,6 +186,11 @@ export default function WorkerDetailPage() {
                     <Fact label="Region">
                         <span className="font-mono text-xs">{node.region || "—"}</span>
                     </Fact>
+                    {node.role === "worker" && (
+                        <Fact label="Mailbox target">
+                            {(node.capacity_target || 100).toLocaleString()}
+                        </Fact>
+                    )}
                     <Fact label="Memory">
                         {node.usage?.memory_mb !== undefined ? `${node.usage.memory_mb} MB` : "—"}
                     </Fact>
@@ -250,7 +259,7 @@ export default function WorkerDetailPage() {
                 <Card>
                     <CardHeader>
                         <CardTitle className="text-base">
-                            Mailboxes {mailboxes.length > 0 && `(${mailboxes.length})`}
+                            Mailboxes {mailboxTotal > 0 && `(${mailboxes.length} of ${mailboxTotal})`}
                         </CardTitle>
                         <CardDescription>
                             Placement assigns these; you never have to. Moving one by hand is
@@ -299,6 +308,17 @@ export default function WorkerDetailPage() {
                                     </label>
                                 ))}
                             </div>
+                        )}
+
+                        {emailsQ.hasNextPage && (
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={emailsQ.isFetchingNextPage}
+                                onClick={() => emailsQ.fetchNextPage()}
+                            >
+                                {emailsQ.isFetchingNextPage ? "Loading…" : "Load more mailboxes"}
+                            </Button>
                         )}
 
                         {selected.size > 0 && (

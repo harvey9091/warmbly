@@ -21,6 +21,7 @@ import {
     resizeAvatar,
     type ResizedAvatar,
 } from "@/lib/avatar";
+import { errorMessage } from "@/lib/errors/message";
 
 interface Props {
     /** Existing avatar URL or undefined when none. */
@@ -70,7 +71,7 @@ export function AvatarUploader({
         try {
             resized = await resizeAvatar(f);
         } catch (err) {
-            toast.error(err instanceof Error ? err.message : "Couldn't process that image.");
+            toast.error(errorMessage(err, "Couldn't process that image."));
             return;
         }
 
@@ -80,7 +81,7 @@ export function AvatarUploader({
         try {
             await onUpload(resized.blob);
         } catch (err) {
-            toast.error(err instanceof Error ? err.message : "Upload failed.");
+            toast.error(errorMessage(err, "Upload failed."));
             // Drop the optimistic preview on failure.
             URL.revokeObjectURL(resized.previewUrl);
             setPreview(null);
@@ -97,7 +98,7 @@ export function AvatarUploader({
             if (preview) URL.revokeObjectURL(preview.previewUrl);
             setPreview(null);
         } catch (err) {
-            toast.error(err instanceof Error ? err.message : "Couldn't remove the avatar.");
+            toast.error(errorMessage(err, "Couldn't remove the avatar."));
         } finally {
             setRemoving(false);
         }

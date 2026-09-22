@@ -25,7 +25,7 @@ Enabling warmup controls **outbound** scheduling only. An active mailbox with wa
 
 ### Where the content comes from
 
-Message generation stays off the live sending path. When an AI provider is configured, a background batch builds complete conversation plans (a subject, an opening, and five alternating reply turns), each validated against a strict schema, checked for robotic language, and passed through a safety lint before entering the active bank.
+Message generation stays off the live sending path. When an AI provider is configured, a background batch builds complete conversation plans (a subject, an opening, and five alternating reply turns), each validated against a strict schema, checked for robotic language, and passed through a safety lint before entering the active bank. When the operator has also configured TypeSafe (`TYPESAFE_API_KEY`), each thread is judged for pitches and generated-sounding filler before entering the bank, and the thread text is sent to TypeSafe for that.
 
 At send time a message draws from the least-used suitable thread and accounts for usage atomically, spreading content evenly across thousands of mailboxes. The opening is personalized with the mailbox's stable persona, greeting, sign-off, and signature; reply turns stay unused until the recipient actually replies. If generation is unavailable or the bank is empty, a built-in reviewed library takes over, so **warmup never waits on an AI provider**.
 
@@ -33,30 +33,44 @@ The controller runs every six hours against the last seven days of demand: at le
 
 ## Pools
 
-A pool is the set of mailboxes that warm each other. Your mailbox only exchanges warmup mail within its own pool.
+A pool is the set of mailboxes that warm each other. Your mailbox exchanges warmup mail within its own pool, with the mirrored crossings documented below. Every instance has both pools from install, so a self-hosted instance warms within its own pools from the first mailbox; [Warmbly Cloud](/guides/warmbly-cloud/) is how it joins the hosted one instead.
 
 | Pool | Who is in it |
 |------|--------------|
 | `premium` | Paid organizations' mailboxes. The default for paid accounts, isolated from lower-trust traffic. |
-| `free` | Lower-trust or trial mailboxes, kept separate so free traffic never mixes into premium reputation. |
+| `free` | Lower-trust or trial mailboxes, kept separate so free traffic does not mix into premium reputation. |
 
 A mailbox belongs to exactly one pool at a time. When its plan changes the mailbox moves between pools rather than joining a second one, and it takes its warmup standing with it, so a quarantine or block is not cleared by changing tier.
 
-The separation is never crossed silently. Warmbly spreads sends across many partners and recipient domains rather than looping the same two mailboxes, since tight reciprocal pairs are easy for providers to spot. **Pool quality matters more than pool size.**
+The separation is crossed in two mirrored ways, and never silently. When the premium tier runs thin (fewer than 25 other eligible recipients), it borrows up to 25 free-tier mailboxes that have been pool members for at least three days, are healthy now, and belong to a workspace in good standing. It prefers a fresh partner from its own tier before a borrowed one, and checks each borrowed mailbox against its own pool's standing before using it.
+
+The borrow is returned: a free-tier mailbox that meets the same bar (healthy now, a member for at least three days, in a workspace in good standing) may write to a paying mailbox that wrote to it in the last 14 days, and to no other paying mailbox. A visit is returned alongside the mailbox's own tier rather than after it, so a paying inbox is written back to even when the free tier is large. Nothing unsolicited from the free tier reaches a paying inbox: the paying side always opens the exchange, and a free mailbox on watch keeps warming in its own tier but stops calling on paying ones.
+
+Every draw also favours the inbox that is owed the most. A mailbox that has sent to many partners and heard back from few is drawn up to four times as often as one in balance, and the preference fades as the pool pays it back, so traffic settles near parity instead of overshooting. The other way is bounded too: an inbox receives at most about twice what it sends in a day (never fewer than 10, never more than 60), and once it reaches that it is left out of every draw for the rest of the day. A mailbox with nobody left to write to sends nothing and tries again later rather than mailing the same partner twice.
+
+Warmbly spreads sends across many partners and recipient domains rather than looping the same two mailboxes, since tight reciprocal pairs are easy for providers to spot. **Pool quality matters more than pool size.**
 
 Self-hosted instances warm only among their own mailboxes unless they are linked to Warmbly Cloud, which puts their enrolled mailboxes into these same pools. See [Warmbly Cloud for self-hosted instances](/guides/warmbly-cloud/).
 
-When a tier runs thin (fewer than 25 eligible recipients), partner selection borrows the other tier's mailboxes that have been healthy members for at least three days. Paid mailboxes are always served from the paid tier first.
-
 ### Choosing partners
 
-Within a pool, partners are picked by weight rather than at random. Three things move the weight:
+Partners outside your own workspace come first. Mail your own mailboxes exchange between your own domains teaches the providers that will receive your cold outreach nothing, costs the mailbox its daily ramp, and is the closed loop a spam filter is most likely to read as one, so a mailbox works through every available outside partner before any of its siblings. It is a preference rather than a rule, because a self-hosted instance's pool is your workspace and nothing else: there, siblings are the only partners there are, and warmup would otherwise stop. Bringing more mailboxes into a shared pool therefore widens your diversity instead of narrowing it.
+
+Within that order, partners are picked by weight rather than at random. Three things move the weight:
 
 - **Domain spread.** Recipient domains you have already used a lot recently are downweighted, so warmup does not loop through the same handful of inboxes.
 - **Where you are landing.** Warmbly tracks your spam-placement rate separately for each recipient provider over the last seven days, grouped by who actually runs that recipient's mail (Google, Microsoft, Yahoo and so on, the same grouping routing rules use). A mailbox landing in spam at Microsoft but not Google is sent fewer Microsoft partners until that rate falls, without waiting for an overall health band to trip.
-- **Your routing rules**, when you have configured any.
+- **Your routing rules**, when you have configured any. A rule's weight multiplies a partner's chance; a weight of `0` is not a weight but an exclusion, so that pairing never happens.
+
+An exclusion is honoured even when it leaves nothing: if every available partner is excluded by your rules, the mailbox sends no warmup mail that tick and tries again later, rather than mailing someone you ruled out because the pool had nobody else. The same holds when a partner writes first: your mailbox does not reply to an address your rules exclude. Rules apply to paid-tier mailboxes.
 
 A struggling provider is downweighted, never excluded: a sender that stops mailing a provider entirely can never discover that it recovered there. A provider is only judged once you have sent it at least five warmup emails in the window, so one bad delivery out of two is treated as noise rather than a pattern. You can see the per-domain numbers this reads under **Deliverability > Warmup placement by domain**.
+
+### Seeing the diversity you are getting
+
+A mailbox's drawer shows how many distinct partners its confirmed sends reached over the last seven days, on how many domains, in how many workspaces, and the other direction: how much verified warmup mail arrived and from how many partners. Failed and still-pending attempts do not count on the sending side, and only mail the mailbox's own sync verified counts on the receiving side. The numbers appear next to the local warmup reputation or inside the Warmbly Cloud card when the cloud warms the mailbox. A single workspace over a whole week is the number to watch, whether it is yours or somebody else's: warmup builds the most reputation across many workspaces and domains. It happens when a pool has no other partner available for that mailbox, and on a self-hosted instance that is not linked to Warmbly Cloud it is the only thing that can happen. A mailbox writing to far more partners than write back is flagged in the same place; the pool favours it on every draw until the two sides even out.
+
+The **Analytics** tab of the same drawer charts the exchange over time: sent, received and replies per day, with the total received against the total sent for the range. The same numbers are in the [warmup analytics](/api/reference/analytics/#get-warmup-analytics) endpoint.
 
 Turning off outbound warmup does not remove a healthy mailbox from the recipient pool. Disconnecting it, losing warmup-plan access, or entering a quarantined or blocked state does. Losing access removes the mailbox from its pool within minutes, whether or not it was still warming.
 
@@ -102,11 +116,66 @@ Timing imitates people throughout: sends come in bursts and lulls rather than a 
 
 ## Keeping warmup out of your inbox
 
-Warmbly recognizes inbound warmup by its token and files it automatically, including for recipient-only mailboxes. The message moves to a dedicated `Warmbly` folder and is usually marked read; anything that landed in spam is rescued first so the provider records a positive placement signal. This works across Gmail, Outlook via Microsoft Graph, and generic IMAP, and warmup mail never appears in your unified inbox.
+Warmup is real mail in a real mailbox, so there are two separate places it could show up: the Warmbly [unibox](/guides/unibox/), and your own mail client. Both are handled, and they are handled differently.
+
+### In your mail client
+
+Warmup mail is filed out of the way in the mailbox itself, in **both directions**: the messages this mailbox received, and the copy of every warmup message it sent. That second half matters more than it sounds, because a mailbox warming at forty a day would otherwise bury a week of real sent mail under machine traffic.
+
+The filing is per mailbox, on the **Warmup** tab of its drawer:
+
+| Setting | What your mail client shows |
+|---------|------------------------------|
+| **Its own folder** (default) | One folder, `Warmbly` unless you rename it, holding every warmup message in and out. Nothing warmup-related in Inbox or Sent. |
+| **Leave it in the inbox** | Warmup mail stays where the provider put it. Mail that landed in spam is still rescued. |
+| **Archive it** | Out of the inbox with no folder of its own: findable by search, listed in All Mail on Gmail. |
+
+The folder is created the first time it is needed, and it is also the answer to "what is this message?": nothing but warmup is filed there, so the folder itself is what identifies warmup traffic in a mail client. If another tool already made a folder you use for this, name that one instead and warmup joins it rather than adding a second.
+
+Anything that landed in spam is rescued before it is filed, so the provider records the positive placement signal warmup exists for. On Gmail that means the `SPAM` label comes off, exactly as pressing **Not spam** does, and the message then goes where your placement says rather than straight back into the inbox.
+
+Mail that arrives somewhere unexpected is still handled. A server-side rule, or another warmup tool's filter, can put warmup mail in a folder of its own choosing before Warmbly sees it; the message is found there and filed from there, and one already sitting in the destination is left alone rather than moved onto itself.
+
+Filing happens as each message arrives, so changing the setting applies to warmup from that point on.
+
+One case reaches back. If a warmup message is ever missed on arrival and shows up in the unibox, a daily sweep recognises it later, removes it from the unibox and files it in your mail client too. Only the filing runs on that path: read state, importance and stars are how fresh warmup earns its placement signal, and replaying them on old mail would be a burst of activity no real reader produces. A mailbox set to leave warmup in the inbox is left alone, because that is a choice rather than a leak.
+
+The sweep repairs what it can still see, so it does not clear a backlog that built up before the setting existed. To do that on Gmail, search `label:Warmbly` and archive the results: warmup mail has always carried the label, so that selects exactly it. On Outlook and IMAP the received mail is already in the folder, and only the Sent copies from before this change stay in Sent.
+
+### Retention
+
+Warmup mail is real mail taking up real space, and once its engagement has been recorded there is nothing left to keep it for. So Warmbly clears the folder itself: every warmup message, received or sent, is deleted from the mailbox once it is older than the mailbox's retention window, 30 days unless you or your instance operator chose otherwise. On Gmail that means it is moved to Trash, which Gmail empties after another 30 days; on Outlook, Microsoft 365 and IMAP it is deleted outright. The copy of the message Warmbly itself stored goes with it.
+
+The window is per mailbox, next to the filing setting on the **Warmup** tab of its drawer, and on the API as `warmup_retention_days`. Leave it empty to follow the instance setting; the shortest is 3 days, so a thread always has time to finish and the delayed engagement (read, starred, marked important) has always run before its message goes. A self-hosted instance sets its default under **Instance > Configuration > Data retention**, see [data control](/development/data-control/#warmup-mail-in-mailboxes).
+
+At the volumes warmup runs, a few plaintext messages of a couple of kilobytes each, a mailbox in balance takes years to fill even on a small hosting quota, so the retention is there so that you never have to think about it rather than because the folder is about to overflow. You do not need to clear the folder by hand, and if you do, see [pool safety](#pool-safety) for what counts.
+
+<Callout type="info" title="Gmail and the Sent copy">
+  Gmail exposes folders as labels and does not document whether `SENT` may be removed. Warmbly asks once per mailbox: where Gmail allows it, the sent copy leaves Sent entirely; where it refuses, the copy keeps its place in Sent and carries the warmup label, and nothing asks again. Outlook, Microsoft 365 and IMAP mailboxes move the copy out of Sent normally. SMTP mailboxes never get one in the first place, because Warmbly does not file a Sent copy for warmup.
+</Callout>
+
+### In the unibox
+
+Warmup never appears in the unified inbox, in either direction. Warmbly recognizes it by its token, including for recipient-only mailboxes. A consumed or expired token still identifies warmup for filtering, but cannot trigger engagement again. When the header is missing, a recorded message identifier can identify older warmup during history sync; the sender-and-subject fallback stays limited to recent inbound sends so an ordinary conversation is not hidden just because it shares a subject. Existing verified warmup entries are removed from the unibox automatically in background batches, without deleting mail at the provider or changing warmup standing.
+
+A reply typed by hand in a warmup thread is warmup too. Answering a warmup message from Gmail or Outlook produces mail with no token, a fresh identifier and a "Re:" subject, so none of the checks above can see it; what it does carry is the identifier of the message it answers, and that is what Warmbly matches. The reply stays out of the unibox and is filed in your mail client like the message it answers, and so is every later turn in that thread, from either mailbox. Nothing is engaged with on that path: reads, stars and importance are earned by verified warmup deliveries only. On a self-hosted instance the partners are usually your own mailboxes, which is where this comes up: replying to a warmup message from one of them by hand no longer puts the thread in your inbox.
+
+If a provider syncs a headerless Sent copy before reporting its final message identifier, Warmbly holds a possible match for verification. The send confirmation then identifies which message was warmup, and ordinary mail sharing its subject can enter the unibox. A matching subject alone never permanently hides a sent message.
+
+Bounce notices and spam reports about warmup are held back too. A warmup send that hard-bounces produces an ordinary "Undelivered Mail Returned to Sender" from the receiving server, which carries no warmup token of its own; it names a pool partner nobody chose to write to, so it is recognized by the send it is about and kept out of the unibox. The same reasoning keeps it out of your deliverability record: a warmup bounce never suppresses an address in your suppression list and never counts toward the bounce rate your campaigns are judged on. Warmup bounce rate is a band in [pool safety](#pool-safety) instead. A bounce or complaint about a **campaign** send is unaffected and still appears, because that is real outreach reaching a real recipient.
+
+### Nowhere else either
+
+Warmup writes to none of the tables the customer-facing views read, so nothing needs to filter it out after the fact:
+
+- a contact's **Activity** timeline is built from campaign progress, opens, clicks, replies, notes, meetings and page hits, and warmup creates no contact and no campaign progress
+- a contact's sent-mail list is keyed on campaign tasks, which a warmup send never has
+- direct-mail analytics counts a mailbox's own sent and received mail and excludes every task-backed message, campaign and warmup alike
+- notifications are raised for domain authentication, worker downtime and campaign guardrails, never per message
 
 ## Pool safety
 
-Shared pools only work if participants behave, so each mailbox accumulates a spam score from negative signals: complaints, spam-folder placement, bounces, and tampering with warmup mail it received, such as deleting it or flagging it as spam.
+Shared pools only work if participants behave, so every mailbox is judged on rates rather than raw counts: complaints, spam-folder placement, bounces, and tampering with warmup mail it received, such as deleting it or flagging it as spam. Each band needs a minimum sample before it acts, so a slow week cannot convict a mailbox and a busy one is not punished for its volume.
 
 | State | Meaning | Effect |
 |-------|---------|--------|
@@ -117,6 +186,10 @@ Shared pools only work if participants behave, so each mailbox accumulates a spa
 | `blocked` | Serious or repeated abuse | Out for longer, review required |
 
 Quarantined and blocked mailboxes are selected as neither sender nor recipient. Mail arriving in a mailbox is never held against it: every warmup message carries a single-use token bound to its recipient, so a token cannot be replayed or redirected, and one that lands where it does not belong is simply filed as ordinary mail.
+
+What a mailbox does to warmup mail it received is held against it, on a ladder rather than at once. Deleting a warmup email within a day of its arrival counts as one strike and marking one as spam counts as two, over the last seven days. One strike puts the mailbox on watch with the reason shown in its drawer, two pause it from the pool for seven days, and four block it for thirty. So deleting one fresh warmup message is a warning, not a ban, while flagging pool mail as spam twice is a block.
+
+Only a fresh deletion counts, because that is the one that costs the pool something: the engagement a warmup message earns happens in its first hours, and removing it before then takes that signal away. A warmup message deleted later is housekeeping, whether by you, by Gmail emptying its Trash, by a retention rule on your mail server or by Warmbly's own [retention](#retention), and it is never held against the mailbox. On Gmail, pressing Delete is what is judged, not the purge from Trash weeks later. A mailbox's own filing is never counted either: Warmbly moving a warmup email into its folder, marking it read, rescuing it from spam or deleting it once its window has passed is the platform acting, not the owner.
 
 <Callout type="warn" title="Acting early protects everyone">
   Warmbly intervenes well before providers would penalize a mailbox. One landing in spam a large share of the time is already dangerous to the pool, so it is throttled or removed rather than left collecting negative signals.

@@ -390,7 +390,9 @@ const trace: Row[] = [
       const run = () => fit(screen);
       run();
       requestAnimationFrame(run);
-      if (screen.parentElement) new ResizeObserver(run).observe(screen.parentElement);
+      if (screen.parentElement) {
+        new ResizeObserver(() => requestAnimationFrame(run)).observe(screen.parentElement);
+      }
       window.addEventListener('load', run);
       window.addEventListener('resize', run);
     });

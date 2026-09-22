@@ -22,6 +22,8 @@ export interface FleetNode {
     notes: string;
     region: string;
     address: string;
+    /** Operator-set assigned-mailbox target reported by a worker. */
+    capacity_target: number;
     /** What the node reports it is running. */
     version: string;
     /** Set when this one node is held at a version, overriding the fleet target. */

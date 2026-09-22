@@ -267,7 +267,11 @@ func (h *Handler) GetCampaignsOverview(c *gin.Context) {
 }
 
 func (h *Handler) UpdateCampaign(c *gin.Context) {
-	userIDStr := middleware.GetUserID(c)
+	orgID := middleware.GetOrganizationID(c)
+	if orgID == nil {
+		errx.Handle(c, errx.New(errx.BadRequest, "no organization selected"))
+		return
+	}
 
 	id := c.Param("id")
 
@@ -278,7 +282,7 @@ func (h *Handler) UpdateCampaign(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.CampaignService.Update(c.Request.Context(), userIDStr, id, &data)
+	resp, err := h.CampaignService.Update(c.Request.Context(), orgID.String(), id, &data)
 	if err != nil {
 		errx.JSON(c, err)
 		return
@@ -426,7 +430,11 @@ func (h *Handler) StopCampaign(c *gin.Context) {
 // GetCampaignLogs returns campaign activity logs
 // GET /campaigns/:id/logs
 func (h *Handler) GetCampaignLogs(c *gin.Context) {
-	userID := middleware.GetUserID(c)
+	orgID := middleware.GetOrganizationID(c)
+	if orgID == nil {
+		errx.Handle(c, errx.New(errx.BadRequest, "no organization selected"))
+		return
+	}
 	id := c.Param("id")
 
 	cursorStr := c.Query("cursor")
@@ -442,13 +450,34 @@ func (h *Handler) GetCampaignLogs(c *gin.Context) {
 		}
 	}
 
-	result, xerr := h.CampaignService.GetLogs(c.Request.Context(), userID, id, limit, cursor)
+	result, xerr := h.CampaignService.GetLogs(c.Request.Context(), orgID.String(), id, limit, cursor)
 	if xerr != nil {
 		errx.JSON(c, xerr)
 		return
 	}
 
 	c.JSON(http.StatusOK, result)
+}
+
+// GetCampaignSendPlan returns today's sending plan for a campaign: what will go
+// out today and every limit that decided it, read through the scheduler's own
+// gates. GET /campaigns/:id/send-plan
+func (h *Handler) GetCampaignSendPlan(c *gin.Context) {
+	orgID := middleware.GetOrganizationID(c)
+	if orgID == nil {
+		errx.JSON(c, errx.ErrNoOrganization)
+		return
+	}
+	if _, err := uuid.Parse(c.Param("id")); err != nil {
+		errx.JSON(c, errx.ErrNotFound)
+		return
+	}
+	plan, xerr := h.CampaignService.SendPlan(c.Request.Context(), *orgID, c.Param("id"))
+	if xerr != nil {
+		errx.JSON(c, xerr)
+		return
+	}
+	c.JSON(http.StatusOK, plan)
 }
 
 // ListCampaignSenders returns a campaign's explicit sender pool.

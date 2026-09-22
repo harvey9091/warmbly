@@ -13,11 +13,11 @@ Dates are parsed as `YYYY-MM-DD` unless noted. Errors follow the standard `{erro
 
 `GET /analytics/dashboard`
 
-Returns the main dashboard overview for the active organization: aggregate stats, recent activity, top campaigns, account health, and a daily trend series. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
+Returns the main dashboard overview for the active organization: aggregate stats, recent activity, top campaigns, account health, and a daily trend series. Sent and engagement totals include email steps only; completed wait and action steps do not inflate them. Account-health buckets are mutually exclusive and use the most severe current connection, sync, or warmup-reputation state. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
-| `period` | query | string | One of `7d`, `30d`, `90d`. Defaults to `7d`; any other value falls back to `7d`. |
+| `period` | query | string | One of `7d`, `30d`, `90d`, measured as UTC calendar days including today. Defaults to `7d`; any other value falls back to `7d`. |
 
 ### Response
 
@@ -103,6 +103,7 @@ Returns the organization's deliverability posture for a time window: bounce, com
   "intent_out_of_office": 11,
   "intent_question": 9,
   "intent_neutral": 13,
+  "intent_automated": 22,
   "emails_sent": 1240,
   "bounce_rate": 0.73,
   "complaint_rate": 0.08,
@@ -175,6 +176,8 @@ Returns the organization's deliverability posture for a time window: bounce, com
 }
 ```
 
+The `intent_*` counters and `reply_count` are two different things and do not add up to each other. `reply_count` counts `reply` deliverability events, which are the ones a provider or your own integration reports to [record an event](/api/reference/deliverability-ops/). The `intent_*` counters are the replies Warmbly classified as they arrived in a connected mailbox, one per reply, including the machine ones: a vacation notice lands in `intent_out_of_office` and an autoresponder, ticket acknowledgement or bounce notice in `intent_automated`. A workspace that reports no reply events sees `reply_count` at zero with intents counted normally.
+
 `spam_placement_rate` and `inbox_placement_rate` are omitted when there are no seed samples in the window. `by_provider` rolls the same seed samples up per recipient provider; `warmup_placement` is the continuous warmup signal per recipient domain, where `delivered` counts verified warmup arrivals and `spam` the subset the recipient's provider filed into junk. `score` starts at `100` and subtracts saturating penalties for bounce rate (up to `40` points, maxed at `10%`), complaint rate (up to `30` points, maxed at `0.30%`), and spam placement (up to `40` points, maxed at `40%`).
 
 ## Get warmup analytics
@@ -182,6 +185,10 @@ Returns the organization's deliverability posture for a time window: bounce, com
 `GET /analytics/warmup`
 
 Returns warmup send and reply statistics over a date range, with a summary and per-day series. Optionally scoped to a single mailbox. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
+
+Results are scoped to the selected workspace, so every member with access sees the same mailbox history. Workspace-wide results combine all mailboxes into one row per date. `average_daily` uses active days (dates with a warmup statistics row) as its denominator. `target_progress` is total sends divided by total planned target volume across those active days and may exceed `100` when sends beat the plan.
+
+`total_received` and each day's `emails_received` count verified warmup mail that arrived from pool partners, bucketed on the UTC day it was verified. A day with arrivals but no warmup plan is listed with zero sends and does not count towards `days_active`.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
@@ -202,13 +209,14 @@ Returns warmup send and reply statistics over a date range, with a summary and p
   "summary": {
     "total_sent": 210,
     "total_replied": 84,
+    "total_received": 196,
     "average_daily": 17.5,
     "reply_rate": 40.0,
-    "target_progress": 0,
+    "target_progress": 87.5,
     "days_active": 12
   },
   "daily_stats": [
-    { "date": "2026-06-01", "emails_sent": 12, "emails_replied": 5, "target_volume": 12 }
+    { "date": "2026-06-01", "emails_sent": 12, "emails_replied": 5, "emails_received": 11, "target_volume": 12 }
   ]
 }
 ```
@@ -219,7 +227,7 @@ Returns warmup send and reply statistics over a date range, with a summary and p
 
 `GET /analytics/campaigns/:id`
 
-Returns a single campaign's performance summary plus per-sequence-step stats. The campaign must belong to the caller. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
+Returns a single campaign's performance summary plus per-sequence-step stats. `total_contacts` counts enrolled leads, and `emails_pending` is the remaining planned email-step sends across those leads. The campaign must belong to the selected workspace. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
@@ -277,7 +285,7 @@ Returns a single campaign's performance summary plus per-sequence-step stats. Th
 
 `engagement` groups the campaign's human opens and clicks by country (ISO code), mail client or browser, and device type (`desktop`, `mobile`, `tablet`), counting distinct contacts per bucket; a click counts as an open. Each list holds the busiest eight; an empty `key` is unknown. Country needs the GeoLite2 database on the consumer, otherwise every country row is unknown.
 
-`machine_opens` is the subset of `unique_opens` from automated fetchers (Apple MPP prefetch, UA-less clients, opens inside the instance's automated-open window, which starts when the step is dispatched to a worker); human opens are `unique_opens` minus `machine_opens`. `machine_clicks` counts the contacts whose only clicks on a step were automated (a security gateway walking the links); those are not part of `unique_clicks` or `total_clicks`, which only ever count a person's click.
+`unique_opens`, `opens`, `total_opens` and every open rate count a person's opens only. `machine_opens` is the separate count of steps whose only open came from an automated fetcher (UA-less clients, known scanner networks, and opens inside the instance's automated-open window, which starts when the step is dispatched to a worker); it is not part of the open counts. The stripped WebKit signature shared by Apple MPP and Outlook image loading is an Apple-prefetch signal only inside that window; by itself it does not prove automation. A person's later open on a machine-opened step moves it from `machine_opens` into the open count. `machine_clicks` counts the contacts whose only clicks on a step were automated (a security gateway walking the links); those are not part of `unique_clicks` or `total_clicks`, which only ever count a person's click.
 
 Each entry in `steps` carries that step's own rates: `open_rate`, `click_rate`, `reply_rate` and `bounce_rate` are percentages of that step's `emails_sent`, not of the campaign's, so a follow-up that reached a tenth of the contacts still compares against the first touch. They are `0` while the step has sent nothing. `machine_opens` and `machine_clicks` follow the same rules as their summary counterparts, scoped to the step.
 
@@ -380,7 +388,7 @@ Returns side-by-side performance for up to 10 campaigns over a date range. Every
 
 `GET /analytics/accounts`
 
-Returns the health and usage status of every email account the caller owns. Accounts whose status fails to build are skipped. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
+Returns the health and usage status of every email account in the selected workspace. The request fails if any account's status cannot be calculated, so clients never receive a silently incomplete list. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
 
 ### Response
 
@@ -414,7 +422,7 @@ The list is returned under a `data` envelope (no cursor; all of the caller's acc
 
 `GET /analytics/accounts/:id`
 
-Returns the detailed status for one email account: a combined health score (folding in warmup-pool reputation), active errors, today's usage, warmup status, and warmup-pool health. The account must belong to the caller. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
+Returns the detailed status for one email account: a combined health score (folding in warmup-pool reputation), active errors, today's UTC usage, warmup status, and warmup-pool health. The account must belong to the selected workspace. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
@@ -464,7 +472,12 @@ Returns the detailed status for one email account: a combined health score (fold
   "warmup_health": {
     "state": "watch",
     "score": 78,
-    "spam_score": 6,
+    "spam_score": 0,
+    "partner_mailboxes_7d": 14,
+    "partner_domains_7d": 11,
+    "partner_organizations_7d": 9,
+    "received_7d": 12,
+    "senders_7d": 8,
     "evaluated_at": "2026-06-12T06:00:00Z"
   },
   "in_campaign": true
@@ -473,15 +486,23 @@ Returns the detailed status for one email account: a combined health score (fold
 
 `warmup_status` is present only when warmup has ever been enabled; `warmup_health` is present only when the mailbox is in a warmup pool. `in_campaign` reports whether the mailbox currently backs a live campaign.
 
+`daily_usage.warmup_sent` and `campaign_sent` both count sends the mailbox completed on that date, which is what the caps are enforced against, so neither can read above the target in force.
+
+The three `partner_*_7d` counters are the distinct partners reached by confirmed warmup sends over the last seven days: mailboxes, their domains, and the workspaces behind them. Failed and still-pending attempts do not count. `partner_organizations_7d` of `1` over a full week means the mailbox is only warming inside one workspace, which is expected on a self-hosted instance that is not linked to Warmbly Cloud and worth investigating anywhere else.
+
+`received_7d` and `senders_7d` are the other direction over the same window: verified warmup arrivals and the distinct partners they came from. Only mail that the mailbox's own sync verifies counts. A mailbox with many partners on the sending side and few on the receiving side is being written to less than it writes; the pool favours it on every draw until the two even out.
+
 ## Get usage overview
 
 `GET /analytics/usage`
 
-Returns account, campaign, contact, and API usage counters for the caller. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
+Returns account, campaign, and contact usage counters for the selected workspace. `campaigns.emails_sent` counts sent email steps in the requested period; wait and action steps do not count. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
+
+The `api` object is a compatibility placeholder. For real API-key request totals, error rates, latency, and endpoint breakdowns use `GET /api-keys/usage/summary` and the API-key analytics endpoints.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
-| `period` | query | string | One of `day`, `week`, `month`. Defaults to `day`; any other value falls back to `day`. |
+| `period` | query | string | `day` counts from 00:00 UTC today, `week` is a rolling seven-day window, and `month` is a rolling one-month window. Defaults to `day`; any other value falls back to `day`. |
 
 ### Response
 
@@ -490,7 +511,7 @@ Returns account, campaign, contact, and API usage counters for the caller. Auth:
   "user_id": "11111111-0000-0000-0000-000000000007",
   "period": "day",
   "email_accounts": { "total": 12, "active": 11, "in_warmup": 8, "with_errors": 1 },
-  "campaigns": { "total": 9, "active": 4, "paused": 2, "draft": 3, "emails_sent": 12400 },
+  "campaigns": { "total": 9, "active": 4, "paused": 2, "draft": 3, "emails_sent": 124 },
   "contacts": { "total": 8200, "subscribed": 8050, "added_today": 120 },
   "api": { "total_calls": 0, "daily_limit": 50000, "top_endpoints": [] }
 }

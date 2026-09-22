@@ -109,7 +109,7 @@ export default function RichTextAICaret({ editor }: { editor: Editor }) {
     React.useEffect(() => {
         const dom = editor.view.dom;
         const onKey = (e: KeyboardEvent) => {
-            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j") {
+            if ((e.metaKey || e.ctrlKey) && e.key?.toLowerCase() === "j") {
                 if (!editor.state.selection.empty) return; // selection belongs to the edit pill
                 e.preventDefault();
                 frozenPos.current = editor.state.selection.from;

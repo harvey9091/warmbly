@@ -90,6 +90,9 @@ func (r *Rotator) tick(ctx context.Context) error {
 		}
 
 		awayFromOwn := state.ReservedWorkerID != nil && *state.ReservedWorkerID != *state.WorkerID
+		orgImbalanced := state.OrganizationPlacementImbalanced()
+		providerImbalanced := state.ProviderPlacementImbalanced()
+		imbalanced := orgImbalanced || providerImbalanced
 		urgency, reason := workerapp.EvaluateRotation(workerapp.RotationInput{
 			WorkerActive:                 state.WorkerActive,
 			WorkerLive:                   state.WorkerLive,
@@ -98,6 +101,7 @@ func (r *Rotator) tick(ctx context.Context) error {
 			Residency:                    state.Residency(now),
 			OnSomeoneElsesReservedWorker: state.WorkerReservedForOtherOrg,
 			AwayFromOwnReservedWorker:    awayFromOwn,
+			PlacementImbalanced:          imbalanced,
 		})
 		if urgency == workerapp.RotationStay {
 			continue
@@ -107,10 +111,11 @@ func (r *Rotator) tick(ctx context.Context) error {
 		}
 
 		lookup := workerapp.PlacementLookup{
-			EmailAccountID:  state.EmailAccountID,
-			OrgID:           *state.OrganizationID,
-			CurrentWorkerID: state.WorkerID,
-			Region:          state.WorkerRegion,
+			EmailAccountID:   state.EmailAccountID,
+			OrgID:            *state.OrganizationID,
+			CurrentWorkerID:  state.WorkerID,
+			IgnoreIncumbency: imbalanced,
+			Region:           state.WorkerRegion,
 		}
 		// When the mailbox has to LEAVE where it is, the current worker must be
 		// off the table: it is still the incumbent, still carries the
@@ -131,6 +136,11 @@ func (r *Rotator) tick(ctx context.Context) error {
 			continue
 		}
 		if res.Worker.ID == *state.WorkerID {
+			continue
+		}
+		concentrationMove := imbalanced && !awayFromOwn &&
+			state.WorkerUtilization <= workerapp.RotationHotUtilization && !leaving
+		if concentrationMove && !res.RelievesConcentration(orgImbalanced, providerImbalanced) {
 			continue
 		}
 		if landed[res.Worker.ID] >= r.MaxMovesPerDestination {

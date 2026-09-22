@@ -698,12 +698,8 @@ const rootClass = ['cb relative w-full bg-white text-slate-900 flex flex-col', o
     </div>
   </div>
 
+  <!-- AI controls use fixed positioning within the shell to match the dashboard portal. -->
   {demo === 'ai' && (
-    <!-- RichTextAICaret portals both to document.body: the companion is fixed
-         at the caret line's top, 28px in from the editor's right edge; the menu
-         floats bottom-start off the caret with an 8px gap. Fixed here means
-         the shell, so they float over the panel the way they float over the
-         page. The script places them from the caret line's box. -->
     <>
       <span class="cb-spark fixed z-40 inline-flex size-[22px] items-center justify-center rounded-md text-slate-300 transition-colors [&.is-hover]:bg-sky-50 [&.is-hover]:text-sky-600" style="left:0; top:0;" title="Write with AI (⌘J)" data-ai="spark">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" set:html={ic.sparkles}></svg>

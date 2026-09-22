@@ -24,6 +24,10 @@ import (
 // OAuthStart issues a fresh state nonce and returns the provider-specific authorization URL.
 // The caller is expected to redirect the user to the URL and post back to OAuthFinish on return.
 func (s *emailService) OAuthStart(ctx context.Context, userID string, orgID *uuid.UUID, provider models.InboxProvider) (*models.EmailOnboardingStartResponse, *errx.Error) {
+	// A new mailbox only; OAuthReauth renews an existing one and is not gated.
+	if provider == models.InboxProviderGoogle && !config.GoogleOAuthConnect() {
+		return nil, errx.ErrEmailOnboardGoogleOAuthDisabled
+	}
 	cfg, xerr := s.oauthConfigFor(provider)
 	if xerr != nil {
 		return nil, xerr
@@ -41,16 +45,23 @@ func (s *emailService) OAuthStart(ctx context.Context, userID string, orgID *uui
 		return nil, errx.InternalError()
 	}
 
+	// PKCE. The verifier stays in the server-side state and the browser only
+	// ever carries the challenge, so an authorization code lifted from the
+	// redirect cannot be redeemed by whoever lifted it.
+	verifier := oauth2.GenerateVerifier()
+
 	if xerr := s.saveOnboardingState(ctx, state, &models.EmailOnboardingState{
 		UserID:         userID,
 		OrganizationID: orgID,
 		Provider:       string(provider),
 		Nonce:          state,
+		CodeVerifier:   verifier,
 	}); xerr != nil {
 		return nil, xerr
 	}
 
-	url := cfg.AuthCodeURL(state, authCodeOptions(provider, "")...)
+	opts := append(authCodeOptions(provider, ""), oauth2.S256ChallengeOption(verifier))
+	url := cfg.AuthCodeURL(state, opts...)
 	return &models.EmailOnboardingStartResponse{URL: url, State: state}, nil
 }
 
@@ -127,7 +138,15 @@ func (s *emailService) OAuthFinish(ctx context.Context, userID, code, state stri
 		return nil, false, xerr
 	}
 
-	tok, err := cfg.Exchange(ctx, code)
+	// The verifier proves this is the same party that started the flow. Absent
+	// only for a state written before PKCE existed, where the exchange has to
+	// go ahead without it or an in-flight consent dies on deploy.
+	var exchangeOpts []oauth2.AuthCodeOption
+	if sess.CodeVerifier != "" {
+		exchangeOpts = append(exchangeOpts, oauth2.VerifierOption(sess.CodeVerifier))
+	}
+
+	tok, err := cfg.Exchange(ctx, code, exchangeOpts...)
 	if err != nil {
 		return nil, false, errx.ErrEmailOnboardExchange
 	}
@@ -189,6 +208,7 @@ func (s *emailService) OAuthFinish(ctx context.Context, userID, code, state stri
 		ExpiresAt:      tok.Expiry,
 	})
 	if xerr == nil && acc != nil {
+		s.captureSendIdentity(ctx, acc, tok)
 		s.syncWarmupPoolMembership(ctx, acc)
 		s.publishAccountEvent(ctx, pubsub.EventAccountConnected, acc)
 		s.dispatchAccountConnected(ctx, sess.OrganizationID, acc)
@@ -326,7 +346,24 @@ func validateSMTPIMAPInput(data *models.NewSMTPIMAPAccount) *errx.Error {
 	if !validPort(data.IMAP.Port) {
 		return errx.ErrEmailIMAPPort
 	}
+	normalizeMailPasswords(data.SMTP, data.IMAP)
 	return validateMailSecurity(data.SMTP, data.IMAP)
+}
+
+// normalizeMailPasswords drops every space from a Google app password (Google
+// prints them in groups of four) and trims only the edges elsewhere, where an
+// inner space can be part of the password.
+func normalizeMailPasswords(services ...*models.Service) {
+	for _, svc := range services {
+		if svc == nil {
+			continue
+		}
+		if models.GoogleMailHost(svc.Host) {
+			svc.Password = strings.Join(strings.Fields(svc.Password), "")
+			continue
+		}
+		svc.Password = strings.TrimSpace(svc.Password)
+	}
 }
 
 // validPort accepts any routable TCP port. Mail submission is conventionally
@@ -418,6 +455,10 @@ func fetchInboxOwner(ctx context.Context, provider models.InboxProvider, accessT
 // Microsoft return a space-separated "scope" alongside the token; an empty or
 // absent one means the provider did not say, which is not the same as "nothing
 // was granted" and must not be read as a denial.
+//
+// Microsoft does not echo offline_access in the scope list (documented: it is
+// not an access-token scope), even when a refresh token was issued, so a live
+// refresh token confers it: without one there is nothing to refresh.
 func grantedScopes(tok *oauth2.Token) (map[string]bool, bool) {
 	raw, _ := tok.Extra("scope").(string)
 	if strings.TrimSpace(raw) == "" {
@@ -426,6 +467,9 @@ func grantedScopes(tok *oauth2.Token) (map[string]bool, bool) {
 	out := make(map[string]bool)
 	for _, sc := range strings.Fields(raw) {
 		out[sc] = true
+	}
+	if tok.RefreshToken != "" {
+		out["offline_access"] = true
 	}
 	return out, true
 }
@@ -456,6 +500,11 @@ var scopeSatisfiedBy = map[string][]string{
 	"https://www.googleapis.com/auth/gmail.modify": {
 		"https://www.googleapis.com/auth/gmail.modify",
 		"https://mail.google.com/",
+	},
+	// settings.basic is not implied by anything: mail.google.com is full
+	// mailbox access and does not confer settings either.
+	"https://www.googleapis.com/auth/gmail.settings.basic": {
+		"https://www.googleapis.com/auth/gmail.settings.basic",
 	},
 }
 

@@ -1,16 +1,13 @@
-// Unibox — three-column overview layout.
+// Unibox: three columns, nothing above them.
 //
-//   ┌── Top metric strip ─────────────────────────────────────────┐
-//   │ Inbox · [scope chip] · unread · awaiting · today · week · …│
-//   ├──────────┬────────────────────────┬─────────────────────────┤
+//   ┌──────────┬────────────────────────┬─────────────────────────┐
 //   │  Scope   │ Conversation list      │ Thread (live fetch)     │
-//   │  rail    │ (search + dense rows)  │ (deep-linkable URL)     │
+//   │  rail    │ (title, search, rows)  │ (deep-linkable URL)     │
 //   │ (220px)  │  (drag-resizable)      │  flex-1                 │
 //   └──────────┴────────────────────────┴─────────────────────────┘
 //
-// All counts in the rail and strip come from /unibox/overview in one
-// round trip — server truth, no client guesswork. Snoozed and
-// Awaiting reply are real backend scopes, not "soon" placeholders.
+// Every count in the rail comes from /unibox/overview in one round trip,
+// so there is no metric strip: the numbers live where the clicks are.
 
 import React from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -20,8 +17,8 @@ import { ConversationList } from "@/components/app/unibox/ConversationList";
 import { ScheduledList } from "@/components/app/unibox/ScheduledList";
 import { ThreadView } from "@/components/app/unibox/ThreadView";
 import { ScopeRail, scopeKey, type UniboxScope } from "@/components/app/unibox/ScopeRail";
+import { viewById, viewCategoryIds } from "@/lib/unibox/views";
 import { ScopeSheet } from "@/components/app/unibox/ScopeSheet";
-import { UniboxHeader } from "@/components/app/unibox/UniboxHeader";
 import useFeatureAccess from "@/hooks/useFeatureAccess";
 import { LockedSurface } from "@/components/layout/LockedSurface";
 import { NoAccess } from "@/components/layout/NoAccess";
@@ -82,7 +79,7 @@ export default function UniboxPage() {
   // opaque mailbox/tag/label id for those scopes) is the only query param left.
   // Accounts are no longer in the URL: the thread fetch scans every mailbox the
   // user owns, which is the right default for a unified inbox.
-  const urlScope = routeParams.scope ?? "all";
+  const urlScope = routeParams.scope ?? "inbox";
   const urlThread = routeParams.threadId ?? null;
   const urlScopeRef = searchParams.get("ref");
 
@@ -207,6 +204,10 @@ export default function UniboxPage() {
         return urlScopeRef
           ? { kind: "category", categoryId: urlScopeRef }
           : { kind: "all" };
+      case "view": {
+        const v = viewById(urlScopeRef);
+        return v ? { kind: "view", view: v.id } : { kind: "all" };
+      }
       default:
         return { kind: "all" };
     }
@@ -226,6 +227,9 @@ export default function UniboxPage() {
           return;
         case "category":
           goTo({ scope: "category", ref: s.categoryId });
+          return;
+        case "view":
+          goTo({ scope: "view", ref: s.view });
           return;
         case "all":
           goTo({ scope: "all", ref: null });
@@ -252,6 +256,9 @@ export default function UniboxPage() {
         : null,
     [scope, storeEmails],
   );
+  // A premade view resolves to the workspace's label rows by slug, so the
+  // filter is recomputed once the overview has loaded them.
+  const viewCategoriesData = overview.data?.categories;
   const paramsForScope = React.useCallback(
     (sortBy: UniboxSearchParams["sortBy"]): UniboxSearchParams => {
       const next: UniboxSearchParams = { sortBy: sortBy ?? "newest" };
@@ -294,25 +301,60 @@ export default function UniboxPage() {
           // mailbox.
           next.categoryIds = [scope.categoryId];
           break;
+        case "all":
+          // All mail is the one view a filed conversation stays in, so
+          // Archive means "out of the way", not "gone". Every other scope
+          // leaves it out, which is what makes the button do something.
+          next.includeArchived = true;
+          break;
+        case "view": {
+          // A premade view is a set of automatic labels, resolved to the
+          // workspace's category rows by slug.
+          const v = viewById(scope.view);
+          next.categoryIds = v ? viewCategoryIds(v, viewCategoriesData) : [];
+          break;
+        }
         default:
           break;
       }
       return next;
     },
-    [scope, tagAccountIds],
+    [scope, tagAccountIds, viewCategoriesData],
   );
   const [params, setParams] = React.useState<UniboxSearchParams>(() =>
     paramsForScope("newest"),
+  );
+  // What the scope alone would query. The list compares against it to tell
+  // a user-added filter from the scope's own parameters.
+  const baseParams = React.useMemo(
+    () => paramsForScope(params.sortBy),
+    [paramsForScope, params.sortBy],
   );
   // Reset filters when the scope changes (or a tag scope re-resolves as
   // the mailbox directory loads), keeping only the sort. Setting state
   // during render re-renders before commit, so the stale params never
   // reach the query.
   const tagIdsKey = tagAccountIds?.join(",") ?? "";
-  const [prevReset, setPrevReset] = React.useState({ scope, tagIdsKey });
-  if (prevReset.scope !== scope || prevReset.tagIdsKey !== tagIdsKey) {
-    setPrevReset({ scope, tagIdsKey });
+  const viewIdsKey =
+    scope.kind === "view" ? (viewCategoriesData ?? []).map((c) => c.id).join(",") : "";
+  const [prevReset, setPrevReset] = React.useState({ scope, tagIdsKey, viewIdsKey });
+  if (prevReset.scope !== scope || prevReset.tagIdsKey !== tagIdsKey || prevReset.viewIdsKey !== viewIdsKey) {
+    setPrevReset({ scope, tagIdsKey, viewIdsKey });
     setParams((prev) => paramsForScope(prev.sortBy));
+  }
+
+  // ── Search text ────────────────────────────────────────────────
+  // Owned here, not in the list, because "Search all mail" changes scope and
+  // has to keep what was typed. A scope change the reader made themselves
+  // still clears it: a query typed for one view silently filtering the next is
+  // what the list used to guard against.
+  const [search, setSearch] = React.useState("");
+  const keepSearch = React.useRef(false);
+  const [searchScope, setSearchScope] = React.useState(scope);
+  if (searchScope !== scope) {
+    setSearchScope(scope);
+    if (keepSearch.current) keepSearch.current = false;
+    else setSearch("");
   }
 
   // ── Scope label for header chip ────────────────────────────────
@@ -341,16 +383,18 @@ export default function UniboxPage() {
       }
       case "tag": {
         const t = overviewData?.tags.find((x) => x.id === scope.tagId);
-        return t ? `Tag · ${t.title}` : "Tag";
+        return t ? t.title : "Tag";
       }
       case "category": {
         const c = overviewData?.categories?.find(
           (x) => x.id === scope.categoryId,
         );
-        return c ? `Label · ${c.title}` : "Label";
+        return c ? c.title : "Label";
       }
+      case "view":
+        return viewById(scope.view)?.label ?? "View";
       default:
-        return "All";
+        return "All mail";
     }
   }, [scope, overviewData]);
 
@@ -365,19 +409,13 @@ export default function UniboxPage() {
       blurb="Read and reply to every inbound message across every connected mailbox from one place — searchable, filterable, with realtime updates."
       minPlan="starter"
       bullets={[
-        "Live overview: unread, awaiting reply, snoozed, today, week",
-        "Scope rail with per-mailbox + per-tag unread counts",
+        "Inbox, unread, awaiting reply and snoozed views with live counts",
+        "Per-mailbox, per-label and per-tag views in one rail",
         "Deep-linkable threads as a clean URL path",
         "Snooze any thread to clear it from the inbox until later",
       ]}
     >
-      <div className="flex flex-col h-full">
-        <UniboxHeader
-          scopeLabel={scopeLabel}
-          onClearScope={() => setScope({ kind: "all" })}
-          onOpenScopeSheet={() => setScopeSheetOpen(true)}
-        />
-
+      <div className="flex flex-col h-full bg-white">
         <ScopeSheet
           open={scopeSheetOpen}
           setOpen={setScopeSheetOpen}
@@ -393,8 +431,8 @@ export default function UniboxPage() {
           {scope.kind === "scheduled" ? (
             // Scheduled scope takes the full right side — a
             // queued send has no thread context to load.
-            <div className="flex-1 min-w-0 flex flex-col overflow-hidden border-l border-slate-200">
-              <ScheduledList />
+            <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+              <ScheduledList onOpenScopeSheet={() => setScopeSheetOpen(true)} />
             </div>
           ) : (
             <>
@@ -414,7 +452,21 @@ export default function UniboxPage() {
                   scopeKey={scopeKey(scope)}
                   scopeLabel={scopeLabel}
                   params={params}
+                  baseParams={baseParams}
                   setParams={setParams}
+                  search={search}
+                  setSearch={setSearch}
+                  onSearchAllMail={
+                    scope.kind === "all"
+                      ? undefined
+                      : () => {
+                          // Widening keeps the query; the reset below reads
+                          // this flag on the scope change it causes.
+                          keepSearch.current = true;
+                          setScope({ kind: "all" });
+                        }
+                  }
+                  onOpenScopeSheet={() => setScopeSheetOpen(true)}
                 />
               </div>
 
@@ -441,7 +493,7 @@ export default function UniboxPage() {
                     <button
                       type="button"
                       onClick={() => goTo({ threadId: null })}
-                      className="md:hidden flex items-center gap-1 px-3 h-10 shrink-0 border-b border-slate-200 text-[13px] font-medium text-slate-600 hover:text-slate-900 active:bg-slate-50"
+                      className="md:hidden flex items-center gap-1 px-3 h-10 shrink-0 border-b border-slate-200 text-[12.5px] font-medium text-slate-600 hover:text-slate-900 active:bg-slate-50"
                     >
                       <ChevronLeftIcon className="w-4 h-4" />
                       Inbox
@@ -457,15 +509,13 @@ export default function UniboxPage() {
                 ) : (
                   <div className="flex-1 flex items-center justify-center">
                     <div className="text-center px-5">
-                      <div className="w-8 h-8 rounded-md bg-slate-100 flex items-center justify-center mx-auto mb-3 text-slate-400">
-                        <InboxIcon className="w-4 h-4" />
-                      </div>
-                      <p className="text-[12.5px] font-medium text-slate-700">
-                        Select a conversation
+                      <InboxIcon className="w-5 h-5 text-slate-300 mx-auto mb-2.5" strokeWidth={1.5} />
+                      <p className="text-[12.5px] font-medium text-slate-600">
+                        No conversation open
                       </p>
-                      <p className="text-[11.5px] text-slate-400 mt-1 max-w-[34ch] leading-relaxed">
-                        Pick a thread from the list. It opens in the URL path so
-                        you can share or refresh.
+                      <p className="text-[11.5px] text-slate-400 mt-1">
+                        Pick one from the list, or press{" "}
+                        <kbd className="inline-flex h-4 px-1 items-center rounded border border-slate-200 bg-slate-50 font-mono text-[10px] text-slate-500">j</kbd>
                       </p>
                     </div>
                   </div>

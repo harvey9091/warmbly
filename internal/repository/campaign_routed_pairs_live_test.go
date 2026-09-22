@@ -2,11 +2,14 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/warmbly/warmbly/internal/models"
 )
 
 // FindRoutedPairs is the query the campaign chain asks "who do I send next".
@@ -219,5 +222,76 @@ func TestLiveFindRoutedPairsSkipsALeadWaitingOnItsPacedMailbox(t *testing.T) {
 	}
 	if !onSender {
 		t.Fatal("the wait must be reported as a lead waiting for its mailbox, not as a step's delay")
+	}
+}
+
+// A branch whose signal already happened routes to its target NOW, and the
+// pair has to carry that so the placer does not re-add the target step's own
+// wait_after. Flipping only the branch's instant flag must put the delay back
+// (issue #583).
+func TestLiveFindRoutedPairsInstantBranchTargetIgnoresTheStepWait(t *testing.T) {
+	_, pool := liveContactDB(t)
+	f := newRoutedPairsFixture(t, pool, 1)
+	ctx := context.Background()
+
+	target := uuid.New()
+	sent := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+	opened := sent.Add(30 * time.Minute)
+
+	// Email 2 carries the ten-day delay the instant branch has to override.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO sequences (id, campaign_id, organization_id, name, subject,
+		      body_plain, body_html, wait_after, position, kind)
+		  VALUES ($1, $2, $3, 'Email 2', 'Hi', 'Hi', '<p>Hi</p>', 10, 1, 'email')`,
+		target, f.campaign, f.org); err != nil {
+		t.Fatalf("insert target step: %v", err)
+	}
+
+	setBranch := func(instant bool) {
+		t.Helper()
+		bc, err := json.Marshal(models.BranchConditions{Branches: []models.Branch{{
+			BranchID:         "b1",
+			TargetSequenceID: &target,
+			Conditions:       []models.BranchCondition{{Field: "opened", Operator: "within_days", Value: intPtr(1)}},
+			Instant:          &instant,
+		}}})
+		if err != nil {
+			t.Fatalf("marshal conditions: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE sequences SET conditions = $2 WHERE id = $1`, f.step, bc); err != nil {
+			t.Fatalf("set branch (instant=%t): %v", instant, err)
+		}
+	}
+	setBranch(true)
+	// Step 1 went out, and the contact opened it inside the window.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO campaign_contact_progress (campaign_id, contact_id, sequence_id, sent_at, opened_at)
+		  VALUES ($1, $2, $3, $4, $5)`,
+		f.campaign, f.leads[0], f.step, sent, opened); err != nil {
+		t.Fatalf("insert progress: %v", err)
+	}
+
+	pairs, nextDue, _ := f.find(t, nil, 5)
+	if len(pairs) != 1 {
+		t.Fatalf("got %d pairs, want the instant branch's target to be due now (next_due=%v)", len(pairs), nextDue)
+	}
+	if pairs[0].SequenceID != target || !pairs[0].Instant {
+		t.Fatalf("pair = %+v, want the instant target %s", pairs[0], target)
+	}
+	if pairs[0].NotBefore == nil || pairs[0].NotBefore.After(time.Now()) {
+		t.Fatalf("NotBefore = %v, want the branch's instant target due now", pairs[0].NotBefore)
+	}
+
+	// The opted-out branch keeps the target's ten-day wait.
+	setBranch(false)
+	pairs, nextDue, _ = f.find(t, nil, 5)
+	if len(pairs) != 0 {
+		t.Fatalf("got %d pairs for a non-instant branch, want the target held back", len(pairs))
+	}
+	if nextDue == nil {
+		t.Fatal("nothing due and no next-due time for a non-instant branch")
+	}
+	if until := nextDue.Sub(sent); until < 239*time.Hour || until > 241*time.Hour {
+		t.Fatalf("next due in %s, want the target's ten-day wait_after", until.Round(time.Minute))
 	}
 }

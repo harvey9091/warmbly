@@ -20,15 +20,27 @@ type TokenClaims struct {
 	SessionID uuid.UUID `json:"sid"`
 	Email     string    `json:"email"`
 	Nonce     string    `json:"nonce"`
+	// Purpose names what this token may be spent on. See the Purpose*
+	// constants: one signing key issues all of them, so this is what keeps a
+	// password-reset token from being accepted as a session.
+	Purpose string `json:"purpose,omitempty"`
 	jwt.RegisteredClaims
 }
 
+// GenerateToken mints a token for a purpose. Callers use the Purpose*
+// constants; a token minted with the wrong one is refused at the verifier that
+// expects a different one.
 func (s *tokenService) GenerateToken(userID, sessionID uuid.UUID, email, nonce string, issuedAt, expiresAt time.Time) (string, error) {
+	return s.GenerateTokenFor(PurposeAccess, userID, sessionID, email, nonce, issuedAt, expiresAt)
+}
+
+func (s *tokenService) GenerateTokenFor(purpose string, userID, sessionID uuid.UUID, email, nonce string, issuedAt, expiresAt time.Time) (string, error) {
 	claims := TokenClaims{
 		UserID:    userID,
 		SessionID: sessionID,
 		Email:     email,
 		Nonce:     nonce,
+		Purpose:   purpose,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(issuedAt),
@@ -40,11 +52,8 @@ func (s *tokenService) GenerateToken(userID, sessionID uuid.UUID, email, nonce s
 
 func (s *tokenService) VerifyToken(tokenStr string) (*TokenClaims, *errx.Error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &TokenClaims{}, func(token *jwt.Token) (any, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, errx.ErrToken
-		}
 		return []byte(s.AuthSecret), nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired())
 
 	if err != nil {
 		return nil, errx.ErrToken
@@ -63,10 +72,43 @@ func (s *tokenService) VerifyToken(tokenStr string) (*TokenClaims, *errx.Error) 
 }
 
 func (s *tokenService) GenerateSession(ctx context.Context, userID uuid.UUID, email, ipaddr, userAgent, authProvider string) (*models.Token, *errx.Error) {
-	return s.GenerateSessionWithOrg(ctx, userID, email, ipaddr, userAgent, authProvider, nil)
+	return s.generateSession(ctx, userID, email, ipaddr, userAgent, authProvider, nil, false)
+}
+
+// GenerateMFASession marks the session as having presented a second factor.
+// Only the TOTP and passkey paths may call it.
+func (s *tokenService) GenerateMFASession(ctx context.Context, userID uuid.UUID, email, ipaddr, userAgent, authProvider string) (*models.Token, *errx.Error) {
+	return s.generateSession(ctx, userID, email, ipaddr, userAgent, authProvider, nil, true)
 }
 
 func (s *tokenService) GenerateSessionWithOrg(ctx context.Context, userID uuid.UUID, email, ipaddr, userAgent, authProvider string, orgID *uuid.UUID) (*models.Token, *errx.Error) {
+	return s.generateSession(ctx, userID, email, ipaddr, userAgent, authProvider, orgID, false)
+}
+
+// ReissueSession ends every one of the user's sessions, the caller's included,
+// then mints a fresh one for the caller's device that keeps its workspace,
+// sign-in method and MFA status. The caller's session comes from the request
+// (nothing is looked up, so nothing can fail before the revoke), and revoke
+// runs before mint so a failed mint leaves the account signed out rather than
+// reachable with the old token.
+func (s *tokenService) ReissueSession(ctx context.Context, userID uuid.UUID, current *models.Session, ipaddr, userAgent string) (*models.Token, *errx.Error) {
+	provider := AuthProviderEmail
+	var orgID *uuid.UUID
+	mfaVerified := false
+	if current != nil && current.UserID == userID {
+		provider = current.AuthProvider
+		orgID = current.CurrentOrganizationID
+		mfaVerified = current.MFAVerified
+	}
+
+	if err := s.RevokeOtherSessions(ctx, userID, uuid.Nil); err != nil {
+		return nil, err
+	}
+
+	return s.generateSession(ctx, userID, "", ipaddr, userAgent, provider, orgID, mfaVerified)
+}
+
+func (s *tokenService) generateSession(ctx context.Context, userID uuid.UUID, email, ipaddr, userAgent, authProvider string, orgID *uuid.UUID, mfaVerified bool) (*models.Token, *errx.Error) {
 	// A session always starts inside a workspace. Without one the caller would
 	// reach org-scoped writes with no tenant, and the rows they create are the
 	// ones that later skip suppression and the entitlement gate (issue #168).
@@ -124,6 +166,7 @@ func (s *tokenService) GenerateSessionWithOrg(ctx context.Context, userID uuid.U
 		OSName:      userAgentInfo.OS,
 
 		AuthProvider: authProvider,
+		MFAVerified:  mfaVerified,
 	}
 
 	tx, err := s.db.Begin(ctx)
@@ -145,7 +188,7 @@ func (s *tokenService) GenerateSessionWithOrg(ctx context.Context, userID uuid.U
 	}
 	session.AccessNonce = accessNonce
 
-	accessToken, err := s.GenerateToken(userID, session.ID, email, accessNonce, issuedAt, accessTokenExpiresAt)
+	accessToken, err := s.GenerateTokenFor(PurposeAccess, userID, session.ID, email, accessNonce, issuedAt, accessTokenExpiresAt)
 	if err != nil {
 		errs.CaptureException(err)
 		return nil, errx.InternalError()
@@ -160,7 +203,7 @@ func (s *tokenService) GenerateSessionWithOrg(ctx context.Context, userID uuid.U
 	}
 	session.RefreshNonce = refreshNonce
 
-	refreshToken, err := s.GenerateToken(userID, session.ID, email, refreshNonce, issuedAt, refreshTokenExpiresAt)
+	refreshToken, err := s.GenerateTokenFor(PurposeRefresh, userID, session.ID, email, refreshNonce, issuedAt, refreshTokenExpiresAt)
 	if err != nil {
 		errs.CaptureException(err)
 		return nil, errx.InternalError()

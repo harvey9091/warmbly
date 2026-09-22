@@ -17,6 +17,7 @@ import AddEmailModal from "@/components/app/modals/AddEmailModal";
 import ComposeWindow from "@/components/app/unibox/compose/ComposeWindow";
 import PasskeyEnrollPrompt from "@/components/app/modals/PasskeyEnrollPrompt";
 import PermissionDeniedModal from "@/components/app/modals/PermissionDeniedModal";
+import ReauthModal from "@/components/app/modals/ReauthModal";
 
 export default function RootAppLayout() {
     const token = getToken();
@@ -28,6 +29,14 @@ export default function RootAppLayout() {
     // inside their action handlers (delete confirmations etc.). They
     // need UserProvider too (state lives there: tagsEdit, foldersEdit,
     // addEmail), so they sit between the two providers.
+    //
+    // They are inside UpgradeDialogProvider for the same class of reason, and
+    // it is easy to get wrong: they render below AppLayout in the file but are
+    // siblings of it, so a provider that wraps only AppLayout does not reach
+    // them. AddEmailModal renders MailboxAllowanceDialog, which calls
+    // useUpgradeDialog to offer the plan that lifts the cap, so leaving it
+    // outside threw the moment someone hit their mailbox allowance -- exactly
+    // when the upgrade path is what they needed.
     return <UserProvider>
         <DataSyncProvider>
             <ConfirmProvider>
@@ -50,13 +59,14 @@ export default function RootAppLayout() {
                             </RealtimeManager>
                         </SocketProvider>
                     </LinkProvider>
+                    <TagsModal />
+                    <FoldersModal />
+                    <AddEmailModal />
+                    <ComposeWindow />
+                    <PasskeyEnrollPrompt />
+                    <PermissionDeniedModal />
+                    <ReauthModal />
                 </UpgradeDialogProvider>
-                <TagsModal />
-                <FoldersModal />
-                <AddEmailModal />
-                <ComposeWindow />
-                <PasskeyEnrollPrompt />
-                <PermissionDeniedModal />
             </ConfirmProvider>
         </DataSyncProvider>
     </UserProvider>

@@ -75,8 +75,8 @@ func (h *Handler) LookupContactByEmail(c *gin.Context) {
 // ListContactEmails returns one row per email we sent (or tried to
 // send) to the contact. Cursor pagination keyed on the task ID.
 func (h *Handler) ListContactEmails(c *gin.Context) {
-	userID, err := middleware.GetUserUUID(c)
-	if err != nil {
+	orgID := middleware.GetOrganizationID(c)
+	if orgID == nil {
 		errx.Handle(c, errx.ErrAuth)
 		return
 	}
@@ -107,7 +107,7 @@ func (h *Handler) ListContactEmails(c *gin.Context) {
 		}
 	}
 
-	res, xerr := h.ContactService.ListSentEmails(c.Request.Context(), userID, contactID, limit, beforeAt, beforeID)
+	res, xerr := h.ContactService.ListSentEmails(c.Request.Context(), *orgID, contactID, limit, beforeAt, beforeID)
 	if xerr != nil {
 		errx.Handle(c, xerr)
 		return
@@ -143,11 +143,6 @@ func (h *Handler) ListContactCampaignStates(c *gin.Context) {
 // and require a selected organization; we 400 if there isn't one to
 // avoid silently returning a misleadingly thin feed.
 func (h *Handler) ListContactTimeline(c *gin.Context) {
-	userID, err := middleware.GetUserUUID(c)
-	if err != nil {
-		errx.Handle(c, errx.ErrAuth)
-		return
-	}
 	contactID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		errx.Handle(c, errx.ErrUuid)
@@ -194,7 +189,7 @@ func (h *Handler) ListContactTimeline(c *gin.Context) {
 		cursor = &models.ContactTimelineKey{At: t}
 	}
 
-	res, xerr := h.ContactService.ListTimeline(c.Request.Context(), userID, orgID, contactID, limit, cursor)
+	res, xerr := h.ContactService.ListTimeline(c.Request.Context(), *orgID, contactID, limit, cursor)
 	if xerr != nil {
 		errx.Handle(c, xerr)
 		return

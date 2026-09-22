@@ -22,8 +22,8 @@ function UtilizationBar({ row }: { row: AdminFleetWorkerRow }) {
         <div className="min-w-[160px]">
             <div className="flex items-center justify-between text-[11px] tabular-nums">
                 <span>
-                    {row.load_score.toFixed(2)}
-                    <span className="text-muted-foreground"> / {row.effective_capacity.toFixed(2)}</span>
+                    {row.load_score.toFixed(0)}
+                    <span className="text-muted-foreground"> / {row.effective_capacity.toFixed(0)}</span>
                 </span>
                 <span
                     className={cn(
@@ -47,9 +47,9 @@ function UtilizationBar({ row }: { row: AdminFleetWorkerRow }) {
     );
 }
 
-function Pair({ a, b, tone }: { a: number; b: number; tone?: string }) {
+function Pair({ a, b, tone, title }: { a: number; b: number; tone?: string; title?: string }) {
     return (
-        <span className="tabular-nums text-xs">
+        <span className="tabular-nums text-xs" title={title}>
             <span className={tone}>{a.toLocaleString()}</span>
             <span className="text-muted-foreground"> / {b.toLocaleString()}</span>
         </span>
@@ -106,17 +106,32 @@ const columns: Column<AdminFleetWorkerRow>[] = [
     },
     {
         id: "utilization",
-        header: "Load / capacity",
+        header: "Load / target",
         sortable: true,
         cell: (w) => <UtilizationBar row={w} />,
-        csv: (w) => `${w.load_score.toFixed(2)}/${w.effective_capacity.toFixed(2)} (${Math.round(w.utilization * 100)}%)`,
+        csv: (w) => `${w.load_score.toFixed(0)}/${w.effective_capacity.toFixed(0)} (${Math.round(w.utilization * 100)}%)`,
     },
     {
         id: "sends",
-        header: "Sends 1h",
+        header: "Send activity 60m",
         align: "right",
         sortable: true,
-        cell: (w) => <Pair a={w.sends_succeeded_1h} b={w.sends_attempted_1h} tone="text-foreground" />,
+        cell: (w) =>
+            w.sends_attempted_1h === 0 ? (
+                <span
+                    className="text-xs text-muted-foreground"
+                    title="The worker made no provider send attempts during the rolling last 60 minutes"
+                >
+                    No attempts
+                </span>
+            ) : (
+                <Pair
+                    a={w.sends_succeeded_1h}
+                    b={w.sends_attempted_1h}
+                    tone="text-foreground"
+                    title="Succeeded / attempted during the rolling last 60 minutes"
+                />
+            ),
         csv: (w) => `${w.sends_succeeded_1h}/${w.sends_attempted_1h}`,
     },
     {
@@ -183,9 +198,10 @@ export function CapacityTab() {
         <div>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-card px-3 py-2 text-[12.5px] text-muted-foreground">
                 <span>
-                    The rebalancer drains a worker above <span className="font-medium text-foreground">80%</span> utilization
-                    onto peers below <span className="font-medium text-foreground">50%</span> in the same tier, and never
-                    across tiers. Counters are the last hour; this view refreshes every 30s.
+                    Placement spreads assigned mailboxes across live workers. The target is an operator-set
+                    planning value, not a mailbox-provider send limit. New nodes fill gradually without
+                    shrinking the displayed target. Send counters show succeeded / attempted during the
+                    rolling last 60 minutes. “No attempts” is activity, not a capacity reading.
                     {rows.length > 0 && (
                         <span className="ml-1.5 tabular-nums">
                             ({hot} hot, {cold} cold of {rows.length})

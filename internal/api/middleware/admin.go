@@ -38,6 +38,22 @@ func (h *Handler) AdminMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		// The admin panel is an internet-reachable administrative interface, so
+		// every account that reaches it has to have presented a second factor
+		// (CASA 3.3.1). Enforced on the session rather than on enrolment: an
+		// admin who has 2FA switched on but signed in before switching it on
+		// is still holding a single-factor session.
+		//
+		// This refuses admin routes only. The rest of the dashboard, including
+		// Settings > Security, stays reachable, which is what lets someone
+		// enrol and then come back.
+		if !session.MFAVerified {
+			errx.JSON(c, errx.NewWithIdentifier(errx.Forbidden, "admin_mfa_required",
+				"Administrative access requires two-factor authentication. Turn on 2FA or add a passkey under Settings > Security, then sign in again."))
+			c.Abort()
+			return
+		}
+
 		// Store admin permissions in context
 		c.Set(AdminPermissionsKey, perms)
 		c.Set(AdminUserIDKey, session.UserID)

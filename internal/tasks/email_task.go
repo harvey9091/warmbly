@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -9,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
-	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/observability/errs"
@@ -217,7 +217,7 @@ func (s *tasksService) HandleEmailTask(task *proto.ProcessTask) *errx.Error {
 	// reply-back: someone mailed this mailbox and it is answering them, which
 	// is what makes a thread read as a conversation instead of two monologues.
 	// The directed partner still passes the same health gate as a drawn one.
-	partner := s.directedWarmupPartner(ctx, taskID, poolType)
+	partner := s.directedWarmupPartner(ctx, taskID, account, poolType)
 	// A directed task IS the reply; the reply-rate draw already happened when
 	// it was scheduled. Rolling again here would square the rate, so a 30%
 	// reply rate would answer 9% of the time.
@@ -479,6 +479,12 @@ const (
 	partnerMaxSharedWindow = 3
 )
 
+var (
+	errNoWarmupPartners         = errors.New("no warmup partners available")
+	errNoEligibleWarmupPartners = errors.New("no eligible warmup partners after health gate")
+	errAllPartnersExcluded      = errors.New("every warmup partner is excluded by a routing rule")
+)
+
 func warmupPartnerRecheckTime() time.Time {
 	return time.Now().Add(time.Duration(240+rand.Intn(240)) * time.Minute)
 }
@@ -489,81 +495,71 @@ func warmupPartnerRecheckTime() time.Time {
 func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (*Email, error) {
 	poolType := s.resolveWarmupPoolType(ctx, &account)
 
-	participantIDs, err := s.warmupRepo.GetPoolRecipientParticipants(ctx, poolType, true)
+	candidates, err := s.warmupRepo.WarmupPartnerCandidates(ctx, poolType, account.ID)
 	if err != nil {
 		return nil, err
 	}
-
-	// A thin tier borrows the other tier's proven mailboxes; the SQL gates age and health.
-	fallbackIDs := []uuid.UUID{}
-	if len(participantIDs) < config.WarmupPoolTierFallbackFloor {
-		if extra, ferr := s.warmupRepo.GetPoolFallbackRecipients(ctx, poolType, config.WarmupPoolFallbackMinAgeDays*24*time.Hour); ferr == nil {
-			fallbackIDs = extra
-			participantIDs = append(participantIDs, extra...)
-		}
+	if len(candidates) == 0 {
+		return nil, errNoWarmupPartners
 	}
 
-	if len(participantIDs) == 0 {
-		return nil, fmt.Errorf("no warmup partners available")
-	}
-
-	if len(participantIDs) < smallPoolWarnThreshold {
+	if len(candidates) < smallPoolWarnThreshold {
 		log.Warn().
-			Int("participants", len(participantIDs)).
+			Int("participants", len(candidates)).
 			Str("pool", poolType).
 			Str("email_account_id", account.ID.String()).
 			Msg("Warmup pool below diversity threshold; partner reuse likely")
 	}
 
-	domainsByID, err := s.warmupRepo.GetPoolParticipantDomains(ctx, poolType, true)
-	if err != nil {
-		// Diversity weighting is best-effort. Fall back to uniform on lookup error.
-		domainsByID = nil
-	}
-	if len(fallbackIDs) > 0 && domainsByID != nil {
-		if other, oerr := s.warmupRepo.GetPoolParticipantDomains(ctx, otherPoolType(poolType), true); oerr == nil {
-			for _, id := range fallbackIDs {
-				if d, ok := other[id]; ok {
-					domainsByID[id] = d
-				}
-			}
+	// Customer routing rules apply to the premium pool only; a borrowed
+	// candidate answers to them like any other, since its address is known.
+	routingRules := s.warmupRoutingRules(ctx, &account, poolType)
+
+	// Every per-recipient signal derives from the address, so no candidate can
+	// be missing from a map and score a silent neutral default. A rule of
+	// weight 0 is an exclusion, so it drops the candidate here rather than
+	// weighting it: a weight cannot survive a pool of one (#501).
+	eligible := make([]models.WarmupPartnerCandidate, 0, len(candidates))
+	domainsByID := make(map[uuid.UUID]string, len(candidates))
+	providersByID := make(map[uuid.UUID]string, len(candidates))
+	ruleWeight := make(map[uuid.UUID]float64, len(candidates))
+	starvation := make(map[uuid.UUID]float64, len(candidates))
+	poolOf := make(map[uuid.UUID]string, len(candidates))
+	excluded := 0
+	for _, c := range candidates {
+		weight := 1.0
+		if len(routingRules) > 0 {
+			weight = routingMultiplier(routingRules, account.Email, c.Email)
 		}
+		if weight <= 0 {
+			excluded++
+			continue
+		}
+		domain := strings.ToLower(models.EmailDomain(c.Email))
+		domainsByID[c.ID] = domain
+		providersByID[c.ID] = string(models.ClassifyProvider(domain))
+		ruleWeight[c.ID] = weight
+		starvation[c.ID] = c.Starvation()
+		poolOf[c.ID] = c.PoolType
+		eligible = append(eligible, c)
 	}
+	if len(eligible) == 0 {
+		// The rules are the customer's, so this is obeyed rather than worked
+		// around, and said out loud because nothing else surfaces it yet.
+		log.Warn().
+			Int("excluded", excluded).
+			Str("pool", poolType).
+			Str("email_account_id", account.ID.String()).
+			Msg("warmup: every available partner is excluded by a routing rule; no warmup mail this tick")
+		return nil, errAllPartnersExcluded
+	}
+	candidates = eligible
 
 	// This sender's recent record per recipient provider. Best-effort: a lookup
-	// error leaves the maps empty and weighting degrades to domain diversity.
-	// Providers are read UNFILTERED so every candidate the selector can offer
-	// resolves; a missing one would score an unpenalized 1.0.
-	providersByID, provErr := s.warmupRepo.GetPoolParticipantProviders(ctx, poolType, false)
-	if provErr != nil {
-		providersByID = nil
-	}
-	if len(fallbackIDs) > 0 && providersByID != nil {
-		if other, oerr := s.warmupRepo.GetPoolParticipantProviders(ctx, otherPoolType(poolType), false); oerr == nil {
-			for _, id := range fallbackIDs {
-				if pv, ok := other[id]; ok {
-					providersByID[id] = pv
-				}
-			}
-		}
-	}
+	// error leaves the map empty and weighting degrades to domain diversity.
 	placementByProvider, placeErr := s.warmupRepo.SenderPlacementByProvider(ctx, account.ID, time.Now().Add(-providerPlacementWindow))
 	if placeErr != nil {
 		placementByProvider = nil
-	}
-
-	// Load customer routing rules (premium pool only — free pool ignores
-	// rules since trial mailboxes don't need provider-shape preferences).
-	var routingRules []models.WarmupRoutingRule
-	var emailsByID map[uuid.UUID]string
-	if poolType == "premium" && s.warmupRoutingRepo != nil && account.OrganizationID != nil {
-		rules, ruleErr := s.warmupRoutingRepo.ListForOrganization(ctx, *account.OrganizationID)
-		if ruleErr == nil && len(rules) > 0 {
-			routingRules = rules
-			if e, eErr := s.warmupRepo.GetPoolParticipantEmails(ctx, poolType, true); eErr == nil {
-				emailsByID = e
-			}
-		}
 	}
 
 	recentPartnerSet := map[uuid.UUID]struct{}{}
@@ -595,52 +591,75 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 		partnerCounts = nil
 	}
 
-	var availablePartners []uuid.UUID
-	var fallbackPartners []uuid.UUID
-	for _, id := range participantIDs {
-		if id == account.ID {
+	// Rank outside workspaces first while retaining siblings as a self-host fallback.
+	var buckets [8][]uuid.UUID
+	foreign, own := 0, 0
+	for _, c := range candidates {
+		if _, usedToday := todayPartnerSet[c.ID]; usedToday {
 			continue
 		}
-		if _, usedToday := todayPartnerSet[id]; usedToday {
-			continue
+		rank := 0
+		if sameOrganization(account.OrganizationID, c.OrganizationID) {
+			rank += 4
+			own++
+		} else {
+			foreign++
 		}
-		fallbackPartners = append(fallbackPartners, id)
-		_, recentlyUsed := recentPartnerSet[id]
-		overUsed := partnerCounts[id] >= partnerMaxSharedWindow
-		if !recentlyUsed && !overUsed {
-			availablePartners = append(availablePartners, id)
+		if _, recentlyUsed := recentPartnerSet[c.ID]; recentlyUsed || partnerCounts[c.ID] >= partnerMaxSharedWindow {
+			rank += 2
 		}
+		// A borrowed partner fills in after the sender's own tier. A return
+		// visit does not: it ranks with the own tier, or a free mailbox with a
+		// hundred fresh siblings would never pay a paying inbox back.
+		if c.Borrowed() {
+			rank++
+		}
+		buckets[rank] = append(buckets[rank], c.ID)
+	}
+	if foreign == 0 && own > 0 {
+		// Surface intentional sibling fallback without warning on local-only pools.
+		log.Info().
+			Int("participants", len(candidates)).
+			Str("pool", poolType).
+			Str("email_account_id", account.ID.String()).
+			Msg("warmup: no partner outside this workspace is available; pairing within the organization")
 	}
 
-	if len(availablePartners) == 0 && len(fallbackPartners) > 0 {
-		availablePartners = fallbackPartners
+	sig := partnerSignals{
+		domainsByID:         domainsByID,
+		domainCounts:        domainCounts,
+		providersByID:       providersByID,
+		placementByProvider: placementByProvider,
+		ruleWeight:          ruleWeight,
+		starvation:          starvation,
 	}
 
-	if len(availablePartners) == 0 {
-		return nil, fmt.Errorf("no available warmup partners")
-	}
-
-	// Pick a partner, then gate it through the SAME health re-evaluation the
-	// sender passes (email_task STEP 5). The recipient-selection SQL re-admits a
-	// row the instant blocked_until elapses — before the hourly sweep
-	// reclassifies it — so without this gate a just-expired quarantined/blocked
-	// mailbox could be chosen as a recipient with no re-qualification.
-	// CanParticipate re-evaluates and forces just-unblocked mailboxes into
-	// probation, matching the CLAUDE.md re-entry policy on the recipient surface.
-	for attempts := 0; attempts < 5 && len(availablePartners) > 0; attempts++ {
-		partnerID := pickWeightedPartner(availablePartners, partnerSignals{
-			domainsByID:         domainsByID,
-			domainCounts:        domainCounts,
-			providersByID:       providersByID,
-			placementByProvider: placementByProvider,
-			rules:               routingRules,
-			senderEmail:         account.Email,
-			emailsByID:          emailsByID,
-		})
+	// A pick that fails the gate is dropped and the draw repeats; an emptied
+	// bucket falls through to the next, so a stale own-tier row cannot hide a
+	// healthy borrowed one. The gate re-evaluates a just-unblocked recipient
+	// (probation), matching the CLAUDE.md re-entry policy on the recipient surface.
+	// Every failure removes a candidate, so the loop ends by exhaustion.
+	var available []uuid.UUID
+	next := 0
+	for {
+		for len(available) == 0 && next < len(buckets) {
+			available = buckets[next]
+			next++
+		}
+		if len(available) == 0 {
+			break
+		}
+		partnerID := pickWeightedPartner(available, sig)
 
 		if s.warmupHealth != nil {
-			if ok, _, _ := s.warmupHealth.CanParticipate(ctx, partnerID, poolType); !ok {
-				availablePartners = removePartnerID(availablePartners, partnerID)
+			// Pinned to the pool it was drawn from, so a row that moved pools
+			// between the read and the gate is not accepted elsewhere (#495).
+			gatePool := poolOf[partnerID]
+			if gatePool == "" {
+				gatePool = poolType
+			}
+			if ok, _, _ := s.warmupHealth.CanParticipate(ctx, partnerID, gatePool); !ok {
+				available = removePartnerID(available, partnerID)
 				continue
 			}
 		}
@@ -652,7 +671,12 @@ func (s *tasksService) selectWarmupPartner(ctx context.Context, account Email) (
 		return partner, nil
 	}
 
-	return nil, fmt.Errorf("no eligible warmup partners after health gate")
+	return nil, errNoEligibleWarmupPartners
+}
+
+// sameOrganization treats unknown ownership as outside rather than guessing.
+func sameOrganization(a, b *uuid.UUID) bool {
+	return a != nil && b != nil && *a == *b
 }
 
 // removePartnerID returns ids without the first occurrence of target. Used to
@@ -674,6 +698,11 @@ const (
 	// Below this sample a provider's rate is noise, not a pattern.
 	providerPlacementMinSends = 5
 	providerPlacementWindow   = 7 * 24 * time.Hour
+	// weight *= 1 + k*starvation. An inbox that has received nothing back for
+	// what it sent is drawn this many times more often than one in balance,
+	// and the boost fades as the pool pays it back, so traffic settles near
+	// parity instead of overshooting.
+	reciprocityBoostK = 3.0
 )
 
 // partnerSignals are the per-pick inputs to partner weighting.
@@ -683,9 +712,24 @@ type partnerSignals struct {
 	// Keyed by who RUNS the recipient's mail (models.ClassifyProvider).
 	providersByID       map[uuid.UUID]string
 	placementByProvider map[string]repository.ProviderPlacementStat
-	rules               []models.WarmupRoutingRule
-	senderEmail         string
-	emailsByID          map[uuid.UUID]string
+	// ruleWeight is the customer's routing multiplier per candidate. An
+	// exclusion never appears here: it removed the candidate (#501).
+	ruleWeight map[uuid.UUID]float64
+	// starvation is how far behind each candidate is on what it sent (0..1).
+	starvation map[uuid.UUID]float64
+}
+
+// reciprocityBoost favours the inbox that is owed the most. 1.0 for one in
+// balance, and on every candidate the signal is missing for.
+func (sig partnerSignals) reciprocityBoost(partnerID uuid.UUID) float64 {
+	starved, ok := sig.starvation[partnerID]
+	if !ok || starved <= 0 {
+		return 1.0
+	}
+	if starved > 1 {
+		starved = 1
+	}
+	return 1.0 + reciprocityBoostK*starved
 }
 
 // providerPenalty weights sending to one provider by how this sender has
@@ -705,17 +749,16 @@ func (sig partnerSignals) providerPenalty(partnerID uuid.UUID) float64 {
 // pickWeightedPartner picks a partner ID using a composite weight:
 //   - inverse-frequency on the partner's recipient domain (diversity)
 //   - this sender's recent junk rate at the partner's provider (feedback)
+//   - how far behind the partner is on what it sent (reciprocity)
 //   - customer-defined routing rule multipliers (preference)
 //
-// Rules are evaluated in priority order; the first matching rule for a
-// (sender, recipient) pair applies its weight multiplier. A rule with
-// weight=0 hard-excludes the pair. Falls back to uniform when no signals
-// are available.
+// Every candidate here is one the customer allows; an excluded pair was
+// dropped before the draw. Falls back to uniform when no signals are available.
 func pickWeightedPartner(candidates []uuid.UUID, sig partnerSignals) uuid.UUID {
 	if len(candidates) == 1 {
 		return candidates[0]
 	}
-	if len(sig.domainsByID) == 0 && len(sig.rules) == 0 && len(sig.placementByProvider) == 0 {
+	if len(sig.domainsByID) == 0 && len(sig.ruleWeight) == 0 && len(sig.placementByProvider) == 0 && len(sig.starvation) == 0 {
 		return candidates[rand.Intn(len(candidates))]
 	}
 
@@ -729,11 +772,12 @@ func pickWeightedPartner(candidates []uuid.UUID, sig partnerSignals) uuid.UUID {
 		// Per-provider placement feedback.
 		w *= sig.providerPenalty(id)
 
+		// The pool's debt to this inbox.
+		w *= sig.reciprocityBoost(id)
+
 		// Routing rule multiplier (premium pool only, when configured).
-		if len(sig.rules) > 0 && len(sig.emailsByID) > 0 {
-			if recipientEmail, ok := sig.emailsByID[id]; ok {
-				w *= routingMultiplier(sig.rules, sig.senderEmail, recipientEmail)
-			}
+		if rw, ok := sig.ruleWeight[id]; ok {
+			w *= rw
 		}
 
 		weights[i] = w
@@ -741,8 +785,8 @@ func pickWeightedPartner(candidates []uuid.UUID, sig partnerSignals) uuid.UUID {
 	}
 
 	if total <= 0 {
-		// All candidates hard-excluded by rules. Fall back to uniform so
-		// the system still warms up rather than stalling on misconfigured rules.
+		// Nothing an exclusion can reach: those candidates are already gone.
+		// Only an underflow of the positive terms lands here, so draw uniformly.
 		return candidates[rand.Intn(len(candidates))]
 	}
 
@@ -1108,8 +1152,10 @@ func warmupConversations() []Conversation {
 
 // directedWarmupPartner resolves a task's explicit reply-back target. Nil for
 // an ordinary task, or when the target is no longer eligible, in which case the
-// caller draws a partner as usual.
-func (s *tasksService) directedWarmupPartner(ctx context.Context, taskID uuid.UUID, poolType string) *Email {
+// caller draws a partner as usual. A reply may cross tiers, because the other
+// side started the thread by borrowing or by returning a visit; a restricted
+// workspace still may not answer into a paying inbox.
+func (s *tasksService) directedWarmupPartner(ctx context.Context, taskID uuid.UUID, account *Email, poolType string) *Email {
 	warmupTask, err := s.taskRepo.GetWarmupTask(ctx, taskID)
 	if err != nil || warmupTask == nil || warmupTask.TargetAccountID == nil {
 		return nil
@@ -1117,7 +1163,16 @@ func (s *tasksService) directedWarmupPartner(ctx context.Context, taskID uuid.UU
 	target := *warmupTask.TargetAccountID
 
 	if s.warmupHealth != nil {
-		if ok, _, herr := s.warmupHealth.CanParticipate(ctx, target, poolType); herr != nil || !ok {
+		ok, reason, herr := s.warmupHealth.CanParticipate(ctx, target, poolType)
+		if herr != nil {
+			return nil
+		}
+		if !ok && reason == "not_in_pool" && s.replyMayCrossTiers(ctx, account, poolType) {
+			if ok, _, herr = s.warmupHealth.CanParticipate(ctx, target, otherPoolType(poolType)); herr != nil {
+				return nil
+			}
+		}
+		if !ok {
 			return nil
 		}
 	}
@@ -1125,7 +1180,46 @@ func (s *tasksService) directedWarmupPartner(ctx context.Context, taskID uuid.UU
 	if xerr != nil || partner == nil {
 		return nil
 	}
+	// An exclusion is about who this mailbox may mail, so it holds for a reply
+	// too; the thread exists because the other side started it (#501).
+	if rules := s.warmupRoutingRules(ctx, account, poolType); len(rules) > 0 {
+		if routingMultiplier(rules, account.Email, partner.Email) <= 0 {
+			return nil
+		}
+	}
 	return partner
+}
+
+// warmupRoutingRules are the sender organization's rules, premium pool only:
+// a free-tier mailbox has no provider-shape preferences to express.
+func (s *tasksService) warmupRoutingRules(ctx context.Context, account *Email, poolType string) []models.WarmupRoutingRule {
+	if poolType != "premium" || s.warmupRoutingRepo == nil || account == nil || account.OrganizationID == nil {
+		return nil
+	}
+	rules, err := s.warmupRoutingRepo.ListForOrganization(ctx, *account.OrganizationID)
+	if err != nil {
+		return nil
+	}
+	return rules
+}
+
+// replyMayCrossTiers: a paid mailbox may always answer a borrowed partner; a
+// free one may answer a paid mailbox only from a workspace whose standing is
+// known to be good. Unlike the other risk reads this fails closed: the
+// downside is one unanswered warmup thread, not free mail in a paying inbox.
+func (s *tasksService) replyMayCrossTiers(ctx context.Context, account *Email, poolType string) bool {
+	if poolType == "premium" {
+		return true
+	}
+	if s.orgRiskRepo == nil || account == nil || account.OrganizationID == nil {
+		return false
+	}
+	states, err := s.orgRiskRepo.GetOrgRiskStates(ctx, []uuid.UUID{*account.OrganizationID})
+	if err != nil {
+		return false
+	}
+	state, known := states[*account.OrganizationID]
+	return known && !state.ForcesFreeWarmupPool()
 }
 
 // orgSuspendedOrRestricted reports whether the workspace's posture bars the
@@ -1154,7 +1248,7 @@ func (s *tasksService) orgBlocksSending(ctx context.Context, orgID *uuid.UUID) b
 	return states[*orgID].BlocksSending()
 }
 
-// otherPoolType is the tier a thin pool borrows from.
+// otherPoolType is the tier on the far side of a borrowed exchange.
 func otherPoolType(poolType string) string {
 	if poolType == "premium" {
 		return "free"

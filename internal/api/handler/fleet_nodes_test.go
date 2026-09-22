@@ -8,6 +8,30 @@ import (
 	"github.com/warmbly/warmbly/internal/models"
 )
 
+func TestHeartbeatAddressPrefersBackendObservedPublicIPv4(t *testing.T) {
+	tests := []struct {
+		name     string
+		reported string
+		observed string
+		want     string
+	}{
+		{"observed public address replaces stale report", "198.51.100.8", "8.8.8.8", "8.8.8.8"},
+		{"private proxy hop keeps reported public address", "1.1.1.1", "10.0.0.4", "1.1.1.1"},
+		{"carrier grade nat is not a public address", "1.1.1.1", "100.64.2.3", "1.1.1.1"},
+		{"mapped public IPv4 is canonicalized", "1.1.1.1", "::ffff:8.8.8.8", "8.8.8.8"},
+		{"private direct address is still useful", "", "10.0.0.4", "10.0.0.4"},
+		{"public IPv6 does not replace requested IPv4", "1.1.1.1", "2001:4860:4860::8888", "1.1.1.1"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := heartbeatAddress(tc.reported, tc.observed); got != tc.want {
+				t.Fatalf("heartbeatAddress(%q, %q) = %q, want %q", tc.reported, tc.observed, got, tc.want)
+			}
+		})
+	}
+}
+
 // envLines turns a rendered node env into a lookup, so assertions name a
 // setting rather than a line number.
 func envLines(t *testing.T, rendered string) map[string]string {

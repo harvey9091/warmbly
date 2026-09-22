@@ -120,6 +120,11 @@ export interface InstanceSettings {
         engagement_event_days: number;
         form_event_days: number;
         audit_log_days: number;
+        // Warmup mail is deleted from each mailbox after this many days (a
+        // mailbox may set its own); the per-message warmup records after the
+        // second. The daily warmup statistics are never pruned.
+        warmup_mail_days: number;
+        warmup_event_days: number;
     };
     // How soon after a send an open or click is recorded as automated. The
     // clock starts at dispatch to the worker, so the window also covers the
@@ -129,6 +134,15 @@ export interface InstanceSettings {
     tracking: {
         machine_window_open_seconds: number;
         machine_window_click_seconds: number;
+        // The window used instead of those two when the tracking edge
+        // recognised a scanner network that also carries people's own
+        // requests, which browser isolation makes true of Proofpoint and
+        // Mimecast. Such a match cannot settle the verdict, so it widens the
+        // window rather than deciding: inside it the event is classified as
+        // the delivery-time scan, outside it as the person who read the mail
+        // later. A genuine click inside the window is classified automated
+        // too, which is the cost of the widening.
+        machine_window_probable_seconds: number;
     };
     // The sending-domain authentication gate. A mailbox whose domain has been
     // failing SPF or DMARC for longer than the grace window stops sending cold

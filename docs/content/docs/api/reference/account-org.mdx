@@ -191,7 +191,7 @@ Auth: public (not available to API keys).
 
 `POST /auth/reset-password/confirm`
 
-Sets a new password using the emailed reset code (carried inside the signed `session` token).
+Sets a new password using the emailed reset code (carried inside the signed `session` token). A reset token is single-use and bound to the password it was requested against: once the password is written by any path (this endpoint, the signed-in change, or an operator reset), every reset token issued before that write answers `401` however long its own expiry has left.
 
 Auth: public (not available to API keys).
 
@@ -289,8 +289,11 @@ A browser cannot authenticate with the provider itself, so it is sent there and 
 | `POST /auth/apple/callback` | form post | Where Apple returns the browser. Apple uses `response_mode=form_post` because the flow requests the email scope, so this arrives as a form rather than a redirect; it also accepts `GET` for a refusal. |
 | `GET /auth/oidc/callback` | none | Where the OpenID Connect provider returns the browser. |
 | `POST /auth/sso/exchange` | `code` and `binding` (both required) | Swaps the single-use handoff code from any callback for the session. `POST /auth/oidc/exchange` is the older name for the same endpoint. |
+| `POST /auth/sso/link` | `pending_token` and `password` (both required) | Completes a sign-in that the exchange answered with `link_required`. Takes the password of the existing account, attaches the provider identity to it, and returns the session (or a two-factor challenge). |
 
 The callback never returns a token. It hands the browser an opaque, single-use code with a 60 second lifetime and the client exchanges it over `POST`, so no token lands in a URL, browser history, `Referer` header or proxy log. The exchange returns a token pair, or a two-factor challenge when the account has TOTP enrolled.
+
+The exchange has a third outcome. A provider identity is bound to an account by its `(issuer, subject)` pair; the first sign-in with a new identity falls back to the verified email address to find an existing account. When that account has a password, the exchange returns `link_required: true` with a `pending_token` (ten minute lifetime), `link_email` and `link_provider`, and nothing is linked and no session exists yet. The client asks for the account's password and posts it with the token to `POST /auth/sso/link`; a correct password attaches the identity and returns the session, so every later sign-in with that provider resolves directly. When the account has TOTP enrolled the answer is a two-factor challenge instead, and the identity is attached only once `POST /auth/2fa/verify` passes. A wrong password is refused with the same `Invalid email or password.` as sign-in and counts against the same per-address budget; three wrong answers, or ten minutes, end the challenge with [`sso_link_expired`](/api/error-codes/) and the sign-in starts over. An account with no password (one created through a provider or an invitation) has nothing to ask for and links on the first sign-in. The native `POST /auth/google` and `POST /auth/apple` return the same `link_required` result and complete through the same endpoint.
 
 The exchange also requires the `binding` secret that `begin` returned. A one-time `state` proves the callback answers a request this server made; it does not prove it answers one this browser made. Without the binding, someone could run the flow with their own provider account and send you the resulting link, signing you into their workspace. The binding never travels to the provider and never appears in a URL, so a forwarded link arrives without it and is refused with [`sso_wrong_browser`](/api/error-codes/).
 
@@ -480,7 +483,9 @@ Auth: Session only (not available to API keys).
 
 `POST /auth/me/password`
 
-Updates the signed-in user's password. Returns `200 OK`.
+Updates the signed-in user's password. Every session the account holds is ended, the one making the request included, and the response is the token pair of a new session for the calling device. Tokens issued before the change are refused after it, so the client must replace its stored pair with the one returned. Returns `200 OK`.
+
+If the new password was stored but the device could not be issued a new session, the response is `409` with code `password_changed_sign_in_again`. The old tokens are not valid in that case either: discard them and sign in with the new password.
 
 Auth: Session only (not available to API keys).
 
@@ -495,6 +500,17 @@ Auth: Session only (not available to API keys).
 {
   "current_password": "correct horse battery staple",
   "new_password": "a longer better passphrase"
+}
+```
+
+#### Response
+
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiJ9...",
+  "access_token_expires_at": "2026-09-21T22:00:00Z",
+  "refresh_token": "eyJhbGciOiJIUzI1NiJ9...",
+  "refresh_token_expires_at": "2026-10-21T10:00:00Z"
 }
 ```
 
@@ -684,21 +700,26 @@ TOTP-based 2FA. Enrollment and management require a live session. The login chal
 
 `GET /auth/2fa/status`
 
-Reports whether the caller has 2FA enabled.
+Reports whether the caller has 2FA enabled, when it was confirmed, and how many recovery codes are left. `confirmed_at` is omitted while 2FA is off.
 
 Auth: Session only (not available to API keys).
 
 #### Response
 
 ```json
-{ "enabled": false }
+{
+  "enabled": true,
+  "confirmed_at": "2026-09-19T10:24:00Z",
+  "recovery_codes_remaining": 8,
+  "recovery_codes_total": 10
+}
 ```
 
 ### Begin enrollment
 
 `POST /auth/2fa/enroll/start`
 
-Generates a TOTP secret and the `otpauth://` provisioning URI (returned once). The client renders the URI as a QR code.
+Generates a TOTP secret and the `otpauth://` provisioning URI (returned once). The client renders the URI as a QR code; the remaining fields spell out the same parameters for manual entry.
 
 Auth: Session only (not available to API keys).
 
@@ -707,7 +728,12 @@ Auth: Session only (not available to API keys).
 ```json
 {
   "secret": "JBSWY3DPEHPK3PXP",
-  "otpauth_uri": "otpauth://totp/Warmbly:alex@acme.com?secret=JBSWY3DPEHPK3PXP&issuer=Warmbly"
+  "otpauth_uri": "otpauth://totp/Warmbly:alex@acme.com?secret=JBSWY3DPEHPK3PXP&issuer=Warmbly&algorithm=SHA1&digits=6&period=30",
+  "issuer": "Warmbly",
+  "account": "alex@acme.com",
+  "algorithm": "SHA1",
+  "digits": 6,
+  "period": 30
 }
 ```
 
@@ -715,7 +741,7 @@ Auth: Session only (not available to API keys).
 
 `POST /auth/2fa/enroll/confirm`
 
-Verifies a TOTP code, enables 2FA, and returns the one-time recovery codes (shown once).
+Verifies a TOTP code, enables 2FA, and returns the one-time recovery codes (shown once). A code that does not match answers `400` with code `two_fa_invalid_code`.
 
 Auth: Session only (not available to API keys).
 
@@ -733,11 +759,33 @@ Auth: Session only (not available to API keys).
 }
 ```
 
+### Regenerate recovery codes
+
+`POST /auth/2fa/recovery-codes`
+
+Replaces every recovery code with a fresh set, returned once. Requires a current TOTP or recovery code in the body; a code that does not match answers `400` with code `two_fa_invalid_code`. The previous codes stop working as soon as the new set is issued. Wrong codes here and on `DELETE /auth/2fa` count against the same per-account attempt budget as `POST /auth/reauth`; once it is spent both answer `400` with "Too many attempts" until it resets. No `Idempotency-Key` is needed: the proof code is single-use, so a retried request is refused rather than rotating the set twice.
+
+Auth: Session only (not available to API keys).
+
+#### Request body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `code` | string | yes | A current TOTP or recovery code. |
+
+#### Response
+
+```json
+{
+  "recovery_codes": ["a1b2-c3d4", "e5f6-g7h8", "..."]
+}
+```
+
 ### Disable 2FA
 
 `DELETE /auth/2fa`
 
-Turns off 2FA. Requires a current TOTP or recovery code in the body.
+Turns off 2FA. Requires a current TOTP or recovery code in the body; a code that does not match answers `400` with code `two_fa_invalid_code`.
 
 Auth: Session only (not available to API keys).
 

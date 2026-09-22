@@ -464,6 +464,9 @@ defmodule RealtimeWeb.OrgChannel do
           event_type in ["EMAIL_RECEIVED", "EMAIL_UPDATED", "EMAIL_DELETED"] ->
         has.(:access_unibox)
 
+      String.contains?(event_type, "DIRECT_EMAIL_") ->
+        has.(:view_analytics)
+
       # Campaign activity: lifecycle, task progress, send/open/click/reply pulses
       String.contains?(event_type, "CAMPAIGN") or String.contains?(event_type, "TASK_PROGRESS") or
           event_type in [

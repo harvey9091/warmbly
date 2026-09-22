@@ -114,7 +114,7 @@ Status-bucket counts plus per-folder totals for the organization, used to drive 
 
 `POST /campaigns-estimate`
 
-Project an audience against a sender pool before a campaign exists: how many contacts the segments resolve to, how many mailboxes would send, the pool's daily ceiling under the campaign limit, and the day the last send is expected to land. Nothing is written, so it needs no `Idempotency-Key`. The dashboard's one-time email wizard shows this on its last step. **Scope** `READ_CAMPAIGNS` · **Org permission** `view_campaigns`.
+Project an audience against a sender pool before a campaign exists: how many contacts the segments resolve to, how many mailboxes would send, the pool's daily ceiling under the campaign limit and the scheduler's own clamps (the easing-out-of-warmup ceiling, the workspace's risk band, a warmup health hold, domain authentication, cold rotation, the plan's daily allowance), and the day the last send is expected to land. Nothing is written, so it needs no `Idempotency-Key`. The dashboard's one-time email wizard shows this on its last step. **Scope** `READ_CAMPAIGNS` · **Org permission** `view_campaigns`.
 
 ### Request body
 
@@ -122,7 +122,7 @@ Project an audience against a sender pool before a campaign exists: how many con
 | --- | --- | --- | --- |
 | `segment_ids` | string[] | yes | Segments making up the audience (at most 20). A contact in several of them is counted once. |
 | `email_tag_ids` | string[] | no | Mailbox tags that resolve the pool. Omit or send `[]` for every active mailbox in the workspace. |
-| `daily_limit` | integer | no | Per-mailbox campaign cap to apply (defaults to `50`). Each mailbox counts the smaller of this and its own cap. |
+| `daily_limit` | integer | no | Per-mailbox campaign cap to apply (defaults to `50`). Each mailbox counts the smaller of this and its own cap, lowered further by any clamp the scheduler would apply today. |
 | `days` | integer (0-127) | no | Weekday bitmask of sending days, bit 0 = Monday. Defaults to weekdays. |
 | `timezone` | string | no | IANA timezone the days are counted in. Defaults to UTC. |
 | `start_date` | string (RFC 3339) | no | When sending begins. Omit for now. |
@@ -190,7 +190,7 @@ Create a campaign. Only `name` is required, every other field is optional and ap
 | `entry_delay_minutes` | integer | no | Hold a contact's first email this long after they entered the campaign. `0` (the default) sends it as soon as the schedule and mailbox limits allow; the maximum is `129600` (90 days). Follow-up spacing is unaffected: that is each step's `wait_after`. |
 | `continuous` | boolean | no | Keep running for new leads: out of leads, the campaign stays `active` and waits instead of finishing. Linking a segment, a form or an automation that enrols leads turns it on, and so does starting a campaign whose every lead has finished. Default `false`. |
 | `tracking_domain` | string | no | Campaign-scoped tracking domain (honored only once verified). |
-| `steps` | object[] | no | Initial sequence steps in order (see create sequence input below). They are connected in order: each step routes unconditionally to the next, waiting that step's `wait_after` days. The first step's `wait_after` defaults to `0`, follow-ups to `3`. |
+| `steps` | object[] | no | Initial sequence steps in order (see create sequence input below). They are connected in order: each step routes unconditionally to the next, waiting that step's `wait_after` days. The first step's `wait_after` defaults to `0`, follow-ups to `3`. A step given no `subject`, or the same one as the conversation so far, defaults to `thread_reply: true` and is sent as a reply carrying that conversation's subject; a step with a subject of its own defaults to `false` and opens a new conversation. Set `thread_reply` explicitly to override either. |
 | `variants` | object[] | no | A/B variants for the first step (same shape as create A/B variant). |
 | `advanced_overrides` | object | no | Advanced outreach overrides, see [advanced settings](#get-advanced-settings). |
 
@@ -353,8 +353,11 @@ A `CampaignAdvancedSettings` object: the campaign id, the `overrides` block, and
       "out_of_office_keywords": ["out of office", "vacation"],
       "question_keywords": ["?", "how", "price"],
       "auto_create_crm_task": true,
+      "crm_task_intents": ["positive", "question", "neutral", "negative"],
       "auto_pause_on_negative": false,
-      "auto_suppress_on_unsubscribe_keyword": true
+      "auto_suppress_on_unsubscribe_keyword": true,
+      "hold_on_out_of_office": true,
+      "out_of_office_hold_days": 7
     },
     "send_time_optimization": {
       "enabled": false,
@@ -401,7 +404,7 @@ Replace the campaign's advanced overrides. **Scope** `WRITE_CAMPAIGNS` · **Org 
     "bounce_pipeline": { "enabled": true, "auto_suppress_on_bounce": true, "auto_suppress_on_complaint": true, "auto_suppress_on_unsubscribe": true, "auto_pause_campaign_on_spike": true, "pause_bounce_rate_threshold": 8, "pause_complaint_rate_threshold": 1.5 },
     "task_reliability": { "enabled": true, "dlq_enabled": true, "max_attempts": 5, "execution_window_seconds": 300 },
     "ab_testing": { "enabled": true, "default_winning_rule": "reply_rate", "auto_promote_winner": false, "min_sample_size": 30 },
-    "reply_intent": { "enabled": true, "positive_keywords": [], "negative_keywords": [], "out_of_office_keywords": [], "question_keywords": [], "auto_create_crm_task": true, "auto_pause_on_negative": false, "auto_suppress_on_unsubscribe_keyword": true },
+    "reply_intent": { "enabled": true, "positive_keywords": [], "negative_keywords": [], "out_of_office_keywords": [], "question_keywords": [], "auto_create_crm_task": true, "crm_task_intents": ["positive", "question", "neutral", "negative"], "auto_pause_on_negative": false, "auto_suppress_on_unsubscribe_keyword": true, "hold_on_out_of_office": true, "out_of_office_hold_days": 7 },
     "send_time_optimization": { "enabled": true, "use_contact_timezone": true, "default_contact_timezone": "UTC", "preferred_hours": [9, 14], "weekend_weight_multiplier": 0.5 },
     "preflight": { "enabled": true, "check_tracking_domain": true, "check_unsubscribe_header": true, "check_ab_variant_configured": false, "check_daily_limit": true, "check_schedule_window": true, "check_content_score": true, "min_content_score": 60 },
     "dashboard": { "enabled": true, "show_suppression_log": true, "show_intent_summary": true, "show_dlq_stats": true }
@@ -758,6 +761,102 @@ Stop (pause) an active campaign. **Scope** `SEND_CAMPAIGNS` · **Org permission*
 { "status": "stopped" }
 ```
 
+## Get a lead's hold
+
+`GET /campaigns/:id/leads/:contact_id/hold`
+
+Read whether one contact's flow inside this campaign is currently held. A hold parks the lead's next step without unsubscribing the contact and without removing them from the campaign; the two things that write one are an out-of-office auto-reply and a member pausing the lead by hand. **Scope** `READ_CAMPAIGNS` · **Org permission** `view_campaigns`.
+
+| Parameter | In | Type | Description |
+| --- | --- | --- | --- |
+| `id` | path | uuid | Campaign id. |
+| `contact_id` | path | uuid | Contact id. Must already be a lead of the campaign. |
+
+### Response
+
+```json
+{
+  "campaign_id": "8f1d6b2e-2b7a-4c9e-9a1f-0e6d4c3b2a10",
+  "contact_id": "3a5e9c71-4f2b-4d88-9a0c-1b7e5d2f6c34",
+  "hold": {
+    "since": "2026-09-07T09:14:00Z",
+    "until": "2026-09-09T00:00:00Z",
+    "reason": "back 8 Sep 2026",
+    "source": "out_of_office"
+  }
+}
+```
+
+`hold` is absent when the lead is not held, including for a dated hold that has since expired. `until` is absent when the hold has no end, in which case only a resume lifts it. `source` is `out_of_office` or `manual`.
+
+### Errors
+
+| Status | Code | When |
+| --- | --- | --- |
+| `404` | `not_found` | The campaign is not the caller's organization's, or the contact is not a lead of it. |
+
+## Pause a lead
+
+`POST /campaigns/:id/leads/:contact_id/pause`
+
+Hold one contact's flow inside one campaign. The contact stays subscribed and stays a lead; the sequence picks up where it stopped when the hold lifts. This is the per-contact lever between leaving a lead alone and the two permanent ones, unsubscribing the contact and adding the address to the suppression list. **Scope** `WRITE_CAMPAIGNS` · **Org permission** `manage_campaigns`.
+
+The request states an absolute hold rather than applying a delta, and replacing a hold that is still live keeps its original start, so a retry lands on exactly the same row and no `Idempotency-Key` is needed.
+
+| Parameter | In | Type | Description |
+| --- | --- | --- | --- |
+| `id` | path | uuid | Campaign id. |
+| `contact_id` | path | uuid | Contact id. Must already be a lead of the campaign. |
+| `until` | body | string | RFC 3339 timestamp the hold lifts at. Must be in the future and within a year. Omit or send `null` for a hold with no end, which only a resume lifts. |
+| `reason` | body | string | Optional note shown next to the hold in the dashboard. Trimmed and capped at 200 characters. |
+
+A manual pause always wins: it replaces a hold an out-of-office auto-reply wrote, and a later auto-reply never shortens it or takes it over.
+
+### Request body
+
+```json
+{ "until": "2026-09-21T17:00:00Z", "reason": "On holiday, asked to follow up later" }
+```
+
+### Response
+
+Same shape as [get a lead's hold](#get-a-leads-hold).
+
+### Errors
+
+| Status | Code | When |
+| --- | --- | --- |
+| `400` | `bad_request` | `until` is in the past, or more than a year away. |
+| `404` | `not_found` | The campaign is not the caller's organization's, or the contact is not a lead of it. |
+
+## Resume a lead
+
+`POST /campaigns/:id/leads/:contact_id/resume`
+
+Lift the hold now. The held time is dropped rather than carried, so the step returns to the schedule it would have had without the hold: the campaign's next pass when that moment has already passed, otherwise when the step's own wait elapses. The campaign's own wakeup is pulled forward with it, and a campaign that had finished while the lead was held is restarted through the usual launch checks. **Scope** `WRITE_CAMPAIGNS` · **Org permission** `manage_campaigns`.
+
+Resuming a lead that is not held succeeds and changes nothing, so a retry is safe.
+
+| Parameter | In | Type | Description |
+| --- | --- | --- | --- |
+| `id` | path | uuid | Campaign id. |
+| `contact_id` | path | uuid | Contact id. |
+
+### Response
+
+```json
+{
+  "campaign_id": "8f1d6b2e-2b7a-4c9e-9a1f-0e6d4c3b2a10",
+  "contact_id": "3a5e9c71-4f2b-4d88-9a0c-1b7e5d2f6c34"
+}
+```
+
+### Errors
+
+| Status | Code | When |
+| --- | --- | --- |
+| `404` | `not_found` | The campaign is not the caller's organization's, or the contact is not a lead of it. |
+
 ## Get campaign logs
 
 `GET /campaigns/:id/logs`
@@ -792,6 +891,74 @@ A `data` plus `pagination` envelope. Here `pagination` carries only `next_cursor
   }
 }
 ```
+
+## Today's sending plan
+
+`GET /campaigns/:id/send-plan`
+
+What the campaign sends today and every limit that decided it, worked out on the spot through the scheduler's own gates. Nothing is stored and nothing is written. **Scope** `READ_CAMPAIGNS` · **Org permission** `view_campaigns`.
+
+| Parameter | In | Type | Description |
+| --- | --- | --- | --- |
+| `id` | path | uuid | Campaign id. |
+
+### Response
+
+The arithmetic adds up: `configured_ceiling` minus every `limits[].emails` minus `sent_today` is `expected_remaining`, and `projected_today` is `sent_today` plus `expected_remaining`. `limits` lists only the clamps that removed something, in the order the scheduler applies them; `bottleneck` names the one that decides the number (`""` when nothing binds, `budget_spent` when every mailbox has used its day). `day` is the budget day in UTC (every daily counter resets at midnight UTC, whatever the campaign's timezone); the window's times are in the campaign's timezone. `leads.waiting_on_sender` counts due steps whose own mailbox has nothing left today, since each contact keeps the address they first heard from. `organization` is present only when the workspace's plan has a daily allowance.
+
+```json
+{
+  "campaign_id": "8f1d6b2e-2b7a-4c9e-9a1f-0e6d4c3b2a10",
+  "status": "active",
+  "day": "2026-09-16",
+  "timezone": "Europe/Paris",
+  "computed_at": "2026-09-16T12:30:00Z",
+  "configured_ceiling": 150,
+  "projected_today": 20,
+  "sent_today": 8,
+  "expected_remaining": 12,
+  "bottleneck": "warmup_graduation",
+  "limits": [
+    { "kind": "warmup_graduation", "emails": 130, "mailboxes": 3 }
+  ],
+  "window": {
+    "sending_day": true,
+    "open_now": true,
+    "closes_at": "2026-09-16T15:00:00Z",
+    "minutes_left": 150
+  },
+  "leads": {
+    "due_now": 340,
+    "due_later_today": 12,
+    "new_leads_due_today": 300,
+    "waiting_on_step": 200,
+    "waiting_on_condition": 0,
+    "held": 3,
+    "waiting_on_sender": 0,
+    "new_leads_started_today": 8,
+    "max_new_leads_per_day": 0
+  },
+  "mailboxes": [
+    {
+      "id": "1c2d...",
+      "email": "sam@acme.com",
+      "provider": "gmail",
+      "configured_cap": 50,
+      "cap_today": 10,
+      "limited_by": "warmup_graduation",
+      "sent_today": 4,
+      "sent_by_other_campaigns": 0,
+      "expected_remaining": 6,
+      "state": "sending",
+      "min_gap_seconds": 600,
+      "graduation": { "ceiling": 10, "mailbox_cap": 50, "days_to_full_cap": 8, "held": false }
+    }
+  ],
+  "next_wake_at": "2026-09-16T12:41:00Z"
+}
+```
+
+`limits[].kind` is one of `campaign_daily_limit`, `campaign_ramp`, `warmup_graduation`, `workspace_risk`, `domain_auth`, `resting`, `warmup_health_hold`, `other_campaigns`, `warmup_health_pace`, `mailbox_hours`, `sending_behavior`, `spacing`, `sending_window`, `not_running`, `org_daily_limit`, `new_lead_cap` or `leads`. `mailboxes[].state` is one of `sending`, `budget_spent`, `hours_closed`, `no_working_day`, `domain_auth`, `resting`, `health_hold` or `window_closed`; `mailboxes[].limited_by` names the clamp that set `cap_today`. See the [campaigns guide](/guides/campaigns/#todays-sending-plan) for what each limit means.
 
 ## List campaign senders
 
@@ -884,7 +1051,9 @@ A `data` array of link objects (no pagination wrapper). The counts are evaluated
 
 `PUT /campaigns/:id/segments`
 
-Atomically replace the campaign's linked segments with the supplied set (up to 20). Every current member of a newly linked segment is enrolled as a lead immediately, and contacts who enter a linked segment later are enrolled automatically, within about 2 minutes. Enrolment is additive: a contact who leaves a segment keeps their lead row, and removing a segment from the set stops future enrolment without touching existing leads. A lead removed from the campaign by hand is never re-added automatically; a manual add (or the one-shot enrol below) clears that removal record. Omitting `segment_ids` returns `400`; send an explicit empty array to detach every segment. An active campaign is woken to send to the new leads; a completed campaign is restarted through the full launch checks when a linked segment grows. A linked segment cannot be deleted (`DELETE /segments/:id` returns `409`) until it is removed here. **Scope** `WRITE_CAMPAIGNS` · **Org permission** `manage_campaigns`.
+Atomically replace the campaign's linked segments with the supplied set (up to 20). Every current member of a newly linked segment is enrolled as a lead immediately, and contacts who enter a linked segment later are enrolled automatically, within about 2 minutes.
+
+Removing a segment from the set withdraws the leads it enrolled, so replacing one segment with another leaves the campaign holding the new audience rather than both. A lead is only withdrawn when all three hold: a linked segment enrolled it (a lead added through any other path counts as chosen by hand and is never withdrawn), it is still a current member of a segment being removed and of none that stayed, and the campaign has not written to it yet (no step dispatched or sent). Nothing is recorded as a hand-made removal, so re-linking the segment enrols those members again. A contact who merely leaves a still-linked segment keeps their lead row; within a link, enrolment stays additive. A lead removed from the campaign by hand is never re-added automatically; a manual add (or the one-shot enrol below) clears that removal record. Omitting `segment_ids` returns `400`; send an explicit empty array to detach every segment. An active campaign is woken to send to the new leads; a completed campaign is restarted through the full launch checks when a linked segment grows. A linked segment cannot be deleted (`DELETE /segments/:id` returns `409`) until it is removed here. **Scope** `WRITE_CAMPAIGNS` · **Org permission** `manage_campaigns`.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
@@ -904,7 +1073,7 @@ Atomically replace the campaign's linked segments with the supplied set (up to 2
 
 ### Response
 
-The resulting links plus how many leads the call enrolled. `added` is `0` when every member was already a lead, when the segments match no contacts yet, or when the only members are held out; the per-link counts tell these apart. The links and the enrolment are written in one transaction, so a failed enrolment returns an error and changes nothing rather than `200` with `added: 0`.
+The resulting links plus what the call did to the campaign's leads. `added` is how many leads it enrolled, and is `0` when every member was already a lead, when the segments match no contacts yet, or when the only members are held out; the per-link counts tell these apart. `withdrawn` is how many leads a removed segment took back out, and `contacted` how many of that audience stayed because the campaign had already emailed them. The links, the withdrawal and the enrolment are written in one transaction, so a failure returns an error and changes nothing rather than `200` with `added: 0`.
 
 ```json
 {
@@ -920,7 +1089,9 @@ The resulting links plus how many leads the call enrolled. `added` is `0` when e
       "linked_at": "2026-06-10T12:00:00Z"
     }
   ],
-  "added": 397
+  "added": 397,
+  "withdrawn": 58,
+  "contacted": 4
 }
 ```
 
@@ -979,6 +1150,7 @@ A bare array of `Sequence` objects (no envelope).
     "body_code": false,
     "wait_after": 0,
     "position": 0,
+    "thread_reply": true,
     "kind": "email",
     "updated_at": "2026-06-02T10:00:00Z",
     "created_at": "2026-06-02T10:00:00Z"
@@ -1026,6 +1198,7 @@ All fields optional.
 | `body_sync` | boolean | no | Keep plain and HTML bodies in sync. |
 | `body_code` | boolean | no | The body is authored as raw HTML. The dashboard editor opens it as markup instead of parsing it into the visual editor, which keeps only what its schema can represent. It does not change what is sent. |
 | `wait_after` | integer | no | Days to wait before this step, counted from the contact's previous step (`0` to `60`). Spacing belongs to the target step, so there is no standalone wait node for email steps. |
+| `thread_reply` | boolean | no | Send this step as a reply on the conversation the contact is already in, rather than as a new email. Default `true`. A threading step carries the conversation's subject, so its own `subject` is only used once it is turned off. It has no effect on a contact's first email, which has nothing to reply to. |
 | `conditions` | object | no | The connections out of this step (`{branches: [...]}`), evaluated in order; a branch with no `conditions` is a plain "go there next" link. Routing follows connections only: a step with `{}` or no branches has no outgoing path and ends the flow for the contact. |
 | `kind` | string | no | `email` (default), `action`, or `wait`. |
 | `action` | object | no | Typed config for non-email nodes. `type` is the switch (`wait`, `add_tag`, `remove_tag`, `add_to_segment`, `remove_from_segment` (each with a `segment_id`), `unsubscribe`, `notify`, `create_task`, `create_deal`, `move_deal_stage`, `run_automation`, `end`), the remaining fields are type-scoped. |

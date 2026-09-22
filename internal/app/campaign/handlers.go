@@ -127,8 +127,8 @@ func (s *campaignService) Overview(ctx context.Context, orgID string) (*models.C
 	return resp, nil
 }
 
-func (s *campaignService) Update(ctx context.Context, userID, query string, data *models.UpdateCampaign) (*models.Campaign, *errx.Error) {
-	resp, err := s.campaignRepository.Update(ctx, userID, query, data)
+func (s *campaignService) Update(ctx context.Context, orgID, query string, data *models.UpdateCampaign) (*models.Campaign, *errx.Error) {
+	resp, err := s.campaignRepository.Update(ctx, orgID, query, data)
 	if err != nil {
 		return nil, err
 	}
@@ -930,14 +930,14 @@ func (s *campaignService) StopCampaign(ctx context.Context, orgID uuid.UUID, cam
 	return nil
 }
 
-func (s *campaignService) GetLogs(ctx context.Context, userID, campaignID string, limit int, cursor *string) (*models.CampaignLogsResult, *errx.Error) {
+func (s *campaignService) GetLogs(ctx context.Context, orgID, campaignID string, limit int, cursor *string) (*models.CampaignLogsResult, *errx.Error) {
 	cID, parseErr := uuid.Parse(campaignID)
 	if parseErr != nil {
 		return nil, errx.ErrUuid
 	}
 
-	// Verify user owns this campaign
-	_, err := s.campaignRepository.Get(ctx, userID, campaignID)
+	// Verify the campaign belongs to the selected workspace
+	_, err := s.campaignRepository.Get(ctx, orgID, campaignID)
 	if err != nil {
 		if errors.Is(err, errx.ErrResourceNotFound) {
 			return nil, errx.ErrNotFound
@@ -1096,20 +1096,38 @@ func (s *campaignService) Estimate(ctx context.Context, orgID uuid.UUID, in *mod
 		return nil, xerr
 	}
 	out.Mailboxes = len(accounts)
-	for _, acct := range accounts {
-		lim := min(acct.CampaignLimit, dailyLimit)
-		if lim < 0 {
-			lim = 0
-		}
-		out.DailyCapacity += lim
-		sent, err := s.taskRepo.CountCampaignEmailsSentToday(ctx, acct.ID)
+	// The pool's day under the same clamps the scheduler applies (the
+	// graduation ceiling, the workspace's risk band, a warmup health hold,
+	// domain authentication, cold rotation), so the wizard promises what the
+	// send path will honour rather than the caps added up.
+	if planner, ok := s.planner(); ok {
+		capacity, err := planner.PoolCapacityToday(ctx, &models.Campaign{OrganizationID: &orgID, DailyLimit: dailyLimit}, accounts)
 		if err != nil {
-			// A counter blip must not blank the whole estimate, but it must
-			// not flatter it either: a mailbox whose sends today are unknown
-			// contributes nothing to today and only counts from tomorrow.
-			continue
+			errs.CaptureException(err)
+			return nil, errx.InternalError()
 		}
-		out.RemainingToday += max(0, lim-sent)
+		out.DailyCapacity, out.RemainingToday = capacity.Capacity, capacity.Remaining
+	} else {
+		for _, acct := range accounts {
+			lim := max(0, min(acct.CampaignLimit, dailyLimit))
+			out.DailyCapacity += lim
+			sent, err := s.taskRepo.CountCampaignEmailsSentToday(ctx, acct.ID)
+			if err != nil {
+				// A counter blip must not blank the whole estimate, but it must
+				// not flatter it either: a mailbox whose sends today are unknown
+				// contributes nothing to today and only counts from tomorrow.
+				continue
+			}
+			out.RemainingToday += max(0, lim-sent)
+		}
+	}
+	if limit := s.orgDailyLimit(ctx, orgID); limit >= 0 {
+		out.DailyCapacity = min(out.DailyCapacity, limit)
+		if s.campaignProgressRepo != nil {
+			if sent, err := s.campaignProgressRepo.CountEmailsSentTodayByOrganization(ctx, orgID); err == nil {
+				out.RemainingToday = min(out.RemainingToday, max(0, limit-sent))
+			}
+		}
 	}
 	if out.Recipients == 0 || out.DailyCapacity == 0 {
 		return out, nil
@@ -1158,6 +1176,170 @@ func (s *campaignService) Estimate(ctx context.Context, orgID uuid.UUID, in *mod
 			out.EstimatedFinishAt = &finish
 			break
 		}
+	}
+	return out, nil
+}
+
+// PauseLead parks one lead's flow. The campaign must be the organization's and
+// the contact must already be a lead of it, so a pause can never be used to
+// probe another workspace's ids.
+func (s *campaignService) PauseLead(ctx context.Context, orgID, campaignID, contactID uuid.UUID, until *time.Time, reason string) (*models.LeadHold, *errx.Error) {
+	if s.campaignProgressRepo == nil {
+		return nil, errx.InternalError()
+	}
+	if xerr := s.ownedCampaign(ctx, orgID, campaignID); xerr != nil {
+		return nil, xerr
+	}
+	if until != nil {
+		now := time.Now()
+		if !until.After(now) {
+			return nil, errx.New(errx.BadRequest, "until must be in the future")
+		}
+		if until.After(now.AddDate(0, 0, leadHoldMaxDays)) {
+			return nil, errx.New(errx.BadRequest, "until must be within a year; remove the lead from the campaign instead")
+		}
+	}
+	hold, err := s.campaignProgressRepo.HoldLead(ctx, campaignID, contactID,
+		until, models.ClampLine(reason, leadHoldReasonMaxLen), models.LeadHoldSourceManual)
+	if err != nil {
+		return nil, errx.InternalError()
+	}
+	if hold == nil {
+		// A manual pause is never refused by the guard, so no row means the
+		// contact is not a lead of this campaign.
+		return nil, errx.New(errx.NotFound, "contact is not a lead of this campaign")
+	}
+	return hold, nil
+}
+
+// ResumeLead lifts the hold and, only when there was one to lift, pulls the
+// campaign's wakeup forward so the lead does not sit until the chain's next
+// parked slot. Waking unconditionally would restart a campaign that had
+// legitimately finished, for a call that changed nothing.
+func (s *campaignService) ResumeLead(ctx context.Context, orgID, campaignID, contactID uuid.UUID) *errx.Error {
+	if s.campaignProgressRepo == nil {
+		return errx.InternalError()
+	}
+	if xerr := s.ownedCampaign(ctx, orgID, campaignID); xerr != nil {
+		return xerr
+	}
+	lifted, err := s.campaignProgressRepo.ResumeLead(ctx, campaignID, contactID)
+	if errors.Is(err, repository.ErrLeadNotInCampaign) {
+		return errx.New(errx.NotFound, "contact is not a lead of this campaign")
+	}
+	if err != nil {
+		return errx.InternalError()
+	}
+	// Resuming a lead that was not held is a success that changed nothing: the
+	// caller asked for "not held" and that is the state either way.
+	if lifted {
+		s.WakeCampaigns(ctx, orgID, []string{campaignID.String()})
+	}
+	return nil
+}
+
+// GetLeadHold reads the live hold on one lead.
+func (s *campaignService) GetLeadHold(ctx context.Context, orgID, campaignID, contactID uuid.UUID) (*models.LeadHold, *errx.Error) {
+	if s.campaignProgressRepo == nil {
+		return nil, errx.InternalError()
+	}
+	if xerr := s.ownedCampaign(ctx, orgID, campaignID); xerr != nil {
+		return nil, xerr
+	}
+	hold, err := s.campaignProgressRepo.GetLeadHold(ctx, campaignID, contactID)
+	if errors.Is(err, repository.ErrLeadNotInCampaign) {
+		return nil, errx.New(errx.NotFound, "contact is not a lead of this campaign")
+	}
+	if err != nil {
+		return nil, errx.InternalError()
+	}
+	return hold, nil
+}
+
+// ownedCampaign refuses a campaign that is not this organization's, through the
+// same load-and-check every other campaign endpoint uses, so a repository
+// failure reads as a failure rather than as "the campaign does not exist".
+func (s *campaignService) ownedCampaign(ctx context.Context, orgID, campaignID uuid.UUID) *errx.Error {
+	_, _, xerr := s.campaignForOrg(ctx, orgID, campaignID.String())
+	return xerr
+}
+
+// planner is the scheduler's send-plan face, when the wired scheduler has one.
+func (s *campaignService) planner() (scheduler.CampaignSendPlanner, bool) {
+	p, ok := s.scheduler.(scheduler.CampaignSendPlanner)
+	return p, ok && p != nil
+}
+
+// orgDailyLimit is the workspace's plan-level daily campaign limit, negative
+// when unlimited or unknown. A gate that cannot be read clamps nothing here;
+// the send path asks again for itself.
+func (s *campaignService) orgDailyLimit(ctx context.Context, orgID uuid.UUID) int {
+	if s.featureGate == nil {
+		return -1
+	}
+	limit, xerr := s.featureGate.GetDailyEmailLimit(ctx, orgID)
+	if xerr != nil {
+		return -1
+	}
+	return limit
+}
+
+func (s *campaignService) SendPlan(ctx context.Context, orgID uuid.UUID, campaignID string) (*models.CampaignSendPlan, *errx.Error) {
+	campaign, xerr := s.Get(ctx, orgID.String(), campaignID)
+	if xerr != nil {
+		return nil, xerr
+	}
+	planner, ok := s.planner()
+	if !ok {
+		return nil, errx.New(errx.Internal, "send planning is not available")
+	}
+	// Keyed on the campaign's own version, so an edit or a start/stop is
+	// answered fresh while two viewers of an unchanged campaign share a read.
+	key := campaign.ID.String() + "|" + campaign.Status + "|" + campaign.UpdatedAt.UTC().Format(time.RFC3339Nano)
+	if s.planCache != nil {
+		if plan, ok := s.planCache.get(key); ok {
+			return plan, nil
+		}
+	}
+	plan, err := planner.PlanCampaignDay(ctx, campaign.ID, s.orgDailyLimit(ctx, orgID))
+	if err != nil {
+		errs.CaptureException(err)
+		return nil, errx.InternalError()
+	}
+	if s.planCache != nil {
+		s.planCache.put(key, plan)
+	}
+	return plan, nil
+}
+
+func (s *campaignService) WorkspaceCapacity(ctx context.Context, orgID uuid.UUID) (*models.WorkspaceSendCapacity, *errx.Error) {
+	planner, ok := s.planner()
+	if !ok {
+		return nil, errx.New(errx.Internal, "send planning is not available")
+	}
+	if s.capacityCache != nil {
+		if out, ok := s.capacityCache.get(orgID.String()); ok {
+			return out, nil
+		}
+	}
+	accounts, xerr := s.emailRepo.GetAllActiveInScope(ctx, repository.NewAccountScope(&orgID))
+	if xerr != nil {
+		return nil, xerr
+	}
+	out, err := planner.PoolCapacityToday(ctx, &models.Campaign{OrganizationID: &orgID}, accounts)
+	if err != nil {
+		errs.CaptureException(err)
+		return nil, errx.InternalError()
+	}
+	if limit := s.orgDailyLimit(ctx, orgID); limit >= 0 && s.campaignProgressRepo != nil {
+		// The plan's daily allowance caps the workspace as a whole.
+		if sent, err := s.campaignProgressRepo.CountEmailsSentTodayByOrganization(ctx, orgID); err == nil {
+			out.Capacity = min(out.Capacity, limit)
+			out.Remaining = min(out.Remaining, max(0, limit-sent))
+		}
+	}
+	if s.capacityCache != nil {
+		s.capacityCache.put(orgID.String(), out)
 	}
 	return out, nil
 }

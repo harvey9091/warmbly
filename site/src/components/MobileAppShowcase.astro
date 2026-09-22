@@ -492,7 +492,7 @@ const searchPill = (placeholder: string) => `
       stage.style.transform = `translateX(-50%) scale(${s})`;
       clip.style.height = `${Math.round(VISIBLE * s)}px`;
     };
-    if (clip) new ResizeObserver(fit).observe(clip);
+    if (clip) new ResizeObserver(() => requestAnimationFrame(fit)).observe(clip);
     fit();
     window.addEventListener('load', fit);
 

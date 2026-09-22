@@ -20,6 +20,12 @@ type Sequence struct {
 	WaitAfter int `json:"wait_after"`
 	Position  int `json:"position"`
 
+	// ThreadReply sends this step as a reply on the contact's existing
+	// conversation (In-Reply-To/References, plus the provider thread handle)
+	// instead of opening a new one. Default true; it only has an effect when
+	// the contact has already received an email from this campaign.
+	ThreadReply bool `json:"thread_reply"`
+
 	// X/Y are the step's canvas coordinates in the sequence builder. Persisted
 	// so the arrangement sticks across visits; 0/0 means "not placed yet" (the
 	// editor auto-arranges until a step is first dragged). Written only through
@@ -46,6 +52,41 @@ type Sequence struct {
 
 	UpdatedAt time.Time `json:"updated_at"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// StepSubject is the subject the step at index i actually puts on the wire:
+// its own, or the conversation's when it replies in the contact's thread. A
+// threading step has no subject of its own, so anything that judges a step's
+// copy (preflight, the content score) has to read this rather than the column.
+//
+// seqs must be in canvas order, which is how every campaign read returns them.
+// It follows that order rather than branch targets: it is what a linear
+// sequence does, and a step reached by a branch still inherits from whatever
+// actually preceded it at send time, which only the send path can know.
+func StepSubject(seqs []Sequence, i int) string {
+	if i < 0 || i >= len(seqs) {
+		return ""
+	}
+	own := seqs[i].Subject
+	if !seqs[i].ThreadReply {
+		return own
+	}
+	// Walking back, every step that also replies passes the question on; the
+	// first that does not is the one that opened the conversation.
+	conv := ""
+	for j := i - 1; j >= 0; j-- {
+		if seqs[j].Kind != "" && seqs[j].Kind != "email" {
+			continue
+		}
+		conv = seqs[j].Subject
+		if !seqs[j].ThreadReply {
+			break
+		}
+	}
+	if conv != "" {
+		return conv
+	}
+	return own
 }
 
 // ActionConfig is the persisted config for a non-email (action/wait) node. Type
@@ -196,6 +237,9 @@ type UpdateSequence struct {
 
 	WaitAfter *int `json:"wait_after"`
 
+	// ThreadReply toggles reply-in-thread for this step.
+	ThreadReply *bool `json:"thread_reply"`
+
 	// Conditions, when non-nil, replaces the step's branching tree. Send `{}`
 	// (or an object with an empty `branches` array) to clear branching and fall
 	// back to linear progression.
@@ -277,11 +321,16 @@ type BranchCondition struct {
 	// "ai_label" (operator "is", value in Label) matches when the AI step that
 	// owns this branch stored that label for the contact — deterministic at
 	// schedule time, no model call.
+	//
+	// "reply_intent" (operator "is", value in Label) matches when automatic inbox
+	// tagging stored that intent for the contact's human reply; also decided
+	// at schedule time with no model call.
 	Field string `json:"field"`
 	// Operator is the comparison. "within_days" (the signal occurred in the last
 	// Value days) and "ever" (the signal occurred at all). For the not_* fields
 	// the meaning inverts (did NOT happen within / ever). The reply_* fields take
-	// operator "ever" (no Value). "is" pairs with "ai_label" (compare to Label).
+	// operator "ever" (no Value). "is" pairs with "ai_label" or "reply_intent"
+	// (compare to Label).
 	Operator string `json:"operator"`
 	// Value is the day window for "within_days". nil for operators that take no
 	// argument (e.g. "ever").

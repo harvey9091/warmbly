@@ -108,7 +108,7 @@ export function CommandPalette() {
     // Cmd/Ctrl+K toggles from anywhere, including inside inputs.
     useEffect(() => {
         function onKey(e: KeyboardEvent) {
-            if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "k") {
+            if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key?.toLowerCase() === "k") {
                 e.preventDefault();
                 setPaletteOpen(!paletteOpen);
             }

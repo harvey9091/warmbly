@@ -96,6 +96,16 @@ func TestHotWorkerIsOpportunisticAndNeedsAMateriallyBetterHome(t *testing.T) {
 	}
 }
 
+func TestExistingPlacementImbalanceIsReconsidered(t *testing.T) {
+	in := healthyInput()
+	in.PlacementImbalanced = true
+
+	urgency, reason := EvaluateRotation(in)
+	if urgency != RotationOpportunistic || reason == "" {
+		t.Fatalf("placement imbalance = %v (%q), want opportunistic", urgency, reason)
+	}
+}
+
 func TestUrgentMovesTakeAnythingEligible(t *testing.T) {
 	// Staying is not an option, so a worse-scoring destination still wins.
 	if !WorthMoving(RotationImmediate, 5.0, 0.1, false) {

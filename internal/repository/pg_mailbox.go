@@ -55,6 +55,14 @@ func (r *mailboxRepository) CreateEntry(ctx context.Context, userId, emailId uui
 	_, err := r.db.Exec(ctx, query,
 		emailId, mb.UIDValidity, mb.Name, textArray(mb.Attrs), mb.HighestModSeq, mb.UIDNext, mb.UpdatedAt,
 	)
+	// The mailbox was deleted between the worker listing its folders and this
+	// write landing. There is no parent to hang a folder off and never will be
+	// again, so the event is done rather than failed: returned as an error it
+	// was reported and redelivered forever, because no retry can bring the
+	// mailbox back. Same call as pg_email_error.go makes on the same race.
+	if isForeignKeyViolation(err) {
+		return nil
+	}
 	return err
 }
 

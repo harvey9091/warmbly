@@ -8,10 +8,7 @@ import (
 	"github.com/warmbly/warmbly/internal/pkg/generation"
 )
 
-// Campaign sequence-step tools. A step is one node in a campaign's sequence
-// (an email, wait, or action). These mirror the /campaigns/:id/steps routes and
-// run as the invoking user, so the SequenceService resolves the campaign within
-// the user's organization.
+// Campaign step tools use the invoking workspace, matching the HTTP routes.
 func (d Deps) registerSequenceTools(r *Registry) {
 	if d.Sequences == nil {
 		return
@@ -43,15 +40,16 @@ func (d Deps) registerSequenceTools(r *Registry) {
 
 	r.Register(Tool{
 		Name:        "update_campaign_step",
-		Description: "Update a campaign step's name, subject, body, or wait time. Only provided fields change. Subject and body may contain {{merge}} variables.",
+		Description: "Update a campaign step's name, subject, body, wait time, or whether it replies in the contact's existing thread. Only provided fields change. Subject and body may contain {{merge}} variables.",
 		InputSchema: objectSchema(map[string]any{
-			"campaign_id": strProp("The campaign's UUID."),
-			"step_id":     strProp("The step (sequence) UUID."),
-			"name":        strProp("New step name."),
-			"subject":     strProp("New email subject."),
-			"body":        strProp("New email body text. Sent as the plain-text part; when the step has no HTML of its own, the HTML part is rendered from it."),
-			"body_html":   strProp("New email body as HTML, for a designed email. Optional: omit it and the HTML part is rendered from body."),
-			"wait_days":   intProp("Days to wait before this step runs."),
+			"campaign_id":  strProp("The campaign's UUID."),
+			"step_id":      strProp("The step (sequence) UUID."),
+			"name":         strProp("New step name."),
+			"subject":      strProp("New email subject."),
+			"body":         strProp("New email body text. Sent as the plain-text part; when the step has no HTML of its own, the HTML part is rendered from it."),
+			"body_html":    strProp("New email body as HTML, for a designed email. Optional: omit it and the HTML part is rendered from body."),
+			"wait_days":    intProp("Days to wait before this step runs."),
+			"thread_reply": boolProp("true (default) sends this step as a reply on the conversation the contact's earlier emails started, so it carries that conversation's subject; false opens a new thread with the step's own subject."),
 		}, "campaign_id", "step_id"),
 		Risk:            generation.RiskWrite,
 		RequiredOrgPerm: models.PermManageCampaigns,
@@ -83,7 +81,7 @@ func (d Deps) listCampaignSteps(ctx context.Context, inv Invocation, args json.R
 	if _, err := parseUUIDArg(in.CampaignID); err != nil {
 		return "", err
 	}
-	steps, xerr := d.Sequences.Get(ctx, inv.UserID.String(), in.CampaignID)
+	steps, xerr := d.Sequences.Get(ctx, inv.OrgID.String(), in.CampaignID)
 	if xerr != nil {
 		return "", fromErrx(xerr)
 	}
@@ -100,7 +98,7 @@ func (d Deps) addCampaignStep(ctx context.Context, inv Invocation, args json.Raw
 	if _, err := parseUUIDArg(in.CampaignID); err != nil {
 		return "", err
 	}
-	step, xerr := d.Sequences.Create(ctx, inv.UserID.String(), in.CampaignID)
+	step, xerr := d.Sequences.Create(ctx, inv.OrgID.String(), in.CampaignID)
 	if xerr != nil {
 		return "", fromErrx(xerr)
 	}
@@ -110,13 +108,14 @@ func (d Deps) addCampaignStep(ctx context.Context, inv Invocation, args json.Raw
 
 func (d Deps) updateCampaignStep(ctx context.Context, inv Invocation, args json.RawMessage) (string, error) {
 	in, err := decodeArgs[struct {
-		CampaignID string  `json:"campaign_id"`
-		StepID     string  `json:"step_id"`
-		Name       *string `json:"name"`
-		Subject    *string `json:"subject"`
-		Body       *string `json:"body"`
-		BodyHTML   *string `json:"body_html"`
-		WaitDays   *int    `json:"wait_days"`
+		CampaignID  string  `json:"campaign_id"`
+		StepID      string  `json:"step_id"`
+		Name        *string `json:"name"`
+		Subject     *string `json:"subject"`
+		Body        *string `json:"body"`
+		BodyHTML    *string `json:"body_html"`
+		WaitDays    *int    `json:"wait_days"`
+		ThreadReply *bool   `json:"thread_reply"`
 	}](args)
 	if err != nil {
 		return "", err
@@ -129,13 +128,14 @@ func (d Deps) updateCampaignStep(ctx context.Context, inv Invocation, args json.
 		return "", err
 	}
 	upd := &models.UpdateSequence{
-		Name:      in.Name,
-		Subject:   in.Subject,
-		BodyPlain: in.Body,
-		BodyHTML:  in.BodyHTML,
-		WaitAfter: in.WaitDays,
+		Name:        in.Name,
+		Subject:     in.Subject,
+		BodyPlain:   in.Body,
+		BodyHTML:    in.BodyHTML,
+		WaitAfter:   in.WaitDays,
+		ThreadReply: in.ThreadReply,
 	}
-	step, xerr := d.Sequences.Update(ctx, inv.UserID.String(), in.CampaignID, in.StepID, upd)
+	step, xerr := d.Sequences.Update(ctx, inv.OrgID.String(), in.CampaignID, in.StepID, upd)
 	if xerr != nil {
 		return "", fromErrx(xerr)
 	}
@@ -158,7 +158,7 @@ func (d Deps) deleteCampaignStep(ctx context.Context, inv Invocation, args json.
 	if err != nil {
 		return "", err
 	}
-	if xerr := d.Sequences.Delete(ctx, inv.UserID.String(), in.CampaignID, in.StepID); xerr != nil {
+	if xerr := d.Sequences.Delete(ctx, inv.OrgID.String(), in.CampaignID, in.StepID); xerr != nil {
 		return "", fromErrx(xerr)
 	}
 	d.logAudit(ctx, inv, models.AuditActionDelete, models.AuditEntitySequence, &sid, nil)

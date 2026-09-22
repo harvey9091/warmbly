@@ -83,3 +83,11 @@ func resolveOptOutOrigin(account *models.Email, campaign *models.Campaign) strin
 	}
 	return origin
 }
+
+// MailboxTrackingHost is the host a direct (non-campaign) send tracks through.
+// Same rules as a campaign send with no campaign-level override: the mailbox's
+// own verified domain, else this install's host.
+func MailboxTrackingHost(account *models.Email) string {
+	host, _ := resolveTrackingHost(config.TrackingHost(), account, nil)
+	return host
+}

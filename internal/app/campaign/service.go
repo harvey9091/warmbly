@@ -2,6 +2,7 @@ package campaign
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/app/dailythrottle"
@@ -27,7 +28,14 @@ type CampaignService interface {
 	// many sending days a mailbox pool needs under the per-mailbox caps.
 	// Read-only; the wizard shows it before a one-time email is created.
 	Estimate(ctx context.Context, orgID uuid.UUID, in *models.CampaignEstimate) (*models.CampaignEstimateResult, *errx.Error)
-	Update(ctx context.Context, userID, id string, data *models.UpdateCampaign) (*models.Campaign, *errx.Error)
+	// SendPlan is today's sending plan for one of orgID's campaigns: what
+	// will go out today and every limit that decided it, derived through the
+	// scheduler's own gates. Read-only.
+	SendPlan(ctx context.Context, orgID uuid.UUID, campaignID string) (*models.CampaignSendPlan, *errx.Error)
+	// WorkspaceCapacity is what the workspace's active mailboxes can send
+	// today between them, under the same clamps. Read-only.
+	WorkspaceCapacity(ctx context.Context, orgID uuid.UUID) (*models.WorkspaceSendCapacity, *errx.Error)
+	Update(ctx context.Context, orgID, id string, data *models.UpdateCampaign) (*models.Campaign, *errx.Error)
 	// Delete removes an organization's campaign outright. A running campaign
 	// is stopped as part of it: its pending tasks are cancelled in the same
 	// transaction, so nothing keeps sending for a campaign that is gone.
@@ -46,7 +54,7 @@ type CampaignService interface {
 	StopCampaign(ctx context.Context, orgID uuid.UUID, campaignID string) *errx.Error
 
 	// Logs
-	GetLogs(ctx context.Context, userID, campaignID string, limit int, cursor *string) (*models.CampaignLogsResult, *errx.Error)
+	GetLogs(ctx context.Context, orgID, campaignID string, limit int, cursor *string) (*models.CampaignLogsResult, *errx.Error)
 
 	// WakeCampaigns pulls the parked wakeup of each listed active campaign
 	// forward when its next slot is sooner than where it is parked. Called after
@@ -70,7 +78,26 @@ type CampaignService interface {
 	// Campaign-scoped tracking domain (feature 5). Resolves the override's CNAME
 	// and flips verified on success; an unresolved record stays "pending".
 	VerifyCampaignTrackingDomain(ctx context.Context, orgID uuid.UUID, campaignID string) (*models.TrackingDomainStatus, *errx.Error)
+
+	// PauseLead parks ONE contact's flow inside ONE campaign until `until`,
+	// or with no end when it is nil. The contact stays subscribed and stays a
+	// lead: this is the lever for "they are away for a week", which
+	// unsubscribing and suppressing both answer far too permanently.
+	PauseLead(ctx context.Context, orgID, campaignID, contactID uuid.UUID, until *time.Time, reason string) (*models.LeadHold, *errx.Error)
+	// ResumeLead lifts the hold now and wakes the campaign so the step goes
+	// out on the next pass rather than when the chain happens to be parked.
+	ResumeLead(ctx context.Context, orgID, campaignID, contactID uuid.UUID) *errx.Error
+	// GetLeadHold reads the live hold on one lead (nil when it is not held).
+	GetLeadHold(ctx context.Context, orgID, campaignID, contactID uuid.UUID) (*models.LeadHold, *errx.Error)
 }
+
+// Bounds on a manual lead hold. A hold in the past would lift the moment it
+// was written; one years out is indistinguishable from removing the lead, and
+// the member who wants that has "remove from campaign".
+const (
+	leadHoldMaxDays      = 365
+	leadHoldReasonMaxLen = 200
+)
 
 type campaignService struct {
 	campaignRepository repository.CampaignRepository
@@ -93,6 +120,10 @@ type campaignService struct {
 	// segments counts an audience for Estimate. Optional: without it an
 	// estimate reports zero recipients.
 	segments SegmentCounter
+	// planCache and capacityCache hold the two derived reads for a few
+	// seconds each; see readCache.
+	planCache     *readCache[*models.CampaignSendPlan]
+	capacityCache *readCache[*models.WorkspaceSendCapacity]
 }
 
 // SegmentCounter is the slice of the segment service Estimate needs.
@@ -153,6 +184,8 @@ func NewService(
 	streamingPublisher *pubsub.StreamingPublisher,
 ) CampaignService {
 	return &campaignService{
+		planCache:          newReadCache[*models.CampaignSendPlan](15 * time.Second),
+		capacityCache:      newReadCache[*models.WorkspaceSendCapacity](60 * time.Second),
 		campaignRepository: campaignRepository,
 		taskRepo:           taskRepo,
 		emailRepo:          emailRepo,

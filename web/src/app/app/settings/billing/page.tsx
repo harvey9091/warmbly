@@ -23,7 +23,7 @@ import {
     TicketIcon,
     XIcon,
 } from "lucide-react";
-import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import toast from "react-hot-toast";
 import { TopbarAction } from "@/components/layout/Page";
@@ -42,6 +42,7 @@ import { TextInput } from "@/components/ui/field";
 import BillingIntervalToggle from "@/components/app/billing/BillingIntervalToggle";
 import PlanCard from "@/components/app/billing/PlanCard";
 import EnterpriseInquiryDialog from "@/components/app/billing/EnterpriseInquiryDialog";
+import WarmupPlanDialog from "@/components/app/billing/WarmupPlanDialog";
 import { Row, Section, SectionShell, TableSurface } from "../_components/SectionShell";
 import { PAID_PLANS, getPlan, planOrder, type PlanID } from "@/lib/plans";
 import { describeDiscount, fmtMoney, fromMinorUnits, type BillingInterval } from "@/lib/pricing";
@@ -88,6 +89,24 @@ export default function BillingSettingsPage() {
     const [billingInterval, setBillingInterval] =
         React.useState<BillingInterval>("annual");
     const [salesOpen, setSalesOpen] = React.useState(false);
+
+    // ?pool=1 is where a linked instance's "Premium" button lands (and what
+    // the overview's warmup-only row opens), and ?pool=done is where Stripe
+    // returns. Both are consumed once and stripped, so a refresh or a back
+    // navigation does not replay them.
+    const [searchParams, setSearchParams] = useSearchParams();
+    const poolParam = searchParams.get("pool");
+    const [poolOpen, setPoolOpen] = React.useState(false);
+    React.useEffect(() => {
+        if (!poolParam) return;
+        if (poolParam === "1") setPoolOpen(true);
+        if (poolParam === "done") {
+            toast.success("Payment received. The Warmup plan applies as soon as Stripe confirms.");
+        }
+        const next = new URLSearchParams(searchParams);
+        next.delete("pool");
+        setSearchParams(next, { replace: true });
+    }, [poolParam, searchParams, setSearchParams]);
 
     const resolvedTab = tabForSlug(tabSlug);
     const tab: BillingTab = resolvedTab ?? "overview";
@@ -187,14 +206,14 @@ export default function BillingSettingsPage() {
         <SectionShell
             title="Billing"
             description={`Plan, payment and invoices for ${currentOrg?.name ?? "this workspace"}.`}
-            actions={
+            actions={flow.hasBillingCustomer ? (
                 <TopbarAction
                     icon={<ExternalLinkIcon className="w-3 h-3" />}
                     onClick={openPortal}
                 >
                     {flow.portalPending ? "Opening…" : "Manage billing"}
                 </TopbarAction>
-            }
+            ) : undefined}
         >
             <div>
                 <div className="sticky top-0 z-20 bg-white/95 backdrop-blur px-2 md:px-6 flex items-center gap-1 border-b border-slate-200/70 overflow-x-auto">
@@ -233,7 +252,7 @@ export default function BillingSettingsPage() {
                         className="divide-y divide-slate-200/70"
                     >
                         {tab === "overview" && (
-                            <OverviewTab onChangePlan={openPlanChooser} />
+                            <OverviewTab onChangePlan={openPlanChooser} onWarmupPlan={() => setPoolOpen(true)} />
                         )}
 
                         {tab === "plans" && (
@@ -263,8 +282,9 @@ export default function BillingSettingsPage() {
                                                 ctaVerb={currentPlan.id === "free" ? "Get" : "Switch to"}
                                                 footer={
                                                     <ProrationNote
+                                                        interval={billingInterval}
                                                         planId={flow.resolveServerPlan(id)?.id}
-                                                        enabled={currentPlan.id !== "free" && currentPlan.id !== id}
+                                                        enabled={flow.hasStripeSubscription && currentPlan.id !== id}
                                                     />
                                                 }
                                                 onChoose={() => upgrade(id)}
@@ -343,7 +363,7 @@ export default function BillingSettingsPage() {
                                 >
                                     {redemptions.isPending ? (
                                         <div className="h-16 rounded bg-slate-100 animate-pulse" />
-                                    ) : (redemptions.data?.data.length ?? 0) === 0 ? (
+                                    ) : (redemptions.data?.data?.length ?? 0) === 0 ? (
                                         <p className="text-[12px] text-slate-500 leading-relaxed">
                                             No codes redeemed yet. Apply a code above to see it here.
                                         </p>
@@ -377,7 +397,13 @@ export default function BillingSettingsPage() {
                             </>
                         )}
 
-                        {tab === "payment" && (
+                        {tab === "payment" && !flow.hasBillingCustomer && (
+                            <Section eyebrow="Payment" description="Complete checkout to set up billing. Operator-granted plans do not create a Stripe billing account.">
+                                <button type="button" onClick={() => navigate(pathForTab("plans"))} className="h-7 px-3 rounded-md bg-slate-900 text-white text-[12px]">Choose a plan</button>
+                            </Section>
+                        )}
+
+                        {tab === "payment" && flow.hasBillingCustomer && (
                             <>
                                 <Section
                                     eyebrow="Payment"
@@ -440,6 +466,7 @@ export default function BillingSettingsPage() {
                 </AnimatePresence>
             </div>
             <EnterpriseInquiryDialog open={salesOpen} onClose={() => setSalesOpen(false)} />
+            <WarmupPlanDialog open={poolOpen} onClose={() => setPoolOpen(false)} />
         </SectionShell>
     );
 }
@@ -504,12 +531,14 @@ function fmtDate(value?: string | null): string {
 // What a switch costs today, shown on each plan card for a paying workspace.
 // An empty id disables the query, so free workspaces and the current plan never
 // hit /subscription/preview-change.
-function ProrationNote({ planId, enabled }: { planId?: string; enabled: boolean }) {
-    const preview = usePreviewPlanChange(enabled && planId ? planId : "");
+function ProrationNote({ planId, enabled, interval }: { planId?: string; enabled: boolean; interval: BillingInterval }) {
+    const preview = usePreviewPlanChange(enabled && interval === "monthly" && planId ? planId : "");
     if (!enabled) return null;
     return (
         <div className="rounded-md border border-slate-200/80 bg-slate-50 px-2.5 py-1.5 text-[11px] leading-snug">
-            {preview.isPending ? (
+            {interval === "annual" ? (
+                <span className="text-slate-500">Stripe calculates annual proration when you switch.</span>
+            ) : preview.isPending ? (
                 <span className="text-slate-400">Pricing this switch…</span>
             ) : preview.data ? (
                 <>
@@ -520,9 +549,9 @@ function ProrationNote({ planId, enabled }: { planId?: string; enabled: boolean 
                                 preview.data.proration_amount,
                                 preview.data.currency,
                             );
-                            if (due > 0) return `Due today $${fmtMoney(due)}`;
-                            if (due < 0) return `Credit $${fmtMoney(Math.abs(due))}`;
-                            return "No charge today";
+                            if (due > 0) return `Estimated proration $${fmtMoney(due)}`;
+                            if (due < 0) return `Estimated credit $${fmtMoney(Math.abs(due))}`;
+                            return "No estimated proration";
                         })()}
                     </div>
                     <div className="text-slate-400">

@@ -214,7 +214,7 @@ type AdminFleetWorkerRow struct {
 	HealthMultiplier  float64 `json:"health_multiplier"`
 	AgeMultiplier     float64 `json:"age_multiplier"`
 	EffectiveCapacity float64 `json:"effective_capacity"`
-	// Utilization is load over effective capacity; the rebalancer calls a
+	// Utilization is load over the worker's operational target; the rebalancer calls a
 	// worker hot above 0.8 and cold below 0.5.
 	Utilization      float64 `json:"utilization"`
 	SendsAttempted1h int64   `json:"sends_attempted_1h"`

@@ -58,17 +58,23 @@ func (s *emailService) OAuthReauth(ctx context.Context, userID string, orgID *uu
 		return nil, errx.InternalError()
 	}
 
+	// PKCE, same as the first-connect path: the verifier never leaves the
+	// server, so an intercepted code is not redeemable.
+	verifier := oauth2.GenerateVerifier()
+
 	if xerr := s.saveOnboardingState(ctx, state, &models.EmailOnboardingState{
 		UserID:         userID,
 		OrganizationID: orgID,
 		Provider:       string(provider),
 		Nonce:          state,
 		EmailAccountID: &accountID,
+		CodeVerifier:   verifier,
 	}); xerr != nil {
 		return nil, xerr
 	}
 
-	url := cfg.AuthCodeURL(state, authCodeOptions(provider, account.Email)...)
+	opts := append(authCodeOptions(provider, account.Email), oauth2.S256ChallengeOption(verifier))
+	url := cfg.AuthCodeURL(state, opts...)
 	return &models.EmailOnboardingStartResponse{URL: url, State: state}, nil
 }
 
@@ -111,6 +117,12 @@ func (s *emailService) finishReauth(ctx context.Context, sess *models.EmailOnboa
 	if err := s.emailRepository.RefreshBoxToken(ctx, account.ID, tok.AccessToken, refresh, tok.Expiry); err != nil {
 		return nil, errx.InternalError()
 	}
+
+	// The send-as list can have changed while the mailbox was disconnected,
+	// and a stale one is what would put a removed alias on the From header.
+	// The signature is deliberately not re-imported: a reconnect is a repair,
+	// not a moment to overwrite what someone has since edited here.
+	s.captureSendIdentityList(ctx, account, tok)
 
 	return s.reconnectAccount(ctx, account.ID)
 }
@@ -221,5 +233,6 @@ func validateSMTPIMAPCredentials(creds *models.SmtpImap) *errx.Error {
 	if !validPort(creds.IMAP.Port) {
 		return errx.ErrEmailIMAPPort
 	}
+	normalizeMailPasswords(creds.SMTP, creds.IMAP)
 	return validateMailSecurity(creds.SMTP, creds.IMAP)
 }

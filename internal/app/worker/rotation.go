@@ -78,6 +78,7 @@ type RotationInput struct {
 	// AwayFromOwnReservedWorker is true when this mailbox's own organization
 	// has a reserved worker and the mailbox is not on it.
 	AwayFromOwnReservedWorker bool
+	PlacementImbalanced       bool
 }
 
 // EvaluateRotation returns how urgently the mailbox should move and a reason
@@ -115,6 +116,9 @@ func EvaluateRotation(in RotationInput) (RotationUrgency, string) {
 
 	if in.WorkerUtilization > RotationHotUtilization {
 		return RotationOpportunistic, "worker over capacity"
+	}
+	if in.PlacementImbalanced {
+		return RotationOpportunistic, "workspace or provider concentration can be reduced"
 	}
 
 	return RotationStay, ""

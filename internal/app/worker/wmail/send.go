@@ -15,6 +15,7 @@ import (
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"google.golang.org/api/gmail/v1"
 )
 
 // parentReference resolves what a reply should be threaded onto, from whichever
@@ -75,6 +76,11 @@ type SendRequest struct {
 	// FromName is the display name the control plane holds for the mailbox at
 	// publish time. Empty falls back to the name cached from ADD_EMAIL.
 	FromName string
+	// FromEmail is the verified provider alias the mailbox was told to send
+	// as. Gmail only, and empty for almost every send, which means the
+	// mailbox's own address. It is never set on a warmup send: warmup pairs
+	// on the mailbox address, so an alias there would break verification.
+	FromEmail string
 }
 
 // buildSendHeaders assembles the outbound custom headers: the warmup
@@ -106,8 +112,14 @@ type SendResult struct {
 	Success       bool
 	MessageID     string
 	ProviderMsgID string
-	SentAt        time.Time
-	Error         *errx.MailError
+	// ThreadID is the provider-side conversation this message landed in.
+	// Gmail is the only provider that has one and the only one that needs it
+	// back: appending a later message to the same thread requires handing the
+	// id to the API, so the control plane records it against the task and
+	// gives it to the next step (issue #472). Empty everywhere else.
+	ThreadID string
+	SentAt   time.Time
+	Error    *errx.MailError
 }
 
 const maxSendRetries = 3
@@ -125,6 +137,16 @@ func permanentSendFailure(err *errx.MailError) bool {
 		return true
 	}
 	return false
+}
+
+// providerThrottle is a temporary limit imposed by the mailbox provider. It
+// must not be raised as Warmbly's anti-abuse RATE_LIMIT_EXCEEDED event, which
+// deactivates the mailbox and removes it from warmup.
+func providerThrottle(err *errx.MailError) bool {
+	if err == nil {
+		return false
+	}
+	return err.Code == errx.MailErrorCodeSendingTooFast || err.Code == errx.MailErrorCodeQuotaExceeded
 }
 
 // Send attempts to send an email with retry for transient failures
@@ -168,6 +190,12 @@ func (w *WMail) Send(ctx context.Context, req *SendRequest) *SendResult {
 		// server answered with a 5xx, so it will answer the same way next
 		// time and another attempt only spends the mailbox's daily budget.
 		if permanentSendFailure(result.Error) {
+			return result
+		}
+		// Retrying a 429 in one, two and four seconds only extends the provider's
+		// throttle. Return it to the scheduler, which already rolls the send back
+		// for a later attempt.
+		if providerThrottle(result.Error) {
 			return result
 		}
 
@@ -216,20 +244,35 @@ func (w *WMail) sendViaGmail(ctx context.Context, req *SendRequest, bodyHTML str
 	attachments := toGoogAttachments(req.Attachments)
 
 	// Send via Gmail API
-	gmailMsg, err := w.GoogleData.Client.SendMessage(
-		ctx,
-		req.FromName,
-		req.To,
-		req.Cc,
-		req.Bcc,
-		req.MessageID,
-		req.Subject,
-		req.BodyPlain,
-		bodyHTML,
-		parent,
-		attachments,
-		customHeaders,
-	)
+	send := func(p *models.EmailMessageData) (*gmail.Message, error) {
+		return w.GoogleData.Client.SendMessage(
+			ctx,
+			req.FromName,
+			req.FromEmail,
+			req.To,
+			req.Cc,
+			req.Bcc,
+			req.MessageID,
+			req.Subject,
+			req.BodyPlain,
+			bodyHTML,
+			p,
+			attachments,
+			customHeaders,
+		)
+	}
+	gmailMsg, err := send(parent)
+	if err != nil && parent != nil && parent.ThreadID != "" && goog.IsThreadRefusal(err) {
+		// Gmail would not file the message in that thread. It never left, so
+		// send it again as its own conversation rather than failing the step:
+		// a follow-up outside the thread still reaches the recipient, and the
+		// reference headers still thread it in THEIR client.
+		log.Warn().Str("task_id", req.TaskID.String()).Err(err).
+			Msg("Gmail refused the thread; sending as a new conversation")
+		retry := *parent
+		retry.ThreadID = ""
+		gmailMsg, err = send(&retry)
+	}
 	if err != nil {
 		// Convert to MailError using goog.HandleError
 		if mailErr := goog.HandleError(err); mailErr != nil {
@@ -249,6 +292,7 @@ func (w *WMail) sendViaGmail(ctx context.Context, req *SendRequest, bodyHTML str
 	result.Success = true
 	result.MessageID = req.MessageID
 	result.ProviderMsgID = gmailMsg.Id
+	result.ThreadID = gmailMsg.ThreadId
 	return result
 }
 
@@ -468,7 +512,7 @@ func DetermineErrorEventType(err *errx.MailError) models.JobEventType {
 	case errx.MailErrorCodeAccountSuspended, errx.MailErrorCodeAuthorizationFailed:
 		return models.JobEventTypeEmailDisabled
 
-	case errx.MailErrorCodeRateLimitExceeded, errx.MailErrorCodeSendingTooFast, errx.MailErrorCodeQuotaExceeded:
+	case errx.MailErrorCodeRateLimitExceeded:
 		return models.JobEventTypeEmailRateLimited
 
 	case errx.MailErrorCodeServerUnreachable, errx.MailErrorCodeConnectionLost, errx.MailErrorCodeNotFound:

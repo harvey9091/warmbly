@@ -157,12 +157,23 @@ Because the wait belongs to the target, every path into that step uses the same 
 Waits are per contact. A contact waiting three days for a follow-up does not hold up anyone else: other contacts' first emails and due follow-ups keep sending in the meantime, and the campaign only pauses when nothing is due for anyone.
 
 <Callout type="info" title="Instant branches skip the wait">
-A path that runs instantly fires the moment the event happens, so the target's wait does not apply and the control is hidden.
+A path that runs instantly fires the moment the event happens, so the target's wait does not apply and the control is hidden. Action steps run right away. An email step is due immediately and goes out on the campaign's next scheduling pass, usually within 15 minutes, still inside your sending hours and the mailbox's spacing between sends. A path that is not instant, including one you toggled off, keeps the target's wait.
 </Callout>
 
 ## Follow-ups and threading
 
-A follow-up is just the next email step, threaded onto the previous step's email so it lands as a reply in the same conversation. The rule: **a follow-up threads on the previous step's subject**, and changing a follow-up's subject starts a new thread instead. Leave the subject alone to stay in-thread, change it to deliberately start fresh.
+A follow-up is the next email step, sent as a **reply on the conversation the contact is already in** rather than as a second email out of nowhere. It carries `In-Reply-To` and `References` pointing at the last message they received from the campaign, and on Gmail it is posted into that same thread, so it sits under the first email in their inbox and in your Sent folder.
+
+Each email step has a **Reply in thread** switch, on by default. Turn it off for a step that should deliberately start a fresh conversation.
+
+- A step that replies in the thread has no subject of its own: a reply carries the conversation's subject, which is the one the step that opened the thread used. The composer shows that subject instead of a subject box.
+- A step with **Reply in thread** off writes its own subject and opens a new conversation. Every threading step after it then replies on *that* conversation.
+- The switch does nothing on a contact's first email. There is nothing to reply to, so it opens the thread.
+- A/B variants on a threading step vary the body only, for the same reason.
+
+<Callout type="info" title="The reply headers need the first email to have been confirmed sent">
+They point at the message id the sending provider put on the wire, which Warmbly learns when the worker reports the send. If that confirmation never arrives the follow-up still sends, carrying the conversation's subject, but as its own conversation.
+</Callout>
 
 ## A/B variants
 
@@ -171,7 +182,7 @@ Open a step's editor and click **A/B test this step**.
 - The step's own subject and body are the **Original** control arm; adding a variant makes it one weighted arm among several.
 - Up to 5 variants (B through F) on top of the Original.
 - The **traffic-split bar** shows one segment per arm. Drag a divider or type an exact percent; shares always total 100%, and **Even split** balances every active arm.
-- Select an arm to edit its name, subject, and body. Leave a variant's subject or body blank to reuse the step's own.
+- Select an arm to edit its name, subject, and body. Leave a variant's subject or body blank to reuse the step's own. On a step that replies in the thread, a variant's subject is ignored: the conversation owns it.
 - A first variant starts at 50/50. Marking one **inactive** drops it from the split without deleting it; deleting the last one returns the step to a single send.
 
 Once variants have sent, each card shows Sent, Open rate, Reply rate, and Bounce rate. When Warmbly finds a **winner**, a banner names it with the rule and confidence used, and the winning card gets a trophy.
@@ -188,12 +199,13 @@ A branch routes contacts by condition. Drag the right amber dot from a step to c
 | `if didn't open` / `didn't click` / `didn't reply` | Warmbly waits the full window, then takes the path only if it still hasn't happened |
 | `if replied: positive` / `negative` / `neutral` | Reply intent, checked once, no day window |
 | `if auto-reply / out of office` | Reply was automated, not human |
+| `if reply intent is…` | The intent [automatic inbox tagging](/guides/inbox-tagging/) read from the human reply: agreed, wants info, wants pricing, not now, not interested, wrong person, opt out, scheduling, in progress, question answered, or unclear. Set only when inbox tagging is on and the classifier was at least 70% sure; an untagged reply takes the otherwise path. Checked once, no day window |
 | `random split` | A random share of contacts (1 to 99%) |
 | Switch case paths | Each case's own dot on the Switch node, not chosen here. Uses the stored case, so routing spends no credits |
 
 ### Instant vs at-the-next-step
 
-Reply intent, `opened`, and `clicked` can fire **instantly**, the moment the event lands rather than at the next scheduled step. These show a violet `instant` badge, and you can toggle it off per connection to check at the next boundary instead. Instant still respects the window: it runs when they open or click within the N days, and never runs if they don't.
+Reply intent, `opened`, and `clicked` can fire **instantly**, the moment the event lands rather than at the next scheduled step. A `reply intent is` path fires the moment the tagged reply lands, with no model call at routing time. These show a violet `instant` badge, and you can toggle it off per connection to check at the next boundary instead. Instant still respects the window: it runs when they open or click within the N days, and never runs if they don't.
 
 ## Reply branches
 
@@ -202,10 +214,17 @@ The **On reply** button on a step card creates an action step connected by a rep
 - A reply triggers the path of the **specific email it answers**, matched by threading headers. That is the email they actually replied to, not necessarily your latest step, and never both.
 - Unmatched replies fall back to the latest step.
 - Auto-replies and out-of-office messages are not human replies: they trigger no human-reply path and do not stop the sequence. Use the `auto-reply / out of office` condition to react to them.
+- An out-of-office message does, on its own, hold the contact's next step until they are back, in every campaign they are a lead of, so no follow-up is sent to an empty desk. See [out of office and pausing one lead](/guides/campaigns/#out-of-office-and-pausing-one-lead).
 
 ## Stop on reply
 
 A campaign-level toggle in the flow toolbar. When on and a contact replies, the rest of the cold sequence stops for them while the reply branch on the email they answered still runs instantly.
+
+Only inbound mail from that campaign contact to the sending mailbox counts. A threaded follow-up synchronized from Sent or Drafts stays outbound even though its `In-Reply-To` header points at an earlier campaign step.
+
+When a campaign rotates between sender accounts, a real inbound reply still links to the campaign if the mail client references an earlier step from another mailbox in the same workspace.
+
+When an upgrade repairs a reply marker that was provably created by a synchronized Sent message, the contact resumes at the next due step and the campaign reply totals update with it. An upgrade also restores provable human replies that were received by one campaign mailbox but referenced a thread started by another mailbox in the workspace. Warmbly recalculates address verification from the corrected delivery, open, click, reply, and bounce evidence. It leaves ambiguous historical replies untouched.
 
 <Callout type="warn" title="Turn on stop on reply">
 With it off and more than one step, Warmbly warns you on the canvas: replies that don't match a reply branch would otherwise keep receiving cold follow-ups. Turning it on still runs your reply branches, so it is strictly safer.

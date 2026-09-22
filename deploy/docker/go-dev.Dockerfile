@@ -14,7 +14,7 @@
 # /tmp/main in place, then restarts it. No docker layer pipeline, no
 # image rebuild — just `go build` against a warm cache.
 
-FROM golang:1.25-alpine
+FROM golang:1.26-alpine
 
 RUN apk add --no-cache git ca-certificates gcc musl-dev librdkafka-dev curl
 

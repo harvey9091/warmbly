@@ -41,7 +41,9 @@ POSTHOG_ERROR_TRACKING="true"
 SENTRY_DSN=""
 
 # SECRETS
-AUTH_SECRET="example123"
+# At least 32 characters: it signs every session token and the backend now
+# refuses to start below that. Generate one with: make gen-key
+AUTH_SECRET="replace-me-with-at-least-32-random-characters"
 TURNSTILE_SECRET=""
 
 # Passkeys (WebAuthn). Optional — derived from APP_URL / CORS_ALLOW_ORIGINS

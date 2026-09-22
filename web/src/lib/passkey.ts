@@ -146,13 +146,49 @@ async function startExplicitAuthentication(
     };
 }
 
+/** Whether the page still has the input conditional autofill binds to. */
+function autofillFieldPresent(): boolean {
+    if (typeof document === "undefined") return false;
+    return document.querySelector('input[autocomplete~="webauthn"]') !== null;
+}
+
 /**
  * Start a server-side login challenge. Safari can lose WebAuthn's required
  * user activation if this network request happens after the click, so explicit
  * button flows should prefetch it before calling startAuthentication().
  */
-export async function beginPasskeyLogin(): Promise<PasskeyLoginChallenge> {
-    return await passkeyLoginBegin();
+export async function beginPasskeyLogin(signal?: AbortSignal): Promise<PasskeyLoginChallenge> {
+    try {
+        return await passkeyLoginBegin(signal);
+    } catch (e) {
+        // An aborted request is this page being left, which is a cancellation
+        // and not a failure anybody needs to hear about.
+        if (isAbort(e)) throw new PasskeyCancelled("aborted");
+        throw e;
+    }
+}
+
+/**
+ * Whether a failed challenge request is one that retrying later fixes by
+ * itself: the address is throttled, or the request never reached the API.
+ *
+ * The sign-in page asks for a challenge on load and again after every ceremony,
+ * so both of these are ordinary. Neither leaves anything broken — the button
+ * asks again when it is pressed — and reporting them buries the failures that
+ * do mean something.
+ */
+export function passkeyChallengeUnavailable(e: unknown): boolean {
+    const status = (e as { status?: number } | null)?.status;
+    if (status === 429) return true;
+    // A fetch that never got an answer has no status: offline, DNS, a dropped
+    // connection, a tab suspended mid-flight.
+    return status === undefined && e instanceof TypeError;
+}
+
+/** Whether a rejection is an aborted fetch rather than a refusal or a fault. */
+function isAbort(e: unknown): boolean {
+    if (typeof DOMException !== "undefined" && e instanceof DOMException && e.name === "AbortError") return true;
+    return (e as { name?: string } | null)?.name === "AbortError";
 }
 
 /**
@@ -168,6 +204,14 @@ export async function finishPasskeyLogin(
     let timeout: ReturnType<typeof setTimeout> | undefined;
 
     try {
+        // beginPasskeyLogin is a round trip, so the user may have left the
+        // sign-in page by now. Autofill needs the field it attaches to, and
+        // without one SimpleWebAuthn throws a message the browser also logs;
+        // a navigation is a cancellation, not a failure worth reporting.
+        if (opts?.conditional && !autofillFieldPresent()) {
+            throw new PasskeyCancelled("aborted");
+        }
+
         const authentication = opts?.conditional
             ? startAuthentication({
                 optionsJSON: challenge.options.publicKey,
@@ -196,8 +240,8 @@ export async function finishPasskeyLogin(
 }
 
 /** Run a discoverable passkey sign-in from scratch. */
-export async function passkeyLogin(opts?: { conditional?: boolean }): Promise<Token> {
-    return await finishPasskeyLogin(await beginPasskeyLogin(), opts);
+export async function passkeyLogin(opts?: { conditional?: boolean; signal?: AbortSignal }): Promise<Token> {
+    return await finishPasskeyLogin(await beginPasskeyLogin(opts?.signal), opts);
 }
 
 /** Enroll a new passkey for the signed-in user. */

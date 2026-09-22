@@ -100,25 +100,71 @@ func (s *schedulerService) newCampaignPass(ctx context.Context, campaign *models
 // graduation and org-risk clamps. Applied via min() only — it can never RAISE a
 // mailbox above its own cold cap (the mailbox-first safety invariant).
 func (p *campaignPass) effectiveCap(acct models.Email) int {
-	c := p.campaign
-	lim := min(acct.CampaignLimit, c.DailyLimit)
-	if c.RampEnabled {
-		lim = min(lim, campaignRampCeiling(true, c.RampStart, c.RampIncrement, c.RampCeiling, c.RampLevel))
-	}
-	// Graduation ceiling: a mailbox at its warmup ceiling must not reach the
-	// full cold cap the day it joins a campaign.
-	lim = min(lim, coldCeilingFor(p.coldRamp[acct.ID], lim))
-	if m := p.risk.CapMultiplier(); m < 1 {
-		risked := int(float64(lim)*m + 0.5)
-		// A restricted organization still sends, just far less. Zeroing it here
-		// would stop the campaign without ever saying why; suspension is the
-		// band that stops sending, and it does so at the send gate.
-		if risked < 1 {
-			risked = 1
+	return p.explainCap(acct).Cap
+}
+
+// capClamp is a mailbox's cold cap for this campaign today and the clamp that
+// set it. The names are what the activity feed shows when a pool's day is
+// shorter than its owner expected, so keep them stable.
+type capClamp struct {
+	Cap       int
+	LimitedBy string
+}
+
+// Clamp names, in the order effectiveCap applies them.
+const (
+	capByMailbox    = "mailbox_daily_cap"
+	capByCampaign   = "campaign_daily_limit"
+	capByRamp       = "campaign_ramp"
+	capByGraduation = "warmup_graduation"
+	capByRisk       = "workspace_risk"
+)
+
+// explainCap is effectiveCap with its working shown: the same clamps, each
+// recorded when it is the one that lowers the cap.
+func (p *campaignPass) explainCap(acct models.Email) capClamp {
+	// One chain: stagedCap (send_plan.go) applies the clamps and keeps each
+	// stage so the plan can show its working; this is its last stage.
+	stages, by := stagedCap(p, acct)
+	return capClamp{Cap: stages[4], LimitedBy: by}
+}
+
+// poolBudget is each mailbox's day as the activity feed reports it: the cap
+// this campaign gives it and the clamp that set it, what it has sent, the
+// gate that shut it if one did, and a warmup health band that dampens it.
+// Without this a campaign that sent one email and went quiet had nothing in
+// its feed to say which of five limits decided that.
+//
+// sendingFrom is the mailbox about to send when the line is written before the
+// send, so its row counts that send: the pass read sent_today before it, and a
+// cap-one mailbox would otherwise be shown at 0 with no gate on the very line
+// that says its day is over.
+func (s *schedulerService) poolBudget(pass *campaignPass, accounts []models.Email, gates map[uuid.UUID]mailboxGate, sendingFrom uuid.UUID) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(accounts))
+	for _, a := range accounts {
+		c := pass.explainCap(a)
+		sent := pass.sentToday[a.ID]
+		row := map[string]interface{}{
+			"mailbox":    a.Email,
+			"cap":        c.Cap,
+			"limited_by": c.LimitedBy,
 		}
-		lim = min(lim, risked)
+		if a.ID == sendingFrom {
+			sent++
+			row["sending_now"] = true
+			if sent >= c.Cap {
+				row["gate"] = gateBudget
+			}
+		} else if g, ok := gates[a.ID]; ok && !g.open() {
+			row["gate"] = g.reason
+		}
+		row["sent_today"] = sent
+		if h, ok := pass.health[a.ID]; ok && h.known && h.state != models.WarmupHealthHealthy && h.state != "" {
+			row["warmup_health"] = string(h.state)
+		}
+		out = append(out, row)
 	}
-	return lim
+	return out
 }
 
 // sentTodayFor is the mailbox's campaign sends so far today, read once per pass.

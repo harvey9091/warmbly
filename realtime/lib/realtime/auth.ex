@@ -109,6 +109,7 @@ defmodule Realtime.Auth do
   def error_code(:token_expired), do: 4004
   def error_code(:invalid_claims), do: 4004
   def error_code(:missing_subject), do: 4004
+  def error_code(:wrong_token_purpose), do: 4004
   def error_code(:invalid_key), do: 4004
   def error_code(:key_inactive), do: 4004
   def error_code(:key_expired), do: 4004
@@ -133,6 +134,10 @@ defmodule Realtime.Auth do
   def error_message(:token_expired), do: "Token expired"
   def error_message(:invalid_claims), do: "Invalid token claims"
   def error_message(:missing_subject), do: "Invalid token claims"
+  # Deliberately indistinguishable from any other authentication failure: a
+  # caller presenting the wrong kind of token learns nothing about which
+  # kinds exist.
+  def error_message(:wrong_token_purpose), do: "Authentication failed"
   def error_message(:invalid_key), do: "Invalid API key"
   def error_message(:key_inactive), do: "API key inactive"
   def error_message(:key_expired), do: "API key expired"
@@ -407,7 +412,18 @@ defmodule Realtime.Auth do
     JOSE.JWK.from_oct(secret)
   end
 
-  defp validate_claims(%{"sub" => user_id, "exp" => exp}) do
+  # The backend signs every one of its tokens with this same key: the session
+  # access token, the refresh token, the challenge token issued after a password
+  # but before the emailed code, the 2FA pending token, and the password-reset
+  # link token. They share a claim shape, so checking only `sub` and `exp`
+  # accepted all of them here. The backend is safe because each is separately
+  # bound to a Redis nonce or a `sessions` row; this service checks neither.
+  #
+  # So the socket takes exactly one kind: the short-lived ticket minted by
+  # POST /v1/getaway for this purpose. Anything else is refused.
+  @ws_purpose "ws"
+
+  defp validate_claims(%{"sub" => user_id, "exp" => exp} = claims) do
     now = System.system_time(:second)
 
     cond do
@@ -417,13 +433,20 @@ defmodule Realtime.Auth do
       exp < now ->
         {:error, :token_expired}
 
+      Map.get(claims, "purpose") != @ws_purpose ->
+        {:error, :wrong_token_purpose}
+
       true ->
         {:ok, user_id}
     end
   end
 
-  defp validate_claims(%{"user_id" => user_id, "exp" => exp}) do
-    validate_claims(%{"sub" => user_id, "exp" => exp})
+  defp validate_claims(%{"user_id" => user_id, "exp" => exp} = claims) do
+    validate_claims(
+      claims
+      |> Map.put("sub", user_id)
+      |> Map.put("exp", exp)
+    )
   end
 
   defp validate_claims(_) do

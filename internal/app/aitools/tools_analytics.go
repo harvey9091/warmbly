@@ -43,7 +43,7 @@ func (d Deps) getDashboardAnalytics(ctx context.Context, inv Invocation, args js
 	if period == "" {
 		period = "30d"
 	}
-	a, xerr := d.Analytics.GetDashboardAnalytics(ctx, inv.UserID, period)
+	a, xerr := d.Analytics.GetDashboardAnalytics(ctx, inv.OrgID, period)
 	if xerr != nil {
 		return "", fromErrx(xerr)
 	}

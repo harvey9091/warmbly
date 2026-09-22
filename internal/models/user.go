@@ -32,6 +32,12 @@ type User struct {
 	AdminPermissions AdminPermission `json:"admin_permissions"`
 	IsAdmin          bool            `json:"is_admin"`
 
+	// SessionMFAVerified reports whether the session making this request
+	// presented a second factor. The admin panel needs it to explain why an
+	// admin account is being refused, rather than showing a bare 403 on the
+	// first data call.
+	SessionMFAVerified bool `json:"session_mfa_verified"`
+
 	// Set when the user has scheduled their own account for deletion.
 	// While these are populated the account is "pending deletion" and
 	// gets hard-deleted at DeletionScheduledFor unless cancelled.

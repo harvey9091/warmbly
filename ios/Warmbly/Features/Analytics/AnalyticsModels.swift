@@ -328,7 +328,7 @@ struct AnalyticsWarmupSummary: Codable, Sendable {
     var totalReplied: Int?
     var averageDaily: Double?
     var replyRate: Double?
-    /// Percentage toward the max warmup volume.
+    /// Actual sends divided by planned target volume for the selected active days.
     var targetProgress: Double?
     var daysActive: Int?
 

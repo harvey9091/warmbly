@@ -2,6 +2,7 @@ package repository
 
 import (
 	"hash/fnv"
+	"regexp"
 	"strings"
 	"time"
 
@@ -36,6 +37,10 @@ var branchConditionFields = map[string]bool{
 	// operator "is". Decides instantly off the stored value — the label was
 	// written when the AI step ran, so the scheduler never calls a model here.
 	"ai_label": true,
+	// "reply_intent" matches the intent inbox tagging stored for the reply
+	// (campaign_contact_progress.reply_intent). Pairs with "is"; decides
+	// instantly off the stored value, so no model call at schedule time.
+	"reply_intent": true,
 }
 
 var branchConditionOperators = map[string]bool{
@@ -47,8 +52,8 @@ var branchConditionOperators = map[string]bool{
 	// "chance" pairs with field "random": Value is the percent (1-99) of
 	// contacts that take the branch, chosen deterministically per contact.
 	"chance": true,
-	// "is" pairs with field "ai_label": the stored AI-step label equals the
-	// condition's Label (case-insensitive).
+	// "is" pairs with field "ai_label" or "reply_intent": the stored value
+	// equals the condition's Label (case-insensitive).
 	"is": true,
 }
 
@@ -59,6 +64,9 @@ const (
 	maxConditionsPerBranch = 20
 	maxBranchWithinDays    = 365
 )
+
+// replyIntentLabel bounds a reply_intent condition to one inbox tagging intent name.
+var replyIntentLabel = regexp.MustCompile(`^[a-z_]{1,32}$`)
 
 // validateBranchConditions checks the per-step shape of a branching tree:
 // known fields/operators, sane within_days windows, and bounded fan-out. It
@@ -92,11 +100,15 @@ func validateBranchConditions(bc *models.BranchConditions) *errx.Error {
 					return errx.ErrSequenceBranch
 				}
 			}
-			// "ai_label" and "is" are a strict pair: the field needs the operator
-			// plus a bounded non-empty Label, and the operator fits nothing else.
+			// "ai_label" and "reply_intent" each pair strictly with "is": the field
+			// needs the operator plus a bounded Label, and "is" fits nothing else.
 			if cond.Field == "ai_label" {
 				label := strings.TrimSpace(cond.Label)
 				if cond.Operator != "is" || label == "" || len(label) > maxAIStepName {
+					return errx.ErrSequenceBranch
+				}
+			} else if cond.Field == "reply_intent" {
+				if cond.Operator != "is" || !replyIntentLabel.MatchString(cond.Label) {
 					return errx.ErrSequenceBranch
 				}
 			} else if cond.Operator == "is" {
@@ -177,6 +189,13 @@ func conditionState(cond models.BranchCondition, prog *CampaignContactProgress, 
 		// catch-all "otherwise" path.
 		want := strings.TrimSpace(cond.Label)
 		if want != "" && strings.EqualFold(strings.TrimSpace(prog.AILabel), want) {
+			return BranchMatch, time.Time{}
+		}
+		return BranchNoMatch, time.Time{}
+	case "reply_intent":
+		// Stored when the reply landed; an untagged or low-confidence reply
+		// matches no reply_intent branch and falls to the catch-all.
+		if prog.ReplyIntent != "" && strings.EqualFold(prog.ReplyIntent, cond.Label) {
 			return BranchMatch, time.Time{}
 		}
 		return BranchNoMatch, time.Time{}
@@ -280,7 +299,7 @@ func fieldBelongsToEvent(field, eventKind string) bool {
 		// carries a day window and the editor presents it as a step-boundary path
 		// with no instant toggle, so it must NOT instant-fire here (parity with the
 		// frontend's INSTANT_CAPABLE_FIELDS, which also excludes "replied").
-		case "reply_positive", "reply_negative", "reply_neutral", "reply_automated":
+		case "reply_positive", "reply_negative", "reply_neutral", "reply_automated", "reply_intent":
 			return true
 		}
 	case "open":
@@ -347,6 +366,35 @@ func MatchInstantBranchTarget(bc *models.BranchConditions, prog *CampaignContact
 		}
 	}
 	return false, nil, false
+}
+
+// branchIsInstant reports whether a matched branch is one the instant path
+// owns: it carries a field the instant matcher handles for some event kind
+// (reply intent, opened, clicked) and has not opted out. The nil default
+// matches MatchInstantBranchTarget and the builder's own isInstantBranch, so
+// the badge the canvas shows and the runtime agree.
+func branchIsInstant(b *models.Branch) bool {
+	if b.Instant != nil && !*b.Instant {
+		return false
+	}
+	for i := range b.Conditions {
+		f := b.Conditions[i].Field
+		if fieldBelongsToEvent(f, "reply") || fieldBelongsToEvent(f, "open") || fieldBelongsToEvent(f, "click") {
+			return true
+		}
+	}
+	return false
+}
+
+// BranchWaitAfter is the delay that gates a branch's target step. An instant
+// branch matched because its signal already happened, so the branch's flag
+// wins over the target step's own wait_after: the target is due now rather
+// than a step wait after the last send (issue #583).
+func BranchWaitAfter(targetWaitAfter int, instant bool) int {
+	if instant {
+		return 0
+	}
+	return targetWaitAfter
 }
 
 // randomHolds deterministically routes Value% of contacts down a random-split

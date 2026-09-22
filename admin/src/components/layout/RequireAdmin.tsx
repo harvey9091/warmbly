@@ -6,12 +6,14 @@
 //    obvious "you are not an admin" screen rather than silently
 //    forwarding them — same-domain dashboard users could otherwise
 //    land here by mistake.
+// 4. If they are an admin but their session did not present a second factor,
+//    say so and point at where to turn one on. The backend refuses these
+//    routes either way; this is what turns that 403 into instructions.
 
 import { useEffect } from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { useMe } from "@/hooks/useMe";
 import { getToken } from "@/lib/auth/storage";
-import { maskIds } from "@/lib/maskIds";
 import { noteStep, setErrorIdentity } from "@/lib/observability";
 import { AdminBadge } from "./AdminBadge";
 
@@ -21,16 +23,19 @@ export function RequireAdmin() {
     const { data: me, isLoading, isError } = useMe();
 
     // Every admin route is behind this guard, so it is the one place that
-    // knows both who is signed in and where they are. A reported exception
-    // carries them, which is the difference between an issue somebody can act
-    // on and a stack trace with no owner. See lib/observability.
+    // knows both who is signed in and where they are. Every reported event and
+    // exception carries them, which is the difference between an issue
+    // somebody can act on and a stack trace with no owner. See
+    // lib/observability.
     const userId = me?.id ?? null;
+    const email = me?.email ?? null;
+    const name = [me?.first_name, me?.last_name].filter(Boolean).join(" ") || null;
     useEffect(() => {
-        setErrorIdentity(userId ? { userId } : null);
+        setErrorIdentity(userId ? { userId, email, name } : null);
         return () => setErrorIdentity(null);
-    }, [userId]);
+    }, [userId, email, name]);
 
-    const path = maskIds(loc.pathname);
+    const path = loc.pathname;
     useEffect(() => {
         noteStep(`Opened ${path}`, { path });
     }, [path]);
@@ -63,6 +68,22 @@ export function RequireAdmin() {
                 </p>
                 <a href="/auth/login" className="text-sm underline text-muted-foreground">
                     Switch account
+                </a>
+            </div>
+        );
+    }
+
+    if (me.session_mfa_verified === false) {
+        return (
+            <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-background p-6 text-center">
+                <AdminBadge />
+                <h1 className="text-xl font-semibold">Two-factor authentication required</h1>
+                <p className="text-sm text-muted-foreground max-w-sm">
+                    Administrative access needs a second factor. Open the dashboard, turn on 2FA
+                    or add a passkey under Settings &gt; Security, then sign in here again.
+                </p>
+                <a href="/auth/login" className="text-sm underline text-muted-foreground">
+                    Sign in again
                 </a>
             </div>
         );

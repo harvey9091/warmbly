@@ -315,6 +315,7 @@ func (s *service) Plan(ctx context.Context, orgID uuid.UUID) (models.PoolLinkPla
 		plan.Tier = "paid"
 		return plan, nil
 	}
+	plan.ManageURL = config.AppBaseURL() + "/app/settings/billing"
 	paid, xerr := s.gate.IsPaidOrganization(ctx, orgID)
 	if xerr != nil {
 		return plan, xerr
@@ -463,12 +464,12 @@ func (s *service) Enroll(ctx context.Context, inst *models.PoolLinkInstance, req
 	}
 
 	if err := s.repo.EnrollMailbox(ctx, &models.PoolLinkMailbox{InstanceID: inst.ID, RemoteID: req.RemoteID, EmailAccountID: acc.ID}); err != nil {
-		_ = s.emailSvc.Delete(ctx, userID, acc.ID.String())
+		_ = s.emailSvc.Delete(ctx, orgID.String(), acc.ID.String())
 		return nil, errx.InternalError()
 	}
 
 	s.applyWarmupSettings(ctx, orgID, userID, acc.ID, req.Warmup)
-	if _, xerr := s.emailSvc.SetWarmupLifecycle(ctx, userID, acc.ID.String(), "start"); xerr != nil {
+	if _, xerr := s.emailSvc.SetWarmupLifecycle(ctx, orgID.String(), acc.ID.String(), "start"); xerr != nil {
 		log.Warn().Str("account_id", acc.ID.String()).Msg("pool link: warmup start failed after enrollment")
 	}
 	if err := s.emailSvc.LoadAccountOntoWorker(ctx, acc.ID); err != nil {
@@ -578,8 +579,8 @@ func (s *service) state(ctx context.Context, inst *models.PoolLinkInstance, m *m
 		if n, err := s.warmup.SumWarmupSentSince(ctx, acc.ID, since); err == nil {
 			st.Sent7d = n
 		}
-		if n, err := s.warmup.CountSpamPlacementsSince(ctx, acc.ID, since); err == nil {
-			st.SpamPlaced7d = n
+		if placed, _, err := s.warmup.CountWarmupSpamReportsSince(ctx, acc.ID, since); err == nil {
+			st.SpamPlaced7d = placed
 		}
 		if stats, err := s.warmup.GetWarmupStatistics(ctx, acc.ID, since, time.Now()); err == nil {
 			for _, d := range stats {
@@ -620,7 +621,7 @@ func (s *service) PatchMailbox(ctx context.Context, inst *models.PoolLinkInstanc
 	}
 	switch patch.Lifecycle {
 	case "pause", "resume":
-		if _, xerr := s.emailSvc.SetWarmupLifecycle(ctx, userID, m.EmailAccountID.String(), patch.Lifecycle); xerr != nil {
+		if _, xerr := s.emailSvc.SetWarmupLifecycle(ctx, inst.OrganizationID.String(), m.EmailAccountID.String(), patch.Lifecycle); xerr != nil {
 			return nil, xerr
 		}
 		if patch.Lifecycle == "resume" && s.scheduler != nil {
@@ -645,11 +646,7 @@ func (s *service) Unenroll(ctx context.Context, inst *models.PoolLinkInstance, r
 	}
 	// A managed mailbox belongs to the workspace; only the link goes.
 	if !m.Managed {
-		userID, xerr := s.ownerUserID(ctx, inst)
-		if xerr != nil {
-			return xerr
-		}
-		if xerr := s.emailSvc.Delete(ctx, userID, m.EmailAccountID.String()); xerr != nil && xerr != errx.ErrNotFound {
+		if xerr := s.emailSvc.Delete(ctx, inst.OrganizationID.String(), m.EmailAccountID.String()); xerr != nil && xerr != errx.ErrNotFound {
 			return xerr
 		}
 	}

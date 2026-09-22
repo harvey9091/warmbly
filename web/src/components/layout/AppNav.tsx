@@ -626,13 +626,13 @@ function TemplatesActivity() {
 // Analytics row: a live, compact tally of emails sent this period — the headline
 // throughput metric, surfaced right in the nav. From the org-wide usage overview.
 function AnalyticsActivity() {
-    const { data } = useUsageOverview();
+    const { data } = useUsageOverview("day");
     const sent = data?.campaigns?.emails_sent ?? 0;
     return (
         <TabStat
             total={sent}
             format={compactN}
-            title={`${sent.toLocaleString()} emails sent this period`}
+            title={`${sent.toLocaleString()} emails sent today`}
         />
     );
 }
@@ -728,8 +728,9 @@ function Section({
  *     (shares the dashboard page's query cache; realtime invalidation keeps
  *     it current)
  *
- * The capacity denominator sums each mailbox's configured campaign_limit
- * (default 50/day, from internal/config/constants.go).
+ * The capacity denominator is the dashboard payload's capacity_today: what
+ * the mailboxes can send today under the scheduler's clamps, not their caps
+ * added up.
  */
 function LivePanel({ collapsed = false }: { collapsed?: boolean }) {
     const emails = useAppStore((s) => s.emails);
@@ -737,18 +738,27 @@ function LivePanel({ collapsed = false }: { collapsed?: boolean }) {
     const dash = useDashboard("30d");
     const [hovered, setHovered] = useState<number | null>(null);
 
+    const serverCapacity = dash.data?.capacity_today?.capacity;
     const { active, mailboxes, capacity } = useMemo(() => {
         const m = emails.length;
         const a = emails.filter((e) => {
             const st = mailboxDisplayStatus(e);
             return st === "healthy" || st === "warming";
         }).length;
-        // Capacity = the sum of each mailbox's configured daily campaign
-        // limit (default 50/day), not a flat count × 50 — a tuned-down or
-        // raised mailbox should move the meter's denominator.
-        const cap = emails.reduce((sum, e) => sum + (e.campaign_limit ?? 50), 0);
+        // The denominator is what the mailboxes can send today under the
+        // scheduler's own clamps (the easing-out-of-warmup ceiling, the
+        // workspace's risk band, a health hold, the plan's daily allowance),
+        // read from the dashboard payload. Adding up configured caps promised
+        // a volume the scheduler never intended to send. Until the payload
+        // arrives, the caps of the mailboxes that can send stand in.
+        const cap =
+            serverCapacity ??
+            emails.reduce((sum, e) => {
+                const st = mailboxDisplayStatus(e);
+                return st === "healthy" || st === "warming" ? sum + (e.campaign_limit ?? 50) : sum;
+            }, 0);
         return { active: a, mailboxes: m, capacity: cap };
-    }, [emails]);
+    }, [emails, serverCapacity]);
 
     const { sentToday, trend } = useMemo(() => {
         // daily_trend only contains days that had sends; rebuild a continuous

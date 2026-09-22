@@ -92,6 +92,8 @@ func testVerifier(t *testing.T, cfg Config, port string) *SMTPVerifier {
 	t.Helper()
 	v := New(cfg)
 	v.smtpPort = port
+	// The fake MX listens on loopback, which the production guard refuses.
+	v.allowPrivateMX = true
 	return v
 }
 

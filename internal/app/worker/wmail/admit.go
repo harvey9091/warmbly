@@ -167,13 +167,24 @@ func (w *WMail) storeNew(ctx context.Context, msg *models.EmailMessageData, data
 		return err
 	}
 
-	w.maybeEmitBounce(msg)
-	w.maybeEmitComplaint(msg)
+	// Both report the send they are about, if any. The id goes on the arrival
+	// event so the consumer can tell a report about a campaign send from one
+	// about a warmup send without reading the body it is buried in.
+	// Both still run on every message: a report is one or the other in
+	// practice, and deciding that here by skipping the second would be this
+	// function guessing at a MIME question the parsers already answer.
+	bounceAbout := w.maybeEmitBounce(msg)
+	complaintAbout := w.maybeEmitComplaint(msg)
+	reportAbout := bounceAbout
+	if reportAbout == "" {
+		reportAbout = complaintAbout
+	}
 
 	// The consumer decodes NEW_EMAIL as JobEventNewEmail{user_id, message}.
 	return w.onEvent(models.JobEventTypeNewEmail, &models.JobEventNewEmail{
-		UserID:  w.UserID,
-		Message: data,
+		UserID:                  w.UserID,
+		Message:                 data,
+		ReportOriginalMessageID: reportAbout,
 	})
 }
 

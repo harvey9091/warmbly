@@ -46,11 +46,14 @@ Returns the `AdvancedOutreachSettings` object directly (not wrapped in an envelo
     "enabled": true,
     "positive_keywords": ["interested", "demo", "pricing"],
     "negative_keywords": ["not interested", "unsubscribe", "stop"],
-    "out_of_office_keywords": ["out of office", "ooo", "vacation"],
+    "out_of_office_keywords": ["out of office", "ooo", "vacation", "abwesenheitsnotiz"],
     "question_keywords": ["?", "how", "price"],
     "auto_create_crm_task": true,
+    "crm_task_intents": ["positive", "question", "neutral", "negative"],
     "auto_pause_on_negative": false,
-    "auto_suppress_on_unsubscribe_keyword": true
+    "auto_suppress_on_unsubscribe_keyword": true,
+    "hold_on_out_of_office": true,
+    "out_of_office_hold_days": 7
   },
   "send_time_optimization": {
     "enabled": false,
@@ -85,10 +88,18 @@ Returns the `AdvancedOutreachSettings` object directly (not wrapped in an envelo
 }
 ```
 
-The `unsubscribe` block is the workspace default for the opt-out appended after the signature of every campaign email: `mode` is `text` (a reply-to-opt-out sentence, the default), `link` (a sentence with the recipient's signed unsubscribe link) or `off`; a campaign's own `unsubscribe_mode` (`inherit` by default) overrides it. Copy fields are single lines of at most 300 characters and fall back to the defaults when blank. See the [unsubscribe guide](/guides/unsubscribe/).
+The `unsubscribe` block is the workspace default for the opt-out appended after the signature of every campaign email: `mode` is `text` (a reply-to-opt-out sentence, the default), `link` (a sentence with the recipient's own unsubscribe link) or `off`; a campaign's own `unsubscribe_mode` (`inherit` by default) overrides it. Copy fields are single lines of at most 300 characters and fall back to the defaults when blank. See the [unsubscribe guide](/guides/unsubscribe/).
+
+<Callout type="info" title="Reply follow-up tasks are per intent">
+`reply_intent.auto_create_crm_task` opens a CRM task when a classified reply lands, and `reply_intent.crm_task_intents` names which intents are worth one. Omit the field (or send `null`) and the default applies: `positive`, `question`, `neutral`, `negative`, which is every human intent and no automated one. Send `["positive"]` to narrow it, `["positive", "question", "neutral", "negative", "out_of_office", "automated"]` to include auto-responders and bounces, or `[]` to open nothing (the same as turning the switch off). An intent outside that vocabulary is refused with `400`. See [Tasks](/guides/contacts-crm/#tasks).
+</Callout>
 
 <Callout type="info" title="Content score floor is clamped">
 `preflight.min_content_score` is stored clamped to `1`-`100`. A value outside that range is corrected on write rather than rejected, so a floor above `100` cannot flag every campaign permanently. Set `preflight.check_content_score` to `false` to turn the check off; the score never blocks or delays a send either way. See [Content checks](/guides/campaigns/).
+</Callout>
+
+<Callout type="info" title="Out-of-office holds are on by default">
+`reply_intent.hold_on_out_of_office` defaults to `true`. When a recipient's mailbox answers a campaign step with an away message, the contact's next step in that campaign is held until they are back: the return date in the auto-reply when one can be read, plus a working day, and `out_of_office_hold_days` (1 to 90, default `7`) when none can. An auto-reply is never counted as a human reply, so without this the follow-up goes out on schedule while the person is away. `out_of_office_keywords` feeds the reply-intent record and is workspace-editable; detection itself carries its own multilingual vocabulary and does not depend on it. See [out of office and pausing one lead](/guides/campaigns/#out-of-office-and-pausing-one-lead) and [pause a lead](/api/reference/campaigns/#pause-a-lead).
 </Callout>
 
 <Callout type="info" title="Send-time optimization is off by default">
@@ -376,7 +387,7 @@ Auth: **Scope** `WARMUP_ROUTING` · **Org permission** `manage_settings`
 | `sender_match_value` | string | Conditional | Required unless `sender_match_type` is `any`. Domain (`acme.com`), TLD (`com`), or provider bucket (`google`, `microsoft`, `yahoo`, `apple`, `proton`, `zoho`, `custom`). |
 | `recipient_match_type` | string | Yes | One of `any`, `domain`, `tld`, `provider`. |
 | `recipient_match_value` | string | Conditional | Required unless `recipient_match_type` is `any`. Same value forms as the sender side. |
-| `weight` | number | No | Selection weight, must be `>= 0`. |
+| `weight` | number | No | Selection weight, must be `>= 0`. Above `1` prefers the pairing, below `1` avoids it, and exactly `0` excludes it: a matching pair is never chosen, even when nothing else is available, and is not replied to either. |
 | `enabled` | boolean | No | Whether the rule is active. |
 
 ```json

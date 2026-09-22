@@ -2,11 +2,16 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
+	tokenpkg "github.com/warmbly/warmbly/internal/app/token"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
+	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/notify/templates"
 	"github.com/warmbly/warmbly/internal/observability/errs"
 	"github.com/warmbly/warmbly/internal/pkg/argon2"
@@ -14,10 +19,14 @@ import (
 )
 
 func (s *authService) ResetPasswordStart(ctx context.Context, data *ResetPasswordStart, ipaddr string) *errx.Error {
+	// The caller's 400, not an incident. See LoginStart.
 	if err := s.captcha.Verify(ctx, data.Turnstile, ipaddr); err != nil {
-		errs.CaptureException(err)
 		return err
 	}
+
+	// Before the budget as well as the lookup, so the same address typed two
+	// ways spends one budget rather than two.
+	data.Email = normalizeEmail(data.Email)
 
 	// Spend the budget before the lookup, and key it on the submitted address,
 	// so an unknown address costs the attacker the same as a known one.
@@ -25,17 +34,46 @@ func (s *authService) ResetPasswordStart(ctx context.Context, data *ResetPasswor
 		return err
 	}
 
+	xerr := s.startPasswordReset(ctx, data)
+	// A failure here produced no mail, so it does not spend the address's
+	// allowance. The budget is two requests per four hours: charging our own
+	// faults to it meant one bad afternoon locked a real person out of the
+	// only self-service way back into their account, and the second attempt
+	// failed for a different reason than the first. An unknown address
+	// deliberately still pays, because it returns nil rather than an error.
+	if xerr != nil {
+		s.refundPasswordResetLimit(ctx, data.Email)
+	}
+	return xerr
+}
+
+func (s *authService) startPasswordReset(ctx context.Context, data *ResetPasswordStart) *errx.Error {
 	user, uerr := s.userRepository.GetUserByEmail(ctx, data.Email)
 	if uerr != nil {
-		// Unknown address answers 200 like every other. Returning ErrUser here
-		// was an enumeration oracle, and because *errx.Error has no Unwrap the
-		// errors.Is check never matched, so it answered 500 instead.
+		// Only "no such account" is answered 200. Returning ErrUser here was an
+		// enumeration oracle, but swallowing EVERY error into one was worse: a
+		// cache or database fault answered "Email successfully sent." and sent
+		// nothing, which is indistinguishable to the person from a mail that
+		// was delivered to a folder they cannot find. Anything that is not the
+		// address being unknown is ours, and says so.
+		if !errors.Is(uerr, errx.ErrUser) {
+			errs.CaptureException(uerr)
+			return errx.InternalError()
+		}
+		// Logged because this one really does answer 200: without a line here
+		// a reset that reached nobody left no trace anywhere, so a mistyped
+		// address and a broken transport looked identical from support.
+		log.Info().Str("email", data.Email).Msg("password reset requested for an address with no account")
 		return nil
 	}
 
 	u, xerr := s.userService.GetUser(ctx, user.ID)
 	if xerr != nil {
-		return nil
+		// Same reasoning: the account exists, so this is a cache or database
+		// failure and never an unknown address. Reported rather than hidden
+		// behind a success — this is the path a Redis quota outage took.
+		errs.CaptureException(xerr)
+		return errx.InternalError()
 	}
 
 	sessionID := uuid.New()
@@ -48,7 +86,7 @@ func (s *authService) ResetPasswordStart(ctx context.Context, data *ResetPasswor
 	issuedAt := time.Now()
 	expiresAt := issuedAt.Add(PasswordResetTTL)
 
-	token, err := s.tokenService.GenerateToken(user.ID, sessionID, data.Email, nonce, issuedAt, expiresAt)
+	token, err := s.tokenService.GenerateTokenFor(tokenpkg.PurposePasswordReset, user.ID, sessionID, data.Email, nonce, issuedAt, expiresAt)
 	if err != nil {
 		errs.CaptureException(err)
 		return errx.InternalError()
@@ -60,27 +98,51 @@ func (s *authService) ResetPasswordStart(ctx context.Context, data *ResetPasswor
 
 	url := config.GetPasswordResetURL(token)
 
-	text, err := templates.GenerateResetPasswordHTML(u.FirstName, url)
+	text, err := templates.GenerateResetPasswordHTML(u.FirstName, url, PasswordResetTTL)
 	if err != nil {
 		errs.CaptureException(err)
 		return errx.InternalError()
 	}
 
-	if err := s.sendAuthEmail(ctx, u.Email, "Password Reset Confirmation", text); err != nil {
-		errs.CaptureException(err)
+	// Reported by the transport; see LoginStart.
+	if err := s.sendResetEmailWithRetry(ctx, u.Email, "Password Reset Confirmation", text); err != nil {
 		return errx.ErrMailUndeliverable
 	}
 
 	return nil
 }
 
+// sendResetEmailWithRetry makes one transient failure survivable rather than
+// final. The reset mail is the only self-service way back into an account, so
+// a single refused connection or throttled SES call should cost a second of
+// latency, not the whole attempt. Bounded to one retry and a short pause: the
+// caller is a person holding an HTTP request open, and a rejection that is
+// going to be permanent (an unverified identity, a suppressed address) repeats
+// identically, so there is nothing to gain from trying harder.
+func (s *authService) sendResetEmailWithRetry(ctx context.Context, to, subject, message string) error {
+	err := s.sendAuthEmail(ctx, to, subject, message)
+	if err == nil {
+		return nil
+	}
+	// Nothing left to retry into: the caller gave up or the deadline passed.
+	if ctx.Err() != nil {
+		return err
+	}
+	select {
+	case <-time.After(authEmailRetryDelay):
+	case <-ctx.Done():
+		return err
+	}
+	return s.sendAuthEmail(ctx, to, subject, message)
+}
+
 func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPasswordConfirm, session, ipaddr string) *errx.Error {
+	// The caller's 400, not an incident. See LoginStart.
 	if err := s.captcha.Verify(ctx, data.Turnstile, ipaddr); err != nil {
-		errs.CaptureException(err)
 		return err
 	}
 
-	sess, err := s.tokenService.VerifyToken(session)
+	sess, err := s.tokenService.VerifyTokenFor(tokenpkg.PurposePasswordReset, session)
 	if err != nil {
 		return err
 	}
@@ -98,12 +160,29 @@ func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPassw
 		return errx.ErrToken
 	}
 
+	// A link is only good for the password it was requested against. Once the
+	// password has been written by any path (this flow, the signed-in change,
+	// the operator CLI), every link issued before that write is dead, however
+	// long its own expiry has left.
+	changedAt, err := s.authRepository.PasswordChangedAt(ctx, sess.UserID)
+	if err != nil {
+		return err
+	}
+	if resetLinkPredatesPassword(sess.IssuedAt, changedAt) {
+		return errx.ErrToken
+	}
+
 	if err := s.deletePasswordResetSession(ctx, sess.SessionID); err != nil {
 		return err
 	}
 
-	if !crypt.ValidatePassword(data.Password) {
-		return errx.ErrPassword
+	// Proving control of the mailbox clears any lockout that wrong passwords
+	// accumulated, so a person who was locked out is not still locked out after
+	// resetting, and an attacker cannot keep the lock on by guessing.
+	s.clearLoginFailures(ctx, normalizeEmail(sess.Email))
+
+	if perr := crypt.PasswordError(data.Password); perr != nil {
+		return perr
 	}
 
 	passwordHash, hashErr := argon2.Hash(data.Password)
@@ -129,52 +208,78 @@ func (s *authService) ResetPasswordConfirm(ctx context.Context, data *ResetPassw
 	return nil
 }
 
+// resetLinkPredatesPassword reports whether a reset token was issued no later
+// than the last password write. JWT iat is whole seconds and the write is
+// stamped by Postgres at microseconds, so a token minted in the same second as
+// the change is refused too: fail closed, the person asks for a new link.
+func resetLinkPredatesPassword(issuedAt *jwt.NumericDate, changedAt *time.Time) bool {
+	if changedAt == nil {
+		return false
+	}
+	if issuedAt == nil {
+		return true
+	}
+	return !issuedAt.Time.After(*changedAt)
+}
+
+// ErrPasswordChangedSignInAgain answers a change whose password is already
+// stored when the device could not be given a new session. The client must
+// not keep its old tokens and must sign in again with the new password.
+var ErrPasswordChangedSignInAgain = errx.NewWithIdentifier(errx.Conflict, "password_changed_sign_in_again",
+	"Your password was changed, but this device could not be signed back in. Sign in again with your new password.")
+
 // ChangePassword updates a logged-in user's password. It verifies the current
 // password first (so a hijacked but unattended session can't silently change
-// it), rejects OAuth-only accounts, and enforces the password policy.
-func (s *authService) ChangePassword(ctx context.Context, userID, currentSessionID uuid.UUID, data *ChangePassword) *errx.Error {
+// it), rejects OAuth-only accounts, and enforces the password policy. Every
+// session ends with the change; the caller gets a new pair for its device.
+func (s *authService) ChangePassword(ctx context.Context, userID uuid.UUID, current *models.Session, ipaddr, userAgent string, data *ChangePassword) (*models.Token, *errx.Error) {
 	hash, xerr := s.authRepository.GetPasswordHash(ctx, userID)
 	if xerr != nil {
-		return xerr
+		return nil, xerr
 	}
 	if hash == "" {
-		return errx.New(errx.BadRequest, "this account signs in without a password")
+		return nil, errx.New(errx.BadRequest, "this account signs in without a password")
 	}
 
 	ok, verr := argon2.Verify(data.CurrentPassword, hash)
 	if verr != nil {
 		errs.CaptureException(verr)
-		return errx.InternalError()
+		return nil, errx.InternalError()
 	}
 	if !ok {
-		return errx.ErrCredentials
+		return nil, errx.ErrCredentials
 	}
 
-	if !crypt.ValidatePassword(data.NewPassword) {
-		return errx.ErrPassword
+	if perr := crypt.PasswordError(data.NewPassword); perr != nil {
+		return nil, perr
 	}
 	if data.NewPassword == data.CurrentPassword {
-		return errx.New(errx.BadRequest, "the new password must be different")
+		return nil, errx.New(errx.BadRequest, "the new password must be different")
 	}
 
 	newHash, hashErr := argon2.Hash(data.NewPassword)
 	if hashErr != nil {
 		errs.CaptureException(hashErr)
-		return errx.InternalError()
+		return nil, errx.InternalError()
 	}
 	if err := s.authRepository.ResetPassword(ctx, userID, newHash); err != nil {
-		return err
+		return nil, err
 	}
 
-	// Changing the password evicts every OTHER signed-in device (the whole
-	// point of changing it when a session may be compromised). The current
-	// device keeps its session so the user isn't logged out of the action
-	// they just performed.
-	if s.tokenService != nil && currentSessionID != uuid.Nil {
-		if err := s.tokenService.RevokeOtherSessions(ctx, userID, currentSessionID); err != nil {
-			errs.CaptureException(err)
-			// Non-fatal: the password is already changed.
-		}
+	if s.tokenService == nil {
+		return nil, nil
 	}
-	return nil
+	// The password is stored by now, so this failure is its own outcome, not
+	// an ordinary error: the caller must drop its tokens and sign in again.
+	tok, err := s.tokenService.ReissueSession(ctx, userID, current, ipaddr, userAgent)
+	if err != nil {
+		errs.CaptureException(err)
+		return nil, ErrPasswordChangedSignInAgain
+	}
+	return tok, nil
+}
+
+// PasswordHashFor returns the stored argon2 hash for a user.
+func (s *authService) PasswordHashFor(ctx context.Context, userID uuid.UUID) (string, *errx.Error) {
+	return s.authRepository.GetPasswordHash(ctx, userID)
 }

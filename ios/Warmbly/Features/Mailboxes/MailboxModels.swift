@@ -248,6 +248,7 @@ struct WarmupStatus: Codable, Sendable {
     var currentVolume: Int?
     var targetVolume: Int?
     var maxVolume: Int?
+    /// Configured percent of warmup sends that should receive a synthetic reply.
     var replyRate: Int?
     var daysActive: Int?
 
@@ -389,7 +390,7 @@ struct MailboxWarmupSummary: Codable, Sendable {
     var totalReplied: Int?
     var averageDaily: Double?
     var replyRate: Double?
-    /// Never populated by the backend; always 0. Do not render.
+    /// Actual sends divided by planned target volume for the selected active days.
     var targetProgress: Double?
     var daysActive: Int?
 

@@ -43,7 +43,7 @@ X-Warmbly-Event: <event key>
 {
   "event": "worker.offline",
   "title": "Worker stopped responding",
-  "summary": "No healthy replacement of the same tier was available…",
+  "summary": "Some affected mailboxes were moved; the remaining mailboxes are paused.",
   "severity": "urgent",
   "fields": [{ "label": "Worker", "value": "…" }],
   "link": "https://app.example.com",
@@ -64,7 +64,7 @@ A chat webhook URL is a bearer credential: anyone holding it can post to that ch
 | Payment failed | Stripe could not collect an invoice |
 | Workspace created | A new organization is created |
 | User registered | A new account finishes signing up |
-| Worker went offline | A worker stops heartbeating and no healthy replacement of its tier is available |
+| Worker went offline | A worker stops heartbeating; the alert reports complete, partial, or failed recovery with moved and paused mailbox counts |
 | Warmup ban appealed | A blocked mailbox asks to rejoin the warmup pool |
 | Workspace risk escalated | Risk scoring moves a workspace into a different posture |
 

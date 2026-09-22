@@ -6,7 +6,7 @@
 // exemptions are the same query.
 
 import { Request } from "@/lib/api/client";
-import type { LoginCodeExemption, CreatedTester } from "@/lib/api/models/admin";
+import type { LoginCodeExemption, CreatedTester, AdminOrgRole } from "@/lib/api/models/admin";
 
 export function listTesters(): Promise<{ data: LoginCodeExemption[] }> {
     return Request({ method: "GET", url: "/admin/testers", authorization: true });
@@ -14,10 +14,19 @@ export function listTesters(): Promise<{ data: LoginCodeExemption[] }> {
 
 export function createTester(body: {
     email: string;
-    org_name?: string;
     reason: string;
+    /** Names a new workspace. Ignored when organization_id is set. */
+    org_name?: string;
+    /** Joins an existing workspace instead of minting one. Requires role_id. */
+    organization_id?: string;
+    role_id?: string;
 }): Promise<CreatedTester> {
     return Request({ method: "POST", url: "/admin/testers", authorization: true, data: body });
+}
+
+/** The roles of one workspace, for the join-existing path. */
+export function listOrganizationRoles(orgID: string): Promise<{ data: AdminOrgRole[] }> {
+    return Request({ method: "GET", url: `/admin/organizations/${orgID}/roles`, authorization: true });
 }
 
 export function revokeTester(id: string): Promise<{ revoked: boolean }> {

@@ -27,29 +27,32 @@ type AdminRepository interface {
 	GetUserDetail(ctx context.Context, userID uuid.UUID) (*models.AdminUserDetail, error)
 	GetUserPreview(ctx context.Context, userID uuid.UUID) (*models.AdminUserPreview, error)
 	UpdateUserAdminPermissions(ctx context.Context, userID uuid.UUID, permissions uint32, grantedBy uuid.UUID) error
+	// CountSuperAdmins reports how many users hold every live admin
+	// permission, so the last one cannot be revoked through the API.
+	CountSuperAdmins(ctx context.Context) (int, error)
 	BanUser(ctx context.Context, userID, bannedBy uuid.UUID, reason string, scope uint32) error
 	UnbanUser(ctx context.Context, userID, unbannedBy uuid.UUID, reason string) error
 	GetUserBans(ctx context.Context, userID uuid.UUID) ([]models.UserBan, error)
-	GetUserEmails(ctx context.Context, userID uuid.UUID, cursor *uuid.UUID, limit int) ([]models.AdminWorkerEmail, *models.Pagination, error)
-	ListAdmins(ctx context.Context, cursor *uuid.UUID, limit int) (*models.AdminsResult, error)
+	GetUserEmails(ctx context.Context, userID uuid.UUID, offset, limit int) ([]models.AdminWorkerEmail, *models.Pagination, error)
+	ListAdmins(ctx context.Context, offset, limit int) (*models.AdminsResult, error)
 
 	// Worker Management
-	ListWorkers(ctx context.Context, cursor *uuid.UUID, limit int) (*models.AdminWorkersResult, error)
+	ListWorkers(ctx context.Context, offset, limit int) (*models.AdminWorkersResult, error)
 	GetWorkerDetail(ctx context.Context, workerID uuid.UUID) (*models.AdminWorkerDetail, error)
 	UpdateWorker(ctx context.Context, workerID uuid.UUID, update *models.AdminUpdateWorker) error
-	GetWorkerEmails(ctx context.Context, workerID uuid.UUID, cursor *uuid.UUID, limit int) ([]models.AdminWorkerEmail, *models.Pagination, error)
+	GetWorkerEmails(ctx context.Context, workerID uuid.UUID, beforeAt time.Time, beforeID uuid.UUID, limit int) ([]models.AdminWorkerEmail, *models.Pagination, error)
 	GetWorkerStats(ctx context.Context, workerID uuid.UUID) (*models.WorkerStats, error)
 	ReassignEmails(ctx context.Context, emailIDs []uuid.UUID, newWorkerID uuid.UUID) error
 
 	// Warmup Management
 	ListWarmupPools(ctx context.Context) ([]models.WarmupPoolInfo, error)
-	GetPoolParticipants(ctx context.Context, poolType string, cursor *uuid.UUID, limit int) (*models.WarmupPoolParticipantsResult, error)
-	ListBlockedAccounts(ctx context.Context, cursor *uuid.UUID, limit int) (*models.AdminBlockedAccountsResult, error)
+	GetPoolParticipants(ctx context.Context, poolType string, offset, limit int) (*models.WarmupPoolParticipantsResult, error)
+	ListBlockedAccounts(ctx context.Context, offset, limit int) (*models.AdminBlockedAccountsResult, error)
 	BlockAccount(ctx context.Context, accountID uuid.UUID, blockedBy uuid.UUID, reason string) error
 	UnblockAccount(ctx context.Context, accountID uuid.UUID) error
 
 	// Warmup Appeals
-	ListAppeals(ctx context.Context, status string, cursor *uuid.UUID, limit int) (*models.WarmupAppealsResult, error)
+	ListAppeals(ctx context.Context, status string, offset, limit int) (*models.WarmupAppealsResult, error)
 	GetAppeal(ctx context.Context, appealID uuid.UUID) (*models.WarmupAppeal, error)
 	ReviewAppeal(ctx context.Context, appealID uuid.UUID, reviewedBy uuid.UUID, approved bool, notes string) error
 
@@ -149,7 +152,7 @@ func (r *adminRepository) SearchUsers(ctx context.Context, search *models.AdminU
 	}
 	addBefore := func(col string, v *time.Time) {
 		if v != nil {
-			whereClause += " AND " + col + " < ($" + itoa(argNum) + " + INTERVAL '1 day')"
+			whereClause += " AND " + col + " < ($" + itoa(argNum) + "::timestamptz + INTERVAL '1 day')"
 			args = append(args, *v)
 			argNum++
 		}
@@ -158,7 +161,7 @@ func (r *adminRepository) SearchUsers(ctx context.Context, search *models.AdminU
 	// Plan / subscription
 	if search.PlanID != nil {
 		whereClause += ` AND EXISTS (SELECT 1 FROM subscriptions s WHERE s.user_id = u.id AND s.plan_id = $` + itoa(argNum) + `)`
-		args = append(args, *search.PlanID)
+		args = append(args, search.PlanID.UUID)
 		argNum++
 	}
 	if search.SubscriptionStatus != "" {
@@ -216,22 +219,21 @@ func (r *adminRepository) SearchUsers(ctx context.Context, search *models.AdminU
 	addAfter("u.updated_at", search.UpdatedAfter)
 	addBefore("u.updated_at", search.UpdatedBefore)
 
-	if search.Cursor != nil {
-		whereClause += ` AND u.id < $` + itoa(argNum)
-		args = append(args, *search.Cursor)
-		argNum++
-	}
+	offset := search.Offset
 
-	orderBy := "ORDER BY u.created_at DESC"
+	orderBy := "ORDER BY u.created_at DESC, u.id DESC"
 	if search.SortBy != "" {
-		switch search.SortBy {
-		case "email":
-			orderBy = "ORDER BY u.email"
-		case "name":
-			orderBy = "ORDER BY u.first_name, u.last_name"
-		}
+		dir := " ASC"
 		if search.SortDesc {
-			orderBy += " DESC"
+			dir = " DESC"
+		}
+		switch search.SortBy {
+		case "created_at":
+			orderBy = "ORDER BY u.created_at" + dir + ", u.id" + dir
+		case "email":
+			orderBy = "ORDER BY u.email" + dir + ", u.id" + dir
+		case "name":
+			orderBy = "ORDER BY u.first_name" + dir + ", u.last_name" + dir + ", u.id" + dir
 		}
 	}
 
@@ -248,7 +250,7 @@ func (r *adminRepository) SearchUsers(ctx context.Context, search *models.AdminU
 		FROM users u
 		` + whereClause + `
 		` + orderBy + `
-		LIMIT $` + itoa(argNum)
+		` + adminLimitOffset("$"+itoa(argNum), offset)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -256,7 +258,10 @@ func (r *adminRepository) SearchUsers(ctx context.Context, search *models.AdminU
 	}
 	defer rows.Close()
 
-	var users []models.AdminUserDetail
+	// Every list this file builds is made rather than declared: a nil slice
+	// marshals to JSON null, and the panel reads .length off these without a
+	// guard, so an empty result took the page down instead of showing "none".
+	users := make([]models.AdminUserDetail, 0)
 	for rows.Next() {
 		var u models.AdminUserDetail
 		err := rows.Scan(
@@ -280,8 +285,7 @@ func (r *adminRepository) SearchUsers(ctx context.Context, search *models.AdminU
 
 	if len(users) > limit {
 		result.Data = users[:limit]
-		lastID := users[limit-1].ID
-		result.Pagination.NextCursor = paging.UUIDString(lastID)
+		result.Pagination.NextCursor = adminNextCursor(offset, limit)
 	}
 
 	// Get total count
@@ -335,8 +339,14 @@ func (r *adminRepository) GetUserPreview(ctx context.Context, userID uuid.UUID) 
 		return nil, nil
 	}
 
+	// Empty slices, not nil: a nil slice marshals to JSON null, and the panel
+	// reads .length off each of these without a guard.
 	preview := &models.AdminUserPreview{
-		User: *user,
+		User:          *user,
+		Organizations: []models.Organization{},
+		Subscriptions: []models.Subscription{},
+		EmailAccounts: []models.AdminWorkerEmail{},
+		RecentBans:    []models.UserBan{},
 	}
 
 	// Get organizations
@@ -558,7 +568,7 @@ func (r *adminRepository) GetUserBans(ctx context.Context, userID uuid.UUID) ([]
 	}
 	defer rows.Close()
 
-	var bans []models.UserBan
+	bans := make([]models.UserBan, 0)
 	for rows.Next() {
 		var ban models.UserBan
 		var bannedByUser models.AdminUserSummary
@@ -592,7 +602,7 @@ func (r *adminRepository) GetUserBans(ctx context.Context, userID uuid.UUID) ([]
 }
 
 // GetUserEmails gets email accounts belonging to a user
-func (r *adminRepository) GetUserEmails(ctx context.Context, userID uuid.UUID, cursor *uuid.UUID, limit int) ([]models.AdminWorkerEmail, *models.Pagination, error) {
+func (r *adminRepository) GetUserEmails(ctx context.Context, userID uuid.UUID, offset, limit int) ([]models.AdminWorkerEmail, *models.Pagination, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
@@ -600,19 +610,14 @@ func (r *adminRepository) GetUserEmails(ctx context.Context, userID uuid.UUID, c
 	args := []interface{}{userID, limit + 1}
 	// email_accounts.user_id is uuid; casting it to text made every call fail.
 	whereClause := "WHERE ea.user_id = $1"
-	if cursor != nil {
-		whereClause += " AND ea.id < $3"
-		args = append(args, *cursor)
-	}
 
 	query := `
 		SELECT ea.id, ea.email, ea.user_id, ea.organization_id,
 			ea.status, ea.provider, ea.warmup IS NOT NULL, ea.last_synced_at
 		FROM email_accounts ea
 		` + whereClause + `
-		ORDER BY ea.created_at DESC
-		LIMIT $2
-	`
+		ORDER BY ea.created_at DESC, ea.id DESC
+		` + adminLimitOffset("$2", offset)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -620,7 +625,7 @@ func (r *adminRepository) GetUserEmails(ctx context.Context, userID uuid.UUID, c
 	}
 	defer rows.Close()
 
-	var emails []models.AdminWorkerEmail
+	emails := make([]models.AdminWorkerEmail, 0)
 	for rows.Next() {
 		var e models.AdminWorkerEmail
 		err := rows.Scan(
@@ -639,24 +644,20 @@ func (r *adminRepository) GetUserEmails(ctx context.Context, userID uuid.UUID, c
 
 	if len(emails) > limit {
 		emails = emails[:limit]
-		pagination.NextCursor = paging.UUIDString(emails[limit-1].ID)
+		pagination.NextCursor = adminNextCursor(offset, limit)
 	}
 
 	return emails, pagination, nil
 }
 
 // ListAdmins lists all admin users
-func (r *adminRepository) ListAdmins(ctx context.Context, cursor *uuid.UUID, limit int) (*models.AdminsResult, error) {
+func (r *adminRepository) ListAdmins(ctx context.Context, offset, limit int) (*models.AdminsResult, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
 
 	args := []interface{}{limit + 1}
 	whereClause := "WHERE u.admin_permissions > 0"
-	if cursor != nil {
-		whereClause += " AND u.id < $2"
-		args = append(args, *cursor)
-	}
 
 	query := `
 		SELECT u.id, u.first_name, u.last_name, u.email, u.admin_permissions,
@@ -665,9 +666,8 @@ func (r *adminRepository) ListAdmins(ctx context.Context, cursor *uuid.UUID, lim
 		FROM users u
 		LEFT JOIN users gu ON gu.id = u.admin_granted_by
 		` + whereClause + `
-		ORDER BY u.admin_granted_at DESC
-		LIMIT $1
-	`
+		ORDER BY u.admin_granted_at DESC NULLS LAST, u.id DESC
+		` + adminLimitOffset("$1", offset)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -675,7 +675,7 @@ func (r *adminRepository) ListAdmins(ctx context.Context, cursor *uuid.UUID, lim
 	}
 	defer rows.Close()
 
-	var admins []models.AdminInfo
+	admins := make([]models.AdminInfo, 0)
 	for rows.Next() {
 		var admin models.AdminInfo
 		var grantedByID *uuid.UUID
@@ -711,25 +711,19 @@ func (r *adminRepository) ListAdmins(ctx context.Context, cursor *uuid.UUID, lim
 
 	if len(admins) > limit {
 		result.Data = admins[:limit]
-		lastID := admins[limit-1].ID
-		result.Pagination.NextCursor = paging.UUIDString(lastID)
+		result.Pagination.NextCursor = adminNextCursor(offset, limit)
 	}
 
 	return result, nil
 }
 
 // ListWorkers lists all workers with details
-func (r *adminRepository) ListWorkers(ctx context.Context, cursor *uuid.UUID, limit int) (*models.AdminWorkersResult, error) {
+func (r *adminRepository) ListWorkers(ctx context.Context, offset, limit int) (*models.AdminWorkersResult, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
 
 	args := []interface{}{limit + 1}
-	whereClause := ""
-	if cursor != nil {
-		whereClause = "WHERE w.id < $2"
-		args = append(args, *cursor)
-	}
 
 	query := `
 		SELECT w.id, n.name, n.notes, n.address, n.active,
@@ -738,10 +732,8 @@ func (r *adminRepository) ListWorkers(ctx context.Context, cursor *uuid.UUID, li
 			(SELECT COUNT(*) FROM email_accounts ea WHERE ea.worker_id = w.id) as connected_emails
 		FROM workers w
 		JOIN fleet_nodes n ON n.id = w.id
-		` + whereClause + `
-		ORDER BY w.created_at DESC
-		LIMIT $1
-	`
+		ORDER BY w.created_at DESC, w.id DESC
+		` + adminLimitOffset("$1", offset)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -749,7 +741,7 @@ func (r *adminRepository) ListWorkers(ctx context.Context, cursor *uuid.UUID, li
 	}
 	defer rows.Close()
 
-	var workers []models.AdminWorkerDetail
+	workers := make([]models.AdminWorkerDetail, 0)
 	for rows.Next() {
 		var w models.AdminWorkerDetail
 		err := rows.Scan(
@@ -773,8 +765,7 @@ func (r *adminRepository) ListWorkers(ctx context.Context, cursor *uuid.UUID, li
 
 	if len(workers) > limit {
 		result.Data = workers[:limit]
-		lastID := workers[limit-1].ID
-		result.Pagination.NextCursor = paging.UUIDString(lastID)
+		result.Pagination.NextCursor = adminNextCursor(offset, limit)
 	}
 
 	return result, nil
@@ -849,16 +840,16 @@ func (r *adminRepository) UpdateWorker(ctx context.Context, workerID uuid.UUID, 
 }
 
 // GetWorkerEmails gets emails connected to a worker
-func (r *adminRepository) GetWorkerEmails(ctx context.Context, workerID uuid.UUID, cursor *uuid.UUID, limit int) ([]models.AdminWorkerEmail, *models.Pagination, error) {
+func (r *adminRepository) GetWorkerEmails(ctx context.Context, workerID uuid.UUID, beforeAt time.Time, beforeID uuid.UUID, limit int) ([]models.AdminWorkerEmail, *models.Pagination, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
 
 	args := []interface{}{workerID, limit + 1}
 	whereClause := "WHERE ea.worker_id = $1"
-	if cursor != nil {
-		whereClause += " AND ea.id < $3"
-		args = append(args, *cursor)
+	if beforeID != uuid.Nil {
+		whereClause += ` AND (ea.created_at, ea.id) < ($3, $4)`
+		args = append(args, beforeAt, beforeID)
 	}
 
 	// Health lives on warmup_pool_participants, one row per mailbox. The CASE
@@ -870,11 +861,10 @@ func (r *adminRepository) GetWorkerEmails(ctx context.Context, workerID uuid.UUI
 			COALESCE(ea.risk_band, 'clean'::email_risk_band)::text,
 			ea.risk_evaluated_at,
 			COALESCE(wh.health_state, '')::text,
-			wh.spam_score,
-			wh.blocked_until
+			wh.blocked_until, ea.created_at
 		FROM email_accounts ea
 		LEFT JOIN LATERAL (
-			SELECT health_state, spam_score, blocked_until
+			SELECT health_state, blocked_until
 			FROM warmup_pool_participants
 			WHERE email_account_id = ea.id
 			ORDER BY CASE health_state
@@ -888,7 +878,7 @@ func (r *adminRepository) GetWorkerEmails(ctx context.Context, workerID uuid.UUI
 			LIMIT 1
 		) wh ON true
 		` + whereClause + `
-		ORDER BY ea.created_at DESC
+		ORDER BY ea.created_at DESC, ea.id DESC
 		LIMIT $2
 	`
 
@@ -898,13 +888,13 @@ func (r *adminRepository) GetWorkerEmails(ctx context.Context, workerID uuid.UUI
 	}
 	defer rows.Close()
 
-	var emails []models.AdminWorkerEmail
+	emails := make([]models.AdminWorkerEmail, 0)
 	for rows.Next() {
 		var e models.AdminWorkerEmail
 		err := rows.Scan(
 			&e.ID, &e.Email, &e.UserID, &e.OrganizationID,
 			&e.Status, &e.Provider, &e.WarmupEnabled, &e.LastSyncedAt,
-			&e.RiskBand, &e.RiskEvaluatedAt, &e.WarmupHealth, &e.SpamScore, &e.BlockedUntil,
+			&e.RiskBand, &e.RiskEvaluatedAt, &e.WarmupHealth, &e.BlockedUntil, &e.CreatedAt,
 		)
 		if err != nil {
 			return nil, nil, err
@@ -918,7 +908,7 @@ func (r *adminRepository) GetWorkerEmails(ctx context.Context, workerID uuid.UUI
 
 	if len(emails) > limit {
 		emails = emails[:limit]
-		pagination.NextCursor = paging.UUIDString(emails[limit-1].ID)
+		pagination.NextCursor = paging.EncodeTime(emails[limit-1].CreatedAt, emails[limit-1].ID)
 	}
 
 	return emails, pagination, nil
@@ -997,7 +987,7 @@ func (r *adminRepository) ListWarmupPools(ctx context.Context) ([]models.WarmupP
 	}
 	defer rows.Close()
 
-	var pools []models.WarmupPoolInfo
+	pools := make([]models.WarmupPoolInfo, 0)
 	for rows.Next() {
 		var p models.WarmupPoolInfo
 		if err := rows.Scan(&p.Type, &p.TotalParticipants, &p.ActiveParticipants, &p.BlockedCount); err != nil {
@@ -1009,22 +999,18 @@ func (r *adminRepository) ListWarmupPools(ctx context.Context) ([]models.WarmupP
 }
 
 // GetPoolParticipants gets participants in a warmup pool
-func (r *adminRepository) GetPoolParticipants(ctx context.Context, poolType string, cursor *uuid.UUID, limit int) (*models.WarmupPoolParticipantsResult, error) {
+func (r *adminRepository) GetPoolParticipants(ctx context.Context, poolType string, offset, limit int) (*models.WarmupPoolParticipantsResult, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
 
 	args := []interface{}{poolType, limit + 1}
 	whereClause := "WHERE wp.pool_type = $1::warmup_pool_type"
-	if cursor != nil {
-		whereClause += " AND wpp.email_account_id < $3"
-		args = append(args, *cursor)
-	}
 
 	query := `
 		SELECT
 			wpp.email_account_id, ea.email, ea.user_id::uuid,
-			wpp.joined_at, wpp.spam_score,
+			wpp.joined_at,
 			wpp.blocked_at IS NOT NULL OR wpp.health_state IN ('quarantined', 'blocked'),
 			wpp.blocked_at,
 			COALESCE((SELECT SUM(ws.emails_sent) FROM warmup_statistics ws WHERE ws.email_account_id = wpp.email_account_id), 0),
@@ -1033,9 +1019,8 @@ func (r *adminRepository) GetPoolParticipants(ctx context.Context, poolType stri
 		JOIN warmup_pools wp ON wpp.pool_id = wp.id
 		JOIN email_accounts ea ON ea.id = wpp.email_account_id
 		` + whereClause + `
-		ORDER BY wpp.joined_at DESC
-		LIMIT $2
-	`
+		ORDER BY wpp.joined_at DESC, wpp.email_account_id DESC
+		` + adminLimitOffset("$2", offset)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1043,12 +1028,12 @@ func (r *adminRepository) GetPoolParticipants(ctx context.Context, poolType stri
 	}
 	defer rows.Close()
 
-	var participants []models.WarmupPoolParticipant
+	participants := make([]models.WarmupPoolParticipant, 0)
 	for rows.Next() {
 		var p models.WarmupPoolParticipant
 		if err := rows.Scan(
 			&p.ID, &p.Email, &p.UserID,
-			&p.JoinedAt, &p.ReputationScore,
+			&p.JoinedAt,
 			&p.IsBlocked, &p.BlockedAt,
 			&p.EmailsSent, &p.EmailsReceived,
 		); err != nil {
@@ -1065,24 +1050,20 @@ func (r *adminRepository) GetPoolParticipants(ctx context.Context, poolType stri
 	}
 	if len(participants) > limit {
 		result.Data = participants[:limit]
-		result.Pagination.NextCursor = paging.UUIDString(participants[limit-1].ID)
+		result.Pagination.NextCursor = adminNextCursor(offset, limit)
 	}
 
 	return result, nil
 }
 
 // ListBlockedAccounts lists blocked warmup accounts
-func (r *adminRepository) ListBlockedAccounts(ctx context.Context, cursor *uuid.UUID, limit int) (*models.AdminBlockedAccountsResult, error) {
+func (r *adminRepository) ListBlockedAccounts(ctx context.Context, offset, limit int) (*models.AdminBlockedAccountsResult, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
 
 	args := []interface{}{limit + 1}
 	whereClause := `WHERE (wpp.health_state IN ('quarantined', 'blocked') OR wpp.blocked_at IS NOT NULL)`
-	if cursor != nil {
-		whereClause += " AND wpp.email_account_id < $2"
-		args = append(args, *cursor)
-	}
 
 	query := `
 		SELECT
@@ -1096,9 +1077,8 @@ func (r *adminRepository) ListBlockedAccounts(ctx context.Context, cursor *uuid.
 		JOIN email_accounts ea ON ea.id = wpp.email_account_id
 		JOIN users u ON u.id = ea.user_id::uuid
 		` + whereClause + `
-		ORDER BY blocked_at DESC
-		LIMIT $1
-	`
+		ORDER BY blocked_at DESC, wpp.email_account_id DESC
+		` + adminLimitOffset("$1", offset)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1106,7 +1086,7 @@ func (r *adminRepository) ListBlockedAccounts(ctx context.Context, cursor *uuid.
 	}
 	defer rows.Close()
 
-	var accounts []models.AdminBlockedAccount
+	accounts := make([]models.AdminBlockedAccount, 0)
 	for rows.Next() {
 		var a models.AdminBlockedAccount
 		var user models.AdminUserSummary
@@ -1136,7 +1116,7 @@ func (r *adminRepository) ListBlockedAccounts(ctx context.Context, cursor *uuid.
 	}
 	if len(accounts) > limit {
 		result.Data = accounts[:limit]
-		result.Pagination.NextCursor = paging.UUIDString(accounts[limit-1].ID)
+		result.Pagination.NextCursor = adminNextCursor(offset, limit)
 	}
 
 	return result, nil
@@ -1187,15 +1167,14 @@ func (r *adminRepository) UnblockAccount(ctx context.Context, accountID uuid.UUI
 		    blocked_until = NULL,
 		    last_health_reason = 'unblocked by admin',
 		    last_health_evaluated_at = NOW(),
-		    last_health_score = 0,
-		    spam_score = 0
+		    last_health_score = 0
 		WHERE email_account_id = $1
 	`, accountID)
 	return err
 }
 
 // ListAppeals lists warmup appeals
-func (r *adminRepository) ListAppeals(ctx context.Context, status string, cursor *uuid.UUID, limit int) (*models.WarmupAppealsResult, error) {
+func (r *adminRepository) ListAppeals(ctx context.Context, status string, offset, limit int) (*models.WarmupAppealsResult, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
@@ -1210,11 +1189,6 @@ func (r *adminRepository) ListAppeals(ctx context.Context, status string, cursor
 		argNum++
 	}
 
-	if cursor != nil {
-		whereClause += " AND wa.id < $" + itoa(argNum)
-		args = append(args, *cursor)
-	}
-
 	query := `
 		SELECT wa.id, wa.email_account_id, wa.user_id, wa.reason, wa.status,
 			wa.reviewed_by, wa.reviewed_at, wa.review_notes, wa.created_at,
@@ -1222,9 +1196,8 @@ func (r *adminRepository) ListAppeals(ctx context.Context, status string, cursor
 		FROM warmup_appeals wa
 		JOIN users u ON u.id = wa.user_id
 		` + whereClause + `
-		ORDER BY wa.created_at DESC
-		LIMIT $1
-	`
+		ORDER BY wa.created_at DESC, wa.id DESC
+		` + adminLimitOffset("$1", offset)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1232,7 +1205,7 @@ func (r *adminRepository) ListAppeals(ctx context.Context, status string, cursor
 	}
 	defer rows.Close()
 
-	var appeals []models.WarmupAppeal
+	appeals := make([]models.WarmupAppeal, 0)
 	for rows.Next() {
 		var a models.WarmupAppeal
 		var user models.AdminUserSummary
@@ -1259,8 +1232,7 @@ func (r *adminRepository) ListAppeals(ctx context.Context, status string, cursor
 
 	if len(appeals) > limit {
 		result.Data = appeals[:limit]
-		lastID := appeals[limit-1].ID
-		result.Pagination.NextCursor = paging.UUIDString(lastID)
+		result.Pagination.NextCursor = adminNextCursor(offset, limit)
 	}
 
 	return result, nil
@@ -1332,8 +1304,7 @@ func (r *adminRepository) ReviewAppeal(ctx context.Context, appealID uuid.UUID, 
 				    blocked_until = NULL,
 				    last_health_reason = 'appeal approved',
 				    last_health_evaluated_at = NOW(),
-				    last_health_score = 0,
-				    spam_score = 0
+				    last_health_score = 0
 				WHERE email_account_id = $1
 			`, accountID)
 			if err != nil {
@@ -1369,13 +1340,13 @@ func (r *adminRepository) SearchCampaigns(ctx context.Context, search *models.Ad
 
 	if search.UserID != nil {
 		whereClause += " AND c.user_id = $" + itoa(argNum)
-		args = append(args, *search.UserID)
+		args = append(args, search.UserID.UUID)
 		argNum++
 	}
 
 	if search.OrgID != nil {
 		whereClause += " AND c.organization_id = $" + itoa(argNum)
-		args = append(args, *search.OrgID)
+		args = append(args, search.OrgID.UUID)
 		argNum++
 	}
 
@@ -1426,7 +1397,7 @@ func (r *adminRepository) SearchCampaigns(ctx context.Context, search *models.Ad
 	}
 	addBefore := func(col string, v *time.Time) {
 		if v != nil {
-			whereClause += " AND " + col + " < ($" + itoa(argNum) + " + INTERVAL '1 day')"
+			whereClause += " AND " + col + " < ($" + itoa(argNum) + "::timestamptz + INTERVAL '1 day')"
 			args = append(args, *v)
 			argNum++
 		}
@@ -1451,11 +1422,7 @@ func (r *adminRepository) SearchCampaigns(ctx context.Context, search *models.Ad
 	addAfter("c.updated_at", search.UpdatedAfter)
 	addBefore("c.updated_at", search.UpdatedBefore)
 
-	if search.Cursor != nil {
-		whereClause += " AND c.id < $" + itoa(argNum)
-		args = append(args, *search.Cursor)
-		argNum++
-	}
+	offset := search.Offset
 
 	orderCol := "c.created_at"
 	switch search.SortBy {
@@ -1498,7 +1465,7 @@ func (r *adminRepository) SearchCampaigns(ctx context.Context, search *models.Ad
 		LEFT JOIN organizations o ON o.id = c.organization_id
 		` + whereClause + `
 		` + orderBy + `
-		LIMIT $` + itoa(argNum)
+		` + adminLimitOffset("$"+itoa(argNum), offset)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1506,7 +1473,7 @@ func (r *adminRepository) SearchCampaigns(ctx context.Context, search *models.Ad
 	}
 	defer rows.Close()
 
-	var campaigns []models.AdminCampaignDetail
+	campaigns := make([]models.AdminCampaignDetail, 0)
 	for rows.Next() {
 		var c models.AdminCampaignDetail
 		var user models.AdminUserSummary
@@ -1545,8 +1512,7 @@ func (r *adminRepository) SearchCampaigns(ctx context.Context, search *models.Ad
 
 	if len(campaigns) > limit {
 		result.Data = campaigns[:limit]
-		lastID := campaigns[limit-1].ID
-		result.Pagination.NextCursor = paging.UUIDString(lastID)
+		result.Pagination.NextCursor = adminNextCursor(offset, limit)
 	}
 
 	// Total count for the same filter — drop the trailing LIMIT arg.
@@ -1634,7 +1600,7 @@ func (r *adminRepository) SearchAuditLogs(ctx context.Context, search *models.Ad
 
 	if search.AdminUserID != nil {
 		whereClause += " AND al.admin_user_id = $" + itoa(argNum)
-		args = append(args, *search.AdminUserID)
+		args = append(args, search.AdminUserID.UUID)
 		argNum++
 	}
 
@@ -1652,7 +1618,7 @@ func (r *adminRepository) SearchAuditLogs(ctx context.Context, search *models.Ad
 
 	if search.TargetID != nil {
 		whereClause += " AND al.target_id = $" + itoa(argNum)
-		args = append(args, *search.TargetID)
+		args = append(args, search.TargetID.UUID)
 		argNum++
 	}
 
@@ -1663,27 +1629,30 @@ func (r *adminRepository) SearchAuditLogs(ctx context.Context, search *models.Ad
 	}
 
 	if search.EndDate != nil {
-		whereClause += " AND al.created_at <= $" + itoa(argNum)
+		// The end date names a whole day, so the bound is the next midnight.
+		whereClause += " AND al.created_at < ($" + itoa(argNum) + "::timestamptz + INTERVAL '1 day')"
 		args = append(args, *search.EndDate)
 		argNum++
 	}
 
-	if search.Cursor != nil {
-		whereClause += " AND al.id < $" + itoa(argNum)
-		args = append(args, *search.Cursor)
-		argNum++
+	// The log only grows, so it pages on its own order rather than an offset
+	// that shifts under an operator who is watching it fill.
+	if at, id, xerr := paging.DecodeTimeCursor(search.Cursor); xerr == nil && id != uuid.Nil {
+		whereClause += " AND (al.created_at, al.id) < ($" + itoa(argNum) + "::timestamptz, $" + itoa(argNum+1) + "::uuid)"
+		args = append(args, at, id)
+		argNum += 2
 	}
 
 	args = append(args, limit+1)
 
 	query := `
 		SELECT al.id, al.admin_user_id, al.action, al.target_type, al.target_id,
-			al.details, al.ip_address, al.user_agent, al.created_at,
+			al.details, COALESCE(al.ip_address, ''), COALESCE(al.user_agent, ''), al.created_at,
 			u.id, u.first_name, u.last_name, u.email
 		FROM admin_audit_logs al
 		JOIN users u ON u.id = al.admin_user_id
 		` + whereClause + `
-		ORDER BY al.created_at DESC
+		ORDER BY al.created_at DESC, al.id DESC
 		LIMIT $` + itoa(argNum)
 
 	rows, err := r.db.Query(ctx, query, args...)
@@ -1692,7 +1661,7 @@ func (r *adminRepository) SearchAuditLogs(ctx context.Context, search *models.Ad
 	}
 	defer rows.Close()
 
-	var logs []models.AdminAuditLog
+	logs := make([]models.AdminAuditLog, 0)
 	for rows.Next() {
 		var log models.AdminAuditLog
 		var user models.AdminUserSummary
@@ -1724,8 +1693,8 @@ func (r *adminRepository) SearchAuditLogs(ctx context.Context, search *models.Ad
 
 	if len(logs) > limit {
 		result.Data = logs[:limit]
-		lastID := logs[limit-1].ID
-		result.Pagination.NextCursor = paging.UUIDString(lastID)
+		last := logs[limit-1]
+		result.Pagination.NextCursor = paging.EncodeTime(last.CreatedAt, last.ID)
 	}
 
 	return result, nil
@@ -1801,7 +1770,7 @@ func (r *adminRepository) GetUserGrowthStats(ctx context.Context, startDate, end
 	}
 	defer rows.Close()
 
-	var stats []models.UserGrowthStats
+	stats := make([]models.UserGrowthStats, 0)
 	for rows.Next() {
 		var s models.UserGrowthStats
 		err := rows.Scan(&s.Date, &s.NewUsers)
@@ -1955,7 +1924,7 @@ func (r *adminRepository) SearchMailboxesForAdmin(ctx context.Context, search *m
 	}
 	if search.OrgID != nil {
 		where += " AND ea.organization_id = $" + itoa(argNum)
-		args = append(args, *search.OrgID)
+		args = append(args, search.OrgID.UUID)
 		argNum++
 	}
 
@@ -1976,7 +1945,7 @@ func (r *adminRepository) SearchMailboxesForAdmin(ctx context.Context, search *m
 	}
 	addBefore := func(col string, v *time.Time) {
 		if v != nil {
-			where += " AND " + col + " < ($" + itoa(argNum) + " + INTERVAL '1 day')"
+			where += " AND " + col + " < ($" + itoa(argNum) + "::timestamptz + INTERVAL '1 day')"
 			args = append(args, *v)
 			argNum++
 		}
@@ -1985,12 +1954,12 @@ func (r *adminRepository) SearchMailboxesForAdmin(ctx context.Context, search *m
 	// Ownership / placement
 	if search.UserID != nil {
 		where += " AND ea.user_id = $" + itoa(argNum)
-		args = append(args, *search.UserID)
+		args = append(args, search.UserID.UUID)
 		argNum++
 	}
 	if search.WorkerID != nil {
 		where += " AND ea.worker_id = $" + itoa(argNum)
-		args = append(args, *search.WorkerID)
+		args = append(args, search.WorkerID.UUID)
 		argNum++
 	}
 
@@ -2049,11 +2018,7 @@ func (r *adminRepository) SearchMailboxesForAdmin(ctx context.Context, search *m
 	addAfter("ea.last_synced_at", search.LastSyncedAfter)
 	addBefore("ea.last_synced_at", search.LastSyncedBefore)
 
-	if search.Cursor != nil {
-		where += " AND ea.id < $" + itoa(argNum)
-		args = append(args, *search.Cursor)
-		argNum++
-	}
+	offset := search.Offset
 
 	orderCol := "ea.id"
 	switch search.SortBy {
@@ -2091,7 +2056,7 @@ func (r *adminRepository) SearchMailboxesForAdmin(ctx context.Context, search *m
 		LEFT JOIN organizations o ON o.id = ea.organization_id
 		` + where + `
 		` + orderBy + `
-		LIMIT ` + limitParam
+		` + adminLimitOffset(limitParam, offset)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -2122,8 +2087,7 @@ func (r *adminRepository) SearchMailboxesForAdmin(ctx context.Context, search *m
 	}
 	if len(items) > limit {
 		result.Data = items[:limit]
-		last := items[limit-1].ID
-		result.Pagination.NextCursor = paging.UUIDString(last)
+		result.Pagination.NextCursor = adminNextCursor(offset, limit)
 	}
 
 	// Total count for the same filter (drop the trailing LIMIT arg).
@@ -2145,4 +2109,13 @@ func itoa(i int) string {
 
 func joinStrings(strs []string, sep string) string {
 	return strings.Join(strs, sep)
+}
+
+// CountSuperAdmins counts users holding the full live admin mask.
+func (r *adminRepository) CountSuperAdmins(ctx context.Context) (int, error) {
+	var n int
+	err := r.db.QueryRow(ctx,
+		`SELECT count(*) FROM users WHERE (admin_permissions & $1) = $1`,
+		uint32(models.LiveAdminPermissions)).Scan(&n)
+	return n, err
 }

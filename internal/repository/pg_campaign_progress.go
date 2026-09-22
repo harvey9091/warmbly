@@ -36,6 +36,10 @@ type CampaignContactProgress struct {
 	// step ("" when the step has no labels or the AI could not decide). Read by
 	// the ai_label branch conditions.
 	AILabel string
+	// ReplyIntent is the inbox tagging intent of the contact's human reply on
+	// this step (agreed, wants_pricing, not_now, ...; "" when tagging is off or
+	// the classifier was not sure). Read by the reply_intent branch condition.
+	ReplyIntent string
 }
 
 // CampaignProgress represents overall campaign progress
@@ -72,6 +76,10 @@ type ContactSequencePair struct {
 	// "due now". The placer floors its base time with it, so a wait routing
 	// honours can never be dropped by the placement pass.
 	NotBefore *time.Time
+	// Instant is true when the branch that chose SequenceID is an instant one.
+	// Its signal already happened, so the target step's own wait_after does not
+	// gate it and the placer must not re-add that delay (issue #583).
+	Instant bool
 	// AssignedSender is the mailbox this lead's sequence is bound to, set when
 	// its first email was reserved. The placer sends from it rather than
 	// rotating, so every step of one conversation comes from one address.
@@ -94,11 +102,32 @@ type StuckDispatch struct {
 	DispatchedAt time.Time
 }
 
+// ThreadParent is the email a campaign step should be sent as a reply to: the
+// last one this contact actually received from this campaign. MessageID
+// becomes the follow-up's In-Reply-To/References, which is the only thing the
+// RECIPIENT's client threads on; ThreadID is the provider-side conversation
+// handle and is what makes the follow-up land in the same thread in the
+// SENDER's mailbox (Gmail, empty elsewhere).
+type ThreadParent struct {
+	MessageID string
+	ThreadID  string
+	// SenderID is the mailbox that sent the parent. A provider thread handle
+	// only means something inside the mailbox that owns it, so a follow-up
+	// leaving from a different address must not carry it.
+	SenderID uuid.UUID
+	// Subject is the conversation's subject, unrendered: the template of the
+	// step that opened the thread, not the parent's own. A reply carries it,
+	// and Gmail refuses to file a message in a thread it does not match.
+	Subject string
+}
+
 // CampaignProgressRepository defines methods for campaign progress tracking
 type CampaignProgressRepository interface {
 	// ReserveSend claims (campaign, contact, step) for one send BEFORE the
 	// command goes on the bus, which is what lets a later tick tell "dispatched,
-	// outcome unknown" apart from "never attempted". It stamps dispatched_at and
+	// outcome unknown" apart from "never attempted". It also refuses a lead
+	// whose flow is held, under a row lock, so a pause cannot be raced by a send
+	// already on its way. It stamps dispatched_at and
 	// counts the send against the day's counters in one transaction, and reports
 	// false when the step is already in flight or already sent — in which case
 	// the caller must NOT dispatch. Resolve every reservation exactly once:
@@ -143,6 +172,11 @@ type CampaignProgressRepository interface {
 	// row, and the address it last heard from is still the one to keep. Nil
 	// when nothing was ever sent to it in this campaign.
 	LastSenderForLead(ctx context.Context, campaignID, contactID uuid.UUID) (*uuid.UUID, error)
+	// ThreadParentForLead is the last email this contact actually received
+	// from this campaign, for threading the next step onto it. Nil when the
+	// contact has had nothing from this campaign yet (their first email opens
+	// the conversation) or when the worker never reported a Message-ID for it.
+	ThreadParentForLead(ctx context.Context, campaignID, contactID uuid.UUID) (*ThreadParent, error)
 	// HasSentSteps reports whether the contact has any other step of the
 	// campaign stamped sent, which is what decides if a failed send was the
 	// lead's first step (a "new lead" for the daily new-lead counter).
@@ -157,7 +191,16 @@ type CampaignProgressRepository interface {
 	// the reference point for telling an instant machine open or click from a
 	// person's.
 	GetStepSentAt(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID) (*time.Time, error)
-	RecordEmailReplied(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID) error
+	// IsInboundReplySource confirms the stored unibox row is not outbound.
+	IsInboundReplySource(ctx context.Context, emailAccountID, messageID uuid.UUID) (bool, error)
+	// CampaignContactSentFromAccount confirms the mailbox sent this contact a campaign step.
+	CampaignContactSentFromAccount(ctx context.Context, campaignID, contactID, emailAccountID uuid.UUID) (bool, error)
+	// ClaimIncomingReply leases one stored inbound message for reply processing.
+	ClaimIncomingReply(ctx context.Context, emailAccountID, messageID uuid.UUID) (uuid.UUID, error)
+	// CompleteIncomingReply prevents a successfully processed message from being retried.
+	CompleteIncomingReply(ctx context.Context, emailAccountID, messageID, claimToken uuid.UUID) error
+	// RecordEmailReplied stamps a human reply while its source is still inbound.
+	RecordEmailReplied(ctx context.Context, campaignID, contactID, sequenceID, emailAccountID, messageID uuid.UUID) (bool, error)
 	RecordEmailBounced(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID) error
 	RecordEmailComplained(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID) error
 
@@ -172,6 +215,10 @@ type CampaignProgressRepository interface {
 	// on that step. Upserts (the AI step runs before its progress row is stamped
 	// sent). Read by the ai_label branch conditions when routing out of the step.
 	RecordAILabel(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID, label string) error
+	// RecordReplyIntent stores the inbox tagging intent of the contact's reply on
+	// the given step. Upserts on the same key as RecordReplyClassification and
+	// touches only reply_intent. Read by the reply_intent branch condition.
+	RecordReplyIntent(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID, intent string) error
 	// GetLatestReplyClass returns the most-recent classified reply class for a
 	// contact in a campaign ("" when none). Convenience getter for the branch
 	// evaluator / callers that need only the class.
@@ -238,12 +285,54 @@ type CampaignProgressRepository interface {
 	// their flow goes next, plus the pre-send gate that excludes them, so a
 	// per-contact preview reads the facts the send path reads.
 	RouteContact(ctx context.Context, campaignID, contactID uuid.UUID) (*ContactRoute, error)
+	// LeadSupply runs the same routing over every lead and counts where
+	// each one stands, so a day's plan knows how many sends the leads can
+	// take rather than only how many the mailboxes can give. until is the
+	// end of the day being planned.
+	// unavailable is the pool mailboxes that cannot send for the rest of the
+	// day: a lead bound to one waits for it, as FindRoutedPairs makes it,
+	// rather than counting as a send another mailbox could make.
+	LeadSupply(ctx context.Context, campaignID uuid.UUID, until time.Time, unavailable map[uuid.UUID]bool) (*LeadSupply, error)
 
 	// CountUndeliverableLeads counts the leads FindRoutedPairs excludes
 	// because address verification refused them. Reported when a campaign
 	// finishes, so "completed" never silently means "skipped everybody".
 	CountUndeliverableLeads(ctx context.Context, campaignID uuid.UUID) (int, error)
+
+	// HoldLead parks ONE contact's flow inside ONE campaign until `until` (nil
+	// for a hold only a person lifts), without unsubscribing them and without
+	// removing them from the campaign. source is "manual" or "out_of_office".
+	//
+	// An automatic hold never overrules a person: a live manual hold is left
+	// alone, and a live automatic one is only ever extended, never cut short.
+	// A manual hold always wins. Reports whether it wrote one.
+	// Returns the hold it wrote, or nil when it wrote none.
+	HoldLead(ctx context.Context, campaignID, contactID uuid.UUID, until *time.Time, reason, source string) (*models.LeadHold, error)
+	// HoldLeadEverywhere parks ONE contact's flow in EVERY campaign they are
+	// still a lead of, under the same guard as HoldLead. Returns the campaigns
+	// it actually held, so a caller can tell a refusal from a hold.
+	//
+	// Being away is a property of the person, not of one sequence: a contact
+	// in two live campaigns used to have one of them held while the other kept
+	// writing to the empty desk (issue #518).
+	HoldLeadEverywhere(ctx context.Context, contactID uuid.UUID, until *time.Time, reason, source string) ([]uuid.UUID, error)
+	// ResumeLead lifts the hold now and reports whether there was one to lift.
+	// The held time is dropped rather than carried, because "resume now" means
+	// now: the step's remaining wait is only preserved when a hold ends on its
+	// own. Returns ErrLeadNotInCampaign when the contact is not a lead.
+	ResumeLead(ctx context.Context, campaignID, contactID uuid.UUID) (bool, error)
+	// CountHeldLeads counts the leads whose flow is parked right now, so a
+	// campaign whose remaining leads are all held is not closed as finished.
+	CountHeldLeads(ctx context.Context, campaignID uuid.UUID) (int, error)
+	// GetLeadHold reads the live hold on one lead (nil when it is not held,
+	// including a dated hold that has since expired). Returns
+	// ErrLeadNotInCampaign when the contact is not a lead of the campaign.
+	GetLeadHold(ctx context.Context, campaignID, contactID uuid.UUID) (*models.LeadHold, error)
 }
+
+// ErrLeadNotInCampaign is returned when a hold is asked for on a contact that
+// is not a lead of the campaign. Callers turn it into a 404.
+var ErrLeadNotInCampaign = errors.New("contact is not a lead of this campaign")
 
 type campaignProgressRepository struct {
 	db *pgxpool.Pool
@@ -286,6 +375,33 @@ func (r *campaignProgressRepository) ReserveSend(ctx context.Context, campaignID
 			return false, nil
 		}
 		return false, err
+	}
+
+	// Refuse a lead somebody has parked. Routing already excludes held leads and
+	// the send path re-reads the hold, but both are reads taken before this
+	// transaction; only a check inside it can rule out a pause that lands in
+	// between. The row is locked, so a concurrent HoldLead either commits first
+	// (and is seen here) or waits until this send is committed, and the claim
+	// above is undone by the rollback when the answer is "held".
+	//
+	// It sits AFTER the claim on purpose. ReleaseSend and RecordSendFailure both
+	// touch campaign_contact_progress before campaign_leads, and two ticks can
+	// hold the same pair, so taking campaign_leads first here would invert the
+	// lock order between them and deadlock.
+	var held bool
+	err = tx.QueryRow(ctx, `
+		SELECT `+liveHold("campaign_leads")+`
+		FROM campaign_leads WHERE campaign_id = $1 AND contact_id = $2
+		FOR UPDATE
+	`, campaignID, contactID).Scan(&held)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		// Not a lead of this campaign any more; there is nothing to send.
+		return false, nil
+	case err != nil:
+		return false, err
+	case held:
+		return false, nil
 	}
 
 	// Bind the lead to the mailbox this send leaves from. Written with the
@@ -517,6 +633,82 @@ func (r *campaignProgressRepository) LastSenderForLead(ctx context.Context, camp
 	return &id, nil
 }
 
+// threadParentScan bounds the walk back through a contact's sends. It only has
+// to reach the step that opened their current conversation, and a sequence
+// that long has bigger problems than a missing header.
+const threadParentScan = 50
+
+// ThreadParentForLead reads the email to thread the contact's next step onto:
+// the most recent completed campaign task for the pair that a Message-ID was
+// ever recorded for. The Message-ID is written by the worker's own EMAIL_SENT
+// result, so a step whose result never came back simply has no parent and its
+// follow-up opens a new conversation rather than referencing an id the
+// recipient never saw.
+//
+// Action and wait nodes never reach the tracking stamp that writes a
+// campaign_tasks row, and never carry a Message-ID, so they cannot be picked
+// as a parent.
+func (r *campaignProgressRepository) ThreadParentForLead(ctx context.Context, campaignID, contactID uuid.UUID) (*ThreadParent, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT t.message_id, t.thread_id, t.email_account_id,
+		       s.id IS NOT NULL, COALESCE(s.subject, ''), COALESCE(s.thread_reply, true)
+		FROM campaign_tasks ct
+		JOIN tasks t ON t.id = ct.task_id
+		LEFT JOIN sequences s ON s.id = ct.sequence_id
+		WHERE ct.campaign_id = $1 AND ct.contact_id = $2
+		  AND t.task_type = 'campaign' AND t.status = 'completed'
+		  AND t.message_id <> ''
+		ORDER BY t.created_at DESC
+		LIMIT $3
+	`, campaignID, contactID, threadParentScan)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var parent *ThreadParent
+	var subject string
+	for rows.Next() {
+		var (
+			messageID, threadID, stepSubject string
+			senderID                         uuid.UUID
+			stepKnown, threadReply           bool
+		)
+		if err := rows.Scan(&messageID, &threadID, &senderID, &stepKnown, &stepSubject, &threadReply); err != nil {
+			return nil, err
+		}
+		if parent == nil {
+			parent = &ThreadParent{MessageID: messageID, ThreadID: threadID, SenderID: senderID}
+		}
+		// A step that has since been deleted (campaign_tasks.sequence_id is
+		// ON DELETE SET NULL) says nothing about whether it opened a thread or
+		// joined one, so the walk cannot pass it. Stopping with no subject is
+		// what makes the caller fall back and drop the provider handle, rather
+		// than filing this send in a conversation under a subject that may
+		// belong to a different one.
+		if !stepKnown {
+			break
+		}
+		// Walking back from the parent, the first step that did NOT reply in a
+		// thread is the one that opened this conversation, and its subject is
+		// the conversation's. Without the walk, a third step would inherit the
+		// blank subject of the second (which inherited it in turn) instead of
+		// the subject the recipient is actually looking at.
+		subject = stepSubject
+		if !threadReply {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if parent == nil {
+		return nil, nil
+	}
+	parent.Subject = subject
+	return parent, nil
+}
+
 // HasSentSteps reports whether any step of the campaign is stamped sent for
 // the contact.
 func (r *campaignProgressRepository) HasSentSteps(ctx context.Context, campaignID, contactID uuid.UUID) (bool, error) {
@@ -624,19 +816,110 @@ func (r *campaignProgressRepository) GetStepSentAt(ctx context.Context, campaign
 	return sentAt, nil
 }
 
-// RecordEmailReplied records that a contact replied
-func (r *campaignProgressRepository) RecordEmailReplied(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID) error {
+// IsInboundReplySource verifies direction from the row stored by the consumer.
+func (r *campaignProgressRepository) IsInboundReplySource(ctx context.Context, emailAccountID, messageID uuid.UUID) (bool, error) {
+	var inbound bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM unibox_emails
+			WHERE id = $1
+			  AND email_id = $2
+			  AND folder NOT IN ('sent', 'drafts')
+			  AND provider_folder NOT IN ('sent', 'drafts')
+		)
+	`, messageID, emailAccountID).Scan(&inbound)
+	return inbound, err
+}
+
+// CampaignContactSentFromAccount proves a cross-mailbox reply arrived at a sender used for this lead.
+func (r *campaignProgressRepository) CampaignContactSentFromAccount(ctx context.Context, campaignID, contactID, emailAccountID uuid.UUID) (bool, error) {
+	var sent bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM campaign_tasks campaign_task
+			JOIN tasks task ON task.id = campaign_task.task_id
+			WHERE campaign_task.campaign_id = $1
+			  AND campaign_task.contact_id = $2
+			  AND task.task_type = 'campaign'
+			  AND task.status = 'completed'
+			  AND task.email_account_id = $3
+		)
+	`, campaignID, contactID, emailAccountID).Scan(&sent)
+	return sent, err
+}
+
+const incomingReplyClaimLease = "10 minutes"
+
+// ClaimIncomingReply leases one inbound message so duplicate events cannot repeat its effects.
+func (r *campaignProgressRepository) ClaimIncomingReply(ctx context.Context, emailAccountID, messageID uuid.UUID) (uuid.UUID, error) {
+	claimToken := uuid.New()
+	result, err := r.db.Exec(ctx, `
+		UPDATE unibox_emails
+		SET campaign_reply_claimed_at = NOW(),
+		    campaign_reply_claim_token = $3
+		WHERE id = $1
+		  AND email_id = $2
+		  AND folder NOT IN ('sent', 'drafts')
+		  AND provider_folder NOT IN ('sent', 'drafts')
+		  AND campaign_reply_processed_at IS NULL
+		  AND (
+			campaign_reply_claimed_at IS NULL
+			OR campaign_reply_claimed_at < NOW() - INTERVAL '`+incomingReplyClaimLease+`'
+		  )
+	`, messageID, emailAccountID, claimToken)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if result.RowsAffected() == 0 {
+		return uuid.Nil, nil
+	}
+	return claimToken, nil
+}
+
+// CompleteIncomingReply marks a claimed message as processed.
+func (r *campaignProgressRepository) CompleteIncomingReply(ctx context.Context, emailAccountID, messageID, claimToken uuid.UUID) error {
+	result, err := r.db.Exec(ctx, `
+		UPDATE unibox_emails
+		SET campaign_reply_processed_at = NOW()
+		WHERE id = $1
+		  AND email_id = $2
+		  AND campaign_reply_claim_token = $3
+		  AND campaign_reply_processed_at IS NULL
+	`, messageID, emailAccountID, claimToken)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("incoming reply claim is no longer owned")
+	}
+	return nil
+}
+
+// RecordEmailReplied records that a contact replied when its source is still inbound.
+func (r *campaignProgressRepository) RecordEmailReplied(ctx context.Context, campaignID, contactID, sequenceID, emailAccountID, messageID uuid.UUID) (bool, error) {
 	query := `
 		UPDATE campaign_contact_progress
-		SET replied_at = NOW()
+		SET replied_at = COALESCE(replied_at, NOW())
 		WHERE campaign_id = $1
 		  AND contact_id = $2
 		  AND sequence_id = $3
-		  AND replied_at IS NULL
+		  AND EXISTS (
+			SELECT 1
+			FROM unibox_emails
+			WHERE id = $4
+			  AND email_id = $5
+			  AND folder NOT IN ('sent', 'drafts')
+			  AND provider_folder NOT IN ('sent', 'drafts')
+		  )
 	`
 
-	_, err := r.db.Exec(ctx, query, campaignID, contactID, sequenceID)
-	return err
+	result, err := r.db.Exec(ctx, query, campaignID, contactID, sequenceID, messageID, emailAccountID)
+	if err != nil {
+		return false, err
+	}
+	return result.RowsAffected() == 1, nil
 }
 
 // RecordEmailBounced records that an email bounced
@@ -696,6 +979,18 @@ func (r *campaignProgressRepository) RecordAILabel(ctx context.Context, campaign
 		DO UPDATE SET ai_label = EXCLUDED.ai_label
 	`
 	_, err := r.db.Exec(ctx, query, campaignID, contactID, sequenceID, label)
+	return err
+}
+
+// RecordReplyIntent persists the inbox tagging intent on the progress row.
+func (r *campaignProgressRepository) RecordReplyIntent(ctx context.Context, campaignID, contactID, sequenceID uuid.UUID, intent string) error {
+	query := `
+		INSERT INTO campaign_contact_progress (campaign_id, contact_id, sequence_id, reply_intent)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (campaign_id, contact_id, sequence_id)
+		DO UPDATE SET reply_intent = EXCLUDED.reply_intent
+	`
+	_, err := r.db.Exec(ctx, query, campaignID, contactID, sequenceID, intent)
 	return err
 }
 
@@ -782,37 +1077,26 @@ func (r *campaignProgressRepository) ClaimInstantFire(ctx context.Context, campa
 	return tag.RowsAffected() == 1, nil
 }
 
-// GetCampaignProgress retrieves overall campaign progress statistics
+// GetCampaignProgress retrieves overall campaign progress statistics.
+//
+// Each count comes from its own table. The earlier version joined leads,
+// steps and progress rows side by side on campaign_id, which multiplied every
+// progress count by leads x steps: one sent email on a 63-lead, 6-step
+// campaign read as 378 sent, and the dashboard showed "378 of 63 contacts" at
+// 100%.
 func (r *campaignProgressRepository) GetCampaignProgress(ctx context.Context, campaignID uuid.UUID) (*CampaignProgress, error) {
 	query := `
-		WITH campaign_stats AS (
-			SELECT
-				COUNT(DISTINCT cl.contact_id) as total_contacts,
-				COUNT(DISTINCT s.id) as total_sequences,
-				COUNT(CASE WHEN ccp.sent_at IS NOT NULL THEN 1 END) as emails_sent,
-				COUNT(CASE WHEN ccp.opened_at IS NOT NULL THEN 1 END) as emails_opened,
-				COUNT(CASE WHEN ccp.clicked_at IS NOT NULL THEN 1 END) as emails_clicked,
-				COUNT(CASE WHEN ccp.replied_at IS NOT NULL THEN 1 END) as emails_replied,
-				COUNT(CASE WHEN ccp.bounced_at IS NOT NULL THEN 1 END) as emails_bounced,
-				COUNT(CASE WHEN ccp.complained_at IS NOT NULL THEN 1 END) as emails_complained
-			FROM campaigns c
-			LEFT JOIN campaign_leads cl ON c.id = cl.campaign_id
-			LEFT JOIN sequences s ON c.id = s.campaign_id
-			LEFT JOIN campaign_contact_progress ccp ON c.id = ccp.campaign_id
-			WHERE c.id = $1
-			GROUP BY c.id
-		)
 		SELECT
-			total_contacts,
-			total_sequences,
-			emails_sent,
-			(total_contacts * total_sequences) - emails_sent as emails_pending,
-			emails_opened,
-			emails_clicked,
-			emails_replied,
-			emails_bounced,
-			emails_complained
-		FROM campaign_stats
+			(SELECT COUNT(DISTINCT contact_id) FROM campaign_leads WHERE campaign_id = $1) AS total_contacts,
+			(SELECT COUNT(*) FROM sequences WHERE campaign_id = $1) AS total_sequences,
+			COUNT(*) FILTER (WHERE ccp.sent_at IS NOT NULL) AS emails_sent,
+			COUNT(*) FILTER (WHERE ccp.opened_at IS NOT NULL AND NOT ccp.opened_machine) AS emails_opened,
+			COUNT(*) FILTER (WHERE ccp.clicked_at IS NOT NULL) AS emails_clicked,
+			COUNT(*) FILTER (WHERE ccp.replied_at IS NOT NULL) AS emails_replied,
+			COUNT(*) FILTER (WHERE ccp.bounced_at IS NOT NULL) AS emails_bounced,
+			COUNT(*) FILTER (WHERE ccp.complained_at IS NOT NULL) AS emails_complained
+		FROM campaign_contact_progress ccp
+		WHERE ccp.campaign_id = $1
 	`
 
 	progress := &CampaignProgress{}
@@ -820,13 +1104,13 @@ func (r *campaignProgressRepository) GetCampaignProgress(ctx context.Context, ca
 		&progress.TotalContacts,
 		&progress.TotalSequences,
 		&progress.EmailsSent,
-		&progress.EmailsPending,
 		&progress.EmailsOpened,
 		&progress.EmailsClicked,
 		&progress.EmailsReplied,
 		&progress.EmailsBounced,
 		&progress.EmailsComplained,
 	)
+	progress.EmailsPending = max(progress.TotalContacts*progress.TotalSequences-progress.EmailsSent, 0)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &CampaignProgress{}, nil
@@ -862,7 +1146,8 @@ func (r *campaignProgressRepository) GetContactProgress(ctx context.Context, cam
 	query := `
 		SELECT campaign_id, contact_id, sequence_id, sent_at,
 		       CASE WHEN opened_machine THEN NULL ELSE opened_at END,
-		       clicked_at, replied_at, bounced_at, complained_at, COALESCE(reply_class, ''), COALESCE(ai_label, '')
+		       clicked_at, replied_at, bounced_at, complained_at, COALESCE(reply_class, ''), COALESCE(ai_label, ''),
+		       COALESCE(reply_intent, '')
 		FROM campaign_contact_progress
 		WHERE campaign_id = $1 AND contact_id = $2
 		ORDER BY sent_at ASC
@@ -889,6 +1174,7 @@ func (r *campaignProgressRepository) GetContactProgress(ctx context.Context, cam
 			&progress.ComplainedAt,
 			&progress.ReplyClass,
 			&progress.AILabel,
+			&progress.ReplyIntent,
 		)
 		if err != nil {
 			return nil, err
@@ -1051,6 +1337,14 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 	}
 
 	// 2. Ordered candidate contacts + their last-sent step (with engagement) + sent set.
+	//
+	// args carries the query's bound parameters. The custom-field key is one of
+	// them: it is the only part of this ORDER BY that comes from a customer, so
+	// it is bound rather than written into the SQL text. This query runs on the
+	// scheduler rather than in a request, which is the worst place to learn that
+	// an identifier was not what it claimed.
+	args := []any{campaignID, config.CampaignSendMaxAttempts}
+
 	var contactOrder string
 	switch orderBy {
 	case "email":
@@ -1059,7 +1353,8 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 		contactOrder = "c.first_name, c.last_name"
 	case "custom_field":
 		if orderField != "" {
-			contactOrder = "c.custom_fields->>'" + orderField + "'"
+			args = append(args, orderField)
+			contactOrder = fmt.Sprintf("c.custom_fields->>$%d", len(args))
 		} else {
 			contactOrder = "c.created_at"
 		}
@@ -1078,57 +1373,9 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 		orderPrefix = "(lp.sequence_id IS NULL) DESC, "
 	}
 
-	query := `
-		SELECT cl.contact_id, cl.added_at, cl.email_account_id,
-		       lp.sequence_id, lp.sent_at, lp.opened_at, lp.clicked_at, lp.replied_at, COALESCE(lp.reply_class, ''), COALESCE(lp.ai_label, ''),
-		       COALESCE(ss.ids, '{}') AS sent_ids,
-		       EXISTS (
-		         SELECT 1 FROM campaign_contact_progress rp
-		         WHERE rp.campaign_id = $1 AND rp.contact_id = cl.contact_id AND rp.replied_at IS NOT NULL
-		       ) AS has_replied
-		FROM campaign_leads cl
-		JOIN contacts c ON c.id = cl.contact_id
-		LEFT JOIN LATERAL (
-			SELECT sequence_id, sent_at,
-			       CASE WHEN p.opened_machine THEN NULL ELSE p.opened_at END AS opened_at,
-			       clicked_at, replied_at, reply_class, ai_label
-			FROM campaign_contact_progress p
-			WHERE p.campaign_id = $1 AND p.contact_id = cl.contact_id AND p.sent_at IS NOT NULL
-			ORDER BY p.sent_at DESC LIMIT 1
-		) lp ON true
-		LEFT JOIN LATERAL (
-			SELECT array_agg(sequence_id) AS ids
-			FROM campaign_contact_progress p2
-			WHERE p2.campaign_id = $1 AND p2.contact_id = cl.contact_id
-			  AND (p2.sent_at IS NOT NULL OR p2.dispatched_at IS NOT NULL)
-		) ss ON true
-		WHERE cl.campaign_id = $1
-		  AND NOT EXISTS (
-		    SELECT 1 FROM campaign_contact_progress b
-		    WHERE b.contact_id = cl.contact_id AND b.bounced_at IS NOT NULL
-		  )
-		  AND NOT EXISTS (
-		    SELECT 1 FROM campaign_contact_progress f
-		    WHERE f.campaign_id = $1 AND f.contact_id = cl.contact_id
-		      AND f.sent_at IS NULL AND f.failed_at IS NOT NULL
-		      AND f.send_attempts >= $2
-		  )
-		  -- The workspace suppression list (addresses and domains) and the
-		  -- contact's own subscription flag are both send gates; the audience
-		  -- count applies the same two, so the number shown is the number sent.
-		  AND NOT recipient_suppressed((SELECT organization_id FROM campaigns WHERE id = $1), c.email)
-		  AND c.subscribed IS NOT FALSE
-		  -- Addresses the pre-send gates in the campaign task would refuse.
-		  -- Without this the finder keeps handing back the same undeliverable
-		  -- contact, the task skips it, and the campaign never reaches the
-		  -- healthy leads behind it (issue #200). Read from the contact's
-		  -- CURRENT verification state, so re-verifying an address puts it
-		  -- straight back into routing.
-		  AND NOT ` + undeliverableClause("$1") + `
-		ORDER BY ` + orderPrefix + contactOrder + ` ` + dir + `
-	`
+	query := routedLeadsQuery(orderPrefix + contactOrder + ` ` + dir)
 
-	rows, err := r.db.Query(ctx, query, campaignID, config.CampaignSendMaxAttempts)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -1151,13 +1398,21 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 	for rows.Next() {
 		var in routeInput
 		var contactID uuid.UUID
-		if serr := rows.Scan(&contactID, &in.addedAt, &in.sender, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.sentIDs, &in.hasReplied); serr != nil {
+		if serr := rows.Scan(&contactID, &in.addedAt, &in.sender, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.replyIntent, &in.sentIDs, &in.hasReplied,
+			&in.pausedAt, &in.pausedUntil, &in.pauseReason, &in.pauseSource); serr != nil {
 			return nil, nil, false, serr
 		}
 		if in.lastSeq == nil && excludeNewLeads {
 			continue
 		}
 		res := router.route(campaignID, contactID, in)
+		// Held with no end: there is nothing to wake up for, so it must not be
+		// reported as a next-due time either — that would park the campaign's
+		// chain on a moment that never arrives. Checked before the condition
+		// window, which a held lead can also be sitting in.
+		if res.Hold != nil && res.Hold.Until == nil {
+			continue
+		}
 		if res.WaitUntil != nil {
 			// Not decidable yet — remember the soonest window so the scheduler
 			// can re-check exactly then instead of guessing or completing.
@@ -1182,7 +1437,7 @@ func (r *campaignProgressRepository) FindRoutedPairs(ctx context.Context, campai
 			noteDue(back, true)
 			continue
 		}
-		pairs = append(pairs, ContactSequencePair{ContactID: contactID, SequenceID: *res.Target, IsNewLead: res.IsNewLead, NotBefore: res.DueAt, AssignedSender: in.sender})
+		pairs = append(pairs, ContactSequencePair{ContactID: contactID, SequenceID: *res.Target, IsNewLead: res.IsNewLead, Instant: res.Instant, NotBefore: res.DueAt, AssignedSender: in.sender})
 		if len(pairs) >= limit {
 			break
 		}
@@ -1207,6 +1462,9 @@ type ContactRoute struct {
 	// condition window is still open (WaitUntil set).
 	Target    *uuid.UUID
 	IsNewLead bool
+	// Instant is true when the branch that chose Target is an instant one, so
+	// Target is due without applying its own wait_after.
+	Instant bool
 	// DueAt is when the target's wait elapses: the campaign's entry delay after
 	// the contact entered for a first step, otherwise the step's wait_after plus
 	// a preceding wait node. Nil means due now.
@@ -1222,6 +1480,11 @@ type ContactRoute struct {
 	// AssignedSender is the mailbox this lead's sequence is bound to, nil
 	// until its first email was reserved.
 	AssignedSender *uuid.UUID
+	// Hold is the per-lead pause, set only while it is live. While it is, the
+	// step is not offered: a dated hold reports DueAt no earlier than its end,
+	// and one with no end reports no DueAt at all, because nothing but a
+	// person lifts it.
+	Hold *models.LeadHold
 }
 
 // RouteContact runs the campaign's routing for ONE contact and reports where
@@ -1235,8 +1498,9 @@ func (r *campaignProgressRepository) RouteContact(ctx context.Context, campaignI
 	}
 	query := `
 		SELECT cl.added_at, cl.email_account_id,
-		       lp.sequence_id, lp.sent_at, lp.opened_at, lp.clicked_at, lp.replied_at, COALESCE(lp.reply_class, ''), COALESCE(lp.ai_label, ''),
+		       lp.sequence_id, lp.sent_at, lp.opened_at, lp.clicked_at, lp.replied_at, COALESCE(lp.reply_class, ''), COALESCE(lp.ai_label, ''), COALESCE(lp.reply_intent, ''),
 		       COALESCE(ss.ids, '{}') AS sent_ids,
+		       ` + leadHoldColumns + `,
 		       EXISTS (
 		         SELECT 1 FROM campaign_contact_progress rp
 		         WHERE rp.campaign_id = $1 AND rp.contact_id = cl.contact_id AND rp.replied_at IS NOT NULL
@@ -1259,7 +1523,7 @@ func (r *campaignProgressRepository) RouteContact(ctx context.Context, campaignI
 		LEFT JOIN LATERAL (
 			SELECT sequence_id, sent_at,
 			       CASE WHEN p.opened_machine THEN NULL ELSE p.opened_at END AS opened_at,
-			       clicked_at, replied_at, reply_class, ai_label
+			       clicked_at, replied_at, reply_class, ai_label, reply_intent
 			FROM campaign_contact_progress p
 			WHERE p.campaign_id = $1 AND p.contact_id = cl.contact_id AND p.sent_at IS NOT NULL
 			ORDER BY p.sent_at DESC LIMIT 1
@@ -1275,8 +1539,9 @@ func (r *campaignProgressRepository) RouteContact(ctx context.Context, campaignI
 	var in routeInput
 	var bounced, failed, suppressed, undeliverable bool
 	err = r.db.QueryRow(ctx, query, campaignID, config.CampaignSendMaxAttempts, contactID).Scan(
-		&in.addedAt, &in.sender, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.sentIDs, &in.hasReplied,
-		&bounced, &failed, &suppressed, &undeliverable,
+		&in.addedAt, &in.sender, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.replyIntent, &in.sentIDs,
+		&in.pausedAt, &in.pausedUntil, &in.pauseReason, &in.pauseSource,
+		&in.hasReplied, &bounced, &failed, &suppressed, &undeliverable,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return &ContactRoute{Excluded: "not_a_lead"}, nil
@@ -1299,7 +1564,8 @@ func (r *campaignProgressRepository) RouteContact(ctx context.Context, campaignI
 		return out, nil
 	}
 	res := router.route(campaignID, contactID, in)
-	out.Target, out.IsNewLead, out.DueAt, out.WaitUntil = res.Target, res.IsNewLead, res.DueAt, res.WaitUntil
+	out.Target, out.IsNewLead, out.Instant, out.DueAt, out.WaitUntil = res.Target, res.IsNewLead, res.Instant, res.DueAt, res.WaitUntil
+	out.Hold = res.Hold
 	return out, nil
 }
 
@@ -1312,10 +1578,53 @@ type routeInput struct {
 	addedAt *time.Time
 	// sender is the mailbox this lead's sequence is bound to, nil until its
 	// first email was reserved.
-	sender              *uuid.UUID
-	replyClass, aiLabel string
-	sentIDs             []uuid.UUID
-	hasReplied          bool
+	sender                           *uuid.UUID
+	replyClass, aiLabel, replyIntent string
+	sentIDs                          []uuid.UUID
+	hasReplied                       bool
+	// The per-lead hold. pausedAt non-nil is the hold itself; pausedUntil nil
+	// means it has no end and only a person lifts it.
+	pausedAt, pausedUntil    *time.Time
+	pauseReason, pauseSource string
+}
+
+// leadHoldColumns is the hold projection the routing queries select, in the
+// order their scans read it. One list, so the batch finder and the
+// single-contact route cannot drift apart on what a held lead looks like.
+// CountUndeliverableLeads deliberately does not select it: a lead verification
+// refuses is refused whether or not somebody also parked it.
+const leadHoldColumns = `cl.paused_at, cl.paused_until, COALESCE(cl.pause_reason, ''), COALESCE(cl.pause_source, '')`
+
+// heldShift is how much of the hold fell inside the wait the next step is
+// serving: from the later of the hold's start and the last step's send, to the
+// earlier of the hold's end and now. Routing adds it to the step's due time, so
+// the wait resumes on the far side of the hold rather than having elapsed while
+// the contact was away.
+//
+// It is DERIVED from the two timestamps, never stored, which is what makes it
+// self-correcting: once a step has gone out after the hold ended, the two
+// intervals stop overlapping and the spent hold contributes nothing. An
+// accumulator would instead have to be cleared by every path that advances a
+// lead, and the action and wait nodes advance one without ever reserving a send.
+//
+// A lead with nothing sent yet has no wait in progress and so takes no shift:
+// its first email simply goes out when the hold lifts.
+func (in routeInput) heldShift(now time.Time) time.Duration {
+	if in.pausedAt == nil || in.sentAt == nil {
+		return 0
+	}
+	start := *in.pausedAt
+	if in.sentAt.After(start) {
+		start = *in.sentAt
+	}
+	end := now
+	if in.pausedUntil != nil && in.pausedUntil.Before(end) {
+		end = *in.pausedUntil
+	}
+	if !end.After(start) {
+		return 0
+	}
+	return end.Sub(start)
 }
 
 // PacedSenders maps a mailbox that cannot take a send right now, but will be
@@ -1371,6 +1680,9 @@ type routeResult struct {
 	target *uuid.UUID
 	stop   bool
 	wait   *time.Time
+	// instant is true when the branch that produced `target` is an instant
+	// one, so the target's own wait_after does not gate it.
+	instant bool
 }
 
 // loadRouter reads the steps (position + branch tree + wait) once, ordered by
@@ -1518,7 +1830,7 @@ func (cr *campaignRouter) routeNext(fromID uuid.UUID, prog *CampaignContactProgr
 			return routeResult{stop: true}
 		}
 		t := *b.TargetSequenceID
-		return routeResult{target: &t}
+		return routeResult{target: &t, instant: branchIsInstant(b)}
 	}
 	// Nothing matched -> the flow ends with STOP.
 	return routeResult{stop: true}
@@ -1550,7 +1862,7 @@ func (cr *campaignRouter) routeReplyOnly(fromID uuid.UUID, prog *CampaignContact
 			continue
 		}
 		t := *b.TargetSequenceID
-		return routeResult{target: &t}
+		return routeResult{target: &t, instant: branchIsInstant(b)}
 	}
 	return routeResult{stop: true}
 }
@@ -1568,7 +1880,7 @@ func (cr *campaignRouter) route(campaignID, contactID uuid.UUID, in routeInput) 
 		prog := &CampaignContactProgress{
 			CampaignID: campaignID, ContactID: contactID, SequenceID: *in.lastSeq,
 			SentAt: in.sentAt, OpenedAt: in.openedAt, ClickedAt: in.clickedAt, RepliedAt: in.repliedAt,
-			ReplyClass: in.replyClass, AILabel: in.aiLabel,
+			ReplyClass: in.replyClass, AILabel: in.aiLabel, ReplyIntent: in.replyIntent,
 		}
 		sa := time.Time{}
 		if in.sentAt != nil {
@@ -1594,7 +1906,15 @@ func (cr *campaignRouter) route(campaignID, contactID uuid.UUID, in routeInput) 
 	}
 
 	if res.wait != nil {
-		out.WaitUntil = res.wait
+		// A condition window is still open. The hold still applies: the window
+		// must not keep elapsing while the contact is away, and the drawer has
+		// to name the hold rather than the window.
+		out.Hold = in.liveHold(cr.now)
+		wait := res.wait.Add(in.heldShift(cr.now))
+		if out.Hold != nil && out.Hold.Until != nil && wait.Before(*out.Hold.Until) {
+			wait = *out.Hold.Until
+		}
+		out.WaitUntil = &wait
 		return out
 	}
 	if res.stop || res.target == nil {
@@ -1607,7 +1927,9 @@ func (cr *campaignRouter) route(campaignID, contactID uuid.UUID, in routeInput) 
 		}
 	}
 	out.Target = res.target
-	if out.IsNewLead {
+	out.Instant = res.instant
+	switch {
+	case out.IsNewLead:
 		// The entry delay: a contact's first email waits this long after they
 		// entered the campaign. Anchored on when they entered, not on when the
 		// campaign started, so a contact who joins a linked segment weeks later
@@ -1616,16 +1938,64 @@ func (cr *campaignRouter) route(campaignID, contactID uuid.UUID, in routeInput) 
 			due := cr.enteredAt(in.addedAt).Add(cr.entryDelay)
 			out.DueAt = &due
 		}
-		return out
-	}
-	if in.sentAt != nil {
-		due := in.sentAt.Add(24 * time.Hour * time.Duration(cr.steps[cr.idxByID[*res.target]].waitAfter))
+	case in.sentAt != nil:
+		wait := BranchWaitAfter(cr.steps[cr.idxByID[*res.target]].waitAfter, res.instant)
+		due := in.sentAt.Add(24 * time.Hour * time.Duration(wait))
 		if last, ok := cr.idxByID[*in.lastSeq]; ok && cr.steps[last].waitMinutes > 0 {
 			due = due.Add(time.Duration(cr.steps[last].waitMinutes) * time.Minute)
 		}
 		out.DueAt = &due
 	}
+	cr.applyHold(&out, in)
 	return out
+}
+
+// applyHold folds a per-lead hold into the route. Two things happen, and they
+// are separate: the held time is added to the step's due moment, so the wait
+// the step was in the middle of resumes rather than having elapsed while the
+// contact was away; and while the hold is live nothing is due before it ends.
+//
+// The shift is added to a FIXED anchor (the step's own wait), never to "now",
+// or a live hold would push the step away from itself as fast as it approached.
+// A new lead has no wait in progress, so it has no anchor and takes no shift —
+// its first email simply goes out when the hold lifts.
+func (cr *campaignRouter) applyHold(out *ContactRoute, in routeInput) {
+	if in.pausedAt == nil {
+		return
+	}
+	if shift := in.heldShift(cr.now); shift > 0 && out.DueAt != nil {
+		due := out.DueAt.Add(shift)
+		out.DueAt = &due
+	}
+	out.Hold = in.liveHold(cr.now)
+	if out.Hold == nil {
+		return
+	}
+	if out.Hold.Until == nil {
+		// No end: there is no moment to wake up for, so report no due time at
+		// all rather than a guess the scheduler would park a wakeup on.
+		out.DueAt = nil
+		return
+	}
+	if out.DueAt == nil || out.DueAt.Before(*out.Hold.Until) {
+		until := *out.Hold.Until
+		out.DueAt = &until
+	}
+}
+
+// liveHold is the lead's hold if it is in force at now, else nil.
+func (in routeInput) liveHold(now time.Time) *models.LeadHold {
+	if in.pausedAt == nil {
+		return nil
+	}
+	h := &models.LeadHold{
+		Since: *in.pausedAt, Until: in.pausedUntil,
+		Reason: in.pauseReason, Source: in.pauseSource,
+	}
+	if !h.Live(now) {
+		return nil
+	}
+	return h
 }
 
 // isEmailStep reports whether a step sends mail. Only those need a mailbox, so
@@ -1677,7 +2047,7 @@ func (r *campaignProgressRepository) CountUndeliverableLeads(ctx context.Context
 	}
 	query := `
 		SELECT cl.contact_id, cl.added_at,
-		       lp.sequence_id, lp.sent_at, lp.opened_at, lp.clicked_at, lp.replied_at, COALESCE(lp.reply_class, ''), COALESCE(lp.ai_label, ''),
+		       lp.sequence_id, lp.sent_at, lp.opened_at, lp.clicked_at, lp.replied_at, COALESCE(lp.reply_class, ''), COALESCE(lp.ai_label, ''), COALESCE(lp.reply_intent, ''),
 		       COALESCE(ss.ids, '{}') AS sent_ids,
 		       EXISTS (
 		         SELECT 1 FROM campaign_contact_progress rp
@@ -1688,7 +2058,7 @@ func (r *campaignProgressRepository) CountUndeliverableLeads(ctx context.Context
 		LEFT JOIN LATERAL (
 			SELECT sequence_id, sent_at,
 			       CASE WHEN p.opened_machine THEN NULL ELSE p.opened_at END AS opened_at,
-			       clicked_at, replied_at, reply_class, ai_label
+			       clicked_at, replied_at, reply_class, ai_label, reply_intent
 			FROM campaign_contact_progress p
 			WHERE p.campaign_id = $1 AND p.contact_id = cl.contact_id AND p.sent_at IS NOT NULL
 			ORDER BY p.sent_at DESC LIMIT 1
@@ -1726,7 +2096,7 @@ func (r *campaignProgressRepository) CountUndeliverableLeads(ctx context.Context
 	for rows.Next() {
 		var in routeInput
 		var contactID uuid.UUID
-		if serr := rows.Scan(&contactID, &in.addedAt, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.sentIDs, &in.hasReplied); serr != nil {
+		if serr := rows.Scan(&contactID, &in.addedAt, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.replyIntent, &in.sentIDs, &in.hasReplied); serr != nil {
 			return 0, serr
 		}
 		res := router.route(campaignID, contactID, in)
@@ -1737,4 +2107,334 @@ func (r *campaignProgressRepository) CountUndeliverableLeads(ctx context.Context
 		}
 	}
 	return n, rows.Err()
+}
+
+// liveHold is the "this lead's flow is parked right now" predicate, on a given
+// table alias. One definition, because the router, the Leads list, the
+// scope-chip counts and the send gate all have to agree on it to the second.
+func liveHold(alias string) string {
+	return alias + ".paused_at IS NOT NULL AND (" + alias + ".paused_until IS NULL OR " + alias + ".paused_until > NOW())"
+}
+
+// holdColumns is what HoldLead and GetLeadHold return, in scanHold's order.
+const holdColumns = `paused_at, paused_until, COALESCE(pause_reason, ''), COALESCE(pause_source, '')`
+
+// scanHold reads holdColumns into a LeadHold, or nil when the row carries no
+// hold. now decides liveness so a caller reports the state it just wrote
+// rather than re-deriving it against a second clock.
+func scanHold(row pgx.Row, now time.Time) (*models.LeadHold, error) {
+	var pausedAt, until *time.Time
+	var reason, source string
+	if err := row.Scan(&pausedAt, &until, &reason, &source); err != nil {
+		return nil, err
+	}
+	if pausedAt == nil || (until != nil && !until.After(now)) {
+		return nil, nil
+	}
+	return &models.LeadHold{Since: *pausedAt, Until: until, Reason: reason, Source: source}, nil
+}
+
+// automaticHoldGuard is what keeps an out-of-office auto-reply from ever
+// shortening or overruling a person's decision: the write is refused unless
+// the lead is unheld, or held by an earlier automatic hold this one extends.
+// alias names the campaign_leads row; untilParam is cast explicitly because
+// inside the guard it is only ever compared, so Postgres has nothing to infer
+// its type from and refuses the statement.
+func automaticHoldGuard(alias, untilParam string) string {
+	return `
+		  AND (
+		    NOT (` + liveHold(alias) + `)
+		    OR (` + alias + `.pause_source IN ('out_of_office', 'inbox_tagging') AND ` + alias + `.paused_until IS NOT NULL
+		        AND (` + untilParam + `::timestamptz IS NULL
+		             OR ` + alias + `.paused_until < ` + untilParam + `::timestamptz))
+		  )`
+}
+
+// automaticHoldSource reports a hold the system wrote, which a member's own
+// pause always outranks and a longer automatic hold is never cut short by.
+func automaticHoldSource(source string) bool {
+	return source == models.LeadHoldSourceOutOfOffice || source == models.LeadHoldSourceInboxTagging
+}
+
+// HoldLead parks one lead's flow and returns the hold it wrote.
+//
+// Replacing a hold that is still LIVE keeps the original paused_at, because the
+// lead has been held continuously since then and that instant is what the
+// step's remaining wait is measured against. It is also what makes the write
+// idempotent: replaying the same pause lands on exactly the same row.
+//
+// The guard is what keeps an out-of-office auto-reply from ever shortening or
+// overruling a person's decision.
+func (r *campaignProgressRepository) HoldLead(ctx context.Context, campaignID, contactID uuid.UUID, until *time.Time, reason, source string) (*models.LeadHold, error) {
+	guard := ""
+	if automaticHoldSource(source) {
+		guard = automaticHoldGuard("campaign_leads", "$3")
+	}
+	now := time.Now()
+	hold, err := scanHold(r.db.QueryRow(ctx, `
+		UPDATE campaign_leads
+		SET paused_at = CASE WHEN `+liveHold("campaign_leads")+` THEN paused_at ELSE NOW() END,
+		    paused_until = $3,
+		    pause_reason = NULLIF($4, ''),
+		    pause_source = $5
+		WHERE campaign_id = $1 AND contact_id = $2`+guard+`
+		RETURNING `+holdColumns,
+		campaignID, contactID, until, reason, source), now)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Either the contact is not a lead, or the guard refused. The caller
+		// tells them apart with GetLeadHold when it needs to.
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return hold, nil
+}
+
+// HoldLeadEverywhere parks one contact's flow in every campaign they are still
+// a lead of, and returns the campaigns it held.
+//
+// One statement rather than a read-then-write loop, so two away messages
+// arriving at once cannot each decide against a snapshot the other has already
+// moved: the guard is evaluated against the row it updates, exactly as in
+// HoldLead.
+//
+// Completed campaigns are left out because nothing in them will send again;
+// draft and paused ones are held, since the contact is still their lead and an
+// away message that lands the day before a campaign starts is about the same
+// desk. Every automatic hold carries an end, so one written into a campaign
+// that never launches expires on its own.
+func (r *campaignProgressRepository) HoldLeadEverywhere(ctx context.Context, contactID uuid.UUID, until *time.Time, reason, source string) ([]uuid.UUID, error) {
+	guard := ""
+	if automaticHoldSource(source) {
+		guard = automaticHoldGuard("cl", "$2")
+	}
+	rows, err := r.db.Query(ctx, `
+		UPDATE campaign_leads cl
+		SET paused_at = CASE WHEN `+liveHold("cl")+` THEN cl.paused_at ELSE NOW() END,
+		    paused_until = $2,
+		    pause_reason = NULLIF($3, ''),
+		    pause_source = $4
+		FROM campaigns c
+		WHERE cl.contact_id = $1
+		  AND c.id = cl.campaign_id
+		  AND c.status <> 'completed'`+guard+`
+		RETURNING cl.campaign_id`,
+		contactID, until, reason, source)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var held []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		held = append(held, id)
+	}
+	return held, rows.Err()
+}
+
+// ResumeLead lifts the hold now. The held time goes with it: "resume now"
+// means now, and the step's remaining wait is only preserved when a hold ends
+// on its own. Reports whether a hold was actually lifted, and
+// ErrLeadNotInCampaign when the contact is not a lead of the campaign, so a
+// resume that changed nothing is not mistaken for one that did.
+func (r *campaignProgressRepository) ResumeLead(ctx context.Context, campaignID, contactID uuid.UUID) (bool, error) {
+	// RETURNING sees the row AFTER the update, so whether there was a hold to
+	// lift is read from the pre-update snapshot the CTE holds.
+	var held bool
+	err := r.db.QueryRow(ctx, `
+		WITH prev AS (
+			SELECT paused_at FROM campaign_leads WHERE campaign_id = $1 AND contact_id = $2
+		), lifted AS (
+			UPDATE campaign_leads
+			SET paused_at = NULL, paused_until = NULL, pause_reason = NULL, pause_source = NULL
+			WHERE campaign_id = $1 AND contact_id = $2
+			RETURNING 1
+		)
+		SELECT (SELECT paused_at IS NOT NULL FROM prev) FROM lifted
+	`, campaignID, contactID).Scan(&held)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrLeadNotInCampaign
+	}
+	if err != nil {
+		return false, err
+	}
+	return held, nil
+}
+
+// GetLeadHold reads the live hold, telling "not held" apart from "not a lead"
+// so the caller can answer 404 rather than 200 for a contact that was never in
+// the campaign.
+func (r *campaignProgressRepository) GetLeadHold(ctx context.Context, campaignID, contactID uuid.UUID) (*models.LeadHold, error) {
+	hold, err := scanHold(r.db.QueryRow(ctx,
+		`SELECT `+holdColumns+` FROM campaign_leads WHERE campaign_id = $1 AND contact_id = $2`,
+		campaignID, contactID), time.Now())
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrLeadNotInCampaign
+	}
+	return hold, err
+}
+
+// CountHeldLeads counts the leads whose flow is parked right now. A campaign
+// whose remaining leads are ALL held has not finished: routing reports no next
+// due time for a hold with no end, and without this the scheduler would read
+// that as "everything sent" and close the campaign (issue #470).
+func (r *campaignProgressRepository) CountHeldLeads(ctx context.Context, campaignID uuid.UUID) (int, error) {
+	var n int
+	err := r.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM campaign_leads cl
+		WHERE cl.campaign_id = $1 AND `+liveHold("cl"),
+		campaignID).Scan(&n)
+	return n, err
+}
+
+// routedLeadsQuery is the lead scan FindRoutedPairs and LeadSupply share: the
+// campaign's leads with their last-sent step and engagement, minus every lead
+// a pre-send gate would refuse. Both walk it through the same router, so a
+// count can never include a lead the send path would not offer. order is the
+// ORDER BY expression; $1 is the campaign and $2 the send-attempt ceiling.
+func routedLeadsQuery(order string) string {
+	return `
+		SELECT cl.contact_id, cl.added_at, cl.email_account_id,
+		       lp.sequence_id, lp.sent_at, lp.opened_at, lp.clicked_at, lp.replied_at, COALESCE(lp.reply_class, ''), COALESCE(lp.ai_label, ''), COALESCE(lp.reply_intent, ''),
+		       COALESCE(ss.ids, '{}') AS sent_ids,
+		       EXISTS (
+		         SELECT 1 FROM campaign_contact_progress rp
+		         WHERE rp.campaign_id = $1 AND rp.contact_id = cl.contact_id AND rp.replied_at IS NOT NULL
+		       ) AS has_replied,
+		       ` + leadHoldColumns + `
+		FROM campaign_leads cl
+		JOIN contacts c ON c.id = cl.contact_id
+		LEFT JOIN LATERAL (
+			SELECT sequence_id, sent_at,
+			       CASE WHEN p.opened_machine THEN NULL ELSE p.opened_at END AS opened_at,
+			       clicked_at, replied_at, reply_class, ai_label, reply_intent
+			FROM campaign_contact_progress p
+			WHERE p.campaign_id = $1 AND p.contact_id = cl.contact_id AND p.sent_at IS NOT NULL
+			ORDER BY p.sent_at DESC LIMIT 1
+		) lp ON true
+		LEFT JOIN LATERAL (
+			SELECT array_agg(sequence_id) AS ids
+			FROM campaign_contact_progress p2
+			WHERE p2.campaign_id = $1 AND p2.contact_id = cl.contact_id
+			  AND (p2.sent_at IS NOT NULL OR p2.dispatched_at IS NOT NULL)
+		) ss ON true
+		WHERE cl.campaign_id = $1
+		  AND NOT EXISTS (
+		    SELECT 1 FROM campaign_contact_progress b
+		    WHERE b.contact_id = cl.contact_id AND b.bounced_at IS NOT NULL
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1 FROM campaign_contact_progress f
+		    WHERE f.campaign_id = $1 AND f.contact_id = cl.contact_id
+		      AND f.sent_at IS NULL AND f.failed_at IS NOT NULL
+		      AND f.send_attempts >= $2
+		  )
+		  -- The workspace suppression list (addresses and domains) and the
+		  -- contact's own subscription flag are both send gates; the audience
+		  -- count applies the same two, so the number shown is the number sent.
+		  AND NOT recipient_suppressed((SELECT organization_id FROM campaigns WHERE id = $1), c.email)
+		  AND c.subscribed IS NOT FALSE
+		  -- Addresses the pre-send gates in the campaign task would refuse.
+		  -- Without this the finder keeps handing back the same undeliverable
+		  -- contact, the task skips it, and the campaign never reaches the
+		  -- healthy leads behind it (issue #200). Read from the contact's
+		  -- CURRENT verification state, so re-verifying an address puts it
+		  -- straight back into routing.
+		  AND NOT ` + undeliverableClause("$1") + `
+		ORDER BY ` + order + `
+	`
+}
+
+// LeadSupply is where a campaign's routable leads stand, counted for a day's
+// plan. Only email steps count as sends; an action or wait node due now is
+// executed without a mailbox and is not counted anywhere here.
+type LeadSupply struct {
+	// DueNow is the email steps that could go this minute, and
+	// DueNowNewLeads how many of them are first emails.
+	DueNow         int
+	DueNowNewLeads int
+	// DueLaterToday is the email steps whose wait elapses before `until`,
+	// and DueLaterTodayNewLeads how many of those are first emails.
+	DueLaterTodayNewLeads int
+	DueLaterToday         int
+	// WaitingOnStep is the leads whose next step is due after `until`.
+	WaitingOnStep int
+	// WaitingOnCondition is the leads inside an undecided branch window.
+	WaitingOnCondition int
+	// Held is the leads under a live hold with no end.
+	Held int
+	// WaitingOnSender is the due email steps whose own mailbox has nothing
+	// left today; each contact keeps the address they first heard from.
+	WaitingOnSender int
+	// NextDueAt is the soonest moment a waiting lead becomes due.
+	NextDueAt *time.Time
+}
+
+// LeadSupply walks every routable lead through the campaign's routing and
+// tallies where each one stands relative to now and `until`.
+func (r *campaignProgressRepository) LeadSupply(ctx context.Context, campaignID uuid.UUID, until time.Time, unavailable map[uuid.UUID]bool) (*LeadSupply, error) {
+	out := &LeadSupply{}
+	router, err := r.loadRouter(ctx, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	if router == nil {
+		return out, nil
+	}
+	rows, err := r.db.Query(ctx, routedLeadsQuery("c.created_at ASC"), campaignID, config.CampaignSendMaxAttempts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	noteDue := func(at time.Time) {
+		if out.NextDueAt == nil || at.Before(*out.NextDueAt) {
+			t := at
+			out.NextDueAt = &t
+		}
+	}
+	for rows.Next() {
+		var in routeInput
+		var contactID uuid.UUID
+		if serr := rows.Scan(&contactID, &in.addedAt, &in.sender, &in.lastSeq, &in.sentAt, &in.openedAt, &in.clickedAt, &in.repliedAt, &in.replyClass, &in.aiLabel, &in.replyIntent, &in.sentIDs, &in.hasReplied,
+			&in.pausedAt, &in.pausedUntil, &in.pauseReason, &in.pauseSource); serr != nil {
+			return nil, serr
+		}
+		res := router.route(campaignID, contactID, in)
+		switch {
+		case res.Hold != nil && res.Hold.Until == nil:
+			out.Held++
+		case res.WaitUntil != nil:
+			out.WaitingOnCondition++
+			noteDue(*res.WaitUntil)
+		case res.Target == nil || !router.isEmailStep(*res.Target):
+			// Finished, or a node that sends nothing.
+		case res.DueAt != nil && res.DueAt.After(router.dueBy):
+			noteDue(*res.DueAt)
+			if res.DueAt.After(until) {
+				out.WaitingOnStep++
+				continue
+			}
+			if in.sender != nil && unavailable[*in.sender] {
+				out.WaitingOnSender++
+				continue
+			}
+			out.DueLaterToday++
+			if res.IsNewLead {
+				out.DueLaterTodayNewLeads++
+			}
+		case in.sender != nil && unavailable[*in.sender]:
+			out.WaitingOnSender++
+		default:
+			out.DueNow++
+			if res.IsNewLead {
+				out.DueNowNewLeads++
+			}
+		}
+	}
+	return out, rows.Err()
 }

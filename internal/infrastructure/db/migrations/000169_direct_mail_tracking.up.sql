@@ -1,0 +1,10 @@
+-- Opt-in open/click tracking for mail written in the unibox.
+ALTER TABLE email_accounts
+    ADD COLUMN IF NOT EXISTS track_direct_mail BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE email_tasks
+    ADD COLUMN IF NOT EXISTS tracked BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS opened_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS opened_machine BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS clicked_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS click_count INTEGER NOT NULL DEFAULT 0;

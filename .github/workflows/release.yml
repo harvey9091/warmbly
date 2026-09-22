@@ -5,6 +5,19 @@ on:
     tags:
       - "v*.*.*"
 
+# One release at a time. Every build writes a buildx cache scope named after
+# the service, so two releases running together export to the same scope and
+# one of them loses the race: the layer blob it is writing disappears under it
+# and the whole build ends on "error writing layer blob: not_found", after the
+# compile succeeded. Tagging twice in quick succession is the ordinary way to
+# hit that, and it reads as a broken build rather than a collision.
+#
+# Not cancel-in-progress: a release that is half-way through pushing images is
+# the last thing that should be interrupted. The second tag waits its turn.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/warmbly
@@ -64,6 +77,12 @@ jobs:
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
             BUILT_AT=${{ github.event.head_commit.timestamp }}
+            POSTHOG_CLI_PROJECT_ID=${{ vars.POSTHOG_CLI_PROJECT_ID }}
+            POSTHOG_CLI_HOST=${{ vars.POSTHOG_CLI_HOST }}
+          # Only the forms image mounts this: it builds the form page app and
+          # uploads its source maps the way the dashboard image does.
+          secrets: |
+            posthog_cli_api_key=${{ secrets.POSTHOG_CLI_API_KEY }}
           tags: |
             ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ github.ref_name }}
             ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:v${{ needs.validate-tag.outputs.minor }}

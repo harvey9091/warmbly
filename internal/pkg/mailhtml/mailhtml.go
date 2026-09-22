@@ -41,6 +41,10 @@ func newDisplayPolicy() *bluemonday.Policy {
 
 	p.SkipElementsContent(skipContent...)
 
+	// Preserve only known mail-client quote markers for the reader's history toggle.
+	p.AllowAttrs("class").Matching(regexp.MustCompile(`^(\s*(gmail_quote|gmail_quote_container|gmail_extra|yahoo_quoted|moz-cite-prefix)\s*)+$`)).OnElements("div", "blockquote", "span", "p")
+	p.AllowAttrs("type").Matching(regexp.MustCompile(`(?i)^cite$`)).OnElements("blockquote")
+
 	// Legacy presentational markup that HTML mail still ships.
 	p.AllowElements("center", "font", "big", "tt")
 	p.AllowAttrs("color", "face", "size").OnElements("font")
@@ -93,7 +97,7 @@ func Sanitize(raw string) string {
 	if strings.TrimSpace(raw) == "" {
 		return ""
 	}
-	return displayPolicy.Sanitize(raw)
+	return stripOpenTrackingPixels(displayPolicy.Sanitize(raw))
 }
 
 // tagPattern matches an HTML tag opener. A plain-text body that merely

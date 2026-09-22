@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -48,8 +49,12 @@ type MailboxPlacementState struct {
 	// no capacity row yet.
 	WorkerUtilization float64
 
-	WorkerTotalMailboxes int
-	WorkerOrgMailboxes   int
+	WorkerTotalMailboxes    int
+	WorkerOrgMailboxes      int
+	WorkerProviderMailboxes int
+	OrgTotalMailboxes       int
+	ProviderTotalMailboxes  int
+	LiveWorkerCount         int
 
 	// ReservedWorkerID is the worker reserved for this mailbox's organization,
 	// when it has isolated egress. Nil for everyone else.
@@ -73,6 +78,35 @@ func (s MailboxPlacementState) Residency(now time.Time) time.Duration {
 	return d
 }
 
+// OrganizationPlacementImbalanced reports organization concentration above a fair share.
+func (s MailboxPlacementState) OrganizationPlacementImbalanced() bool {
+	if s.LiveWorkerCount <= 1 {
+		return false
+	}
+	if s.ReservedWorkerID != nil && s.WorkerID != nil && *s.ReservedWorkerID == *s.WorkerID {
+		return false
+	}
+	orgShare := math.Ceil(float64(s.OrgTotalMailboxes) / float64(s.LiveWorkerCount))
+	return float64(s.WorkerOrgMailboxes) > orgShare
+}
+
+// ProviderPlacementImbalanced reports provider concentration above a fair share.
+func (s MailboxPlacementState) ProviderPlacementImbalanced() bool {
+	if s.LiveWorkerCount <= 1 {
+		return false
+	}
+	if s.ReservedWorkerID != nil && s.WorkerID != nil && *s.ReservedWorkerID == *s.WorkerID {
+		return false
+	}
+	providerShare := math.Ceil(float64(s.ProviderTotalMailboxes) / float64(s.LiveWorkerCount))
+	return float64(s.WorkerProviderMailboxes) > providerShare
+}
+
+// PlacementImbalanced reports concentration that another live worker can relieve.
+func (s MailboxPlacementState) PlacementImbalanced() bool {
+	return s.OrganizationPlacementImbalanced() || s.ProviderPlacementImbalanced()
+}
+
 const placementCandidateSelect = `
 	SELECT v.worker_id, v.region, v.health_state,
 	       v.load_score, v.base_capacity, v.health_multiplier, v.age_multiplier,
@@ -81,6 +115,8 @@ const placementCandidateSelect = `
 	       COALESCE(neighbours.total_count, 0), COALESCE(neighbours.org_count, 0), COALESCE(neighbours.provider_count, 0)
 	  FROM worker_capacity_view v
 	  JOIN fleet_nodes node ON node.id = v.worker_id
+	  LEFT JOIN dedicated_worker_assignments reservation
+	         ON reservation.worker_id = v.worker_id AND reservation.released_at IS NULL
 	  LEFT JOIN LATERAL (
 	      SELECT count(*) AS total_count,
 	             count(*) FILTER (WHERE ea.organization_id = $1) AS org_count,
@@ -91,6 +127,7 @@ const placementCandidateSelect = `
 	 WHERE v.health_state = ANY($3::text[])
 	   AND node.active
 	   AND node.last_seen_at > now() - $4::interval
+	   AND (reservation.organization_id IS NULL OR reservation.organization_id = $1)
 `
 
 // ListPlacementCandidates returns every worker that may host a mailbox for the
@@ -150,26 +187,75 @@ func (r *workerRepository) CountOrgMailboxes(ctx context.Context, orgID uuid.UUI
 }
 
 const mailboxPlacementStateSelect = `
+	WITH shared_workers AS MATERIALIZED (
+	    SELECT live_worker.id
+	      FROM workers live_worker
+	      JOIN fleet_nodes live_node ON live_node.id = live_worker.id
+	      LEFT JOIN dedicated_worker_assignments live_reservation
+	             ON live_reservation.worker_id = live_worker.id AND live_reservation.released_at IS NULL
+	     WHERE live_worker.health_state IN ('healthy', 'watch')
+	       AND live_node.active
+	       AND live_node.last_seen_at > now() - $1::interval
+	       AND live_reservation.worker_id IS NULL
+	),
+	assigned_mailboxes AS MATERIALIZED (
+	    SELECT ea.worker_id, ea.organization_id, ea.provider
+	      FROM email_accounts ea
+	      JOIN shared_workers shared ON shared.id = ea.worker_id
+	),
+	worker_totals AS (
+	    SELECT worker_id, count(*) AS total_count
+	      FROM assigned_mailboxes
+	     GROUP BY worker_id
+	),
+	worker_org_totals AS (
+	    SELECT worker_id, organization_id, count(*) AS total_count
+	      FROM assigned_mailboxes
+	     GROUP BY worker_id, organization_id
+	),
+	worker_provider_totals AS (
+	    SELECT worker_id, provider, count(*) AS total_count
+	      FROM assigned_mailboxes
+	     GROUP BY worker_id, provider
+	),
+	org_totals AS (
+	    SELECT organization_id, count(*) AS total_count
+	      FROM assigned_mailboxes
+	     GROUP BY organization_id
+	),
+	provider_totals AS (
+	    SELECT provider, count(*) AS total_count
+	      FROM assigned_mailboxes
+	     GROUP BY provider
+	),
+	fleet AS (
+	    SELECT count(*) AS live_count FROM shared_workers
+	)
 	SELECT ea.id, ea.organization_id, ea.provider::text, (ea.warmup IS NOT NULL),
 	       ea.worker_id, ea.worker_assigned_at,
 	       COALESCE(node.active, false),
 	       COALESCE(node.last_seen_at > now() - $1::interval, false),
 	       COALESCE(w.health_state, 'healthy'),
 	       COALESCE(node.region, ''),
-	       COALESCE(v.load_score / GREATEST(v.base_capacity * v.health_multiplier * v.age_multiplier, 1), 0),
-	       COALESCE(neighbours.total_count, 0), COALESCE(neighbours.org_count, 0),
+	       COALESCE(v.load_score / GREATEST(v.base_capacity * v.health_multiplier, 1), 0),
+	       COALESCE(worker_totals.total_count, 0), COALESCE(worker_org_totals.total_count, 0), COALESCE(worker_provider_totals.total_count, 0),
+	       COALESCE(org_totals.total_count, 0), COALESCE(provider_totals.total_count, 0), COALESCE(fleet.live_count, 0),
 	       own.worker_id,
 	       (here.organization_id IS NOT NULL AND here.organization_id IS DISTINCT FROM ea.organization_id)
 	  FROM email_accounts ea
 	  LEFT JOIN workers w ON w.id = ea.worker_id
 	  LEFT JOIN fleet_nodes node ON node.id = ea.worker_id
 	  LEFT JOIN worker_capacity_view v ON v.worker_id = ea.worker_id
-	  LEFT JOIN LATERAL (
-	      SELECT count(*) AS total_count,
-	             count(*) FILTER (WHERE peer.organization_id = ea.organization_id) AS org_count
-	        FROM email_accounts peer
-	       WHERE peer.worker_id = ea.worker_id
-	  ) neighbours ON true
+	  LEFT JOIN worker_totals ON worker_totals.worker_id = ea.worker_id
+	  LEFT JOIN worker_org_totals
+	         ON worker_org_totals.worker_id = ea.worker_id
+	        AND worker_org_totals.organization_id = ea.organization_id
+	  LEFT JOIN worker_provider_totals
+	         ON worker_provider_totals.worker_id = ea.worker_id
+	        AND worker_provider_totals.provider = ea.provider
+	  LEFT JOIN org_totals ON org_totals.organization_id = ea.organization_id
+	  LEFT JOIN provider_totals ON provider_totals.provider = ea.provider
+	  CROSS JOIN fleet
 	  LEFT JOIN dedicated_worker_assignments own
 	         ON own.organization_id = ea.organization_id AND own.released_at IS NULL
 	  LEFT JOIN dedicated_worker_assignments here
@@ -183,26 +269,14 @@ func scanMailboxPlacementState(row pgx.Row) (*MailboxPlacementState, error) {
 		&s.WorkerID, &s.AssignedAt,
 		&s.WorkerActive, &s.WorkerLive, &s.WorkerHealth, &s.WorkerRegion,
 		&s.WorkerUtilization,
-		&s.WorkerTotalMailboxes, &s.WorkerOrgMailboxes,
+		&s.WorkerTotalMailboxes, &s.WorkerOrgMailboxes, &s.WorkerProviderMailboxes,
+		&s.OrgTotalMailboxes, &s.ProviderTotalMailboxes, &s.LiveWorkerCount,
 		&s.ReservedWorkerID, &s.WorkerReservedForOtherOrg,
 	)
 	if err != nil {
 		return nil, err
 	}
 	return &s, nil
-}
-
-// GetMailboxPlacementState loads one mailbox's placement facts.
-func (r *workerRepository) GetMailboxPlacementState(ctx context.Context, emailAccountID uuid.UUID) (*MailboxPlacementState, error) {
-	s, err := scanMailboxPlacementState(
-		r.db.QueryRow(ctx, mailboxPlacementStateSelect+` WHERE ea.id = $2`, WorkerLivenessWindow, emailAccountID))
-	if err == pgx.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return s, nil
 }
 
 // ListRotationCandidates returns assigned mailboxes whose current worker is
@@ -220,7 +294,11 @@ func (r *workerRepository) ListRotationCandidates(ctx context.Context, hotUtiliz
 	         COALESCE(node.active, false) = false
 	      OR COALESCE(node.last_seen_at > now() - $1::interval, false) = false
 	      OR COALESCE(w.health_state, 'healthy') <> ALL (ARRAY['healthy', 'watch'])
-	      OR COALESCE(v.load_score / GREATEST(v.base_capacity * v.health_multiplier * v.age_multiplier, 1), 0) > $2
+	      OR COALESCE(v.load_score / GREATEST(v.base_capacity * v.health_multiplier, 1), 0) > $2
+	      OR (own.worker_id IS NULL AND COALESCE(fleet.live_count, 0) > 1 AND (
+	            COALESCE(worker_org_totals.total_count, 0) > CEIL(COALESCE(org_totals.total_count, 0)::numeric / NULLIF(fleet.live_count, 0))
+	         OR COALESCE(worker_provider_totals.total_count, 0) > CEIL(COALESCE(provider_totals.total_count, 0)::numeric / NULLIF(fleet.live_count, 0))
+	      ))
 	      -- isolation drift, in both directions: a stranger sitting on someone's
 	      -- reserved worker, and an entitled org's mailbox that is not on theirs.
 	      OR (here.organization_id IS NOT NULL AND here.organization_id IS DISTINCT FROM ea.organization_id)

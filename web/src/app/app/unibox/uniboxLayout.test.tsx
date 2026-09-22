@@ -15,9 +15,10 @@
 // which state survives a remount.
 
 import React from "react";
-import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { screen, act, fireEvent } from "@testing-library/react";
 import { useAppStore } from "@/stores";
+import { replyDraftKey } from "@/lib/unibox/replyDraft";
 import {
     UNIBOX_LIST_DEFAULT_WIDTH,
     UNIBOX_LIST_MAX_WIDTH,
@@ -33,6 +34,8 @@ import {
     SUITE,
 } from "./uniboxHarness";
 
+const threadFixture = vi.hoisted(() => ({ includeNewer: false }));
+
 beforeAll(() => {
     installLayoutShims();
     // A 14" laptop: wide enough for the three-column inbox, which is the
@@ -42,8 +45,12 @@ beforeAll(() => {
 
 vi.mock("@/lib/api/client/Request", () => ({
     default: async (cfg: { url?: string }) => {
-        const { route } = await import("./uniboxHarness");
-        return route(String(cfg?.url ?? ""));
+        const { route, ROWS } = await import("./uniboxHarness");
+        const url = String(cfg?.url ?? "");
+        if (threadFixture.includeNewer && url.startsWith("/unibox/thread?") && url.includes("thread-4")) {
+            return { data: [ROWS[4], { ...ROWS[4], id: "newer-message" }], pagination: { has_more: false } };
+        }
+        return route(url);
     },
 }));
 vi.mock("@/lib/helper/getToken", () => ({
@@ -96,19 +103,40 @@ async function drag(fromX: number, toX: number) {
 
 async function openThread(subject: string) {
     await act(async () => {
-        fireEvent.click(screen.getByText(subject).closest("button")!);
+        fireEvent.click(screen.getByText(subject).closest('[role="button"]')!);
     });
     await settle();
 }
 
 describe("unibox desktop layout (#473)", SUITE, () => {
     beforeEach(() => {
+        threadFixture.includeNewer = false;
         resetScrollTops();
         useAppStore.setState({
             navCollapsed: false,
             uniboxListWidth: UNIBOX_LIST_DEFAULT_WIDTH,
             uniboxContactRailOpen: true,
         });
+    });
+
+    afterEach(() => {
+        vi.mocked(localStorage.getItem).mockReset();
+    });
+
+    it("reopens a personal draft on an older message when newer mail exists", async () => {
+        threadFixture.includeNewer = true;
+        useAppStore.setState({ currentOrganization: { id: "org-1", name: "Org", role: "owner" } });
+        const key = replyDraftKey("u1", "org-1", "thread-4", "msg-4", "reply");
+        vi.mocked(localStorage.getItem).mockImplementation((item: string) => item === key
+            ? JSON.stringify({ to: ["s4@example.com"], cc: [], bcc: [], subject: "Re: Subject 4", body: "My older reply" })
+            : null);
+        await mount("/app/unibox/all");
+        await settle();
+        await openThread("Subject 4");
+        expect(screen.getByPlaceholderText(/Write your reply/)).toHaveValue("My older reply");
+        await act(async () => fireEvent.click(screen.getByLabelText("Close composer, keeping the draft")));
+        await settle();
+        expect(screen.queryByPlaceholderText(/Write your reply/)).toBeNull();
     });
 
     describe("collapsible left navigation", () => {
@@ -241,12 +269,18 @@ describe("unibox desktop layout (#473)", SUITE, () => {
     });
 
     describe("contact rail", () => {
-        it("opens by default and stays closed once closed, thread after thread", async () => {
+        it("starts closed by default, and each state sticks thread after thread", async () => {
+            const initial = useAppStore.getInitialState().uniboxContactRailOpen;
+            expect(initial).toBe(false);
+            useAppStore.setState({ uniboxContactRailOpen: initial });
             await mount("/app/unibox/all");
             await settle();
-
             await openThread("Subject 4");
-            // Default is still open, which is what 568bdb48 settled on.
+            expect(screen.getByLabelText("Show contact panel")).toBeTruthy();
+
+            await act(async () => {
+                fireEvent.click(screen.getByLabelText("Show contact panel"));
+            });
             const toggle = screen.getByLabelText("Hide contact panel");
 
             await act(async () => {

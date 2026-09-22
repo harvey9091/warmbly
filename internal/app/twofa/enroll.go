@@ -32,7 +32,15 @@ func (s *service) EnrollStart(ctx context.Context, userID uuid.UUID) (*EnrollSta
 	if err := s.repo.UpsertPending(ctx, userID, sealed); err != nil {
 		return nil, errx.InternalError()
 	}
-	return &EnrollStart{Secret: secret, OtpauthURI: OtpauthURI(issuer, user.Email, secret)}, nil
+	return &EnrollStart{
+		Secret:     secret,
+		OtpauthURI: OtpauthURI(issuer, user.Email, secret),
+		Issuer:     issuer,
+		Account:    user.Email,
+		Algorithm:  "SHA1",
+		Digits:     totpDigits,
+		Period:     totpPeriod,
+	}, nil
 }
 
 // EnrollConfirm verifies a code against the pending secret, enables 2FA, and
@@ -53,7 +61,7 @@ func (s *service) EnrollConfirm(ctx context.Context, userID uuid.UUID, code stri
 		return nil, errx.InternalError()
 	}
 	if !ValidateCode(secret, code) {
-		return nil, errx.New(errx.BadRequest, "Invalid code")
+		return nil, ErrInvalidCode()
 	}
 	codes, hashes, err := generateRecoveryCodes()
 	if err != nil {

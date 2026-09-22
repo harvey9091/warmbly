@@ -13,7 +13,7 @@ const plans = [
     annual: 23,
     summary: 'For small teams getting started with cold outreach.',
     sendsPerDay: 150,
-    href: 'https://app.warmbly.com/register?plan=starter',
+    href: 'https://app.warmbly.com/auth/register?plan=starter',
     cta: 'Choose plan',
     highlight: false,
     features: [
@@ -30,7 +30,7 @@ const plans = [
     annual: 71,
     summary: 'For teams scaling outreach across multiple senders.',
     sendsPerDay: 3000,
-    href: 'https://app.warmbly.com/register?plan=grow',
+    href: 'https://app.warmbly.com/auth/register?plan=grow',
     cta: 'Choose plan',
     highlight: false,
     features: [
@@ -47,7 +47,7 @@ const plans = [
     annual: 263,
     summary: 'For established teams with serious sending volume.',
     sendsPerDay: 15000,
-    href: 'https://app.warmbly.com/register?plan=business',
+    href: 'https://app.warmbly.com/auth/register?plan=business',
     cta: 'Choose plan',
     highlight: true,
     features: [
@@ -252,9 +252,13 @@ const headers = ['Starter', 'Grow', 'Business', 'Enterprise'];
       </div>
 
       <p class="mt-9 text-center text-[13.5px] text-foreground/65 max-w-2xl mx-auto leading-relaxed">
-        Rather run it yourself? Self-hosting is free, forever. Once Warmbly Cloud launches, link your instance and we run the
-        warmup for your mailboxes in the shared pool, free for up to 10 mailboxes and $15 a month for unlimited.
-        Everything else, sending, inbox, campaigns and data, stays on your server.
+        Applicable taxes are calculated from your billing address and shown before you pay. Where supported, business buyers can add their legal name and tax ID at checkout.
+      </p>
+
+      <p class="mt-4 text-center text-[13.5px] text-foreground/65 max-w-2xl mx-auto leading-relaxed">
+        Only warming? The Warmup plan is $15 a month for the premium pool, with better deliverability and no mailbox cap, whether your mailboxes are connected
+        here or on a self-hosted instance you link. Rather run it yourself? Self-hosting is free, forever, and everything
+        else, sending, inbox, campaigns and data, stays on your server.
       </p>
     </div>
   </section>
@@ -424,7 +428,9 @@ const headers = ['Starter', 'Grow', 'Business', 'Enterprise'];
           ['Can a self-hosted instance use the warmup pool?', 'Yes, once Warmbly Cloud launches. Open Settings, Warmbly Cloud on your instance, approve the code here, and pick the mailboxes to enroll. Warmbly runs their warmup in the shared pool; sending, contacts and inbox stay on your server.'],
           ['Is there a per-seat charge?',    'No. Add as many teammates as you want. Roles and audit log unlock on Business.'],
           ['Annual billing?',                'Yes, with 20% off. Toggle is at the top of this page.'],
+          ['Can I buy as a business?',       'Yes. Add your legal business name and tax ID in Stripe Checkout. They appear on invoices, and Stripe applies reverse charge where the rules allow it. You can update both later from Settings, Billing, Payment.'],
           ['Is there a free plan?',          'Yes. A hosted workspace starts free with up to 10 mailboxes and warmup, no card and no time limit. Sending, the inbox and CRM unlock when you pick a plan. Self-hosting is free too.'],
+          ['Can I pay for warmup only?',     'Yes. The Warmup plan is $15 a month, or $144 a year, and is built for inbox placement. It moves your mailboxes into the premium pool for better deliverability, with mailboxes that start landing in spam removed early and no mailbox cap. It counts mailboxes connected on the cloud and through a linked self-hosted instance alike, so it is not tied to self-hosting. Sending needs one of the plans above.'],
           ['Refund policy?',                 'Full refund inside 14 days of a paid purchase if the platform did not work for you.'],
           ['Startup pricing?',               '50% off Grow for one year for pre-seed and seed companies on YC, Antler, EF, Techstars or similar.'],
         ].map(([q, a]) => (
@@ -489,7 +495,7 @@ const headers = ['Starter', 'Grow', 'Business', 'Enterprise'];
       </p>
       <div class="mt-10 flex flex-wrap items-center justify-center gap-3">
         <a
-          href="https://app.warmbly.com/register"
+          href="https://app.warmbly.com/auth/register"
           class="inline-flex h-11 px-5 items-center gap-2 rounded-[10px] text-[14.5px] font-semibold bg-white !text-[#075985] hover:bg-white hover:!text-[#0c4a6e] hover:-translate-y-0.5 hover:shadow-[0_12px_28px_-6px_rgba(0,0,0,0.3)] transition-all duration-200 ease-out shadow-[0_4px_14px_-2px_rgba(0,0,0,0.18)]"
         >
           <span class="text-[#075985]" style="color:#075985;">Start free</span>

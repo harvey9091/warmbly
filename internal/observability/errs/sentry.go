@@ -15,8 +15,12 @@ type sentrySink struct{}
 
 func newSentrySink(cfg Config) (sink, error) {
 	err := sentry.Init(sentry.ClientOptions{
-		Dsn:            cfg.SentryDSN,
-		SendDefaultPII: true,
+		Dsn: cfg.SentryDSN,
+		// Off deliberately: the services attach the ids an event needs
+		// themselves. SendDefaultPII would add request headers and bodies,
+		// which on this backend means Authorization headers, mailbox
+		// credentials on the connect path, and message content.
+		SendDefaultPII: false,
 		Environment:    cfg.Environment,
 		Release:        cfg.Release,
 		ServerName:     cfg.Service,

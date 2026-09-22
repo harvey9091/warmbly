@@ -7,10 +7,7 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// WorkerHealthState is the rolled-up health label maintained by the
-// assignment loop. Authoritative for "can this worker accept new
-// mailboxes" placement decisions. Mirrors the warmup health vocabulary
-// but applies to whole workers, not per-mailbox warmup state.
+// WorkerHealthState is the externally managed machine-health label used by placement.
 type WorkerHealthState string
 
 const (
@@ -118,10 +115,15 @@ type EmailSendError struct {
 
 // SendEmailResult is the result from worker after sending email
 type SendEmailResult struct {
-	TaskID         uuid.UUID       `json:"task_id" avro:"task_id"`
-	Success        bool            `json:"success" avro:"success"`
-	MessageID      string          `json:"message_id,omitempty" avro:"message_id"`
-	ProviderMsgID  string          `json:"provider_msg_id,omitempty" avro:"provider_msg_id"`
+	TaskID        uuid.UUID `json:"task_id" avro:"task_id"`
+	Success       bool      `json:"success" avro:"success"`
+	MessageID     string    `json:"message_id,omitempty" avro:"message_id"`
+	ProviderMsgID string    `json:"provider_msg_id,omitempty" avro:"provider_msg_id"`
+	// ThreadID is the provider-side conversation the message landed in, for
+	// the providers that have one (Gmail). The control plane records it
+	// against the task so the next step of the sequence can be appended to
+	// the same thread instead of opening a new one (issue #472).
+	ThreadID       string          `json:"thread_id,omitempty" avro:"thread_id"`
 	SentAt         time.Time       `json:"sent_at,omitempty" avro:"sent_at"`
 	Error          *EmailSendError `json:"error,omitempty" avro:"error"`
 	LegacyErrorMsg string          `json:"legacy_error,omitempty" avro:"legacy_error"` // Deprecated: use Error instead

@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"log"
+	"math"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -242,17 +244,33 @@ func newNodeAgent(workerID uuid.UUID, bindIP string) *nodeagent.Agent {
 		reportedIP = bindIP
 	}
 	return nodeagent.New(nodeagent.Config{
-		NodeID:  workerID,
-		Role:    models.NodeRoleWorker,
-		Name:    os.Getenv("WARMBLY_NODE_NAME"),
-		Region:  nodeRegion(),
-		Address: reportedIP,
-		Version: buildVersion(),
-		BaseURL: os.Getenv("ENCRYPTED_KEYS_BACKEND_URL"),
-		Token:   os.Getenv("ENCRYPTED_KEYS_WORKER_TOKEN"),
+		NodeID:         workerID,
+		Role:           models.NodeRoleWorker,
+		Name:           os.Getenv("WARMBLY_NODE_NAME"),
+		Region:         nodeRegion(),
+		Address:        reportedIP,
+		CapacityTarget: workerCapacityTarget(),
+		Version:        buildVersion(),
+		BaseURL:        os.Getenv("ENCRYPTED_KEYS_BACKEND_URL"),
+		Token:          os.Getenv("ENCRYPTED_KEYS_WORKER_TOKEN"),
 		// Written for the host-side updater installed by `warmbly join`.
 		TargetVersionPath: os.Getenv("WARMBLY_TARGET_VERSION_PATH"),
 	})
+}
+
+const defaultWorkerCapacityTarget = 100.0
+
+// workerCapacityTarget reads this machine's assigned-mailbox target.
+func workerCapacityTarget() float64 {
+	raw := strings.TrimSpace(os.Getenv("WARMBLY_WORKER_CAPACITY"))
+	if raw == "" {
+		return defaultWorkerCapacityTarget
+	}
+	n, err := strconv.ParseFloat(raw, 64)
+	if err != nil || n <= 0 || math.IsNaN(n) || math.IsInf(n, 0) || n > 99_999_999.99 {
+		return defaultWorkerCapacityTarget
+	}
+	return n
 }
 
 // nodeRegion reads the sign-in geography hint. WARMBLY_NODE_REGION is what the

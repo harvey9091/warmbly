@@ -1,9 +1,11 @@
 import React from "react";
 import { Link } from "react-router-dom";
-import { useAppStore } from "@/stores";
-import { TextInput } from "@/components/ui/field";
+import { useAppStore, type Organization as StoreOrganization } from "@/stores";
+import { FieldError, TextInput } from "@/components/ui/field";
+import { WORKSPACE_NAME_MAX, nameError, normalizeName } from "@/lib/displayName";
 import { Textarea } from "@/components/ui/textarea";
 import useUpdateOrganization from "@/lib/api/hooks/app/organizations/useUpdateOrganization";
+import type Organization from "@/lib/api/models/app/organizations/Organization";
 import { AvatarUploader } from "@/components/app/avatar/AvatarUploader";
 import {
     useDeleteOrgAvatar,
@@ -18,13 +20,37 @@ import { usePermission } from "@/hooks/usePermission";
 import useAiMetered from "@/hooks/useAiMetered";
 import AdvisorSettingsSection from "@/components/app/advisor/AdvisorSettingsSection";
 
+// Keyed on the workspace id, which is what makes a switch re-seed the editors
+// below. Each of them takes its initial value from the org it mounted with, and
+// nothing here re-reads that on a change: the name field kept the previous
+// workspace's name while the autosave baseline moved to the new one, so merely
+// switching workspaces (or creating one, which switches to it) saved the old
+// name over the new workspace's. That is the reported bug where renaming one
+// workspace renamed the other.
 export default function WorkspaceSettingsPage() {
     const currentOrg = useAppStore((s) => s.currentOrganization);
+    return <WorkspaceSettings key={currentOrg?.id ?? "none"} org={currentOrg} />;
+}
+
+function WorkspaceSettings({ org: currentOrg }: { org: StoreOrganization | null }) {
     const [name, setName] = React.useState(currentOrg?.name ?? "");
+    const orgID = currentOrg?.id;
 
     const uploadOrgAvatar = useUploadOrgAvatar();
     const removeOrgAvatar = useDeleteOrgAvatar();
     const updateOrg = useUpdateOrganization();
+
+    // Every save here renames whatever workspace the server session has
+    // selected, and a debounce or a blur armed on this page can land after a
+    // switch. orgID is the workspace this editor was opened for, so a write
+    // that would reach a different one is dropped rather than applied to it.
+    const saveToThisWorkspace = React.useCallback(
+        async (patch: Partial<Organization>) => {
+            if (!orgID || useAppStore.getState().currentOrganization?.id !== orgID) return;
+            await updateOrg.mutateAsync(patch);
+        },
+        [orgID, updateOrg],
+    );
 
     // Team presence privacy. The full org (with the flags) comes from
     // /organization/current; toggling saves immediately and the realtime
@@ -43,11 +69,11 @@ export default function WorkspaceSettingsPage() {
 
     const onToggleOnline = (next: boolean) => {
         setShowOnline(next);
-        updateOrg.mutate({ presence_show_online: next });
+        void saveToThisWorkspace({ presence_show_online: next });
     };
     const onToggleActivity = (next: boolean) => {
         setShowActivity(next);
-        updateOrg.mutate({ presence_show_activity: next });
+        void saveToThisWorkspace({ presence_show_activity: next });
     };
 
     // AI voice profile. Grounds every AI writing surface. Saved on blur when
@@ -67,7 +93,7 @@ export default function WorkspaceSettingsPage() {
         orgQuery.data?.voice_profile,
     ]);
     const saveVoiceField = (key: "product_description" | "icp_notes" | "voice_profile", value: string, saved: string) => {
-        if (value !== saved) updateOrg.mutate({ [key]: value });
+        if (value !== saved) void saveToThisWorkspace({ [key]: value });
     };
 
     // Inbox agent opt-in (paid). When on, an inbound human reply gets an
@@ -81,21 +107,23 @@ export default function WorkspaceSettingsPage() {
     }, [orgQuery.data?.inbox_agent_enabled, orgQuery.data?.assistant_shared_history]);
     const onToggleInboxAgent = (next: boolean) => {
         setInboxAgent(next);
-        updateOrg.mutate({ inbox_agent_enabled: next });
+        void saveToThisWorkspace({ inbox_agent_enabled: next });
     };
     const onToggleSharedHistory = (next: boolean) => {
         setSharedHistory(next);
-        updateOrg.mutate({ assistant_shared_history: next });
+        void saveToThisWorkspace({ assistant_shared_history: next });
     };
 
-    // Auto-save the workspace name ~700ms after typing stops. An empty name is
-    // never persisted; the field just stays unsaved until it's valid again.
+    // Auto-save the workspace name ~700ms after typing stops. A name the server
+    // would refuse is never sent; the field shows why and stays unsaved.
+    const nameInvalid = nameError("Workspace name", name, "workspace");
     const autosave = useAutosave({
-        value: name.trim(),
+        value: normalizeName(name),
         debounceMs: 700,
         save: async (v) => {
-            if (!v) throw new Error("name required");
-            await updateOrg.mutateAsync({ name: v });
+            const invalid = nameError("Workspace name", v, "workspace");
+            if (invalid) throw new Error(invalid);
+            await saveToThisWorkspace({ name: v });
         },
     });
     useRegisterUnsaved(autosave, () => setName(autosave.savedValue));
@@ -133,7 +161,17 @@ export default function WorkspaceSettingsPage() {
                     />
                 </Row>
                 <Row label="Workspace name" description="Shown in the sidebar and invitation emails.">
-                    <TextInput value={name} onChange={setName} className="w-full max-w-[280px]" />
+                    <div className="w-full max-w-[280px]">
+                        <TextInput
+                            value={name}
+                            onChange={setName}
+                            invalid={!!nameInvalid}
+                            title={nameInvalid ?? undefined}
+                            maxLength={WORKSPACE_NAME_MAX}
+                            className="w-full"
+                        />
+                        <FieldError message={nameInvalid} />
+                    </div>
                 </Row>
                 <Row
                     label="Workspace ID"

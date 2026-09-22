@@ -8,13 +8,14 @@ import {
     RouterProvider,
     useLocation,
 } from "react-router-dom";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 
 import "@fontsource/inter/400.css";
 import "@fontsource/inter/600.css";
 
 import { initErrorReporting } from "@/lib/observability";
+import { reportFailure } from "@/lib/api/reportFailure";
 
 import { Toaster } from "@/components/ui/sonner";
 import { AppShell } from "@/components/layout/AppShell";
@@ -43,6 +44,7 @@ import WarmupContentJobsPage from "@/app/dashboard/warmup-content/JobsPage";
 import CampaignsPage from "@/app/dashboard/CampaignsPage";
 import SendsPage from "@/app/dashboard/SendsPage";
 import LimitRequestsPage from "@/app/dashboard/LimitRequestsPage";
+import DiscountsPage from "@/app/dashboard/DiscountsPage";
 import OutreachPage from "@/app/dashboard/OutreachPage";
 import MailboxesPage from "@/app/dashboard/MailboxesPage";
 import SyncPage from "@/app/dashboard/SyncPage";
@@ -64,6 +66,8 @@ import { AdminPerm } from "@/lib/auth/permissions";
 //     day; we don't want a thundering herd of refetches on focus
 //   - retry: 1 — same reasoning as the dashboard
 const queryClient = new QueryClient({
+    queryCache: new QueryCache({ onError: (error) => reportFailure(error, "query") }),
+    mutationCache: new MutationCache({ onError: (error) => reportFailure(error, "mutation") }),
     defaultOptions: {
         queries: {
             staleTime: 60_000,
@@ -158,6 +162,7 @@ const router = createBrowserRouter([
                             { path: "organizations", element: gated(AdminPerm.ViewOrganizations, <OrganizationsPage />) },
                             { path: "organizations/:id", element: gated(AdminPerm.ViewOrganizations, <OrganizationDetailPage />) },
                             { path: "limit-requests", element: gated(AdminPerm.ViewOrganizations, <LimitRequestsPage />) },
+                            { path: "discounts", element: gated(AdminPerm.ViewOrganizations, <DiscountsPage />) },
                             { path: "outreach", element: gated(AdminPerm.ViewOrganizations, <OutreachPage />) },
                             { path: "admins", element: gated(AdminPerm.GrantAdminAccess, <AdminsPage />) },
                             { path: "testers", element: gated(AdminPerm.ViewUsers, <TestersPage />) },

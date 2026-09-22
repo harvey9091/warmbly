@@ -41,6 +41,12 @@ type Email struct {
 	SignatureSync  bool   `json:"signature_sync"`
 	SignatureCode  bool   `json:"signature_code"`
 
+	// SendAsEmail is the verified provider alias this mailbox sends from.
+	// Empty, which is every mailbox until someone picks one, means the
+	// mailbox's own address. The alias list itself is not carried here: it is
+	// read through the identity endpoint, like sync state and behaviour.
+	SendAsEmail string `json:"send_as_email"`
+
 	Provider string `json:"provider"`
 	Status   string `json:"status"`
 
@@ -55,11 +61,21 @@ type Email struct {
 	TrackingDomainVerified   bool       `json:"tracking_domain_verified"`
 	TrackingDomainVerifiedAt *time.Time `json:"tracking_domain_verified_at"`
 
+	// TrackDirectMail opts this mailbox's hand-written unibox sends into the
+	// open/click tracking campaign mail already gets. Off by default: a pixel
+	// in a one-to-one reply is the operator's call, not ours.
+	TrackDirectMail bool `json:"track_direct_mail"`
+
 	// Sending-domain authentication (SPF/DKIM/DMARC), refreshed by the
 	// background auth-check sweep. AuthState is "unknown" until checked (or
 	// when a DNS lookup failed transiently), distinct from a real "failing".
 	// A sustained "failing" gates cold sending and warmup; see
 	// DomainAuthBlocked for when that becomes enforceable.
+	//
+	// AuthDKIM is a positive-only signal: true means a key was found at a
+	// probed selector, false means none answered. Selectors are not
+	// discoverable from DNS, so false is "unverified" and must never be
+	// presented as a missing record.
 	AuthState       string     `json:"auth_state"`
 	AuthSPF         bool       `json:"auth_spf"`
 	AuthDKIM        bool       `json:"auth_dkim"`
@@ -83,6 +99,16 @@ type Email struct {
 	WarmupStartTime string     `json:"warmup_start_time"`
 	WarmupEndTime   string     `json:"warmup_end_time"`
 	WarmupDays      int        `json:"warmup_days"`
+
+	// WarmupPlacement and WarmupFolder decide where warmup mail ends up in the
+	// customer's real mail client: see WarmupFiling. An empty WarmupFolder
+	// means the instance default rather than "no folder".
+	WarmupPlacement string `json:"warmup_placement"`
+	WarmupFolder    string `json:"warmup_folder"`
+	// WarmupRetentionDays is how long warmup mail stays in this mailbox before
+	// the platform deletes it. Zero means the instance setting: see
+	// WarmupMailRetentionDays.
+	WarmupRetentionDays int `json:"warmup_retention_days"`
 
 	Timezone string `json:"timezone"`
 
@@ -121,6 +147,162 @@ func (e *Email) DomainAuthBlocked(now time.Time, grace time.Duration) bool {
 // mailbox keeps its ramp progress (the anchor is shifted forward on resume).
 func (e *Email) IsWarmupPaused() bool {
 	return e.Warmup != nil && e.WarmupPausedAt != nil
+}
+
+// Where warmup mail is filed in the customer's own mail client. The platform
+// hides warmup from the unibox on its own; these decide what the mailbox owner
+// sees in Gmail, Outlook or their IMAP client.
+const (
+	// WarmupPlacementFolder moves warmup mail out of the inbox (and out of
+	// Sent, where the provider filed our own copy) into one named folder.
+	WarmupPlacementFolder = "folder"
+	// WarmupPlacementInbox leaves warmup mail where the provider put it. Mail
+	// that landed in spam is still rescued into the inbox.
+	WarmupPlacementInbox = "inbox"
+	// WarmupPlacementArchive takes warmup mail out of the inbox without giving
+	// it a folder of its own: the provider's archive.
+	WarmupPlacementArchive = "archive"
+)
+
+// ValidWarmupPlacement reports whether p is one of the placement modes.
+func ValidWarmupPlacement(p string) bool {
+	switch p {
+	case WarmupPlacementFolder, WarmupPlacementInbox, WarmupPlacementArchive:
+		return true
+	}
+	return false
+}
+
+// WarmupFiling resolves where this mailbox's warmup mail belongs: the placement
+// mode, and the folder name to use when that mode is "folder". A row written
+// before the columns existed carries neither, and filing into the default
+// folder is the behaviour every mailbox already had.
+func (e *Email) WarmupFiling() (placement, folder string) {
+	placement = e.WarmupPlacement
+	if !ValidWarmupPlacement(placement) {
+		placement = WarmupPlacementFolder
+	}
+	folder = strings.TrimSpace(e.WarmupFolder)
+	if folder == "" {
+		folder = config.WarmupFolderDefault
+	}
+	return placement, folder
+}
+
+// ValidWarmupRetentionDays reports whether d is an accepted per-mailbox
+// window: zero for the instance setting, or a number of days inside the band.
+func ValidWarmupRetentionDays(d int) bool {
+	return d == 0 || (d >= config.WarmupMailRetentionDaysMin && d <= config.RetentionDaysMax)
+}
+
+// WarmupMailRetentionDays resolves how long this mailbox keeps warmup mail:
+// its own window when it set one, otherwise the instance's. A row written
+// before the column existed carries zero and follows the instance, which is
+// what every mailbox did when the window was not a choice.
+func (e *Email) WarmupMailRetentionDays(instanceDays int) int {
+	if ValidWarmupRetentionDays(e.WarmupRetentionDays) && e.WarmupRetentionDays != 0 {
+		return e.WarmupRetentionDays
+	}
+	if instanceDays < config.WarmupMailRetentionDaysMin {
+		return config.WarmupMailRetentionDaysDefault
+	}
+	return instanceDays
+}
+
+// SendFrom is the address this mailbox's mail is actually From. A verified
+// alias when one was chosen, the mailbox address otherwise.
+func (e *Email) SendFrom() string {
+	if s := strings.TrimSpace(e.SendAsEmail); s != "" {
+		return s
+	}
+	return e.Email
+}
+
+// SendAsIdentity is one address the provider has verified this mailbox to send
+// as, as the provider last reported it. Primary is the mailbox's own address;
+// Default is the one the provider composes from by default, which Warmbly
+// reports but does not follow: which alias Warmbly sends from is the
+// workspace's choice and lives in Email.SendAsEmail.
+type SendAsIdentity struct {
+	Email     string `json:"email"`
+	Name      string `json:"name"`
+	IsPrimary bool   `json:"is_primary"`
+	IsDefault bool   `json:"is_default"`
+	// Verified reports that the provider finished verifying the address.
+	// Sending as an unverified alias is refused by the provider, so these are
+	// offered but never selectable.
+	Verified bool `json:"verified"`
+}
+
+// Signature provenance, mirroring the email_accounts.signature_source CHECK.
+// Unrelated to SignatureSync, which decides whether the signature is appended
+// to outgoing mail.
+const (
+	// SignatureSourceManual: written in Warmbly.
+	SignatureSourceManual = "manual"
+	// SignatureSourceProvider: imported from the mailbox provider.
+	SignatureSourceProvider = "provider"
+)
+
+// SendIdentity is the mailbox's sending identity as the dashboard reads it:
+// which addresses the provider will let it send as, which one is in use, and
+// where the stored signature came from.
+type SendIdentity struct {
+	// Supported reports whether the provider can be asked at all. Only Gmail
+	// exposes send-as identities and a stored signature; an Outlook or
+	// SMTP/IMAP mailbox answers with Supported false and an empty list rather
+	// than an error, so the dashboard can say so instead of failing.
+	Supported bool   `json:"supported"`
+	Provider  string `json:"provider"`
+	// MailboxEmail is the address the mailbox authenticates as, which is
+	// always a legal sender and is what an empty SendAsEmail means.
+	MailboxEmail string           `json:"mailbox_email"`
+	SendAsEmail  string           `json:"send_as_email"`
+	Identities   []SendAsIdentity `json:"identities"`
+	SyncedAt     *time.Time       `json:"synced_at,omitempty"`
+
+	SignatureSource     string     `json:"signature_source"`
+	SignatureImportedAt *time.Time `json:"signature_imported_at,omitempty"`
+}
+
+// EventWorkerMailboxIdentity asks a worker to read one mailbox's sending
+// identity from its provider and answer on the process channel.
+//
+// The worker is the only side that talks to a customer's mailbox: it holds the
+// credential, and the address the provider sees for a mailbox has to stay the
+// one it always sees, or the provider answers with a sign-in challenge.
+type EventWorkerMailboxIdentity struct {
+	EmailID uuid.UUID `json:"email_id" avro:"email_id"`
+	// ProcessID names the reply channel, like a credential validation.
+	ProcessID uuid.UUID `json:"process_id" avro:"process_id"`
+	// WantSignature asks for the signature too. Off for a plain address
+	// refresh, which is the common press.
+	WantSignature bool `json:"want_signature" avro:"want_signature"`
+	// SignatureFor is the address whose signature is wanted: the alias the
+	// mailbox sends as, so it signs off as that alias. Empty takes the
+	// provider's default identity.
+	SignatureFor string `json:"signature_for,omitempty" avro:"signature_for"`
+}
+
+// MailboxIdentityResult is the worker's answer, published to the process
+// channel. Everything the control plane stores comes from here; nothing about
+// the provider call itself crosses back.
+type MailboxIdentityResult struct {
+	OK bool `json:"ok"`
+	// Error is a short reason when OK is false, for the log and for the
+	// message the customer sees.
+	Error      string           `json:"error,omitempty"`
+	Identities []SendAsIdentity `json:"identities,omitempty"`
+	// SignatureHTML is empty both when none was asked for and when the
+	// provider holds none, which are the same thing to the caller: nothing to
+	// import, so nothing is overwritten.
+	SignatureHTML string `json:"signature_html,omitempty"`
+}
+
+// ImportedSignature is a signature read from the provider, ready to store.
+type ImportedSignature struct {
+	HTML  string
+	Plain string
 }
 
 // EmailAuthTarget is a mailbox due for a sending-domain authentication check,
@@ -264,14 +446,14 @@ func ResolveIMAPSecurity(security string, port int) string {
 }
 
 type Service struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
+	Username string `json:"username" avro:"username"`
+	Password string `json:"password" avro:"password"`
+	Host     string `json:"host" avro:"host"`
+	Port     int    `json:"port" avro:"port"`
 	// Security is the connection mode (see MailSecurity*). Empty means "infer
 	// from the port", which is how rows and events written before the field
 	// existed behave.
-	Security string `json:"security,omitempty"`
+	Security string `json:"security,omitempty" avro:"security"`
 }
 
 type Oauth2Service struct {
@@ -281,8 +463,8 @@ type Oauth2Service struct {
 }
 
 type SmtpImap struct {
-	SMTP *Service `json:"smtp"`
-	IMAP *Service `json:"imap"`
+	SMTP *Service `json:"smtp" avro:"smtp"`
+	IMAP *Service `json:"imap" avro:"imap"`
 }
 
 type Oauth2SmtpImap struct {
@@ -323,6 +505,13 @@ type EmailOnboardingState struct {
 	// EmailAccountID marks a re-authorization round trip: the finish leg
 	// renews this mailbox's tokens instead of connecting a new one.
 	EmailAccountID *uuid.UUID `json:"email_account_id,omitempty"`
+	// CodeVerifier is the PKCE verifier for this round trip. It stays here,
+	// server-side, and is never sent to the browser: the point of PKCE is that
+	// only the party that started the flow can finish it, so an authorization
+	// code intercepted anywhere between the provider and this backend is not
+	// redeemable. Empty for a state written before PKCE was added, which the
+	// exchange tolerates so an in-flight consent still lands.
+	CodeVerifier string `json:"code_verifier,omitempty"`
 }
 
 // EmailOnboardingStartResponse is returned from POST /emails/onboarding/oauth/start.
@@ -379,6 +568,11 @@ type UpdateEmail struct {
 	SignatureSync  *bool   `json:"signature_sync"`
 	SignatureCode  *bool   `json:"signature_code"`
 
+	// SendAsEmail picks which verified provider alias the mailbox sends from.
+	// An empty string clears it back to the mailbox's own address; anything
+	// else has to be an address the provider reported as verified.
+	SendAsEmail *string `json:"send_as_email"`
+
 	Status *string `json:"status"` // active, inactive, revoked
 
 	CampaignLimit *int    `json:"campaign_limit"`
@@ -394,6 +588,15 @@ type UpdateEmail struct {
 	WarmupStartTime *string `json:"warmup_start_time"`
 	WarmupEndTime   *string `json:"warmup_end_time"`
 	WarmupDays      *int    `json:"warmup_days"`
+
+	// WarmupPlacement is "folder", "inbox" or "archive"; WarmupFolder names the
+	// destination for "folder" and is cleared back to the instance default by
+	// an empty string.
+	WarmupPlacement *string `json:"warmup_placement"`
+	WarmupFolder    *string `json:"warmup_folder"`
+	// WarmupRetentionDays is how long warmup mail is kept in the mailbox; 0
+	// goes back to the instance setting.
+	WarmupRetentionDays *int `json:"warmup_retention_days"`
 
 	// Timezone is the mailbox's own IANA zone, which its sending behaviour and
 	// business-hours window are evaluated in. Empty means not configured, so

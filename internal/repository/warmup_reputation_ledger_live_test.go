@@ -26,7 +26,6 @@ type ledgerFixture struct {
 	warmups WarmupRepository
 	user    uuid.UUID
 	org     uuid.UUID
-	poolID  uuid.UUID
 	address string
 }
 
@@ -35,7 +34,7 @@ func newLedgerFixture(t *testing.T) *ledgerFixture {
 	handle, pool := liveContactDB(t)
 	f := &ledgerFixture{
 		pool: pool, emails: NewEmailRepostory(handle, nil), warmups: NewWarmupRepository(pool),
-		user: uuid.New(), org: uuid.New(), poolID: uuid.New(),
+		user: uuid.New(), org: uuid.New(),
 	}
 	// Mixed case on purpose: the mirror keys on the normalized form.
 	f.address = "Ledger-" + f.org.String()[:8] + "@Test.Local"
@@ -43,7 +42,6 @@ func newLedgerFixture(t *testing.T) *ledgerFixture {
 		f.user, "ledger-"+f.user.String()[:8]+"@test.local")
 	f.exec(t, `INSERT INTO organizations (id, name, slug, owner_user_id) VALUES ($1, 'Ledger Test', $2, $3)`,
 		f.org, "ledger-"+f.org.String()[:8], f.user)
-	f.exec(t, `INSERT INTO warmup_pools (id, pool_type, name) VALUES ($1, 'premium', 'Ledger test pool')`, f.poolID)
 
 	t.Cleanup(func() {
 		c := context.Background()
@@ -54,7 +52,6 @@ func newLedgerFixture(t *testing.T) *ledgerFixture {
 			{`DELETE FROM warmup_pool_participants WHERE email_account_id IN (SELECT id FROM email_accounts WHERE organization_id = $1)`, f.org},
 			{`DELETE FROM warmup_reputation_ledger WHERE organization_id = $1`, f.org},
 			{`DELETE FROM email_accounts WHERE organization_id = $1`, f.org},
-			{`DELETE FROM warmup_pools WHERE id = $1`, f.poolID},
 			{`DELETE FROM organizations WHERE id = $1`, f.org},
 			{`DELETE FROM users WHERE id = $1`, f.user},
 		} {
@@ -85,17 +82,17 @@ func (f *ledgerFixture) addMailbox(t *testing.T, user uuid.UUID) uuid.UUID {
 
 func (f *ledgerFixture) join(t *testing.T, id uuid.UUID) {
 	t.Helper()
-	if err := f.warmups.MoveToPool(context.Background(), f.poolID, id, "sender_receiver"); err != nil {
+	if err := f.warmups.MoveToPool(context.Background(), premiumPoolID, id, "sender_receiver"); err != nil {
 		t.Fatalf("MoveToPool: %v", err)
 	}
 }
 
 // penalise writes a standing the way the sweep or a tampering block would; the
 // trigger mirrors it. A nil until is the review-required block.
-func (f *ledgerFixture) penalise(t *testing.T, id uuid.UUID, score int, state string, until *time.Time) {
+func (f *ledgerFixture) penalise(t *testing.T, id uuid.UUID, score float64, state string, until *time.Time) {
 	t.Helper()
 	f.exec(t, `UPDATE warmup_pool_participants
-	           SET spam_score = $2, health_state = $3, blocked_at = now(), blocked_until = $4, blocked_reason = 'ledger test'
+	           SET last_health_score = $2, health_state = $3, blocked_at = now(), blocked_until = $4, blocked_reason = 'ledger test'
 	           WHERE email_account_id = $1`, id, score, state, until)
 }
 
@@ -107,7 +104,8 @@ func (f *ledgerFixture) remove(t *testing.T, user, id uuid.UUID) {
 }
 
 type standing struct {
-	score       int
+	score       float64
+	reason      string
 	state       string
 	until       *time.Time
 	blockedAt   *time.Time
@@ -118,8 +116,8 @@ func (f *ledgerFixture) standing(t *testing.T, id uuid.UUID) standing {
 	t.Helper()
 	var s standing
 	err := f.pool.QueryRow(context.Background(),
-		`SELECT spam_score, health_state, blocked_until, blocked_at, health_signals_from FROM warmup_pool_participants WHERE email_account_id = $1`, id).
-		Scan(&s.score, &s.state, &s.until, &s.blockedAt, &s.signalsFrom)
+		`SELECT last_health_score, COALESCE(last_health_reason, ''), health_state, blocked_until, blocked_at, health_signals_from FROM warmup_pool_participants WHERE email_account_id = $1`, id).
+		Scan(&s.score, &s.reason, &s.state, &s.until, &s.blockedAt, &s.signalsFrom)
 	if err != nil {
 		t.Fatalf("read standing: %v", err)
 	}
@@ -127,7 +125,7 @@ func (f *ledgerFixture) standing(t *testing.T, id uuid.UUID) standing {
 }
 
 type mirror struct {
-	score      int
+	score      float64
 	state      string
 	until      *time.Time
 	recordedAt time.Time
@@ -139,7 +137,7 @@ func (f *ledgerFixture) mirrorRow(t *testing.T) *mirror {
 	t.Helper()
 	var m mirror
 	err := f.pool.QueryRow(context.Background(),
-		`SELECT spam_score, health_state, blocked_until, recorded_at, standing_until FROM warmup_reputation_ledger WHERE organization_id = $1`, f.org).
+		`SELECT last_health_score, health_state, blocked_until, recorded_at, standing_until FROM warmup_reputation_ledger WHERE organization_id = $1`, f.org).
 		Scan(&m.score, &m.state, &m.until, &m.recordedAt, &m.standing)
 	if err != nil {
 		if err.Error() == "no rows in result set" {
@@ -226,7 +224,7 @@ func TestLiveReputationMirrorClearsOnRecovery(t *testing.T) {
 	if f.mirrorRow(t) == nil {
 		t.Fatal("penalty was not mirrored")
 	}
-	f.exec(t, `UPDATE warmup_pool_participants SET spam_score = 0, health_state = 'healthy', blocked_at = NULL, blocked_until = NULL, blocked_reason = NULL WHERE email_account_id = $1`, id)
+	f.exec(t, `UPDATE warmup_pool_participants SET last_health_score = 0, health_state = 'healthy', blocked_at = NULL, blocked_until = NULL, blocked_reason = NULL WHERE email_account_id = $1`, id)
 	if m := f.mirrorRow(t); m != nil {
 		t.Fatalf("recovery left a mirror row: %+v", m)
 	}
@@ -341,6 +339,28 @@ func TestLiveReputationMirrorDoesNotInheritALapsedStanding(t *testing.T) {
 	}
 }
 
+// A pool move is not a change of standing. The mirror trigger is scoped to the
+// standing columns (000156), so moving tiers leaves the retention clock alone;
+// before that every tier change of a penalised mailbox restarted it.
+func TestLiveReputationMirrorIgnoresAPoolMove(t *testing.T) {
+	f := newLedgerFixture(t)
+	id := f.addMailbox(t, f.user)
+	f.join(t, id)
+	f.penalise(t, id, 40, "blocked", ptr(time.Now().Add(20*24*time.Hour)))
+	before := f.mirrorRow(t)
+	if before == nil {
+		t.Fatal("penalty was not mirrored")
+	}
+	time.Sleep(20 * time.Millisecond)
+	if err := f.warmups.MoveToPool(context.Background(), models.WarmupPoolFreeID, id, "sender_receiver"); err != nil {
+		t.Fatalf("MoveToPool: %v", err)
+	}
+	after := f.mirrorRow(t)
+	if after == nil || !after.recordedAt.Equal(before.recordedAt) {
+		t.Fatalf("a pool move touched the mirror: recorded_at %v -> %v", before.recordedAt, after)
+	}
+}
+
 // Two members of one workspace can each connect the same address. The mirror
 // is the worse of the two, and a recovery on the milder row cannot clear it.
 func TestLiveReputationMirrorKeepsTheWorseOfTwoLiveRows(t *testing.T) {
@@ -355,12 +375,12 @@ func TestLiveReputationMirrorKeepsTheWorseOfTwoLiveRows(t *testing.T) {
 	f.penalise(t, severe, 60, "blocked", nil)
 	mild := f.addMailbox(t, other)
 	f.join(t, mild)
-	f.exec(t, `UPDATE warmup_pool_participants SET spam_score = 5, health_state = 'watch' WHERE email_account_id = $1`, mild)
+	f.exec(t, `UPDATE warmup_pool_participants SET last_health_score = 5, health_state = 'watch' WHERE email_account_id = $1`, mild)
 
 	if m := f.mirrorRow(t); m == nil || m.state != "blocked" || m.score != 60 {
 		t.Fatalf("mirror after the milder write = %+v, want the block kept (60, blocked)", m)
 	}
-	f.exec(t, `UPDATE warmup_pool_participants SET spam_score = 0, health_state = 'healthy' WHERE email_account_id = $1`, mild)
+	f.exec(t, `UPDATE warmup_pool_participants SET last_health_score = 0, health_state = 'healthy' WHERE email_account_id = $1`, mild)
 	if m := f.mirrorRow(t); m == nil || m.state != "blocked" {
 		t.Fatalf("the milder row's recovery cleared a block the other row still holds: %+v", m)
 	}
@@ -381,7 +401,7 @@ func TestLiveHealthFloorHoldsAQuarantineOrBlockForItsTerm(t *testing.T) {
 	before := f.standing(t, id)
 
 	// A clean reading does not release the block, and does not restart it.
-	if err := f.warmups.UpdateParticipantHealth(ctx, id, models.WarmupHealthHealthy, nil, "", 0.5); err != nil {
+	if _, err := f.warmups.UpdateParticipantHealth(ctx, id, models.WarmupHealthHealthy, nil, "", 0.5); err != nil {
 		t.Fatalf("UpdateParticipantHealth(healthy): %v", err)
 	}
 	got := f.standing(t, id)
@@ -390,7 +410,7 @@ func TestLiveHealthFloorHoldsAQuarantineOrBlockForItsTerm(t *testing.T) {
 	}
 
 	// An equally severe reading with an earlier end keeps the later end.
-	if err := f.warmups.UpdateParticipantHealth(ctx, id, models.WarmupHealthBlocked, &short, "placement", 50); err != nil {
+	if _, err := f.warmups.UpdateParticipantHealth(ctx, id, models.WarmupHealthBlocked, &short, "placement", 50); err != nil {
 		t.Fatalf("UpdateParticipantHealth(blocked, shorter): %v", err)
 	}
 	got = f.standing(t, id)
@@ -400,14 +420,14 @@ func TestLiveHealthFloorHoldsAQuarantineOrBlockForItsTerm(t *testing.T) {
 
 	// A quarantine is a floor too.
 	f.penalise(t, id, 20, "quarantined", ptr(time.Now().Add(7*24*time.Hour)))
-	if err := f.warmups.UpdateParticipantHealth(ctx, id, models.WarmupHealthWatch, nil, "", 1); err != nil {
+	if _, err := f.warmups.UpdateParticipantHealth(ctx, id, models.WarmupHealthWatch, nil, "", 1); err != nil {
 		t.Fatalf("UpdateParticipantHealth(watch): %v", err)
 	}
 	if got := f.standing(t, id); got.state != "quarantined" {
 		t.Fatalf("a milder reading lowered a quarantine in force: %+v", got)
 	}
 	// A more severe reading applies over it.
-	if err := f.warmups.UpdateParticipantHealth(ctx, id, models.WarmupHealthBlocked, &short, "complaints", 9); err != nil {
+	if _, err := f.warmups.UpdateParticipantHealth(ctx, id, models.WarmupHealthBlocked, &short, "complaints", 9); err != nil {
 		t.Fatalf("UpdateParticipantHealth(blocked): %v", err)
 	}
 	if got := f.standing(t, id); got.state != "blocked" || !sameInstant(got.until, &short) {
@@ -423,7 +443,7 @@ func TestLiveHealthFloorReleasesWhatItShould(t *testing.T) {
 
 	// Throttled lifts on recovery: it is not floored.
 	f.penalise(t, id, 5, "throttled", ptr(time.Now().Add(3*24*time.Hour)))
-	if err := f.warmups.UpdateParticipantHealth(ctx, id, models.WarmupHealthHealthy, nil, "", 0); err != nil {
+	if _, err := f.warmups.UpdateParticipantHealth(ctx, id, models.WarmupHealthHealthy, nil, "", 0); err != nil {
 		t.Fatalf("UpdateParticipantHealth: %v", err)
 	}
 	if got := f.standing(t, id); got.state != "healthy" {
@@ -432,7 +452,7 @@ func TestLiveHealthFloorReleasesWhatItShould(t *testing.T) {
 
 	// A served block is released by the reading.
 	f.penalise(t, id, 40, "blocked", ptr(time.Now().Add(-time.Hour)))
-	if err := f.warmups.UpdateParticipantHealth(ctx, id, models.WarmupHealthHealthy, nil, "", 0); err != nil {
+	if _, err := f.warmups.UpdateParticipantHealth(ctx, id, models.WarmupHealthHealthy, nil, "", 0); err != nil {
 		t.Fatalf("UpdateParticipantHealth: %v", err)
 	}
 	if got := f.standing(t, id); got.state != "healthy" || got.until != nil {
@@ -441,10 +461,69 @@ func TestLiveHealthFloorReleasesWhatItShould(t *testing.T) {
 
 	// A review block is still untouchable by the sweep.
 	f.penalise(t, id, 60, "blocked", nil)
-	if err := f.warmups.UpdateParticipantHealth(ctx, id, models.WarmupHealthHealthy, nil, "", 0); err != nil {
+	if _, err := f.warmups.UpdateParticipantHealth(ctx, id, models.WarmupHealthHealthy, nil, "", 0); err != nil {
 		t.Fatalf("UpdateParticipantHealth: %v", err)
 	}
 	if got := f.standing(t, id); got.state != "blocked" || got.until != nil {
 		t.Fatalf("the sweep overturned a review block: %+v", got)
+	}
+}
+
+// The ledger records a sentence, not a number. It used to keep a row for a
+// healthy mailbox that still carried a spam score, so a number nothing acted
+// on outlived the standing it was filed under (#491).
+func TestLiveReputationMirrorRecordsASentenceNotAScore(t *testing.T) {
+	f := newLedgerFixture(t)
+	id := f.addMailbox(t, f.user)
+	f.join(t, id)
+
+	f.exec(t, `UPDATE warmup_pool_participants SET last_health_score = 78, health_state = 'healthy' WHERE email_account_id = $1`, id)
+	if m := f.mirrorRow(t); m != nil {
+		t.Fatalf("a healthy mailbox left a mirror row for its score alone: %+v", m)
+	}
+
+	until := time.Now().Add(7 * 24 * time.Hour)
+	f.penalise(t, id, 78, "quarantined", &until)
+	if m := f.mirrorRow(t); m == nil || m.state != "quarantined" || m.score != 78 {
+		t.Fatalf("mirror after the sentence = %+v, want quarantined at 78", m)
+	}
+}
+
+// A sentence keeps the reading that produced it. A blocked mailbox stops
+// warming, so the next sweep reads an empty sample, and overwriting the score
+// and reason left the block with no explanation anywhere the advisor or the
+// ledger could find one (#491).
+func TestLiveHealthFloorKeepsTheReadingThatProducedTheSentence(t *testing.T) {
+	f := newLedgerFixture(t)
+	ctx := context.Background()
+	id := f.addMailbox(t, f.user)
+	f.join(t, id)
+	until := time.Now().UTC().Add(30 * 24 * time.Hour)
+	reason := "warmup spam placement 44.0% exceeded block threshold"
+
+	if _, err := f.warmups.UpdateParticipantHealth(ctx, id, models.WarmupHealthBlocked, &until, reason, 44); err != nil {
+		t.Fatalf("block: %v", err)
+	}
+	// The mailbox is out of the pool, so the next sweep has nothing to count.
+	if _, err := f.warmups.UpdateParticipantHealth(ctx, id, models.WarmupHealthHealthy, nil, "", 0); err != nil {
+		t.Fatalf("clean reading: %v", err)
+	}
+
+	got := f.standing(t, id)
+	if got.state != "blocked" || got.score != 44 || got.reason != reason {
+		t.Fatalf("the held block lost the reading that produced it: %+v", got)
+	}
+	if m := f.mirrorRow(t); m == nil || m.score != 44 {
+		t.Fatalf("the mirror lost it too: %+v", m)
+	}
+
+	// A reading that does apply still replaces both.
+	worse := "complaint rate 0.40%% exceeded block threshold"
+	later := until.Add(24 * time.Hour)
+	if _, err := f.warmups.UpdateParticipantHealth(ctx, id, models.WarmupHealthBlocked, &later, worse, 88); err != nil {
+		t.Fatalf("more severe reading: %v", err)
+	}
+	if got := f.standing(t, id); got.score != 88 || got.reason != worse {
+		t.Fatalf("a reading that applied did not replace the explanation: %+v", got)
 	}
 }

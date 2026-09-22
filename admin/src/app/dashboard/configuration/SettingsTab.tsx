@@ -85,19 +85,36 @@ const RETENTION_FIELDS = [
         key: "engagementDays",
         setting: "engagement_event_days",
         label: "Opens and clicks (days)",
+        min: RETENTION_MIN_DAYS,
         help: "Per-event open and click logs, with the client, device and approximate location of each. Campaign counts and routing read a separate summary that is never pruned, so shortening this changes what a contact's timeline can show, not what a campaign does.",
     },
     {
         key: "formDays",
         setting: "form_event_days",
         label: "Form funnel events (days)",
+        min: RETENTION_MIN_DAYS,
         help: "Views, starts, field-level drop-off and submissions for hosted forms. Funnel reports range up to 90 days, so anything below that shortens the report too. Submitted contacts are unaffected.",
     },
     {
         key: "auditDays",
         setting: "audit_log_days",
         label: "Audit log (days)",
+        min: RETENTION_MIN_DAYS,
         help: "Who did what, from which IP address and user agent, with the change payload. This window is how long that record is held, and it is the one most likely to be set by a retention policy.",
+    },
+    {
+        key: "warmupMailDays",
+        setting: "warmup_mail_days",
+        label: "Warmup mail in mailboxes (days)",
+        min: 3,
+        help: "How long warmup mail stays in each mailbox before Warmbly deletes it, wherever the mailbox's filing setting keeps it (Trash on Gmail), with the stored copy of its body. A mailbox may set its own window in its drawer; this is the one every other mailbox follows. The floor leaves room for the engagement and a reply in the thread to finish.",
+    },
+    {
+        key: "warmupEventDays",
+        setting: "warmup_event_days",
+        label: "Warmup records (days)",
+        min: 30,
+        help: "Per-message warmup records: tokens, receipts, tampering events and spam reports. The pool health bands read the last 30 days, which is the floor. The daily sent and received counts behind the analytics are separate and never pruned.",
     },
 ] as const;
 
@@ -108,14 +125,26 @@ const RETENTION_PRESETS = [
     {
         id: "default",
         label: "Defaults",
-        description: "365 / 180 / 90 days",
-        values: { engagementDays: "365", formDays: "180", auditDays: "90" },
+        description: "365 / 180 / 90 days, warmup 30 / 365",
+        values: {
+            engagementDays: "365",
+            formDays: "180",
+            auditDays: "90",
+            warmupMailDays: "30",
+            warmupEventDays: "365",
+        },
     },
     {
         id: "minimal",
         label: "Minimal retention",
-        description: "30 / 30 / 30 days",
-        values: { engagementDays: "30", formDays: "30", auditDays: "30" },
+        description: "30 / 30 / 30 days, warmup 7 / 30",
+        values: {
+            engagementDays: "30",
+            formDays: "30",
+            auditDays: "30",
+            warmupMailDays: "7",
+            warmupEventDays: "30",
+        },
     },
 ] as const;
 
@@ -125,19 +154,35 @@ const RETENTION_PRESETS = [
 // cover provider queueing and transit before the recipient's gateway sees it.
 const MACHINE_WINDOW_MIN_SECONDS = 1;
 const MACHINE_WINDOW_MAX_SECONDS = 900;
+// The probable window has bounds of its own and reaches a day, because how
+// long a security vendor takes to detonate a link is the vendor's property,
+// not this instance's.
+const PROBABLE_WINDOW_MAX_SECONDS = 86400;
 
 const TRACKING_FIELDS = [
     {
         key: "machineWindowOpen",
         setting: "machine_window_open_seconds",
         label: "Automated open window (seconds)",
+        min: MACHINE_WINDOW_MIN_SECONDS,
+        max: MACHINE_WINDOW_MAX_SECONDS,
         help: "An open arriving this soon after a send was dispatched is recorded as automated. Raise it when delivery-time scanners are being counted as opens, lower it when recipients who read immediately are being missed.",
     },
     {
         key: "machineWindowClick",
         setting: "machine_window_click_seconds",
         label: "Automated click window (seconds)",
+        min: MACHINE_WINDOW_MIN_SECONDS,
+        max: MACHINE_WINDOW_MAX_SECONDS,
         help: "The same window for clicks, kept separate because the two mistakes cost different things: a misjudged open loses a metric, a misjudged click loses the automation behind an interested lead.",
+    },
+    {
+        key: "machineWindowProbable",
+        setting: "machine_window_probable_seconds",
+        label: "Probable-scanner window (seconds)",
+        min: MACHINE_WINDOW_MIN_SECONDS,
+        max: PROBABLE_WINDOW_MAX_SECONDS,
+        help: "Used instead of the two above when the request came from a mail-security network that also renders clicked pages for people, which Proofpoint and Mimecast do through browser isolation. Inside this window the event is classified as the delivery-time scan; past it, as the recipient who got to the mail later. A recipient behind one of those vendors who really does click inside it is recorded as automated, so raise it if their scans still count as engagement and lower it if fast recipients are being missed. It is never applied shorter than the windows above.",
     },
 ] as const;
 
@@ -169,10 +214,13 @@ function toForm(s: InstanceSettings): FormState {
             engagementDays: String(s.retention.engagement_event_days),
             formDays: String(s.retention.form_event_days),
             auditDays: String(s.retention.audit_log_days),
+            warmupMailDays: String(s.retention.warmup_mail_days),
+            warmupEventDays: String(s.retention.warmup_event_days),
         },
         tracking: {
             machineWindowOpen: String(s.tracking.machine_window_open_seconds),
             machineWindowClick: String(s.tracking.machine_window_click_seconds),
+            machineWindowProbable: String(s.tracking.machine_window_probable_seconds),
         },
         enforceDomainAuth: s.deliverability.enforce_domain_auth,
         authGraceHours: String(s.deliverability.auth_grace_hours),
@@ -252,19 +300,11 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
         form !== null && SYNC_FIELDS.every((f) => syncFieldValid(form.sync[f.key], f.min, f.max));
     const retentionValid =
         form !== null &&
-        RETENTION_FIELDS.every((f) =>
-            syncFieldValid(form.retention[f.key], RETENTION_MIN_DAYS, RETENTION_MAX_DAYS),
-        );
+        RETENTION_FIELDS.every((f) => syncFieldValid(form.retention[f.key], f.min, RETENTION_MAX_DAYS));
 
     const trackingValid =
         form !== null &&
-        TRACKING_FIELDS.every((f) =>
-            syncFieldValid(
-                form.tracking[f.key],
-                MACHINE_WINDOW_MIN_SECONDS,
-                MACHINE_WINDOW_MAX_SECONDS,
-            ),
-        );
+        TRACKING_FIELDS.every((f) => syncFieldValid(form.tracking[f.key], f.min, f.max));
 
     const authGrace = form ? Number(form.authGraceHours) : NaN;
     const authGraceValid =
@@ -296,13 +336,13 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
         }
         if (!retentionValid) {
             toast.error(
-                `Every retention window must be a whole number of days between ${RETENTION_MIN_DAYS} and ${RETENTION_MAX_DAYS.toLocaleString()}`,
+                `Every retention window must be a whole number of days up to ${RETENTION_MAX_DAYS.toLocaleString()}, and not below the floor shown under it`,
             );
             return;
         }
         if (!trackingValid) {
             toast.error(
-                `Every automated-engagement window must be a whole number of seconds between ${MACHINE_WINDOW_MIN_SECONDS} and ${MACHINE_WINDOW_MAX_SECONDS}`,
+                "Every automated-engagement window must be a whole number of seconds inside the range shown under it",
             );
             return;
         }
@@ -325,10 +365,13 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
                 engagement_event_days: Number(form.retention.engagementDays),
                 form_event_days: Number(form.retention.formDays),
                 audit_log_days: Number(form.retention.auditDays),
+                warmup_mail_days: Number(form.retention.warmupMailDays),
+                warmup_event_days: Number(form.retention.warmupEventDays),
             },
             tracking: {
                 machine_window_open_seconds: Number(form.tracking.machineWindowOpen),
                 machine_window_click_seconds: Number(form.tracking.machineWindowClick),
+                machine_window_probable_seconds: Number(form.tracking.machineWindowProbable),
             },
             deliverability: {
                 enforce_domain_auth: form.enforceDomainAuth,
@@ -553,7 +596,7 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
                                 {RETENTION_FIELDS.map((f) => {
                                     const valid = syncFieldValid(
                                         form.retention[f.key],
-                                        RETENTION_MIN_DAYS,
+                                        f.min,
                                         RETENTION_MAX_DAYS,
                                     );
                                     return (
@@ -578,13 +621,13 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
                                                 className="mt-1"
                                             />
                                             <p className="mt-1 text-xs text-muted-foreground">
-                                                {f.help} Between {RETENTION_MIN_DAYS} and{" "}
+                                                {f.help} Between {f.min} and{" "}
                                                 {RETENTION_MAX_DAYS.toLocaleString()} days.
                                             </p>
                                             {!valid && (
                                                 <p className="mt-1 text-xs text-red-600">
                                                     Enter a whole number of days between{" "}
-                                                    {RETENTION_MIN_DAYS} and{" "}
+                                                    {f.min} and{" "}
                                                     {RETENTION_MAX_DAYS.toLocaleString()}.
                                                 </p>
                                             )}
@@ -607,18 +650,19 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
                                 or automation, or send a webhook. Nothing is discarded either way.
                                 The clock starts when the send is handed to a worker, so the
                                 window also covers the provider&apos;s queue and the transit to
-                                the recipient. Known scanner networks are matched separately and
-                                are not bounded by time. A change applies within a minute and
-                                only to events recorded after it: opens and clicks already
-                                stored keep the label they were given when they arrived.
+                                the recipient. A network that only ever filters mail is matched
+                                by name and is not bounded by time; one that can also carry a
+                                person gets the probable window below. A change applies within a
+                                minute and only to events recorded after it: opens and clicks
+                                already stored keep the label they were given when they arrived.
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="grid grid-cols-1 gap-3 pt-0 md:grid-cols-2">
                             {TRACKING_FIELDS.map((f) => {
                                 const valid = syncFieldValid(
                                     form.tracking[f.key],
-                                    MACHINE_WINDOW_MIN_SECONDS,
-                                    MACHINE_WINDOW_MAX_SECONDS,
+                                    f.min,
+                                    f.max,
                                 );
                                 return (
                                     <div key={f.key}>
@@ -642,14 +686,13 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
                                             className="mt-1"
                                         />
                                         <p className="mt-1 text-xs text-muted-foreground">
-                                            {f.help} Between {MACHINE_WINDOW_MIN_SECONDS} and{" "}
-                                            {MACHINE_WINDOW_MAX_SECONDS.toLocaleString()} seconds.
+                                            {f.help} Between {f.min} and{" "}
+                                            {f.max.toLocaleString()} seconds.
                                         </p>
                                         {!valid && (
                                             <p className="mt-1 text-xs text-red-600">
-                                                Enter a whole number between{" "}
-                                                {MACHINE_WINDOW_MIN_SECONDS} and{" "}
-                                                {MACHINE_WINDOW_MAX_SECONDS.toLocaleString()}.
+                                                Enter a whole number between {f.min} and{" "}
+                                                {f.max.toLocaleString()}.
                                             </p>
                                         )}
                                     </div>

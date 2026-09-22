@@ -16,6 +16,7 @@ import (
 
 	"github.com/warmbly/warmbly/internal/pkg/generation"
 	"github.com/warmbly/warmbly/internal/pkg/humanlint"
+	"github.com/warmbly/warmbly/internal/pkg/typesafe"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -94,11 +95,16 @@ type Service interface {
 	RunScheduled(ctx context.Context) error
 	// Enabled reports whether an AI client is configured.
 	Enabled() bool
+	// WireJudge adds the TypeSafe judgment on generated threads; nil turns it off.
+	WireJudge(asker typesafe.Asker)
 }
 
 type service struct {
 	repo repository.WarmupContentRepository
 	gen  *generation.GenerationClient
+	// judge rejects generated threads that carry a pitch or read as filler.
+	// Nil means the deterministic lints are the only gate.
+	judge typesafe.Asker
 }
 
 // NewService creates the generation service. gen may be nil (provider not OpenAI),
@@ -108,6 +114,8 @@ func NewService(repo repository.WarmupContentRepository, gen *generation.Generat
 }
 
 func (s *service) Enabled() bool { return s.gen != nil }
+
+func (s *service) WireJudge(asker typesafe.Asker) { s.judge = asker }
 
 func (s *service) RunScheduled(ctx context.Context) error {
 	if s.gen == nil {

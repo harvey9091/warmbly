@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/config"
+	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 )
 
@@ -182,6 +183,19 @@ func TestNextSyncDelay(t *testing.T) {
 		d := w.nextSyncDelay(base, nil)
 		if d < syncBackoffMax-syncBackoffMax/10 || d > syncBackoffMax+syncBackoffMax/10 {
 			t.Fatalf("throttled delay %v not near the ceiling", d)
+		}
+	}
+}
+
+func TestNextSyncDelayDoesNotUndercutProviderRetryAfter(t *testing.T) {
+	w := &WMail{}
+	retryAfter := 12 * time.Minute
+	mailErr := errx.MError(errx.MailErrorWarning, errx.MailErrorCodeSendingTooFast, "throttled", errx.MailErrorResolveMethodRetry)
+	mailErr.RetryAfter = retryAfter
+
+	for i := 0; i < 50; i++ {
+		if got := w.nextSyncDelay(time.Minute, mailErr); got < retryAfter {
+			t.Fatalf("delay %v retried before provider's %v window", got, retryAfter)
 		}
 	}
 }

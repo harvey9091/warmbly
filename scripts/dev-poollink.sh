@@ -50,7 +50,7 @@ common_env() {
 cloud_env() {
   common_env
   export DEPLOYMENT_MODE=cloud BILLING_PROVIDER=stripe
-  export STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-sk_test_placeholder} STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-whsec_placeholder} STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY:-pk_test_placeholder}
+  export STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-local-stripe-secret} STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-local-stripe-webhook-secret} STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY:-local-stripe-publishable-key}
   export PRIMARY_DB="$PG/$CLOUD_DB?sslmode=disable" REDIS=redis://localhost:16379/5 BLOB_FS_ROOT=/tmp/warmbly-poollink-blobs-cloud
   export API_HOST=0.0.0.0:$CLOUD_API_PORT APP_URL=http://$HOST:$CLOUD_WEB_PORT BLOB_PUBLIC_BASE_URL=http://$HOST:$CLOUD_API_PORT/public
   export CORS_ALLOW_ORIGINS=http://$HOST:$CLOUD_WEB_PORT,http://localhost:$CLOUD_WEB_PORT
@@ -86,13 +86,6 @@ ensure_db() {
     psql_admin -c "CREATE DATABASE $db" >/dev/null
     echo "created database $db"
   fi
-}
-
-ensure_pools() {
-  # warmup_pools rows are seeded, not migrated; the pool needs both tiers.
-  psql_db "$1" -c "insert into warmup_pools (pool_type, name, description, max_participants)
-    select v.t::warmup_pool_type, v.n, '', 100000 from (values ('free','Free'),('premium','Premium')) v(t,n)
-    where not exists (select 1 from warmup_pools p where p.pool_type = v.t::warmup_pool_type)" >/dev/null
 }
 
 start_bg() { # name, logfile, command...
@@ -131,7 +124,6 @@ cmd_up() {
     echo "== seeding the cloud with the Sunrise Labs sandbox org (pool mailboxes)"
     ( cloud_env; go run ./cmd/sandbox -seed-only >/dev/null )
   fi
-  ensure_pools "$CLOUD_DB"; ensure_pools "$SELF_DB"
 
   echo "== building backend"
   build_backend

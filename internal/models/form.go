@@ -31,6 +31,9 @@ type Form struct {
 	CategoryIDs    []uuid.UUID `json:"category_ids"`
 	AllowedDomains []string    `json:"allowed_domains"`
 	CaptchaEnabled bool        `json:"captcha_enabled"`
+	// TriageEnabled classifies each submission through TypeSafe; junk is kept
+	// but creates no contact and joins no campaign.
+	TriageEnabled bool `json:"triage_enabled"`
 	// LogoURL, CoverURL and BackgroundURL are uploaded brand assets (public
 	// object URLs).
 	LogoURL       string `json:"logo_url"`
@@ -215,7 +218,18 @@ type FormWrite struct {
 	CategoryIDs    *[]uuid.UUID `json:"category_ids,omitempty"`
 	AllowedDomains *[]string    `json:"allowed_domains,omitempty"`
 	CaptchaEnabled *bool        `json:"captcha_enabled,omitempty"`
+	TriageEnabled  *bool        `json:"triage_enabled,omitempty"`
 }
+
+// Form triage verdicts, as stored on form_submissions.triage. Empty means the
+// submission was not triaged.
+const (
+	FormTriageBuyer     = "buyer"
+	FormTriageVendor    = "vendor"
+	FormTriageJobSeeker = "job_seeker"
+	FormTriageOther     = "other"
+	FormTriageJunk      = "junk"
+)
 
 // FormSubmission is one public submit, kept verbatim. Data is keyed by field
 // id; checkbox groups store a string slice, everything else a string.
@@ -229,7 +243,11 @@ type FormSubmission struct {
 	CampaignID *uuid.UUID     `json:"campaign_id,omitempty"`
 	Data       map[string]any `json:"data"`
 	SourceURL  string         `json:"source_url"`
-	CreatedAt  time.Time      `json:"created_at"`
+	// Triage is the FormTriage* verdict, empty when the form did not triage
+	// or the call did not complete; TriageConfidence is the model's own.
+	Triage           string    `json:"triage"`
+	TriageConfidence float64   `json:"triage_confidence"`
+	CreatedAt        time.Time `json:"created_at"`
 
 	// Contact and campaign summaries for the submissions table, populated by
 	// reads.

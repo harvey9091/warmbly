@@ -103,7 +103,37 @@ type ContactCampaignProgress struct {
 	// Sender is the mailbox address this lead's whole sequence sends from,
 	// fixed when its first email went out. Empty until then.
 	Sender string `json:"sender,omitempty"`
+	// Hold is the per-lead pause, set only while it is live. Present on any
+	// status: a held lead that has also replied still reads "replied".
+	Hold *LeadHold `json:"hold,omitempty"`
 }
+
+// LeadHold is one contact's flow parked inside one campaign. Source is
+// "out_of_office" when an auto-reply parked it and "manual" when a member did.
+// Until is nil for a hold with no end, which only a person lifts.
+type LeadHold struct {
+	Since  time.Time  `json:"since"`
+	Until  *time.Time `json:"until,omitempty"`
+	Reason string     `json:"reason,omitempty"`
+	Source string     `json:"source"`
+}
+
+// Live reports whether the hold is in force at t. A dated hold stops counting
+// the moment it passes, with nothing having to write, so every surface that
+// shows or enforces a hold reads it through this.
+func (h *LeadHold) Live(t time.Time) bool {
+	return h != nil && (h.Until == nil || h.Until.After(t))
+}
+
+// Lead hold sources, stored in campaign_leads.pause_source and matched by the
+// CHECK constraint migration 000161 adds.
+const (
+	LeadHoldSourceManual      = "manual"
+	LeadHoldSourceOutOfOffice = "out_of_office"
+	// LeadHoldSourceInboxTagging is a hold a classified reply wrote: "not now"
+	// for a while, a decline with no end.
+	LeadHoldSourceInboxTagging = "inbox_tagging"
+)
 
 // Lead status constants for ContactCampaignProgress.Status.
 const (
@@ -114,6 +144,11 @@ const (
 	LeadStatusBounced      = "bounced"
 	LeadStatusFailed       = "failed"
 	LeadStatusUnsubscribed = "unsubscribed"
+	// LeadStatusPaused is a lead whose flow is held: an out-of-office
+	// auto-reply parked it until the contact is back, or a member paused it by
+	// hand. The lead keeps its place in the sequence and resumes where it
+	// stopped; it is not unsubscribed and not removed from the campaign.
+	LeadStatusPaused = "paused"
 	// LeadStatusUndeliverable is a lead routing will never send to because
 	// address verification refused it (invalid, or risky with the campaign's
 	// "send to risky emails" toggle off). Distinct from pending, which is a
@@ -125,7 +160,7 @@ const (
 // Used to gate the single-campaign Leads-view `lead_status` search filter.
 func ValidLeadStatus(s string) bool {
 	switch s {
-	case LeadStatusPending, LeadStatusActive, LeadStatusCompleted, LeadStatusReplied, LeadStatusBounced, LeadStatusFailed, LeadStatusUnsubscribed, LeadStatusUndeliverable:
+	case LeadStatusPending, LeadStatusActive, LeadStatusCompleted, LeadStatusReplied, LeadStatusBounced, LeadStatusFailed, LeadStatusUnsubscribed, LeadStatusPaused, LeadStatusUndeliverable:
 		return true
 	default:
 		return false
@@ -174,8 +209,8 @@ type ContactsResult struct {
 
 // CampaignLeadCounts are per-status lead totals within a single campaign,
 // derived the same way as ContactCampaignProgress.Status (unsubscribed >
-// bounced > replied > failed > completed > processing > undeliverable >
-// queued). Drives the Leads-view scope chips.
+// bounced > replied > failed > completed > paused > processing >
+// undeliverable > queued). Drives the Leads-view scope chips.
 type CampaignLeadCounts struct {
 	Total        int `json:"total"`
 	Queued       int `json:"queued"`     // pending: a lead, no email sent yet
@@ -185,6 +220,9 @@ type CampaignLeadCounts struct {
 	Bounced      int `json:"bounced"`
 	Failed       int `json:"failed"` // a step could not be sent after every retry
 	Unsubscribed int `json:"unsubscribed"`
+	// Paused: the lead's flow is held (an out-of-office auto-reply, or a
+	// member pausing it by hand) and resumes where it stopped.
+	Paused int `json:"paused"`
 	// Undeliverable: address verification refused it, so routing skips it.
 	Undeliverable int `json:"undeliverable"`
 	// Engagement totals, matching the `engagement` search filter: leads sent
@@ -595,7 +633,7 @@ type ContactLinkClick struct {
 
 // EngagementOrigin is what an open or click said about where it came from.
 // Client names the mail client or image proxy when the user agent does
-// (Gmail, Apple Mail, Outlook); the browser fields describe the rest. The
+// (Gmail, Outlook, Image proxy); the browser fields describe the rest. The
 // location is resolved from the source network and the address itself is
 // never stored. Every field is empty when unknown.
 type EngagementOrigin struct {
@@ -624,9 +662,28 @@ type ContactTimelineResult struct {
 	Pagination Pagination `json:"pagination"`
 }
 
+// EvidenceStep names the campaign step a verification observation came from.
+// It is what lets a late bounce or open be refused when the mail it describes
+// left before the contact's address was edited: the observation is about the
+// old mailbox, not the one the contact holds now. A zero value means the
+// observation is not attributable to a step and is always recorded.
+type EvidenceStep struct {
+	CampaignID *uuid.UUID
+	SequenceID *uuid.UUID
+}
+
+// Step builds an EvidenceStep from ids a caller already holds.
+func Step(campaignID, sequenceID *uuid.UUID) EvidenceStep {
+	return EvidenceStep{CampaignID: campaignID, SequenceID: sequenceID}
+}
+
 type UpdateContact struct {
-	FirstName        *string            `json:"first_name"`
-	LastName         *string            `json:"last_name"`
+	FirstName *string `json:"first_name"`
+	LastName  *string `json:"last_name"`
+	// Email replaces the contact's address. It is the contact's identity, so
+	// changing it drops the verification verdict and the delivery evidence
+	// that belonged to the old mailbox.
+	Email            *string            `json:"email"`
 	Company          *string            `json:"company"`
 	Phone            *string            `json:"phone"`
 	CustomFields     *map[string]string `json:"custom_fields"`
@@ -748,8 +805,8 @@ type SearchContacts struct {
 	CreatedBefore      *time.Time             `json:"created_before"`       // Contacts created before this date
 	UpdatedAfter       *time.Time             `json:"updated_after"`        // Contacts updated after this date
 	UpdatedBefore      *time.Time             `json:"updated_before"`       // Contacts updated before this date
-	SortBy             string                 `json:"sort_by"`              // e.g., "first_name ASC", "campaign_count DESC"
-	Reverse            bool                   `json:"reverse"`              // ASC or DESC
+	SortBy             string                 `json:"sort_by"`              // A column name (created_at, first_name, company, ...) or "custom:<key>" for a custom field
+	Reverse            bool                   `json:"reverse"`              // Ascending when true; the default is descending
 }
 
 type BulkEditContactsFieldType string

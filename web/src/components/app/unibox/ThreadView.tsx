@@ -1,9 +1,9 @@
 // Thread reader : right pane of the unibox.
 //
-// Fetches the thread via /unibox/thread. Header actions are wrapped
-// in radix tooltips so hover reveals the intent + (where it exists) a
-// keyboard hint. Snooze has both presets and a custom "pick a time"
-// path with a native datetime input.
+// Fetches the thread via /unibox/thread. The header is the subject over one
+// meta line (count, mailbox, labels, who else is here) with icon-only actions
+// on the right, each under a tooltip. Snooze has presets and a custom "pick a
+// time" path.
 
 import React from "react";
 import { useParams } from "react-router-dom";
@@ -14,7 +14,6 @@ import {
   AlertCircleIcon,
   ArchiveIcon,
   CheckIcon,
-  ChevronDownIcon,
   ClockIcon,
   CornerUpLeftIcon,
   ForwardIcon,
@@ -31,6 +30,7 @@ import {
 
 import { MessageBubble } from "./MessageBubble";
 import { ReplyComposer, type ReplyMode, type ReplySeed } from "./ReplyComposer";
+import { loadReplyDraft, replyDraftKey } from "@/lib/unibox/replyDraft";
 import { useOutboxStore } from "@/hooks/useOutboxStore";
 import AgentDraftCard from "./AgentDraftCard";
 import ResourceViewers from "@/components/app/presence/ResourceViewers";
@@ -40,18 +40,18 @@ import { useMediaQuery, LG_QUERY } from "@/hooks/useMediaQuery";
 import { useShortcutActions } from "@/hooks/useShortcutActions";
 import { ThreadLabelMenu } from "./ThreadLabelMenu";
 import ContactContextPanel from "./ContactContextPanel";
-import BookACallButton from "@/components/app/integrations/BookACallButton";
 import { CategoryChip } from "@/components/app/contacts/CategoryPicker";
-import { SectionBar } from "@/components/layout/Page";
 import useThread from "@/lib/api/hooks/app/unibox/useThread";
 import useMarkSeen from "@/lib/api/hooks/app/unibox/useMarkSeen";
-import useMoveFolder from "@/lib/api/hooks/app/unibox/useMoveFolder";
-import moveFolderRequest, { type FilableFolder } from "@/lib/api/client/app/unibox/moveFolder";
+import { useConversationActions } from "@/hooks/useConversationActions";
+import { SNOOZE_PRESETS, offsetHours } from "@/lib/unibox/snooze";
+import type { FilableFolder } from "@/lib/api/client/app/unibox/moveFolder";
 import { bareEmail, nameFromAddr, wrappedEmail } from "@/lib/helper/emailAddress";
 import useThreadLabels from "@/lib/api/hooks/app/unibox/useThreadLabels";
 import useThreadScheduled from "@/lib/api/hooks/app/unibox/useThreadScheduled";
 import cancelScheduled from "@/lib/api/client/app/unibox/cancelScheduled";
 import { useAppStore } from "@/stores";
+import { cn } from "@/lib/utils";
 import {
   PopoverMenu,
   PopoverMenuContent,
@@ -64,10 +64,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import {
-  snoozeThread,
-  unsnoozeThread,
-} from "@/lib/api/client/app/unibox/snoozeThread";
 import type UniboxEmail from "@/lib/api/models/app/unibox/UniboxEmail";
 import type UniboxScheduledItem from "@/lib/api/models/app/unibox/UniboxScheduled";
 import type { UniboxThreadMessage } from "@/lib/api/models/app/unibox/UniboxThread";
@@ -82,6 +78,7 @@ function toUniboxEmail(m: UniboxThreadMessage): UniboxEmail {
     id: m.id,
     from: m.from_addr?.[0] ?? "",
     to: m.to_addr?.[0] ?? "",
+    recipients: m.to_addr ?? [],
     subject: m.subject,
     snippet: m.snippet,
     date: new Date(m.internal_date),
@@ -89,47 +86,6 @@ function toUniboxEmail(m: UniboxThreadMessage): UniboxEmail {
     thread_id: m.thread_id,
     account_id: m.email_id,
   };
-}
-
-// Filing copy, per destination. "Deleted" is deliberately not said anywhere:
-// the message is moved to Trash here and still sits in the mail client.
-const FILE_COPY: Record<FilableFolder, { loading: string; done: string; failed: string }> = {
-  archive: { loading: "Archiving…", done: "Archived", failed: "Couldn't archive" },
-  trash: { loading: "Moving to Trash…", done: "Moved to Trash", failed: "Couldn't move to Trash" },
-  inbox: { loading: "Moving to Inbox…", done: "Moved to Inbox", failed: "Couldn't move to Inbox" },
-};
-
-const SNOOZE_PRESETS: { label: string; until: () => Date }[] = [
-  { label: "In 1 hour", until: () => offsetHours(1) },
-  { label: "In 3 hours", until: () => offsetHours(3) },
-  { label: "Tomorrow 9:00", until: () => atHour(1, 9) },
-  { label: "Monday 9:00", until: () => nextMonday9() },
-  { label: "Next week", until: () => offsetDays(7) },
-];
-
-function offsetHours(h: number): Date {
-  const d = new Date();
-  d.setHours(d.getHours() + h);
-  return d;
-}
-function offsetDays(d: number): Date {
-  const x = new Date();
-  x.setDate(x.getDate() + d);
-  return x;
-}
-function atHour(dayOffset: number, hour: number): Date {
-  const d = new Date();
-  d.setDate(d.getDate() + dayOffset);
-  d.setHours(hour, 0, 0, 0);
-  return d;
-}
-function nextMonday9(): Date {
-  const d = new Date();
-  const dow = d.getDay();
-  const delta = (1 - dow + 7) % 7 || 7;
-  d.setDate(d.getDate() + delta);
-  d.setHours(9, 0, 0, 0);
-  return d;
 }
 
 // Local datetime → ISO string. The native <input type="datetime-local">
@@ -147,6 +103,8 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
   const q = useThread(threadId, emailId);
   const scheduledQ = useThreadScheduled(threadId);
   const accounts = useAppStore((s) => s.emails);
+  const userId = useAppStore((s) => s.user?.id);
+  const orgId = useAppStore((s) => s.currentOrganization?.id);
   const queryClient = useQueryClient();
 
   const cancel = useMutation({
@@ -175,15 +133,7 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
   const threadLabels = useThreadLabels(threadId);
   const [labelMenuOpen, setLabelMenuOpen] = React.useState(false);
 
-  // CRM context rail (right side). From lg up it is a static rail beside the
-  // thread and its open/closed state is a persisted preference: this view is
-  // keyed on the thread id, so component state would put the rail back over
-  // every conversation the reader opens. It still starts open, which is the
-  // default #402/568bdb48 settled on; closing it now sticks (#473).
-  //
-  // Below lg the same panel is an overlay drawer on top of the thread, which
-  // is not something to restore on arrival, so there it is plain local state
-  // that starts closed and never writes the preference.
+  // Desktop visibility is remembered; mobile drawers start closed.
   const isWide = useMediaQuery(LG_QUERY);
   const railPref = useAppStore((s) => s.uniboxContactRailOpen);
   const setRailPref = useAppStore((s) => s.setUniboxContactRailOpen);
@@ -234,6 +184,24 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
     setReplySeed(null);
   }, [threadId]);
 
+  // Restore once on arrival, including drafts targeting an older message.
+  const reopenedFor = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    const msgs = q.data?.data ?? [];
+    if (!msgs.length || !userId || !orgId) return;
+    const identity = JSON.stringify([userId, orgId, threadId]);
+    if (reopenedFor.current === identity) return;
+    reopenedFor.current = identity;
+    for (const message of [...msgs].reverse()) {
+      for (const mode of ["reply", "forward"] as const) {
+        if (loadReplyDraft(replyDraftKey(userId, orgId, threadId, message.id, mode))) {
+          openReply(message.id, mode);
+          return;
+        }
+      }
+    }
+  }, [threadId, q.data, userId, orgId, openReply]);
+
   // A cancelled undo-send reply for this thread reopens the composer with
   // the exact content that was about to go out.
   const pendingRestore = useOutboxStore((s) => s.pendingReplyRestore);
@@ -269,65 +237,29 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
       .filter((m) => !m.seen)
       .map((m) => m.id);
     if (unseenIds.length === 0) return;
-    markSeenMutate({ ids: unseenIds, threadId });
+    markSeenMutate({ ids: unseenIds, threadIds: [threadId] });
   }, [threadId, q.data, markSeenMutate]);
 
   // Header actions. Each one closes the thread: the effect above would
   // otherwise re-mark an "unread" thread as seen on the next refetch, and a
   // filed thread has left the list the reader is looking at.
-  const moveFolder = useMoveFolder();
+  const actions = useConversationActions();
   const setSelectedThreadId = useAppStore((s) => s.setSelectedThreadId);
   const threadIds = () => (q.data?.data ?? []).map((m) => m.id);
   const markUnread = () => {
-    markSeenMutate({ ids: threadIds(), seen: false, threadId });
+    markSeenMutate({ ids: threadIds(), seen: false, threadIds: [threadId] });
     setSelectedThreadId(null);
-  };
-
-  // One click and the conversation is gone from the list, so the way back
-  // belongs on screen; the Trash scope's Move to inbox is the slow path. This
-  // pane has already closed by the time Undo is clicked, so it calls the
-  // endpoint directly: react-query drops an unmounted observer's callbacks,
-  // and the invalidation is the whole point.
-  const offerUndo = (message: string, ids: string[]) => {
-    toast((t) => (
-      <span className="flex items-center gap-3 text-[12.5px] text-slate-700">
-        {message}
-        <button
-          type="button"
-          onClick={() => {
-            toast.dismiss(t.id);
-            moveFolderRequest({ ids, folder: "inbox" })
-              .then(() => {
-                queryClient.invalidateQueries({ queryKey: ["unibox"] });
-                toast.success("Moved back to Inbox");
-              })
-              .catch(() => toast.error("Couldn't undo"));
-          }}
-          className="h-6 px-2 rounded-md border border-slate-200 hover:border-slate-300 text-[11.5px] font-medium text-sky-700 hover:bg-sky-50 transition-colors"
-        >
-          Undo
-        </button>
-      </span>
-    ));
   };
 
   // Filing is store-side: the message keeps its place at the provider, and
   // the sync knows not to undo this (migration 000146).
+  // The row leaves the list and the reader closes at once; the request runs
+  // behind the toast, and a failure re-reads the list, which brings it back.
+  // The copy, the undo and the cache handling are shared with the list row.
   const fileThread = async (folder: FilableFolder) => {
-    const ids = threadIds();
-    if (ids.length === 0 || moveFolder.isPending) return;
-    const copy = FILE_COPY[folder];
-    const pending = toast.loading(copy.loading);
-    try {
-      await moveFolder.mutateAsync({ ids, folder });
-      setSelectedThreadId(null);
-      toast.dismiss(pending);
-      if (folder === "inbox") toast.success(copy.done);
-      else offerUndo(copy.done, ids);
-    } catch {
-      toast.dismiss(pending);
-      toast.error(copy.failed);
-    }
+    if (actions.filing) return;
+    setSelectedThreadId(null);
+    await actions.file([threadId], folder, threadIds());
   };
 
   // Restoring is only offered where the user can see what they are restoring.
@@ -335,37 +267,27 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
   const filed = urlScope === "trash" || urlScope === "archive";
 
   const snooze = useMutation({
-    mutationFn: (until: Date) =>
-      snoozeThread({ thread_id: threadId, snoozed_until: until.toISOString() }),
-    onSuccess: () => {
-      toast.success("Snoozed");
-      queryClient.invalidateQueries({ queryKey: ["unibox", "search"] });
-      queryClient.invalidateQueries({ queryKey: ["unibox", "overview"] });
-      queryClient.invalidateQueries({ queryKey: ["unibox", "unseen-count"] });
+    mutationFn: (until: Date) => actions.snooze([threadId], until),
+    onSettled: () => {
       setSnoozeOpen(false);
       setCustomMode(false);
     },
-    onError: () => toast.error("Couldn't snooze this thread"),
   });
 
   const unsnooze = useMutation({
-    mutationFn: () => unsnoozeThread(threadId),
-    onSuccess: () => {
-      toast.success("Un-snoozed");
-      queryClient.invalidateQueries({ queryKey: ["unibox", "search"] });
-      queryClient.invalidateQueries({ queryKey: ["unibox", "overview"] });
-      setSnoozeOpen(false);
-    },
-    onError: () => toast.error("Couldn't un-snooze"),
+    mutationFn: () => actions.unsnooze([threadId]),
+    onSettled: () => setSnoozeOpen(false),
   });
 
+  // Built once per fetch, not once per render. Every consumer holds these
+  // objects by identity, so rebuilding them on each render hands each one a
+  // value that looks new while the conversation has not changed. That is what
+  // let a thread re-render reset the reply composer; keep it memoised, and
+  // above the early returns below so the hook order stays fixed.
+  const messages = React.useMemo(() => (q.data?.data ?? []).map(toUniboxEmail), [q.data]);
+
   if (q.isPending) {
-    return (
-      <div className="flex-1 flex items-center justify-center gap-2 text-[12px] text-slate-400">
-        <Loader2Icon className="w-3.5 h-3.5 animate-spin" />
-        Loading thread…
-      </div>
-    );
+    return <ThreadSkeleton />;
   }
 
   if (q.isError) {
@@ -374,7 +296,7 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
         <div className="text-center max-w-sm">
           <AlertCircleIcon className="w-5 h-5 text-rose-500 mx-auto mb-2" />
           <p className="text-[12.5px] font-medium text-slate-900 mb-1">
-            Couldn't load this thread
+            Couldn't load this conversation
           </p>
           <p className="text-[11.5px] text-slate-500 mb-3">
             {q.error?.message ?? "Request failed"}
@@ -391,20 +313,15 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
     );
   }
 
-  const messages = (q.data?.data ?? []).map(toUniboxEmail);
-
   if (messages.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center text-[12px] text-slate-400">
-        This thread is empty.
+        This conversation is empty.
       </div>
     );
   }
 
   const subject = messages[0]?.subject || "(no subject)";
-  const participants = new Set(
-    messages.map((m) => m.from).filter((f): f is string => Boolean(f)),
-  );
   const mailbox = accounts.find((a) => a.id === messages[0]?.account_id);
 
   // The external party of the thread = the first message address that isn't
@@ -447,42 +364,32 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
   return (
     <div className="flex h-full min-h-0">
       <div className="flex-1 flex flex-col min-w-0 bg-white">
-      <div className="h-12 px-3 sm:px-5 border-b border-slate-200 flex items-center gap-2 sm:gap-3 shrink-0 bg-white">
-        <span className="hidden sm:inline text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">
-          Thread
-        </span>
-        <div className="hidden sm:block h-4 w-px bg-slate-200" />
-        <span className="text-[12.5px] text-slate-900 font-medium truncate min-w-0">
-          {subject}
-        </span>
-        {mailbox && (
-          <span className="ml-1 hidden md:inline-flex items-center gap-1 h-5 px-1.5 rounded bg-slate-100 text-slate-600 text-[10.5px] font-medium font-mono shrink-0">
-            {mailbox.email}
-          </span>
-        )}
-        {(threadLabels.data ?? []).length > 0 && (
-          <span className="hidden md:inline-flex items-center gap-1 shrink-0">
-            {(threadLabels.data ?? []).slice(0, 3).map((c) => (
-              <CategoryChip key={c.id} category={c} compact />
-            ))}
-          </span>
-        )}
-        <ResourceViewers resource={`thread:${threadId}`} className="shrink-0" />
-        <div className="ml-auto flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setCrmOpen(!crmOpen)}
-            aria-label={crmOpen ? "Hide contact panel" : "Show contact panel"}
-            className={
-              "inline-flex size-7 rounded-md items-center justify-center transition-colors " +
-              (crmOpen
-                ? "text-sky-700 bg-sky-50"
-                : "text-slate-500 hover:text-slate-900 hover:bg-slate-100")
-            }
-          >
-            <UserIcon className="w-3.5 h-3.5" />
-          </button>
-          <BookACallButton email={contactEmail} className="hidden sm:inline-flex" />
+      <div className="min-h-12 px-4 sm:px-5 py-2 border-b border-slate-200 flex items-center gap-3 shrink-0 bg-white">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-[13.5px] text-slate-900 font-semibold truncate leading-5">
+            {subject}
+          </h1>
+          <div className="flex items-center gap-1.5 min-w-0 text-[11px] text-slate-400 leading-4">
+            <span className="shrink-0">
+              {messages.length} {messages.length === 1 ? "message" : "messages"}
+            </span>
+            {mailbox && (
+              <>
+                <span aria-hidden className="text-slate-300">&middot;</span>
+                <span className="truncate min-w-0">{mailbox.email}</span>
+              </>
+            )}
+            {(threadLabels.data ?? []).length > 0 && (
+              <span className="hidden md:inline-flex items-center gap-1 shrink-0 ml-1">
+                {(threadLabels.data ?? []).slice(0, 3).map((c) => (
+                  <CategoryChip key={c.id} category={c} compact />
+                ))}
+              </span>
+            )}
+            <ResourceViewers resource={`thread:${threadId}`} className="shrink-0 ml-1" />
+          </div>
+        </div>
+        <div className="flex items-center gap-0.5 shrink-0">
           <ThreadLabelMenu
             threadId={threadId}
             open={labelMenuOpen}
@@ -500,16 +407,20 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
             <PopoverMenuTrigger asChild>
               <button
                 aria-label="Snooze this thread"
-                className="h-7 px-2 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100 inline-flex items-center gap-1 transition-colors text-[12px]"
+                title="Snooze"
+                className={cn(
+                  "size-7 rounded-md inline-flex items-center justify-center transition-colors",
+                  snoozeOpen
+                    ? "bg-slate-100 text-slate-900"
+                    : "text-slate-500 hover:text-slate-900 hover:bg-slate-100",
+                )}
                 disabled={snooze.isPending || unsnooze.isPending}
               >
                 {snooze.isPending || unsnooze.isPending ? (
-                  <Loader2Icon className="w-3 h-3 animate-spin" />
+                  <Loader2Icon className="w-3.5 h-3.5 animate-spin" />
                 ) : (
-                  <MoonIcon className="w-3.5 h-3.5" />
+                  <MoonIcon className="w-[15px] h-[15px]" />
                 )}
-                <span className="hidden sm:inline">Snooze</span>
-                <ChevronDownIcon className="w-3 h-3 text-slate-400" />
               </button>
             </PopoverMenuTrigger>
             <PopoverMenuContent>
@@ -577,24 +488,24 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
             </PopoverMenuContent>
           </PopoverMenu>
 
-          <div className="hidden sm:flex items-center gap-1">
+          <div className="hidden sm:flex items-center gap-0.5">
             <IconAction
               label="Mark as unread"
-              icon={<MailCheckIcon className="w-3.5 h-3.5" />}
+              icon={<MailCheckIcon className="w-[15px] h-[15px]" />}
               onClick={markUnread}
             />
             {filed ? (
               <IconAction
                 label="Move to inbox"
-                icon={<InboxIcon className="w-3.5 h-3.5" />}
-                disabled={moveFolder.isPending}
+                icon={<InboxIcon className="w-[15px] h-[15px]" />}
+                disabled={actions.filing}
                 onClick={() => fileThread("inbox")}
               />
             ) : (
               <IconAction
                 label="Archive thread"
-                icon={<ArchiveIcon className="w-3.5 h-3.5" />}
-                disabled={moveFolder.isPending}
+                icon={<ArchiveIcon className="w-[15px] h-[15px]" />}
+                disabled={actions.filing}
                 onClick={() => fileThread("archive")}
               />
             )}
@@ -602,12 +513,31 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
               <IconAction
                 label="Delete thread"
                 danger
-                icon={<TrashIcon className="w-3.5 h-3.5" />}
-                disabled={moveFolder.isPending}
+                icon={<TrashIcon className="w-[15px] h-[15px]" />}
+                disabled={actions.filing}
                 onClick={() => fileThread("trash")}
               />
             )}
           </div>
+          <span aria-hidden className="hidden sm:block h-4 w-px bg-slate-200 mx-1" />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => setCrmOpen(!crmOpen)}
+                aria-label={crmOpen ? "Hide contact panel" : "Show contact panel"}
+                className={cn(
+                  "size-7 rounded-md inline-flex items-center justify-center transition-colors",
+                  crmOpen
+                    ? "text-sky-700 bg-sky-50"
+                    : "text-slate-500 hover:text-slate-900 hover:bg-slate-100",
+                )}
+              >
+                <UserIcon className="w-[15px] h-[15px]" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{crmOpen ? "Hide contact" : "Show contact"}</TooltipContent>
+          </Tooltip>
           <PopoverMenu align="end" side="bottom">
             <PopoverMenuTrigger asChild>
               <button
@@ -628,7 +558,7 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
               {filed ? (
                 <PopoverMenuItem
                   icon={<InboxIcon className="w-3.5 h-3.5" />}
-                  disabled={moveFolder.isPending}
+                  disabled={actions.filing}
                   onSelect={() => fileThread("inbox")}
                 >
                   Move to inbox
@@ -636,7 +566,7 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
               ) : (
                 <PopoverMenuItem
                   icon={<ArchiveIcon className="w-3.5 h-3.5" />}
-                  disabled={moveFolder.isPending}
+                  disabled={actions.filing}
                   onSelect={() => fileThread("archive")}
                 >
                   Archive thread
@@ -646,7 +576,7 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
                 <PopoverMenuItem
                   danger
                   icon={<TrashIcon className="w-3.5 h-3.5" />}
-                  disabled={moveFolder.isPending}
+                  disabled={actions.filing}
                   onSelect={() => fileThread("trash")}
                 >
                   Delete thread
@@ -657,12 +587,15 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
         </div>
       </div>
 
-      <SectionBar
-        label={`${messages.length} ${messages.length === 1 ? "message" : "messages"}`}
-        count={participants.size}
-      />
-
-      <div className="flex-1 overflow-y-auto divide-y divide-slate-200/60">
+      <motion.div
+        // The thread is keyed on its id, so this runs once per conversation
+        // opened: a short fade in place of the messages popping into an
+        // otherwise settled pane.
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+        className="flex-1 overflow-y-auto divide-y divide-slate-100"
+      >
         {messages.map((email, i) => (
           <MessageBubble
             key={email.id}
@@ -671,6 +604,9 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
             // still unread. Older read messages stay collapsed so a long
             // thread does not fetch every body at once.
             defaultExpanded={i === messages.length - 1 || !email.is_seen}
+            outbound={
+              !!mailboxEmail && bareEmail(email.from).toLowerCase() === mailboxEmail
+            }
             onReply={() => openReply(email.id, "reply")}
             onForward={() => openReply(email.id, "forward")}
           />
@@ -683,7 +619,7 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
             onCancel={() => cancel.mutate(item.task_id)}
           />
         ))}
-      </div>
+      </motion.div>
 
       <AgentDraftCard threadId={threadId} />
 
@@ -695,7 +631,7 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
               messages[messages.length - 1];
             return target ? (
               <ReplyComposer
-                key={`${replyState.messageId}-${replyState.mode}`}
+                key={`${userId}-${orgId}-${replyState.messageId}-${replyState.mode}`}
                 threadId={threadId}
                 replyTo={target}
                 mode={replyState.mode}
@@ -714,7 +650,7 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 6 }}
             transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-            className="border-t border-slate-200 bg-white px-3 py-2 flex items-center gap-1.5 shrink-0"
+            className="border-t border-slate-200 bg-white px-4 sm:px-5 py-2.5 flex items-center gap-1.5 shrink-0"
           >
             <button
               type="button"
@@ -740,9 +676,6 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
               <ForwardIcon className="w-3 h-3" />
               Forward
             </button>
-            <span className="ml-auto hidden md:inline text-[10.5px] text-slate-400">
-              Hover any message to reply to it directly.
-            </span>
           </motion.div>
         )}
       </AnimatePresence>
@@ -756,6 +689,52 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
           onClose={() => setCrmOpen(false)}
         />
       )}
+    </div>
+  );
+}
+
+// The pane's own shape while the thread loads: a header block, then two
+// messages. Nothing is centred and nothing spins, so the layout the messages
+// land in is already on screen.
+function ThreadSkeleton() {
+  return (
+    <div className="flex h-full min-h-0" aria-busy aria-label="Loading conversation">
+      <div className="flex-1 flex flex-col min-w-0 bg-white">
+        <div className="min-h-12 px-4 sm:px-5 py-2 border-b border-slate-200 flex items-center gap-3 shrink-0">
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className="h-3 w-2/3 max-w-[320px] rounded bg-slate-100 animate-pulse" />
+            <div className="h-2.5 w-40 rounded bg-slate-100/80 animate-pulse" />
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="size-7 rounded-md bg-slate-50" />
+            ))}
+          </div>
+        </div>
+        <div className="flex-1 divide-y divide-slate-100">
+          <div className="px-4 sm:px-5 py-2.5 flex items-center gap-3">
+            <div className="size-7 rounded-full bg-slate-100 animate-pulse shrink-0" />
+            <div className="h-2.5 w-28 rounded bg-slate-100 animate-pulse" />
+            <div className="h-2.5 flex-1 max-w-[280px] rounded bg-slate-100/70 animate-pulse" />
+          </div>
+          <div className="px-4 sm:px-5 py-4">
+            <div className="flex items-start gap-3">
+              <div className="size-7 rounded-full bg-slate-100 animate-pulse shrink-0" />
+              <div className="flex-1 space-y-2 pt-1">
+                <div className="h-2.5 w-36 rounded bg-slate-100 animate-pulse" />
+                <div className="h-2.5 w-24 rounded bg-slate-100/80 animate-pulse" />
+              </div>
+            </div>
+            <div className="sm:pl-10 mt-4 space-y-2.5">
+              <div className="h-2.5 w-[92%] rounded bg-slate-100 animate-pulse" />
+              <div className="h-2.5 w-[84%] rounded bg-slate-100 animate-pulse" />
+              <div className="h-2.5 w-[60%] rounded bg-slate-100 animate-pulse" />
+              <div className="h-2.5 w-[76%] rounded bg-slate-100/80 animate-pulse mt-4" />
+              <div className="h-2.5 w-[40%] rounded bg-slate-100/80 animate-pulse" />
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

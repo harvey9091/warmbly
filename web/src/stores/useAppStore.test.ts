@@ -127,6 +127,14 @@ describe('useAppStore', () => {
         useAppStore.persist.setOptions({ storage: original })
       })
 
+      it('preserves existing contact rail preferences', async () => {
+        expect(useAppStore.getInitialState().uniboxContactRailOpen).toBe(false)
+        await rehydrateFrom({ state: { uniboxContactRailOpen: true }, version: 0 })
+        expect(useAppStore.getState().uniboxContactRailOpen).toBe(true)
+        await rehydrateFrom({ state: { uniboxContactRailOpen: false } })
+        expect(useAppStore.getState().uniboxContactRailOpen).toBe(false)
+      })
+
       it('clamps a stored width that is out of range or not a number', async () => {
         await rehydrateFrom({ state: { uniboxListWidth: 99999 } })
         expect(useAppStore.getState().uniboxListWidth).toBe(UNIBOX_LIST_MAX_WIDTH)

@@ -26,7 +26,7 @@ import (
 // the auth package needs no import of twofa (no cycle).
 type TwoFAChallenger interface {
 	IsEnabled(ctx context.Context, userID uuid.UUID) (bool, error)
-	CreatePendingChallenge(ctx context.Context, userID uuid.UUID) (string, int, *errx.Error)
+	CreatePendingChallenge(ctx context.Context, userID uuid.UUID, authProvider string, link *models.UserIdentity) (string, int, *errx.Error)
 }
 
 // ReferralAttributor links a brand-new org to the referrer behind its signup
@@ -64,6 +64,17 @@ type InstanceSettings interface {
 
 type AuthService interface {
 	LoginStart(ctx context.Context, data *AuthData, ipaddr, userAgent string) (*models.AuthSession, *errx.Error)
+	// PasswordHashFor returns the stored argon2 hash, or empty for an account
+	// that has no password (passkey or SSO only). Used by the re-auth endpoint
+	// to confirm the account holder without starting a new login.
+	PasswordHashFor(ctx context.Context, userID uuid.UUID) (string, *errx.Error)
+	// The per-account budget for signed-in proofs (re-auth, 2FA disable and
+	// recovery-code regeneration). Reserve charges one attempt atomically and
+	// reports whether it was within budget; Release refunds an attempt that
+	// never checked a credential; Clear forgives the count on success.
+	ReserveReauthAttempt(ctx context.Context, userID uuid.UUID) bool
+	ReleaseReauthAttempt(ctx context.Context, userID uuid.UUID)
+	ClearReauthFailures(ctx context.Context, userID uuid.UUID)
 	LoginConfirm(ctx context.Context, data *ConfirmData, session, ipaddr, userAgent string) (*models.LoginResult, *errx.Error)
 	// WireTwoFA attaches the 2FA challenger (post-construction; nil = 2FA off).
 	WireTwoFA(t TwoFAChallenger)
@@ -97,8 +108,10 @@ type AuthService interface {
 	ResetPasswordConfirm(ctx context.Context, data *ResetPasswordConfirm, session, ipaddr string) *errx.Error
 
 	// ChangePassword updates a logged-in user's password after verifying the
-	// current one.
-	ChangePassword(ctx context.Context, userID, currentSessionID uuid.UUID, data *ChangePassword) *errx.Error
+	// current one. Every session ends with it and the caller gets the token
+	// pair of a new one for its device; current is the caller's session, whose
+	// workspace, sign-in method and MFA status the new one keeps.
+	ChangePassword(ctx context.Context, userID uuid.UUID, current *models.Session, ipaddr, userAgent string, data *ChangePassword) (*models.Token, *errx.Error)
 
 	// Policy is the resolved per-deployment auth behavior, exposed so the
 	// public /auth/config endpoint can report it to the login screen.
@@ -128,6 +141,10 @@ type AuthService interface {
 	// provider redirects a browser here, so the response must be a redirect.
 	SSOCallbackComplete(ctx context.Context, in SSOCallback) (string, *errx.Error)
 	SSOExchange(ctx context.Context, code, binding string) (*models.LoginResult, *errx.Error)
+	// SSOLinkConfirm completes a federated sign-in that came back with
+	// link_required: the address already belongs to a password account, and
+	// the identity is attached only once that password is presented.
+	SSOLinkConfirm(ctx context.Context, data *SSOLinkData, ipaddr, userAgent string) (*models.LoginResult, *errx.Error)
 }
 
 // OperatorNotifier is the instance-wide operator alert surface, injected

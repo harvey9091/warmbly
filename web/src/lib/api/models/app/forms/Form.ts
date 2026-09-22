@@ -105,6 +105,8 @@ export default interface Form {
     category_ids: string[];
     allowed_domains: string[];
     captcha_enabled: boolean;
+    /** Classify each submission through TypeSafe; junk creates no contact. */
+    triage_enabled: boolean;
     logo_url: string;
     cover_url: string;
     background_url: string;
@@ -132,7 +134,11 @@ export interface FormWrite {
     category_ids?: string[];
     allowed_domains?: string[];
     captcha_enabled?: boolean;
+    triage_enabled?: boolean;
 }
+
+/** The triage verdict on a submission; empty when it was not triaged. */
+export type FormTriage = "" | "buyer" | "vendor" | "job_seeker" | "other" | "junk";
 
 export interface FormSubmission {
     id: string;
@@ -143,6 +149,8 @@ export interface FormSubmission {
     campaign_id?: string;
     data: Record<string, string | string[]>;
     source_url: string;
+    triage?: FormTriage;
+    triage_confidence?: number;
     created_at: Date;
     contact_email?: string;
     contact_name?: string;
@@ -152,6 +160,7 @@ export interface FormSubmission {
 export interface FormsConfig {
     base_url: string;
     captcha_available: boolean;
+    triage_available: boolean;
 }
 
 /** Field types that collect a value on submit. */

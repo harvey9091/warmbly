@@ -162,6 +162,12 @@ func (h *Handler) GetUser(c *gin.Context) {
 	// Scoped to the session's current organization, not the caller: labels
 	// are workspace assets, so a teammate must see what the owner created
 	// (issue #436). A session with no workspace selected gets empty lists.
+	// Admin routes require a second factor, so the panel has to be able to say
+	// so before it makes a call that 403s.
+	if sess := middleware.GetSession(c); sess != nil {
+		u.SessionMFAVerified = sess.MFAVerified
+	}
+
 	u.Folders, u.Tags, u.Categories = []models.Group{}, []models.Group{}, []models.Group{}
 	if orgID := middleware.GetOrganizationID(c); orgID != nil {
 		if folders, ferr := h.FolderService.List(ctx, *orgID); ferr == nil {
@@ -216,7 +222,9 @@ func (h *Handler) ResetPasswordConfirm(c *gin.Context) {
 	c.Status(http.StatusOK)
 }
 
-// ChangePassword updates the signed-in user's password (current + new).
+// ChangePassword updates the signed-in user's password (current + new). Every
+// session ends with it; the response carries the token pair of a new session
+// for this device, and the client must use it from here on.
 func (h *Handler) ChangePassword(c *gin.Context) {
 	uid, err := uuid.Parse(middleware.GetUserID(c))
 	if err != nil {
@@ -233,10 +241,15 @@ func (h *Handler) ChangePassword(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), authRequestTimeout)
 	defer cancel()
 
-	if xerr := h.AuthService.ChangePassword(ctx, uid, currentSessionID(c), &data); xerr != nil {
+	tok, xerr := h.AuthService.ChangePassword(ctx, uid, middleware.GetSession(c), c.ClientIP(), c.Request.UserAgent(), &data)
+	if xerr != nil {
 		errx.Handle(c, xerr)
 		return
 	}
+	if tok == nil {
+		c.Status(http.StatusOK)
+		return
+	}
 
-	c.Status(http.StatusOK)
+	c.JSON(http.StatusOK, tok)
 }

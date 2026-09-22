@@ -87,7 +87,7 @@ describe("unibox scroll position", SUITE, () => {
         await scrollTo(1200);
 
         await act(async () => {
-            fireEvent.click(screen.getByText("Subject 4").closest("button")!);
+            fireEvent.click(screen.getByText("Subject 4").closest('[role="button"]')!);
         });
         await settle();
 
@@ -103,18 +103,18 @@ describe("unibox scroll position", SUITE, () => {
 
         const search = screen.getByPlaceholderText(/^Search unread/i) as HTMLInputElement;
         await act(async () => {
-            fireEvent.change(search, { target: { value: "invoice" } });
+            fireEvent.change(search, { target: { value: "Subject 2" } });
         });
         await settle();
 
         await act(async () => {
-            fireEvent.click(screen.getByText("Subject 2").closest("button")!);
+            fireEvent.click(screen.getByText("Subject 2").closest('[role="button"]')!);
         });
         await settle();
 
         expect(
             (screen.getByPlaceholderText(/^Search unread/i) as HTMLInputElement).value,
-        ).toBe("invoice");
+        ).toBe("Subject 2");
     });
 
     it("puts a remembered offset back after the pane is hidden and shown again", async () => {
@@ -126,7 +126,7 @@ describe("unibox scroll position", SUITE, () => {
         await scrollTo(700);
 
         await act(async () => {
-            fireEvent.click(screen.getByText("Subject 3").closest("button")!);
+            fireEvent.click(screen.getByText("Subject 3").closest('[role="button"]')!);
         });
         await settle();
         scroller().scrollTop = 0;

@@ -227,6 +227,12 @@ var Tables = []Table{
 		Name: "webhook_endpoints", Group: models.OrgDataGroupCore,
 		Scope:         scopeOrg,
 		ResetOnImport: []string{"last_success_at", "last_failure_at", "last_failure_reason", "consecutive_failures", "first_failure_at", "auto_disabled_at", "disabled_reason"},
+		// The signing secret is sealed under the instance key, so it has to be
+		// re-sealed on the way across or the destination hands the receiver
+		// signatures computed from ciphertext it could not read.
+		Secrets: []SecretColumn{
+			{Column: "secret", Domain: KeyDomainInstance},
+		},
 	},
 	{
 		Name: "outreach_settings", Group: models.OrgDataGroupCore,
@@ -390,6 +396,18 @@ var Tables = []Table{
 	{
 		Name: "campaign_leads", Group: models.OrgDataGroupCampaigns,
 		Scope: `campaign_id IN ` + orgCampaigns,
+	},
+	{
+		// The recipient's opt-out address. It travels because an unsubscribe
+		// link a recipient already holds is a commitment for as long as it
+		// says it is good for, and a moved instance answering it with
+		// "invalid" breaks the one mechanism the email promised. Keyed on an
+		// opaque token rather than on anything about this instance, so the
+		// same address resolves on the other side. Signed links minted before
+		// short tickets do not travel: they verify under the auth secret,
+		// which is per instance.
+		Name: "unsubscribe_links", Group: models.OrgDataGroupCampaigns,
+		Scope: `organization_id = $1`,
 	},
 	{
 		// Segments travel in the contacts group, which campaigns already
@@ -571,7 +589,8 @@ var Tables = []Table{
 	},
 	{
 		Name: "unibox_emails", Group: models.OrgDataGroupInbox,
-		Scope: `email_id IN ` + orgMailboxes,
+		Scope:         `email_id IN ` + orgMailboxes,
+		ResetOnImport: []string{"campaign_reply_claimed_at", "campaign_reply_claim_token", "campaign_reply_processed_at"},
 	},
 	{
 		Name: "unibox_thread_labels", Group: models.OrgDataGroupInbox,
@@ -580,6 +599,13 @@ var Tables = []Table{
 	{
 		Name: "unibox_snoozes", Group: models.OrgDataGroupInbox,
 		Scope: `thread_id IN ` + orgThreads,
+	},
+	{
+		Name: "inbox_tag_results", Group: models.OrgDataGroupInbox,
+		Scope: scopeOrg + ` AND status = 'complete'`,
+		Note: "Automatic tagging verdicts, including the raw probabilities. They travel because retuning the weights " +
+			"against stored answers is free while re-running the model over the history is not. Below email_accounts, " +
+			"which it references.",
 	},
 	{
 		Name: "email_message_map", Group: models.OrgDataGroupInbox,
@@ -762,6 +788,11 @@ var Tables = []Table{
 		Scope: scopeOrgAlt, ImportSkip: true,
 	},
 	{
+		Name: "credit_auto_topup_attempts", Group: models.OrgDataGroupBilling,
+		Scope: scopeOrg, ImportSkip: true,
+		Note: "Stripe charge attempts belong to the source instance's Stripe account.",
+	},
+	{
 		Name: "referral_earnings_ledger", Group: models.OrgDataGroupBilling,
 		Scope: scopeOrgAlt, ImportSkip: true,
 	},
@@ -788,6 +819,7 @@ var Tables = []Table{
 // with the reason. Kept as data so the docs page and the coverage test both
 // read from one list instead of restating it.
 var ExcludedTables = map[string]string{
+	"unibox_pending_emails":        "Unverified mailbox-sync events awaiting this instance's warmup checks. The destination resyncs provider mail with its own warmup and cloud-link state.",
 	"organization_encrypted_keys":  "The organization's data key, wrapped by the source instance's KMS. The destination cannot unwrap it, and shipping it would put every org secret behind one exported blob.",
 	"api_idempotency_keys":         "A short-lived replay cache for in-flight API requests.",
 	"realtime_events":              "The websocket outbox. Every row is already delivered or expired.",
@@ -803,8 +835,12 @@ var ExcludedTables = map[string]string{
 	"cloud_link":                   "This instance's own link to Warmbly Cloud: an instance property, not workspace data, and its token would be wrong on any other instance.",
 	"cloud_link_mailboxes":         "Which local mailboxes Warmbly Cloud warms for this instance. The enrollment belongs to the link, which does not travel.",
 	"warmup_conversations":         "The instance's shared warmup content library, not workspace data.",
+	"copy_judgments":               "A cache of copy judgments keyed by the hash of the words judged. The destination re-reads a step the first time its Advisor runs.",
+	"warmup_thread_messages":       "Message identifiers this instance recognised as turns of a warmup conversation, so the reply to each is recognised too. The destination syncs provider mail afresh and rebuilds it from the warmup tokens, which do travel.",
 	"sessions":                     "Live login sessions. They are bound to the source instance's signing key and must not survive a move.",
+	"mailbox_erasures":             "Erasure still owed for a mailbox this instance deleted: a grant to revoke at the provider, and message bodies to remove from this instance's blob store. Both name work on the instance that wrote the row, and the mailboxes are already gone.",
 	"login_history":                "Where people signed in from, kept only to compare a new sign-in against recent ones. It belongs to the person rather than the workspace, and a destination must build its own baseline before it can call anything anomalous.",
+	"user_view_preferences":        "Each member's own column layout and sort for the dashboard's lists. It belongs to the person rather than the workspace: members are matched by account on import and a layout names custom fields the destination may not hold yet, so everyone starts from the default view and picks their columns again.",
 }
 
 // TableByName indexes Tables for lookup during import.

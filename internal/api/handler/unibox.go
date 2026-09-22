@@ -80,14 +80,21 @@ func (h *Handler) GetUniboxIncoming(c *gin.Context) {
 		params.Direction = &direction
 	}
 
-	// Folder scope. Absent = every folder except spam and trash; an
-	// unknown value is a 400 rather than silently widening the result.
+	// Folder scope. Absent = every working folder (spam, trash and archive
+	// stay out); an unknown value is a 400 rather than silently widening the
+	// result.
 	if folder := c.Query("folder"); folder != "" {
 		if !models.ValidFolder(folder) {
 			errx.Handle(c, errx.ErrUniboxFolder)
 			return
 		}
 		params.Folder = &folder
+	}
+
+	// All mail and reference reads ask for filed conversations back.
+	if c.Query("include_archived") == "true" {
+		v := true
+		params.IncludeArchived = &v
 	}
 
 	// Parse subject filter
@@ -413,6 +420,7 @@ func (h *Handler) UniboxMoveFolder(c *gin.Context) {
 		"action":   "move_folder",
 		"folder":   data.Folder,
 		"messages": strconv.Itoa(len(data.EmailIDs)),
+		"threads":  strconv.Itoa(len(data.ThreadIDs)),
 	})
 
 	c.JSON(http.StatusOK, resp)
@@ -482,6 +490,10 @@ func (h *Handler) UniboxReply(c *gin.Context) {
 	accountID, err := uuid.Parse(req.EmailAccountID)
 	if err != nil {
 		errx.Handle(c, errx.ErrUuid)
+		return
+	}
+	if xerr := mailboxAllowed(c, accountID); xerr != nil {
+		errx.Handle(c, xerr)
 		return
 	}
 
@@ -555,12 +567,26 @@ func (h *Handler) GetUniboxOverview(c *gin.Context) {
 }
 
 type UniboxSnoozeRequest struct {
-	ThreadID     string    `json:"thread_id" binding:"required"`
+	ThreadID string `json:"thread_id"`
+	// ThreadIDs snoozes a whole selection in one call. Either field will do;
+	// naming both snoozes the union.
+	ThreadIDs    []string  `json:"thread_ids"`
 	SnoozedUntil time.Time `json:"snoozed_until" binding:"required"`
 }
 
-// CreateUniboxSnooze hides a thread until snoozed_until passes.
+// threads is every conversation the request names, in either field.
+func (r UniboxSnoozeRequest) threads() []string {
+	out := r.ThreadIDs
+	if r.ThreadID != "" {
+		out = append([]string{r.ThreadID}, out...)
+	}
+	return out
+}
+
+// CreateUniboxSnooze hides conversations until snoozed_until passes.
 // Upsert semantics: a second call on the same thread updates the time.
+// A request naming one thread answers with that row, as it always has; one
+// naming several answers with `data`.
 // POST /unibox/snooze
 func (h *Handler) CreateUniboxSnooze(c *gin.Context) {
 	if !h.gateUnibox(c) {
@@ -579,18 +605,23 @@ func (h *Handler) CreateUniboxSnooze(c *gin.Context) {
 		return
 	}
 
-	resp, xerr := h.UniboxService.Snooze(c.Request.Context(), uid, req.ThreadID, req.SnoozedUntil)
+	threads := req.threads()
+	rows, xerr := h.UniboxService.Snooze(c.Request.Context(), uid, threads, req.SnoozedUntil)
 	if xerr != nil {
 		errx.Handle(c, xerr)
 		return
 	}
 
 	h.auditOrg(c, models.AuditActionCreate, models.AuditEntityUnibox, nil, nil, map[string]string{
-		"action":    "snooze",
-		"thread_id": req.ThreadID,
+		"action":  "snooze",
+		"threads": strconv.Itoa(len(threads)),
 	})
 
-	c.JSON(http.StatusOK, resp)
+	if len(threads) == 1 && len(rows) == 1 {
+		c.JSON(http.StatusOK, rows[0])
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": rows})
 }
 
 // DeleteUniboxSnooze un-snoozes a thread immediately. Idempotent —
@@ -607,20 +638,27 @@ func (h *Handler) DeleteUniboxSnooze(c *gin.Context) {
 		return
 	}
 
-	threadID := c.Query("thread_id")
-	if threadID == "" {
+	// One id, or a comma-separated selection. Same shape as email_ids on the
+	// other list endpoints.
+	var threads []string
+	for _, raw := range strings.Split(c.Query("thread_id"), ",") {
+		if id := strings.TrimSpace(raw); id != "" {
+			threads = append(threads, id)
+		}
+	}
+	if len(threads) == 0 {
 		errx.Handle(c, errx.New(errx.BadRequest, "thread_id is required"))
 		return
 	}
 
-	if xerr := h.UniboxService.Unsnooze(c.Request.Context(), uid, threadID); xerr != nil {
+	if xerr := h.UniboxService.Unsnooze(c.Request.Context(), uid, threads); xerr != nil {
 		errx.Handle(c, xerr)
 		return
 	}
 
 	h.auditOrg(c, models.AuditActionDelete, models.AuditEntityUnibox, nil, nil, map[string]string{
-		"action":    "snooze",
-		"thread_id": threadID,
+		"action":  "snooze",
+		"threads": strconv.Itoa(len(threads)),
 	})
 
 	c.Status(http.StatusNoContent)

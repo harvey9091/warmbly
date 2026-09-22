@@ -23,4 +23,8 @@ const (
 	// Anything longer is functionally "mute" — we'd rather expose a
 	// dedicated mute action than let snooze drift into archive.
 	SnoozeMaxHorizon = 90 * 24 * time.Hour
+
+	// SnoozeMaxThreads bounds one selection-bar press, matching the id cap
+	// the read-state and filing endpoints apply.
+	SnoozeMaxThreads = 500
 )

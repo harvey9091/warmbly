@@ -16,6 +16,8 @@ Open **Settings -> Webhooks** in the dashboard and click **Add endpoint**.
 3. Choose which events to subscribe to. Leave the list empty to receive all standard events (high-volume firehose events are opt-in separately, see below).
 4. Click **Create**. The signing secret is shown exactly once. Copy it now and store it somewhere safe (a secrets manager or environment variable). It is never shown again. Use **Rotate secret** if you need a new one later.
 
+The secret is encrypted at rest with the instance's credential key, the same one that protects mailbox passwords, and is decrypted only when a delivery is signed. It is never returned by the API after creation, and never shown in the admin panel.
+
 After creation the endpoint is **unverified** and will receive only a challenge request, not real events.
 
 ## Verifying your endpoint

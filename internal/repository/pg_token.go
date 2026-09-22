@@ -14,6 +14,8 @@ import (
 
 type TokenRepository interface {
 	GenerateSession(ctx context.Context, tx pgx.Tx, session *models.Session) *errx.Error
+	// StampReauth records that this session just re-proved the account holder.
+	StampReauth(ctx context.Context, sessionID uuid.UUID, at time.Time) error
 	GetSession(ctx context.Context, sessionID uuid.UUID) (*models.Session, *errx.Error)
 	ListSessionsByUser(ctx context.Context, userID uuid.UUID) ([]*models.Session, *errx.Error)
 	RefreshToken(ctx context.Context, sessionID uuid.UUID, oldRefreshNonce, refreshNonce, accessNonce string, issuedAt time.Time) *errx.Error
@@ -47,13 +49,13 @@ func (r *tokenRepository) GenerateSession(ctx context.Context, tx pgx.Tx, sessio
 		 created_at, expires_at, last_refreshed_at, revoked_at,
 		 access_nonce, refresh_nonce,
 		 location_city, location_region, location_country, location_country_code, location_postal_code,
-		 os_name, browser_name, auth_provider
+		 os_name, browser_name, auth_provider, mfa_verified
 		) VALUES (
 		 $1, $2, $3,
 		 $4, $5, $6, $7,
 		 $8, $9,
 		 $10, $11, $12, $13, $14,
-		 $15, $16, $17
+		 $15, $16, $17, $18
 		)
 	`
 
@@ -62,7 +64,7 @@ func (r *tokenRepository) GenerateSession(ctx context.Context, tx pgx.Tx, sessio
 		session.CreatedAt, session.ExpiresAt, session.LastRefreshedAt, session.RevokedAt,
 		session.AccessNonce, session.RefreshNonce,
 		session.LocationCity, session.LocationRegion, session.LocationCountry, session.LocationCountryCode, session.LocationPostalCode,
-		session.OSName, session.BrowserName, session.AuthProvider,
+		session.OSName, session.BrowserName, session.AuthProvider, session.MFAVerified,
 	}
 
 	_, err := tx.Exec(
@@ -84,7 +86,7 @@ func (r *tokenRepository) GetSession(ctx context.Context, sessionID uuid.UUID) (
 		 created_at, expires_at, last_refreshed_at, revoked_at,
 		 access_nonce, refresh_nonce,
 		 location_city, location_region, location_country, location_country_code, location_postal_code,
-		 os_name, browser_name, auth_provider
+		 os_name, browser_name, auth_provider, mfa_verified, reauth_at
 		FROM sessions
 		WHERE id = $1
 	`
@@ -104,7 +106,7 @@ func (r *tokenRepository) GetSession(ctx context.Context, sessionID uuid.UUID) (
 		&sess.CreatedAt, &sess.ExpiresAt, &sess.LastRefreshedAt, &sess.RevokedAt,
 		&sess.AccessNonce, &sess.RefreshNonce,
 		&sess.LocationCity, &sess.LocationRegion, &sess.LocationCountry, &sess.LocationCountryCode, &sess.LocationPostalCode,
-		&sess.OSName, &sess.BrowserName, &sess.AuthProvider,
+		&sess.OSName, &sess.BrowserName, &sess.AuthProvider, &sess.MFAVerified, &sess.ReauthAt,
 	)
 	if err != nil {
 		// A missing session row is an expected auth outcome, not a server
@@ -132,7 +134,7 @@ func (r *tokenRepository) ListSessionsByUser(ctx context.Context, userID uuid.UU
 		 created_at, expires_at, last_refreshed_at, revoked_at,
 		 access_nonce, refresh_nonce,
 		 location_city, location_region, location_country, location_country_code, location_postal_code,
-		 os_name, browser_name, auth_provider
+		 os_name, browser_name, auth_provider, mfa_verified, reauth_at
 		FROM sessions
 		WHERE user_id = $1
 		  AND revoked_at IS NULL
@@ -157,7 +159,7 @@ func (r *tokenRepository) ListSessionsByUser(ctx context.Context, userID uuid.UU
 			&sess.CreatedAt, &sess.ExpiresAt, &sess.LastRefreshedAt, &sess.RevokedAt,
 			&sess.AccessNonce, &sess.RefreshNonce,
 			&sess.LocationCity, &sess.LocationRegion, &sess.LocationCountry, &sess.LocationCountryCode, &sess.LocationPostalCode,
-			&sess.OSName, &sess.BrowserName, &sess.AuthProvider,
+			&sess.OSName, &sess.BrowserName, &sess.AuthProvider, &sess.MFAVerified, &sess.ReauthAt,
 		); err != nil {
 			db.CaptureError(err, "", nil, "scan")
 			return nil, errx.InternalError()
@@ -426,4 +428,12 @@ func (r *tokenRepository) DefaultOrganization(ctx context.Context, userID uuid.U
 		return nil, errx.InternalError()
 	}
 	return &orgID, nil
+}
+
+// StampReauth records a successful re-authentication on the session.
+func (r *tokenRepository) StampReauth(ctx context.Context, sessionID uuid.UUID, at time.Time) error {
+	_, err := r.DB.Exec(ctx,
+		`UPDATE sessions SET reauth_at = $2 WHERE id = $1 AND revoked_at IS NULL`,
+		sessionID, at)
+	return err
 }

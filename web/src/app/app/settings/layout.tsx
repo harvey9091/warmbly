@@ -32,11 +32,13 @@ import {
     WebhookIcon,
     GlobeIcon,
     PaletteIcon,
+    TagsIcon,
 } from "lucide-react";
 import { UnsavedProvider, useUnsavedRegistry } from "@/hooks/context/unsaved";
 import { usePermission, type PermissionKey } from "@/hooks/usePermission";
 import { Page, PageTopbar } from "@/components/layout/Page";
 import useFeatureAccess from "@/hooks/useFeatureAccess";
+import useAuthConfig from "@/lib/api/hooks/auth/useAuthConfig";
 
 interface SectionDef {
     path: string;
@@ -47,6 +49,9 @@ interface SectionDef {
     permission?: PermissionKey;
     /** Only meaningful when the deployment runs a billing provider. */
     billingOnly?: boolean;
+    /** What the entry is called on the hosted product, when that differs. */
+    hostedLabel?: string;
+    hostedDescription?: string;
 }
 
 interface SectionGroup {
@@ -78,6 +83,7 @@ const GROUPS: SectionGroup[] = [
             { path: "workspace", label: "Workspace", icon: BriefcaseIcon, description: "Org-wide settings.", ownerOnly: true },
             { path: "sending", label: "Sending", icon: SendIcon, description: "When campaign mail reaches each recipient.", permission: "MANAGE_SETTINGS" },
             { path: "tracking", label: "Website tracking", icon: GlobeIcon, description: "Page views on your site, in the contact timeline.", permission: "MANAGE_SETTINGS" },
+            { path: "inbox-tagging", label: "Inbox tagging", icon: TagsIcon, description: "Label and score inbound mail automatically.", permission: "VIEW_ANALYTICS" },
             { path: "ai-skills", label: "AI skills", icon: SparklesIcon, description: "Playbooks your AI features follow.", permission: "MANAGE_SETTINGS" },
             { path: "billing", label: "Billing", icon: CreditCardIcon, description: "Plan, payment, invoices.", ownerOnly: true, billingOnly: true },
             { path: "referral", label: "Refer & earn", icon: GiftIcon, description: "Invite teams and earn account credit.", ownerOnly: true, billingOnly: true },
@@ -95,7 +101,7 @@ const GROUPS: SectionGroup[] = [
     {
         label: "Advanced",
         items: [
-            { path: "warmbly-cloud", label: "Warmbly Cloud", icon: CloudIcon, description: "Warm your mailboxes in the Warmbly pool.", permission: "MANAGE_SETTINGS" },
+            { path: "warmbly-cloud", label: "Warmbly Cloud", icon: CloudIcon, description: "Warm your mailboxes in the Warmbly pool.", permission: "MANAGE_SETTINGS", hostedLabel: "Linked instances", hostedDescription: "Self-hosted instances warming in this workspace." },
             { path: "data", label: "Data", icon: DatabaseIcon, description: "Export this workspace, or import one from another instance.", ownerOnly: true },
             { path: "danger", label: "Danger zone", icon: AlertOctagonIcon, description: "Irreversible actions." },
         ],
@@ -113,8 +119,10 @@ export default function SettingsLayout() {
 function SettingsLayoutInner() {
     const location = useLocation();
     const access = useFeatureAccess();
+    const hosted = useAuthConfig().data?.self_hosted === false;
     const canManageApiKeys = usePermission("MANAGE_API_KEYS");
     const canManageSettings = usePermission("MANAGE_SETTINGS");
+    const canViewAnalytics = usePermission("VIEW_ANALYTICS");
     const navRef = React.useRef<HTMLElement>(null);
     const unsaved = useUnsavedRegistry();
     const [savingLeave, setSavingLeave] = React.useState(false);
@@ -176,13 +184,20 @@ function SettingsLayoutInner() {
 
     const visibleGroups = GROUPS.map((g) => ({
         ...g,
-        items: g.items.filter(
-            (s) =>
-                (!s.ownerOnly || access.isOwner) &&
-                (!s.billingOnly || access.billing) &&
-                (s.permission !== "MANAGE_API_KEYS" || canManageApiKeys) &&
-                (s.permission !== "MANAGE_SETTINGS" || canManageSettings),
-        ),
+        items: g.items
+            .filter(
+                (s) =>
+                    (!s.ownerOnly || access.isOwner) &&
+                    (!s.billingOnly || access.billing) &&
+                    (s.permission !== "MANAGE_API_KEYS" || canManageApiKeys) &&
+                    (s.permission !== "MANAGE_SETTINGS" || canManageSettings) &&
+                    (s.permission !== "VIEW_ANALYTICS" || canViewAnalytics),
+            )
+            .map((s) =>
+                hosted && s.hostedLabel
+                    ? { ...s, label: s.hostedLabel, description: s.hostedDescription ?? s.description }
+                    : s,
+            ),
     })).filter((g) => g.items.length > 0);
 
     const currentPath = location.pathname.replace(/^\/app\/settings\//, "");

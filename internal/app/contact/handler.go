@@ -10,6 +10,7 @@ import (
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/utils"
 	"github.com/warmbly/warmbly/internal/utils/paging"
 	"github.com/warmbly/warmbly/internal/utils/validate"
 )
@@ -114,8 +115,25 @@ func (s *contactService) Search(ctx context.Context, orgID, cursor, category, li
 	if err := validateLeadFilters(filters); err != nil {
 		return nil, err
 	}
+	if err := validateSort(filters); err != nil {
+		return nil, err
+	}
 
 	return s.contactRepository.Search(ctx, orgID, categoryId, cursorPos, filters, limitN)
+}
+
+// validateSort rejects a custom-field sort whose key could never name a field.
+// A bare column name that is unknown still falls back to created_at, which is
+// the published behaviour; the custom form is new and can be strict.
+func validateSort(filters models.SearchContacts) *errx.Error {
+	key, ok := models.ContactSortCustomField(filters.SortBy)
+	if !ok {
+		return nil
+	}
+	if !utils.IsValidJSONKey(key) {
+		return errx.NewWithIdentifier(errx.BadRequest, "invalid_sort_by", "invalid sort_by: custom field name must "+utils.JSONKeyRules)
+	}
+	return nil
 }
 
 // validateLeadFilters gates the single-campaign Leads-view filters: an unknown
@@ -215,10 +233,10 @@ func (s *contactService) GetByEmail(ctx context.Context, orgID *uuid.UUID, email
 	return s.contactRepository.GetByEmailAndOrganization(ctx, *orgID, email)
 }
 
-func (s *contactService) ListSentEmails(ctx context.Context, userID, contactID uuid.UUID, limit int, beforeSentAt *time.Time, beforeTaskID *uuid.UUID) (*models.ContactSentEmailsResult, *errx.Error) {
-	return s.contactRepository.ListSentEmails(ctx, userID, contactID, limit, beforeSentAt, beforeTaskID)
+func (s *contactService) ListSentEmails(ctx context.Context, orgID, contactID uuid.UUID, limit int, beforeSentAt *time.Time, beforeTaskID *uuid.UUID) (*models.ContactSentEmailsResult, *errx.Error) {
+	return s.contactRepository.ListSentEmails(ctx, orgID, contactID, limit, beforeSentAt, beforeTaskID)
 }
 
-func (s *contactService) ListTimeline(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, contactID uuid.UUID, limit int, cursor *models.ContactTimelineKey) (*models.ContactTimelineResult, *errx.Error) {
-	return s.contactRepository.ListTimeline(ctx, userID, orgID, contactID, limit, cursor)
+func (s *contactService) ListTimeline(ctx context.Context, orgID, contactID uuid.UUID, limit int, cursor *models.ContactTimelineKey) (*models.ContactTimelineResult, *errx.Error) {
+	return s.contactRepository.ListTimeline(ctx, orgID, contactID, limit, cursor)
 }

@@ -37,6 +37,9 @@ type Config struct {
 	Name    string
 	Region  string
 	Address string
+	// CapacityTarget is meaningful for workers only. Zero leaves the control
+	// plane's stored/default target unchanged.
+	CapacityTarget float64
 	// Version is what this build reports. Empty means "unknown", which the
 	// control plane must not read as "needs updating".
 	Version string
@@ -130,15 +133,16 @@ func paceFrom(livenessSeconds int) time.Duration {
 
 func (a *Agent) beat(ctx context.Context, booted, stopping bool) *models.NodeHeartbeatReply {
 	beat := models.NodeHeartbeat{
-		NodeID:   a.cfg.NodeID,
-		Role:     a.cfg.Role,
-		Name:     a.cfg.Name,
-		Region:   a.cfg.Region,
-		Address:  a.cfg.Address,
-		Version:  a.cfg.Version,
-		Usage:    sampleUsage(a.started),
-		Booted:   booted,
-		Stopping: stopping,
+		NodeID:         a.cfg.NodeID,
+		Role:           a.cfg.Role,
+		Name:           a.cfg.Name,
+		Region:         a.cfg.Region,
+		Address:        a.cfg.Address,
+		CapacityTarget: a.cfg.CapacityTarget,
+		Version:        a.cfg.Version,
+		Usage:          sampleUsage(a.started),
+		Booted:         booted,
+		Stopping:       stopping,
 	}
 	if p := a.lastErr.Swap(nil); p != nil {
 		beat.LastError = *p

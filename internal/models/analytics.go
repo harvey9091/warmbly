@@ -22,19 +22,28 @@ type WarmupAnalytics struct {
 }
 
 type WarmupSummary struct {
-	TotalSent      int     `json:"total_sent"`
-	TotalReplied   int     `json:"total_replied"`
-	AverageDaily   float64 `json:"average_daily"`
-	ReplyRate      float64 `json:"reply_rate"`      // percentage
-	TargetProgress float64 `json:"target_progress"` // percentage to max
+	TotalSent    int `json:"total_sent"`
+	TotalReplied int `json:"total_replied"`
+	// TotalReceived is verified warmup mail that arrived from partners in the
+	// range: the other half of the exchange, so a mailbox that sends and is
+	// never written to can be seen from the numbers.
+	TotalReceived int     `json:"total_received"`
+	AverageDaily  float64 `json:"average_daily"`
+	ReplyRate     float64 `json:"reply_rate"` // percentage
+	// TargetProgress is actual sends divided by planned target volume for active days.
+	TargetProgress float64 `json:"target_progress"`
 	DaysActive     int     `json:"days_active"`
 }
 
 type WarmupDailyStats struct {
-	Date          string `json:"date"` // YYYY-MM-DD
-	EmailsSent    int    `json:"emails_sent"`
-	EmailsReplied int    `json:"emails_replied"`
-	TargetVolume  int    `json:"target_volume"`
+	Date           string `json:"date"` // YYYY-MM-DD
+	EmailsSent     int    `json:"emails_sent"`
+	EmailsReplied  int    `json:"emails_replied"`
+	EmailsReceived int    `json:"emails_received"`
+	TargetVolume   int    `json:"target_volume"`
+	// Active is whether the mailbox had a warmup plan that day. A day with
+	// arrivals but no plan still lists, but does not count as a day active.
+	Active bool `json:"-"`
 }
 
 // Campaign Analytics
@@ -167,12 +176,24 @@ type ColdRampInfo struct {
 }
 
 type WarmupHealthInfo struct {
-	State        string     `json:"state"` // healthy/watch/throttled/quarantined/blocked
-	Score        float64    `json:"score"`
-	Reason       string     `json:"reason,omitempty"`
+	State  string  `json:"state"` // healthy/watch/throttled/quarantined/blocked
+	Score  float64 `json:"score"`
+	Reason string  `json:"reason,omitempty"`
+	// SpamScore is always 0. The accumulating score it reported was retired in
+	// #491 because it tracked volume rather than misbehaviour; the key stays so
+	// a published v1 client does not break, and goes at the next API version.
+	// Read Score and Reason instead. Do not wire anything back into it.
 	SpamScore    int        `json:"spam_score"`
 	BlockedUntil *time.Time `json:"blocked_until,omitempty"`
 	EvaluatedAt  *time.Time `json:"evaluated_at,omitempty"`
+	// Partner diversity counts confirmed warmup deliveries over seven days.
+	PartnerMailboxes7d     int `json:"partner_mailboxes_7d"`
+	PartnerDomains7d       int `json:"partner_domains_7d"`
+	PartnerOrganizations7d int `json:"partner_organizations_7d"`
+	// The receiving side over the same window: verified warmup arrivals and
+	// the distinct partners they came from.
+	Received7d int `json:"received_7d"`
+	Senders7d  int `json:"senders_7d"`
 }
 
 type AccountHealth struct {
@@ -207,8 +228,9 @@ type WarmupStatusInfo struct {
 	CurrentVolume int        `json:"current_volume"`
 	TargetVolume  int        `json:"target_volume"`
 	MaxVolume     int        `json:"max_volume"`
-	ReplyRate     int        `json:"reply_rate"`
-	DaysActive    int        `json:"days_active"`
+	// ReplyRate is the configured share of warmup sends that receive synthetic replies.
+	ReplyRate  int `json:"reply_rate"`
+	DaysActive int `json:"days_active"`
 	// RampHold explains a ramp that is not climbing, so a target below the
 	// plain ramp is never an unexplained drop.
 	RampHold *WarmupRampHold `json:"ramp_hold,omitempty"`
@@ -246,10 +268,11 @@ type AccountsUsage struct {
 }
 
 type CampaignsUsage struct {
-	Total      int `json:"total"`
-	Active     int `json:"active"`
-	Paused     int `json:"paused"`
-	Draft      int `json:"draft"`
+	Total  int `json:"total"`
+	Active int `json:"active"`
+	Paused int `json:"paused"`
+	Draft  int `json:"draft"`
+	// EmailsSent counts sent email steps inside UsageOverview.Period.
 	EmailsSent int `json:"emails_sent"`
 }
 
@@ -280,6 +303,10 @@ type DashboardAnalytics struct {
 	TopCampaigns   []TopCampaignStats    `json:"top_campaigns"`
 	AccountHealth  AccountHealthSummary  `json:"account_health"`
 	DailyTrend     []DashboardDailyStats `json:"daily_trend"`
+	// CapacityToday is what the workspace's mailboxes can send today under
+	// the scheduler's clamps; the sidebar meter's denominator. Absent when
+	// it could not be computed.
+	CapacityToday *WorkspaceSendCapacity `json:"capacity_today,omitempty"`
 }
 
 // DashboardOverallStats contains aggregate statistics for the dashboard
@@ -366,4 +393,82 @@ type CampaignComparisonItem struct {
 	ClickRate  float64   `json:"click_rate"`
 	ReplyRate  float64   `json:"reply_rate"`
 	BounceRate float64   `json:"bounce_rate"`
+}
+
+// DirectMailAnalytics reports on mail written by hand rather than sent by a
+// campaign. Two sources, deliberately, because they answer different questions
+// and cover different sets of messages:
+//
+//   - Volume and replies come from the synced mailbox (unibox_emails), so they
+//     cover everything the mailbox sent, including mail written in Gmail or on
+//     a phone, and they cover history from before any of this shipped.
+//   - Opens and clicks come from the send records (email_tasks), so they cover
+//     only mail sent through Warmbly by a mailbox with tracking switched on,
+//     and only from the moment it was switched on.
+//
+// Reporting them as one blended rate would be a lie, so they stay apart and the
+// UI labels each for what it is.
+type DirectMailAnalytics struct {
+	Period      string                   `json:"period"`
+	Volume      DirectMailVolume         `json:"volume"`
+	Tracking    DirectMailTracking       `json:"tracking"`
+	DailyTrend  []DirectMailDailyStats   `json:"daily_trend"`
+	Mailboxes   []DirectMailMailboxStats `json:"mailboxes"`
+	TopContacts []DirectMailContact      `json:"top_contacts"`
+}
+
+// DirectMailVolume is the "how much did we actually send and hear back" half,
+// measured from the synced mailbox.
+type DirectMailVolume struct {
+	Sent     int `json:"sent"`
+	Received int `json:"received"`
+	// ThreadsStarted counts outbound threads whose first message was ours.
+	ThreadsStarted int `json:"threads_started"`
+	// Replied counts those that got an inbound message back.
+	Replied   int     `json:"replied"`
+	ReplyRate float64 `json:"reply_rate"`
+	// Bounced counts the delivery failures that came back. Excluded from
+	// Replied, and reported here because it is the most actionable number on
+	// the page.
+	Bounced int `json:"bounced"`
+	// MedianReplyMinutes is how long the contact took to answer, across the
+	// threads that were answered. Zero when nothing has been.
+	MedianReplyMinutes int `json:"median_reply_minutes"`
+}
+
+// DirectMailTracking is the opt-in half. TrackedSent is the denominator for
+// both rates: untracked sends are not failures to open, they are messages that
+// were never asked.
+type DirectMailTracking struct {
+	// MailboxesOptedIn says how much of the picture this covers.
+	MailboxesOptedIn int     `json:"mailboxes_opted_in"`
+	MailboxesTotal   int     `json:"mailboxes_total"`
+	TrackedSent      int     `json:"tracked_sent"`
+	Opened           int     `json:"opened"`
+	MachineOpened    int     `json:"machine_opened"`
+	Clicked          int     `json:"clicked"`
+	OpenRate         float64 `json:"open_rate"`
+	ClickRate        float64 `json:"click_rate"`
+}
+
+type DirectMailDailyStats struct {
+	Date     time.Time `json:"date"`
+	Sent     int       `json:"sent"`
+	Received int       `json:"received"`
+}
+
+type DirectMailMailboxStats struct {
+	EmailAccountID  uuid.UUID `json:"email_account_id"`
+	Email           string    `json:"email"`
+	TrackDirectMail bool      `json:"track_direct_mail"`
+	Sent            int       `json:"sent"`
+	Received        int       `json:"received"`
+}
+
+// DirectMailContact is one correspondent, ranked by how much was sent to them.
+type DirectMailContact struct {
+	Email    string    `json:"email"`
+	Sent     int       `json:"sent"`
+	Received int       `json:"received"`
+	LastAt   time.Time `json:"last_at"`
 }

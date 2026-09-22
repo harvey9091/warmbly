@@ -186,6 +186,38 @@ func TestFormServerServesShellWithRenderToken(t *testing.T) {
 	}
 }
 
+// The bare host and a mistyped path are the two addresses a human reaches
+// without a form link, and gin answers both with a plain-text 404 unless we
+// take them over.
+func TestFormServerRootAndNotFoundPages(t *testing.T) {
+	_, _, r := newFixture(t, 0)
+
+	w := get(r, "/", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("root status %d, want 200", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "<!doctype html>") {
+		t.Fatalf("root is not an HTML page: %q", w.Body.String())
+	}
+
+	w = get(r, "/nope", "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unknown path status %d, want 404", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "<!doctype html>") {
+		t.Fatalf("unknown path is not an HTML page: %q", w.Body.String())
+	}
+
+	// A scripted caller still gets JSON.
+	w = get(r, "/api/nope", "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unknown api status %d, want 404", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), `"not_found"`) {
+		t.Fatalf("unknown api did not answer JSON: %q", w.Body.String())
+	}
+}
+
 func TestFormServerRequiresRenderToken(t *testing.T) {
 	_, srv, r := newFixture(t, 0)
 
@@ -410,6 +442,7 @@ func TestFormShellStampsBrowserReporting(t *testing.T) {
 	shell := []byte(`<!doctype html><html><head>` +
 		`<meta name="wf-posthog-key" content="" />` +
 		`<meta name="wf-posthog-host" content="" />` +
+		`<meta name="wf-posthog-errors" content="" />` +
 		`<meta name="wf-sentry-dsn" content="" />` +
 		`<meta name="wf-release" content="" />` +
 		`</head><body></body></html>`)
@@ -421,14 +454,16 @@ func TestFormShellStampsBrowserReporting(t *testing.T) {
 		}
 	}
 
-	set := string(stampMeta(stampMeta(stampMeta(stampMeta(shell,
+	set := string(stampMeta(stampMeta(stampMeta(stampMeta(stampMeta(shell,
 		"wf-posthog-key", "phc_example"),
 		"wf-posthog-host", "https://eu.i.posthog.com"),
+		"wf-posthog-errors", "false"),
 		"wf-sentry-dsn", `https://k@example.invalid/1`),
 		"wf-release", "v1.2.3"))
 	for _, want := range []string{
 		`<meta name="wf-posthog-key" content="phc_example" />`,
 		`<meta name="wf-posthog-host" content="https://eu.i.posthog.com" />`,
+		`<meta name="wf-posthog-errors" content="false" />`,
 		`<meta name="wf-sentry-dsn" content="https://k@example.invalid/1" />`,
 		`<meta name="wf-release" content="v1.2.3" />`,
 	} {

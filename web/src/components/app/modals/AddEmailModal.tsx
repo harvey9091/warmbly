@@ -6,10 +6,16 @@
 // triptych.
 //
 // Flow:
-//   provider picker ──► gmail OAuth popup  ─┐
+//   provider picker ──► gmail app-password walkthrough ─► /emails/onboarding/smtp-imap
+//                  ──► gmail OAuth popup  ─┐   (only when gmail_oauth_connect is on)
 //                  ──► outlook OAuth popup ─┼─► /emails/onboarding/oauth/finish
 //                  ──► smtp/imap form ──────────► /emails/onboarding/smtp-imap
 //                  ──► CSV bulk import ─────────► /emails/onboarding/smtp-imap/bulk
+//
+// Gmail defaults to the app-password walkthrough: the deployment says whether
+// a NEW Gmail mailbox may use Google sign-in (gmail_oauth_connect on
+// /auth/config), and off is the default. Mailboxes already connected with
+// Google sign-in are untouched and still re-authorize from their drawer.
 //
 // Every path can run into the workspace's mailbox allowance; that answer
 // (code mailbox_allowance_reached) opens MailboxAllowanceDialog instead of a
@@ -72,10 +78,11 @@ import useMailboxAllowance from "@/lib/api/hooks/app/emails/useMailboxAllowance"
 import { allowanceFull } from "@/lib/api/models/app/emails/MailboxAllowance";
 import type MailboxAllowance from "@/lib/api/models/app/emails/MailboxAllowance";
 import MailboxAllowanceDialog from "@/components/app/emails/MailboxAllowanceDialog";
+import GmailAppPasswordPanel from "@/components/app/emails/GmailAppPasswordPanel";
 import BulkConnectPanel from "@/components/app/emails/BulkConnectPanel";
 import { DitherMeter, type DitherTone } from "@/components/ui/dither";
 
-type View = "pick" | "gmail" | "outlook" | "smtp_imap" | "bulk";
+type View = "pick" | "gmail" | "gmail_app_password" | "outlook" | "smtp_imap" | "bulk";
 
 /** The one answer every connect path shares: open the allowance dialog. */
 function isAllowanceError(e: unknown): boolean {
@@ -160,6 +167,10 @@ export default function AddEmailModal() {
     const allowance = useMailboxAllowance(user.addEmail);
     const [allowanceOpen, setAllowanceOpen] = React.useState(false);
     const [allowanceReached, setAllowanceReached] = React.useState(false);
+    // Whether a new Gmail mailbox may use Google sign-in here. Anything but an
+    // explicit yes (an older backend, the unreachable fallback) takes the
+    // app-password walkthrough, which works on every deployment.
+    const gmailOAuth = useAuthConfig().config.gmail_oauth_connect === true;
     const openAllowance = React.useCallback((reached = false) => {
         setAllowanceReached(reached);
         setAllowanceOpen(true);
@@ -364,6 +375,7 @@ export default function AddEmailModal() {
                                             <PickProvider
                                                 onPick={setView}
                                                 viaCloud={viaCloud}
+                                                gmailOAuth={gmailOAuth}
                                                 onAdopted={() => {
                                                     qc.invalidateQueries({ queryKey: ["emails", "list"] });
                                                     user.setAddEmail(false);
@@ -380,8 +392,18 @@ export default function AddEmailModal() {
                                                 busy={oauthBusy === "gmail"}
                                                 viaCloud={viaCloud}
                                                 onConnect={() => startOAuth("gmail")}
+                                                onUseAppPassword={() => setView("gmail_app_password")}
                                             />
                                         )
+                                    )}
+                                    {view === "gmail_app_password" && (
+                                        <GmailAppPasswordPanel
+                                            onDone={() => {
+                                                qc.invalidateQueries({ queryKey: ["emails", "list"] });
+                                                user.setAddEmail(false);
+                                            }}
+                                            onError={onConnectError}
+                                        />
                                     )}
                                     {view === "outlook" && (
                                         notConfigured === "outlook" ? (
@@ -504,6 +526,7 @@ function Header({
     const sub: Record<View, string> = {
         pick: "Connect a sending account",
         gmail: "Gmail or Google Workspace",
+        gmail_app_password: "Gmail or Google Workspace",
         outlook: "Outlook or Microsoft 365",
         smtp_imap: "Any provider via SMTP / IMAP",
         bulk: "Many mailboxes from one CSV",
@@ -613,20 +636,38 @@ function ProviderNotConfigured({ provider, selfHosted }: { provider: OAuthProvid
     );
 }
 
-function PickProvider({ onPick, viaCloud, onAdopted }: { onPick: (v: View) => void; viaCloud: boolean; onAdopted: () => void }) {
+function PickProvider({
+    onPick,
+    viaCloud,
+    gmailOAuth,
+    onAdopted,
+}: {
+    onPick: (v: View) => void;
+    viaCloud: boolean;
+    /** Google sign-in is open to new mailboxes; otherwise the app-password walkthrough. */
+    gmailOAuth: boolean;
+    onAdopted: () => void;
+}) {
     const rows: Array<{
         key: View;
         icon: React.ReactNode;
         title: string;
         sub: string;
         tone: "primary" | "neutral";
+        /** A quiet badge after the title. */
+        badge?: string;
     }> = [
         {
-            key: "gmail",
+            key: gmailOAuth ? "gmail" : "gmail_app_password",
             icon: <Google className="w-5 h-5" />,
             title: "Gmail / Google Workspace",
-            sub: viaCloud ? "Sign in through Warmbly Cloud. Warmup included, no OAuth app needed." : "OAuth via Google. Best deliverability for Gmail.",
+            sub: gmailOAuth
+                ? viaCloud
+                    ? "Sign in through Warmbly Cloud. Warmup included, no OAuth app needed."
+                    : "OAuth via Google. Native sync for Gmail accounts."
+                : "With an app password, over IMAP and SMTP. About two minutes; we walk you through it.",
             tone: "primary",
+            badge: gmailOAuth ? undefined : "Google sign-in coming soon",
         },
         {
             key: "outlook",
@@ -666,7 +707,14 @@ function PickProvider({ onPick, viaCloud, onAdopted }: { onPick: (v: View) => vo
                         {r.icon}
                     </div>
                     <div className="min-w-0 flex-1">
-                        <div className="text-[13px] font-medium text-slate-900 truncate">{r.title}</div>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="text-[13px] font-medium text-slate-900 truncate">{r.title}</span>
+                            {r.badge && (
+                                <span className="shrink-0 h-[18px] px-1.5 rounded-full bg-sky-50 border border-sky-200 text-sky-700 text-[10px] font-medium inline-flex items-center">
+                                    {r.badge}
+                                </span>
+                            )}
+                        </div>
                         <div className="text-[11.5px] text-slate-500 truncate">{r.sub}</div>
                     </div>
                     <ChevronRightIcon className="w-4 h-4 text-slate-300 shrink-0 group-hover:text-slate-500 group-hover:translate-x-0.5 transition-all" />
@@ -736,11 +784,14 @@ function OAuthPanel({
     busy,
     viaCloud,
     onConnect,
+    onUseAppPassword,
 }: {
     provider: OAuthProvider;
     busy: boolean;
     viaCloud: boolean;
     onConnect: () => void;
+    /** Gmail only: the same mailbox over IMAP and SMTP, for whoever prefers it. */
+    onUseAppPassword?: () => void;
 }) {
     const label = provider === "gmail" ? "Google" : "Microsoft";
     const Icon = provider === "gmail" ? Google : Outlook;
@@ -781,7 +832,7 @@ function OAuthPanel({
                 onClick={onConnect}
                 disabled={busy}
                 whileTap={busy ? undefined : { scale: 0.985 }}
-                className="w-full h-9 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-[12.5px] font-medium inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-60"
+                className="w-full h-9 rounded-md text-[12.5px] font-medium inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-60 bg-slate-900 hover:bg-slate-800 text-white"
             >
                 {busy ? (
                     <Loader2Icon className="w-3.5 h-3.5 animate-spin" />
@@ -790,6 +841,19 @@ function OAuthPanel({
                 )}
                 {busy ? "Waiting for authorization…" : `Continue with ${label}`}
             </motion.button>
+
+            {onUseAppPassword && (
+                <p className="text-[11.5px] text-slate-500 text-center">
+                    Prefer not to use Google sign-in?{" "}
+                    <button
+                        type="button"
+                        onClick={onUseAppPassword}
+                        className="text-sky-700 underline decoration-sky-300 hover:decoration-sky-600 transition-colors"
+                    >
+                        Connect it with an app password instead
+                    </button>
+                </p>
+            )}
         </div>
     );
 }

@@ -19,12 +19,12 @@ The data is split into groups. Every export includes **Workspace**; the rest are
 |-------|----------|
 | Workspace | The organization, members, roles, teams, mailboxes, mailbox tags, API keys, webhooks, and settings, including the website tracking site key. Always included |
 | Contacts | Contacts, categories, segments with their manual overrides, forms with their images, submissions, personalized link tickets and funnel events, notes, activities, and the suppression list |
-| Campaigns | Campaigns, folders, sequences, senders, linked segments, attachments, the email image library, per-campaign settings, and each lead's step progress with its per-link clicks and per-event opens |
+| Campaigns | Campaigns, folders, sequences, senders, linked segments, attachments, the email image library, per-campaign settings, each lead's step progress with its per-link clicks and per-event opens, and the [unsubscribe links](/guides/unsubscribe/) already in recipients' inboxes |
 | CRM | Pipelines, deals, tasks, and meeting bookings |
 | Automations | Automations, connected integrations, and lead sync sources |
 | Assistant | Assistant sessions and messages, skills, MCP servers, and AI settings |
 | Warmup | Warmup participation, routing rules, statistics, appeals, and the standing of every penalised address, current or removed, so a move is not a way past a block |
-| Inbox | Unified inbox threads, message bodies, conversation labels, and mailbox sync state |
+| Inbox | Unified inbox threads, message bodies, conversation labels, mailbox sync state, and completed automatic-tagging verdicts with their raw probabilities |
 | Send history | Queued and completed send tasks with their payloads |
 | Delivery events | Bounces, complaints, opens, clicks, placement tests, and website page views with the browser records that tie them to contacts |
 | Verification evidence | What real mail showed about each contact's address (deliveries, opens, replies, bounces), so verdicts and confidence survive the move |
@@ -89,6 +89,8 @@ Some things belong to an instance rather than to a workspace, so they are not ap
 | Plan limit overrides | A capacity grant is a decision by one platform's operators, not a property the workspace carries |
 | Worker assignment | The destination places mailboxes on its own workers |
 | Mailbox sync checkpoints | Replaying a checkpoint would make the destination skip everything that arrived between export and import, so it re-syncs from scratch |
+| Reply processing checkpoints | Claims that prevent a synchronized inbox message from being handled twice belong to the source process. They reset so the destination can safely classify its imported inbox state |
+| Pending warmup verification | Mail waiting for this instance's local or cloud warmup check is not exported. The destination re-syncs it from the provider and applies its own verification |
 | Warmup pool membership | Pools are shared across every workspace on an instance, so membership is re-earned rather than asserted by a file |
 | Domain authentication timings | The verdict travels (public DNS reads the same anywhere), but the destination re-checks before it can stop any sending, so a mailbox is never blocked on an observation the new instance never made |
 | Risk and review status | A workspace's abuse posture is one platform's verdict about a tenant on its own infrastructure, reached from evidence the destination never saw. An archive can neither carry a restriction nor clear one |
@@ -97,6 +99,8 @@ Some things belong to an instance rather than to a workspace, so they are not ap
 | Scheduled deletions | A pending deletion from the source must never follow the workspace to its new home |
 | Failure and delivery counters | A webhook endpoint's failure streak and auto-disable state, and whether a notification's email already went out, describe what happened on the source. They start fresh, so an endpoint is not pre-disabled on the new instance and a notification is not re-sent |
 | Sends still in flight | A campaign step handed to a worker on the source has no worker on the destination to report back, so it arrives queued and is sent there instead of waiting forever. Steps already sent keep their history |
+| An invalid workspace name | An archive's workspace name is applied only when it passes the same [naming rules](/api/error-codes/#name-refusals) as a rename. Otherwise the destination keeps its own |
+| Personal list layouts | Which columns each member shows on the contacts list and how they sort it belongs to the person, not the workspace. Everyone starts from the default view on the new instance and picks their columns again |
 
 An import runs as one transaction. If anything fails, nothing lands and the workspace is untouched.
 
@@ -109,6 +113,7 @@ An import runs as one transaction. If anything fails, nothing lands and the work
 - **Check campaign schedules.** Per-contact progress travels, so a running campaign resumes at the step it reached rather than restarting.
 - **Expect the daily send counters to be honoured.** Today's counts come across, so a mailbox cannot double its volume by being migrated mid-day.
 - **Re-authorize integrations** if you exported without credentials.
+- **Rotate each webhook's signing secret.** The secret is encrypted at rest with the source instance's key, so it travels only in an export that carries credentials. Exported without them, the endpoint arrives with no secret and its deliveries will not verify at your receiver. Open each endpoint and use **Rotate secret**, then put the new value in your receiver.
 
 <Callout type="info" title="Moving from a self-hosted instance">
 If you have shell access to the source, `warmblyctl org export` writes the same archive straight to a file without going through a browser, which is the easier route for a large workspace. See the [warmblyctl reference](/development/warmblyctl/).
@@ -117,6 +122,8 @@ If you have shell access to the source, `warmblyctl org export` writes the same 
 ## What does not travel
 
 A few things belong to the instance rather than the workspace and are left out on purpose: the instance's link to Warmbly Cloud and which mailboxes it enrolled in the hosted pool ([Warmbly Cloud](/guides/warmbly-cloud/)), linked self-hosted instances on a cloud workspace, live sessions, in-flight OAuth handshakes and the organization's wrapped data key. Reconnect to Warmbly Cloud after the move.
+
+Reply and forward drafts kept in your browser are also excluded. Finish or copy them before moving to another instance. See [replying in Unibox](/guides/unibox/#replying).
 
 ## Limits
 

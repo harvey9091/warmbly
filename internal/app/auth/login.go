@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"github.com/warmbly/warmbly/internal/app/authrisk"
 	"time"
 
@@ -21,15 +22,30 @@ func (s *authService) LoginStart(ctx context.Context, data *AuthData, ipaddr, us
 		return nil, errx.New(errx.Forbidden, "password sign-in is disabled on this deployment")
 	}
 
+	// A failed challenge is the caller's 400, not an incident: reporting it
+	// filed an issue for every bot and every reloaded sign-in page.
 	if xerr := s.captcha.Verify(ctx, data.Turnstile, ipaddr); xerr != nil {
-		errs.CaptureException(xerr)
 		return nil, xerr
+	}
+
+	// The credential lookup, the send budget and the emailed code all key on
+	// this string, so it is folded once here rather than at each of them.
+	data.Email = normalizeEmail(data.Email)
+
+	// Spent budgets are refused before the hash comparison, so a guesser past
+	// the limit cannot even measure argon2's timing.
+	if s.loginFailureExceeded(ctx, data.Email) {
+		return nil, errx.ErrAuthLimit
 	}
 
 	uid, err := s.authRepository.IsValidCredentials(ctx, data.Email, data.Password)
 	if err != nil {
+		if errors.Is(err, errx.ErrCredentials) {
+			s.recordLoginFailure(ctx, data.Email)
+		}
 		return nil, err
 	}
+	s.clearLoginFailures(ctx, data.Email)
 
 	// The emailed code is a step in the login, not a second factor: NIST
 	// SP 800-63B and OWASP ASVS both decline to count email as one. When it is
@@ -78,8 +94,9 @@ func (s *authService) LoginStart(ctx context.Context, data *AuthData, ipaddr, us
 		return nil, errx.InternalError()
 	}
 
+	// The transport reports the send failure itself; capturing it again here
+	// filed the same rejection as a second issue under a second file.
 	if xerr := s.sendAuthEmail(ctx, data.Email, "Your Login Code", text); xerr != nil {
-		errs.CaptureException(xerr)
 		return nil, errx.ErrMailUndeliverable
 	}
 
@@ -95,7 +112,7 @@ func (s *authService) LoginStart(ctx context.Context, data *AuthData, ipaddr, us
 		AnomalyReason: verdict.Reason,
 	}
 
-	sessionToken, xerr := s.tokenService.GenerateToken(uid, sessionID, "", nonce, issuedAt, expiresAt)
+	sessionToken, xerr := s.tokenService.GenerateTokenFor(token.PurposeLoginCode, uid, sessionID, "", nonce, issuedAt, expiresAt)
 	if xerr != nil {
 		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
@@ -143,7 +160,7 @@ func (s *authService) loginCodeRequired(ctx context.Context, userID uuid.UUID, u
 }
 
 func (s *authService) LoginConfirm(ctx context.Context, data *ConfirmData, session, ipaddr string, userAgent string) (*models.LoginResult, *errx.Error) {
-	atoken, err := s.tokenService.VerifyToken(session)
+	atoken, err := s.tokenService.VerifyTokenFor(token.PurposeLoginCode, session)
 	if err != nil {
 		return nil, err
 	}
@@ -209,18 +226,30 @@ func (s *authService) finishLoginAs(ctx context.Context, userID uuid.UUID, ipadd
 	return s.finishLoginAsWith(ctx, userID, ipaddr, userAgent, provider, nil)
 }
 
+// refuseSuspended is the ban-scope check (migration 000045): BanScopeLogin
+// means the account cannot authenticate, whatever it presents.
+func (s *authService) refuseSuspended(ctx context.Context, userID uuid.UUID) *errx.Error {
+	if scope, scopeErr := s.userRepository.GetBanState(ctx, userID); scopeErr == nil {
+		if models.BanScope(scope).Has(models.BanScopeLogin) {
+			return errx.New(errx.Forbidden, "this account has been suspended")
+		}
+	}
+	return nil
+}
+
 // finishLoginAsWith takes the verdict the caller already reached, if it has
 // one. A nil verdict is assessed here, which is right for the paths that
 // authenticate and complete in the same request.
 func (s *authService) finishLoginAsWith(ctx context.Context, userID uuid.UUID, ipaddr, userAgent, provider string, verdict *authrisk.Verdict) (*models.LoginResult, *errx.Error) {
-	// Ban-scope enforcement (migration 000045). The runtime treats
-	// BanScopeLogin as "this account cannot authenticate" — the row's
-	// banned_at is set in tandem so legacy callers still see the user
-	// as banned, but the bit makes the rule auditable.
-	if scope, scopeErr := s.userRepository.GetBanState(ctx, userID); scopeErr == nil {
-		if models.BanScope(scope).Has(models.BanScopeLogin) {
-			return nil, errx.New(errx.Forbidden, "this account has been suspended")
-		}
+	return s.completeLogin(ctx, userID, ipaddr, userAgent, provider, verdict, nil)
+}
+
+// completeLogin is the one path behind every sign-in: ban check, 2FA gate,
+// then the session. link, when set, is a federated identity attached only
+// once every gate has passed (inside the 2FA verify on a 2FA account).
+func (s *authService) completeLogin(ctx context.Context, userID uuid.UUID, ipaddr, userAgent, provider string, verdict *authrisk.Verdict, link *models.UserIdentity) (*models.LoginResult, *errx.Error) {
+	if xerr := s.refuseSuspended(ctx, userID); xerr != nil {
+		return nil, xerr
 	}
 
 	// 2FA gate: if the user has TOTP enabled, issue a single-use pending
@@ -228,11 +257,17 @@ func (s *authService) finishLoginAsWith(ctx context.Context, userID uuid.UUID, i
 	// two_fa_required and POSTs /auth/2fa/verify next.
 	if s.twofa != nil {
 		if enabled, _ := s.twofa.IsEnabled(ctx, userID); enabled {
-			pendTok, expiresIn, perr := s.twofa.CreatePendingChallenge(ctx, userID)
+			pendTok, expiresIn, perr := s.twofa.CreatePendingChallenge(ctx, userID, provider, link)
 			if perr != nil {
 				return nil, perr
 			}
 			return &models.LoginResult{TwoFARequired: true, PendingToken: pendTok, ExpiresIn: expiresIn}, nil
+		}
+	}
+
+	if link != nil {
+		if xerr := s.linkIdentity(ctx, userID, *link); xerr != nil {
+			return nil, xerr
 		}
 	}
 

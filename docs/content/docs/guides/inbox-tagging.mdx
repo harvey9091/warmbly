@@ -1,0 +1,151 @@
+---
+title: "Automatic inbox tagging"
+description: "Label and score inbound mail as it arrives, and let a confident verdict hold, stop, follow up or suppress. Optional, off by default."
+---
+
+Automatic tagging reads each inbound message and files it under workspace labels, then scores how much it deserves your attention. It is optional and off until an operator turns it on.
+
+Classification sends message content to TypeSafe, so it is opt-in twice: an operator supplies a key, and separately switches the feature on. An instance that does neither never calls TypeSafe and behaves exactly as it did before. Other optional AI features can also send content to their configured provider; see [data control](/development/data-control/).
+
+## What it does
+
+It writes labels and a relevance score for every inbound message. That part needs nothing from you beyond turning the feature on.
+
+It can also act on a confident verdict: hold a contact who said not now, stop a contact who declined, open a task when someone asks for a call, and suppress a sender who asked to be removed. Each of those is its own switch under **Settings > Sending > Classified replies**. The three reversible ones are on from the start; the suppression is off until you turn it on, because it is the one the system cannot undo. See [Acting on a verdict](#acting-on-a-verdict).
+
+## Nothing to set up
+
+The whole label set is created when a workspace is created (and, on an instance that turned the feature on later, within the hour by the follow-up sweep), so the inbox can filter for `opt-out` before anything has opted out. The premade **Views** in the inbox rail (Hot leads, Needs a reply, Follow up, Declined, Automated) are built on those labels and fill as mail is classified; see [Unified inbox](/guides/unibox/). Every label has a hover explanation, so nobody has to learn the taxonomy first.
+
+## The labels
+
+Four families, all of them ordinary workspace labels. The inbox filters on them like any label you made yourself, and the whole set is created when the feature is switched on, so you can filter for `opt-out` before anything has opted out.
+
+**What the message is.** Exactly one applies: `bounce-hard`, `bounce-soft`, `auto-reply-ooo`, `auto-reply-ticket`, `human-reply`, `cold-inbound`, `notification`, `internal`.
+
+**What a reply wants.** Only on a human reply.
+
+For a first answer to an approach: `agreed`, `wants-info`, `wants-pricing`, `not-now`, `not-interested`, `wrong-person`, `opt-out`.
+
+For a thread that is already a working relationship: `scheduling` (proposes or confirms a time), `in-progress` (reports progress, or says their side is done), `question-answered` (answers something you asked). Most of a real inbox is this, once anything has been agreed, and without these buckets those replies score badly for the wrong reason.
+
+`unclear` is deliberate. A reply whose intent genuinely cannot be read needs somewhere to go, or it gets forced into a bucket that is simply wrong.
+
+**Signals worth finding a thread by**: `asks-for-call`, `requests-removal`, `legal-threat`, `needs-human-judgement`. Ten more signals are recorded and feed the score without becoming labels, because a thread wearing fifteen chips is not easier to read than one wearing three.
+
+**`needs-review`** means the classifier declined to decide. See below.
+
+## Follow-ups: who owes whom a reply
+
+Four labels answer the question a pipeline actually turns on, which is not "what is this message" but "what have I dropped".
+
+| label | means |
+|---|---|
+| `ball-in-our-court` | They replied and you have not answered for two days or more |
+| `awaiting-reply` | You sent last and it is still early |
+| `follow-up-due` | You sent last, five days ago, and heard nothing |
+| `going-cold` | They were interested, then went quiet for ten days |
+
+`going-cold` is separate from `follow-up-due` on purpose. A stalled deal and an unanswered cold email need different things from you, and someone who already said yes has earned more patience than someone who never answered. That is why its fuse is longer.
+
+**The sweep makes no additional model calls.** When automatic tagging is enabled, it reuses stored classifications so bounces, autoresponders, and platform notices are not treated as human replies.
+
+**Threads that said no are never chased.** A reply classified `not-interested`, `opt-out`, `wrong-person` or `not-now` gets no follow-up label, ever. Nagging someone who declined is rude, and nagging someone who asked to be removed is a compliance problem rather than a missed opportunity. Bounces, autoresponders and platform notices are skipped too: there is nobody on the other end to chase.
+
+These labels change as the calendar moves, so they are recomputed hourly and **replaced rather than added**. A thread is never wearing both `awaiting-reply` and `follow-up-due`; it wears its state, not its history. A reply clears the follow-up label within the hour.
+
+To recompute on demand:
+
+```bash
+warmblyctl inbox-tag follow-ups --org you@example.com
+```
+
+## Relevance and priority
+
+Each message gets a score from 0 to 100, and a priority of `now`, `today`, `whenever` or `ignore`. Sorting the inbox by relevance puts the person who said yes above the person who is thinking about it, above a bounce.
+
+The score is arithmetic over the answers, computed in Warmbly rather than asked. Asking for a single "how relevant is this" rating hides four independent judgments inside one question, and the model correctly refuses those: it returns a flat distribution at zero confidence.
+
+## Acting on a verdict
+
+Four actions, each behind its own switch under **Settings > Sending > Classified replies**. The hold, the stop and the task are on by default; the suppression is off. Only a confident human reply may act: a verdict marked `needs-review`, a bounce, an autoresponder or a cold pitch never does, whatever its signals say. The intent has to clear the same `0.70` floor the labels use, because an action on an intent the labels did not trust is an action on a coin toss.
+
+| Switch | Fires on | What happens |
+|---|---|---|
+| Hold a contact who says not now | `not-now` | The contact's sequences are parked, in every campaign they are in, for the number of days you set (default 30, between 1 and 90). The hold shows on the campaign's Leads tab and lifts on its own |
+| Stop a contact who declines | `not-interested`, `wrong-person` | The contact's sequences are parked for a year, in every campaign they are in. Nothing is unsubscribed and nothing is deleted; resume the lead from the Leads tab if the reply was misread |
+| Open a task when they ask for a call | `asks-for-call`, `scheduling` | A high-priority CRM task for the mailbox owner, due in 24 hours, titled with what they asked |
+| Suppress a contact who asks to be removed | requests removal at `0.80` or above | The sender goes on the suppression list with the reason, and the contact's subscription flag is cleared, exactly as a reply that says "unsubscribe" does today |
+
+The suppression is the one irreversible action, so it reads its own yes/no question ("the sender asks to be removed") at the strong floor rather than the eight-way intent, and when it fires nothing else does: a suppressed address has no sequence left to hold or chase. A hold written by a classified reply never overrides a hold a member set by hand, and never cuts a longer automatic hold short. A call request opens one task, whichever of the tagging switch and the reply follow-up setting would have opened it.
+
+Every action is recorded on the verdict, so the review page shows what was done next to the answer that caused it, and the **Actions taken** count at the top tells you how often the switches fire. Actions run on mail as it arrives; a backfill over history labels and never acts.
+
+## What else reads the verdict
+
+Two other features reuse a stored verdict rather than paying for a second judgment:
+
+- **Campaign reply handling.** The reply classifier that drives `stop_on_reply` and the reply branches reads the stored kind and intent when one exists, so `agreed` routes as a positive reply and `not-interested` as a negative one with the classifier's real confidence. The intent itself is also stored on the contact's progress, and a sequence can branch on it with the `reply_intent` condition (see [Campaigns](/guides/campaigns/)). Without tagging, the classifier asks TypeSafe one three-way question instead, and without a key it falls back to the platform LLM as before.
+- **The inbox agent.** A reply the verdict shows as closed (`not-interested`, `opt-out`, `wrong-person`, `not-now`), a one-line acknowledgement, a legal threat or a message that needs a person to read it is not drafted, so no credits are spent answering it.
+
+## When it declines to decide
+
+Every classification carries a confidence. If the message kind is below 0.70, the thread is labelled `needs-review` and no inferred kind, intent, or signal label is applied. If the kind is confident but the intent is below 0.70, the trusted kind and relevance remain, the uncertain intent label is omitted, and `needs-review` is added.
+
+That floor is not caution for its own sake. A low-confidence answer is not merely uncertain, it is not reproducible: the same ambiguous message run three times returned a different winning label each time while confidence stayed near 0.2. A label that would not survive being asked again is not one to file mail under.
+
+## What it never asks
+
+Anything Warmbly already knows is established in code and never sent as a question: which direction a message travelled, which mailbox it belongs to, which campaign it answers, whether the sender is already suppressed.
+
+This matters more than it sounds. Given only a message body, the model classified one of our own outbound sends as a human reply at 0.94 confidence. The answer was reasonable for the question; the question should never have been asked. Your own sends are filtered out before anything is asked about them.
+
+Common out-of-office subject prefixes and automated sender addresses are checked offline. When one is decisive, no model call is made. The review page shows which verdicts were decided offline and which came from the model.
+
+## Follow-ups without TypeSafe
+
+With no `TYPESAFE_API_KEY`, Warmbly can still compute `awaiting-reply` and `follow-up-due` locally from sent-message dates. It makes no external call. `ball-in-our-court` and `going-cold` also need a trusted stored classification so an automated message is not mistaken for a person and a weak intent is not treated as interest.
+
+The key and switch add message classification. When both are unset, automatic inbox tagging sends no message content to TypeSafe. Other optional AI features use their separately configured provider; see [data control](/development/data-control/).
+
+## Turning it on
+
+Two environment variables:
+
+```bash
+TYPESAFE_API_KEY=...        # from typesafe.ai
+INBOX_TAGGING_ENABLED=true  # off by default even when a key is present
+```
+
+Then **Settings > Inbox tagging** shows every decision: the labels, the relevance, the confidence, where the verdict came from, and what it did. Watch it for a week before enabling the suppression under **Settings > Sending > Classified replies**; the reversible actions are already on and every one of them is visible on the Leads tab or the Tasks page.
+
+## Backfilling mail you already have
+
+A classifier that only sees new arrivals is no use on the day you switch it on: the inbox you want sorted is the one already sitting there. Run it over your history:
+
+```bash
+# See what it would cover, and what it would cost. Calls nothing, writes nothing.
+warmblyctl inbox-tag backfill --org you@example.com --days 30 --dry-run
+
+# Then do it.
+warmblyctl inbox-tag backfill --org you@example.com --days 30 --limit 200
+```
+
+It is bounded and resumable. Every message is idempotent on its Message-ID, so hitting the limit, pressing Ctrl-C, or running it twice all behave the way you would want: work already done is kept, and the next run picks up where the last one stopped. Nothing is classified twice.
+
+Only inbound mail is covered. Your own sends are excluded, and so is mail from one of your connected mailboxes to another, which lands in the second one's inbox and is still yours.
+
+A backfill fills in the previous message in each thread from your sent mail, so a reply reading "yes, let's do it" is judged against the thing it is agreeing to.
+
+## What it costs
+
+
+One call contains every question for a message and currently uses about 1,300 input tokens on the recorded fixture set. TypeSafe evaluates the questions in parallel, but each question still contributes tokens, so check its current pricing before a large backfill. Output tokens are not billed.
+
+A message with no Message-ID is skipped. A database claim prevents two concurrent deliveries of the same Message-ID from making duplicate calls, and an abandoned claim becomes eligible for retry after 15 minutes.
+
+## Related guides
+
+- [Unified inbox](/guides/unibox/): where the labels appear and how to filter on them
+- [Campaigns](/guides/campaigns/): reply handling and the `reply_intent` branch condition
+- [Inbox agent](/guides/inbox-agent/): the drafts a verdict can skip

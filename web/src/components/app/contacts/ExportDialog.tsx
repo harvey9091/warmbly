@@ -36,6 +36,7 @@ import exportContacts, {
 import type SearchContacts from "@/lib/api/models/app/contacts/SearchContacts";
 import { Label, TextInput } from "@/components/ui/field";
 import { hasNarrowingFilters } from "./filters/helpers";
+import { errorMessage } from "@/lib/errors/message";
 
 interface Props {
     open: boolean;
@@ -204,7 +205,7 @@ export default function ExportDialog({
             toast.success("Export ready");
             onClose();
         } catch (err) {
-            const msg = err instanceof Error ? err.message : "Export failed.";
+            const msg = errorMessage(err, "Export failed.");
             toast.error(msg);
         } finally {
             setLoading(false);

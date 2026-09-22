@@ -4,6 +4,7 @@
 // what the current selection means before anyone saves it.
 
 import React from "react";
+import { useAppStore } from "@/stores";
 import { ClockIcon } from "lucide-react";
 import { Row, Section, SectionShell, Toggle } from "../_components/SectionShell";
 import { NoAccess } from "@/components/layout/NoAccess";
@@ -20,11 +21,18 @@ import {
 } from "@/lib/api/hooks/app/outreach/useOutreachSettings";
 import VerificationSettings from "@/components/app/contacts/VerificationSettings";
 import {
+    AUTOMATED_INTENTS,
+    DEFAULT_INBOX_TAGGING,
     DEFAULT_PREFERRED_HOURS,
     DEFAULT_UNSUBSCRIBE,
+    REPLY_INTENT_CHOICES,
     describeHours,
     formatHour,
+    taskIntents,
+    type InboxTaggingSettings,
     type OutreachSettings,
+    type ReplyIntent,
+    type ReplyIntentSettings,
     type UnsubscribeMode,
     type UnsubscribeSettings,
 } from "@/lib/api/models/app/outreach/OutreachSettings";
@@ -51,25 +59,34 @@ function SendingSettings() {
     const timezones = useTimezones();
     const [draft, setDraft] = React.useState<OutreachSettings | null>(null);
 
+    // These are one workspace's settings, so the draft belongs to the workspace
+    // it was hydrated from. Switching workspaces re-hydrates it, and a save that
+    // would land on a different workspace than the draft came from is dropped:
+    // otherwise the next edit after a switch wrote the previous workspace's
+    // whole settings object onto the new one.
+    const orgID = useAppStore((st) => st.currentOrganization?.id);
+    const hydratedFor = React.useRef<string | undefined>(undefined);
+
     const autosave = useAutosave({
         value: draft,
         enabled: !!draft,
         save: async (v) => {
-            if (v) await update.mutateAsync(v);
+            if (!v) return;
+            if (hydratedFor.current !== useAppStore.getState().currentOrganization?.id) return;
+            await update.mutateAsync(v);
         },
     });
     useRegisterUnsaved(autosave, () => setDraft(autosave.savedValue));
 
-    // One-shot hydration: the server value seeds the draft once, then the save
-    // path owns the baseline so a refetch can't stomp an in-flight edit.
-    const hydrated = React.useRef(false);
+    // Hydration is once per workspace: the server value seeds the draft, then
+    // the save path owns the baseline so a refetch can't stomp an in-flight edit.
     React.useEffect(() => {
-        if (!data || hydrated.current) return;
-        hydrated.current = true;
+        if (!data || hydratedFor.current === orgID) return;
+        hydratedFor.current = orgID;
         setDraft(data);
         autosave.markSaved(data);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [data]);
+    }, [data, orgID]);
 
     const sto = draft?.send_time_optimization;
 
@@ -83,11 +100,23 @@ function SendingSettings() {
     );
 
     const patchReplyIntent = React.useCallback(
-        (next: Record<string, unknown>) => {
+        (next: Partial<ReplyIntentSettings>) => {
             setDraft((prev) => (prev ? { ...prev, reply_intent: { ...prev.reply_intent, ...next } } : prev));
         },
         [],
     );
+
+    const patchInboxTagging = React.useCallback(
+        (next: Partial<InboxTaggingSettings>) => {
+            setDraft((prev) =>
+                prev
+                    ? { ...prev, inbox_tagging: { ...(prev.inbox_tagging ?? DEFAULT_INBOX_TAGGING), ...next } }
+                    : prev,
+            );
+        },
+        [],
+    );
+    const tagging = draft?.inbox_tagging ?? DEFAULT_INBOX_TAGGING;
 
     const patchPreflight = React.useCallback(
         (next: Partial<OutreachSettings["preflight"]>) => {
@@ -251,6 +280,151 @@ function SendingSettings() {
             </Section>
 
             <Section
+                eyebrow="Out of office"
+                description="When a recipient's mailbox answers with an away message, hold their next step until they are back instead of sending it to an empty desk. The hold covers every campaign that contact is in, not only the one they answered. The return date in the auto-reply is used when it can be read (English, German, French, Spanish, Portuguese, Italian and Dutch), plus a working day so the follow-up does not land in their first-morning backlog. The lead keeps its place in the sequence and the time it spent held does not count against the step's wait. You can resume or stop a held lead at any time from the campaign's Leads tab."
+            >
+                {isLoading || !draft ? (
+                    <div className="h-7 w-40 rounded bg-slate-100 animate-pulse" />
+                ) : (
+                    <>
+                        <Row
+                            label="Hold a contact who is away"
+                            description="An auto-reply is never treated as a human reply, so without this the follow-up goes out on schedule and the sequence is over before they are back."
+                        >
+                            <Toggle
+                                on={draft.reply_intent?.hold_on_out_of_office !== false}
+                                onChange={(on) => patchReplyIntent({ hold_on_out_of_office: on })}
+                            />
+                        </Row>
+                        {draft.reply_intent?.hold_on_out_of_office !== false && (
+                            <Row
+                                label="Hold for"
+                                description="Used when the away message names no return date we can read. Between 1 and 90 days."
+                            >
+                                <div className="flex items-center gap-1.5">
+                                    <NumberInput
+                                        min={1}
+                                        max={90}
+                                        value={draft.reply_intent?.out_of_office_hold_days ?? 7}
+                                        onChange={(n) =>
+                                            patchReplyIntent({
+                                                out_of_office_hold_days: Number.isFinite(n)
+                                                    ? Math.min(90, Math.max(1, n))
+                                                    : 7,
+                                            })
+                                        }
+                                        className="w-20"
+                                    />
+                                    <span className="text-[11.5px] text-slate-500">days</span>
+                                </div>
+                            </Row>
+                        )}
+                    </>
+                )}
+            </Section>
+
+            <Section
+                eyebrow="Reply follow-ups"
+                description="Open a CRM task when a reply lands, so a prospect who answers ends up on the Tasks page instead of only in the inbox. The task is assigned to the mailbox owner and due in 24 hours."
+            >
+                {isLoading || !draft ? (
+                    <div className="h-7 w-40 rounded bg-slate-100 animate-pulse" />
+                ) : (
+                    <>
+                        <Row
+                            label="Open a task on a reply"
+                            description="One task per classified reply, titled with the intent and the sender."
+                        >
+                            <Toggle
+                                on={draft.reply_intent?.auto_create_crm_task !== false}
+                                onChange={(on) => patchReplyIntent({ auto_create_crm_task: on })}
+                            />
+                        </Row>
+                        {draft.reply_intent?.auto_create_crm_task !== false && (
+                            <Row
+                                label="Which replies"
+                                description="Automated replies are off by default: a vacation notice is not follow-up work, and a week of sending makes enough of them to bury the real ones."
+                                align="start"
+                            >
+                                <IntentPicker
+                                    value={taskIntents(draft.reply_intent)}
+                                    onChange={(next) => patchReplyIntent({ crm_task_intents: next })}
+                                />
+                            </Row>
+                        )}
+                    </>
+                )}
+            </Section>
+
+            <Section
+                eyebrow="Classified replies"
+                description="What a reply may do once automatic inbox tagging has read it. The hold, the stop and the task are on from the start and every one of them is visible: holds and stops show on the campaign's Leads tab, where you can lift them, and a task is an ordinary CRM task. The suppression is off until you turn it on, because it is the one the system cannot undo; watch the review page under Settings first."
+            >
+                {isLoading || !draft ? (
+                    <div className="h-7 w-40 rounded bg-slate-100 animate-pulse" />
+                ) : (
+                    <>
+                        <Row
+                            label="Hold a contact who says not now"
+                            description="A reply read as open in principle but wrong on timing parks the contact's sequences, in every campaign they are in, and the follow-up lands after the hold instead of three days later."
+                        >
+                            <Toggle
+                                on={tagging.hold_on_not_now}
+                                onChange={(on) => patchInboxTagging({ hold_on_not_now: on })}
+                            />
+                        </Row>
+                        {tagging.hold_on_not_now && (
+                            <Row label="Hold for" description="Between 1 and 90 days.">
+                                <div className="flex items-center gap-1.5">
+                                    <NumberInput
+                                        min={1}
+                                        max={90}
+                                        value={tagging.not_now_hold_days}
+                                        onChange={(n) =>
+                                            patchInboxTagging({
+                                                not_now_hold_days: Number.isFinite(n)
+                                                    ? Math.min(90, Math.max(1, n))
+                                                    : 30,
+                                            })
+                                        }
+                                        className="w-20"
+                                    />
+                                    <span className="text-[11.5px] text-slate-500">days</span>
+                                </div>
+                            </Row>
+                        )}
+                        <Row
+                            label="Stop a contact who declines"
+                            description="Not interested, or not the right person: the contact's sequences are parked for a year. Nothing is unsubscribed and nothing is deleted; a member resumes the lead if the reply was misread."
+                        >
+                            <Toggle
+                                on={tagging.stop_on_declined}
+                                onChange={(on) => patchInboxTagging({ stop_on_declined: on })}
+                            />
+                        </Row>
+                        <Row
+                            label="Open a task when they ask for a call"
+                            description="A reply that asks for a call or proposes a time opens a high-priority task for the mailbox owner, due in 24 hours."
+                        >
+                            <Toggle
+                                on={tagging.task_on_call_request}
+                                onChange={(on) => patchInboxTagging({ task_on_call_request: on })}
+                            />
+                        </Row>
+                        <Row
+                            label="Suppress a contact who asks to be removed"
+                            description="Adds the sender to the suppression list when the classifier is at least 80% sure the reply asks to stop receiving email. The keyword rule above catches the plain phrasings; this catches the rest. Suppression is permanent until a member removes the entry."
+                        >
+                            <Toggle
+                                on={tagging.suppress_on_removal_request}
+                                onChange={(on) => patchInboxTagging({ suppress_on_removal_request: on })}
+                            />
+                        </Row>
+                    </>
+                )}
+            </Section>
+
+            <Section
                 eyebrow="Content checks"
                 description="Score each step's copy for the signals spam filters weight: trigger wording, stacked punctuation, link and image counts, attachments. Checked when you launch, and again per send against the copy the recipient actually receives once merge fields and spintax have resolved."
             >
@@ -289,6 +463,62 @@ function SendingSettings() {
                 )}
             </Section>
         </SectionShell>
+    );
+}
+
+// The intents that open a follow-up task. Chips rather than checkboxes, to
+// match the delivery-hours grid above; the two automated classes move together
+// because they are one thing to the person reading the list.
+function IntentPicker({
+    value,
+    onChange,
+}: {
+    value: ReplyIntent[];
+    onChange: (next: ReplyIntent[]) => void;
+}) {
+    const has = (id: ReplyIntent) =>
+        id === "out_of_office" ? AUTOMATED_INTENTS.some((i) => value.includes(i)) : value.includes(id);
+
+    function toggle(id: ReplyIntent) {
+        const group = id === "out_of_office" ? AUTOMATED_INTENTS : [id];
+        const on = has(id);
+        const next = on
+            ? value.filter((v) => !group.includes(v))
+            : [...value.filter((v) => !group.includes(v)), ...group];
+        onChange(next);
+    }
+
+    return (
+        <div className="w-full sm:w-[320px]">
+            <div className="flex flex-wrap gap-1">
+                {REPLY_INTENT_CHOICES.map((c) => {
+                    const on = has(c.id);
+                    return (
+                        <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => toggle(c.id)}
+                            aria-pressed={on}
+                            title={c.hint}
+                            className={`h-7 px-2.5 rounded-md border text-[11.5px] transition-colors ${
+                                on
+                                    ? "bg-sky-50 text-sky-700 border-sky-200"
+                                    : "bg-white text-slate-500 border-slate-200 hover:border-slate-300"
+                            }`}
+                        >
+                            {c.label}
+                        </button>
+                    );
+                })}
+            </div>
+            <p className="mt-2 text-[11.5px] text-slate-500 leading-relaxed">
+                {value.length === 0
+                    ? "Nothing opens a task. Same as turning the switch off."
+                    : `A reply classified ${REPLY_INTENT_CHOICES.filter((c) => has(c.id))
+                          .map((c) => c.label.toLowerCase())
+                          .join(", ")} opens a task.`}
+            </p>
+        </div>
     );
 }
 

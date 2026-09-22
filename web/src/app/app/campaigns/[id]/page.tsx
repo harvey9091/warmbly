@@ -16,11 +16,12 @@ import { TONE_DOT } from "@/components/ui/tones";
 import type { DitherTone } from "@/components/ui/dither";
 import AnalyticsShareButton from "@/components/app/analytics/AnalyticsShareButton";
 import TaskPreview from "@/components/app/campaigns/TaskPreview";
+import SendPlanCard from "@/components/app/campaigns/SendPlanCard";
 import CampaignFormsPanel from "@/components/app/campaigns/CampaignFormsPanel";
 import AnimatedNumber from "@/components/ui/AnimatedNumber";
 import AdvisorStrip from "@/components/app/advisor/AdvisorStrip";
 
-const AUTO_OPENS_TIP = "Auto-opens: pixel fetches from privacy proxies (e.g. Apple Mail) or within seconds of sending, not a person reading";
+const AUTO_OPENS_TIP = "Auto-opens: pixel fetches from privacy proxies (e.g. Apple Mail) or within seconds of sending, not a person reading. Logged as delivery proof, not counted as opens";
 const AUTO_CLICKS_TIP = "Auto-clicks: links followed by a security gateway scanning the email, not a person; not counted as clicks";
 
 const pctFmt = (v: number) => `${v.toFixed(1)}%`;
@@ -103,7 +104,7 @@ export default function CampaignOverview() {
 
     const breakdown = [
         { label: "Sent", value: summary?.emails_sent, icon: SendIcon, dot: "bg-slate-400" },
-        { label: "Opens", value: summary?.unique_opens, icon: MailCheckIcon, dot: "bg-emerald-500", note: summary?.machine_opens ? `${summary.machine_opens} auto` : undefined, noteTitle: AUTO_OPENS_TIP },
+        { label: "Opens", value: summary?.unique_opens, icon: MailCheckIcon, dot: "bg-emerald-500", note: summary?.machine_opens ? `${summary.machine_opens} auto, not counted` : undefined, noteTitle: AUTO_OPENS_TIP },
         { label: "Clicks", value: summary?.unique_clicks, icon: MousePointerClickIcon, dot: "bg-violet-500", note: summary?.machine_clicks ? `${summary.machine_clicks} auto` : undefined, noteTitle: AUTO_CLICKS_TIP },
         { label: "Replies", value: summary?.replies, icon: ReplyIcon, dot: "bg-amber-500" },
         { label: "Bounces", value: summary?.bounces, icon: TriangleAlertIcon, dot: "bg-rose-500" },
@@ -114,6 +115,11 @@ export default function CampaignOverview() {
             {/* What the Advisor has found about THIS campaign, above the numbers
                 that motivated it. Renders nothing when there is nothing wrong. */}
             <AdvisorStrip entityType="campaign" entityId={id} title="" limit={3} compact />
+
+            {/* What will actually go out today and every limit that decided
+                it, read through the scheduler's own gates. This is the number
+                the caps added up used to misstate (issue #606). */}
+            <SendPlanCard campaignId={id} />
 
             <div className="grid lg:grid-cols-[1fr_340px] gap-5 items-start">
                 {/* Main analytics column */}

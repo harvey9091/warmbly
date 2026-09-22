@@ -40,6 +40,7 @@ A `data` array of mailbox objects plus a `pagination` envelope.
       "signature_html": "",
       "signature_sync": false,
       "signature_code": false,
+      "send_as_email": "",
       "provider": "gmail",
       "status": "active",
       "last_synced_at": "2026-06-11T09:14:00Z",
@@ -83,7 +84,7 @@ A `data` array of mailbox objects plus a `pagination` envelope.
 }
 ```
 
-`provider` is one of `gmail`, `outlook`, or `smtp_imap`. `status` is one of `active`, `inactive`, or `revoked`. `warmup` is the warmup anchor timestamp (null when warmup has never been enabled); a non-null `warmup_paused_at` means warmup is enabled but paused. `auth_state` is the sending domain's authentication state, one of `passing` (SPF and DMARC present), `failing` (SPF or DMARC missing), or `unknown` (not checked yet, the DNS lookup could not complete, or the domain is special-use and cannot resolve). It is refreshed by a background check, and `auth_dkim` is advisory because DKIM selectors are not discoverable from DNS. `auth_failing_since` is when the domain entered `failing` and is null otherwise; a domain that stays `failing` past the instance grace period stops cold sending and warmup from every mailbox on it, so this is the clock that decides. See [domain authentication](/guides/deliverability/#domain-authentication). `total` and `next_cursor` may be null when not applicable.
+`provider` is one of `gmail`, `outlook`, or `smtp_imap`. `status` is one of `active`, `inactive`, or `revoked`. `warmup` is the warmup anchor timestamp (null when warmup has never been enabled); a non-null `warmup_paused_at` means warmup is enabled but paused. `auth_state` is the sending domain's authentication state, one of `passing` (SPF and DMARC present), `failing` (SPF or DMARC missing), or `unknown` (not checked yet, the DNS lookup could not complete, or the domain is special-use and cannot resolve). It is refreshed by a background check. `auth_dkim` is positive-only and never gates: `true` means a DKIM key was found at a probed selector, `false` means none answered, which is unverified rather than missing because selectors are not discoverable from DNS. `auth_failing_since` is when the domain entered `failing` and is null otherwise; a domain that stays `failing` past the instance grace period stops cold sending and warmup from every mailbox on it, so this is the clock that decides. See [domain authentication](/guides/deliverability/#domain-authentication). `total` and `next_cursor` may be null when not applicable.
 
 ## Get a mailbox
 
@@ -143,8 +144,9 @@ Auth: **Scope** `WRITE_EMAILS` · **Org permission** `manage_emails`
 | `name` | string | no | Display name on outgoing mail. |
 | `signature_plain` | string | no | Plain-text signature. |
 | `signature_html` | string | no | HTML signature. |
-| `signature_sync` | boolean | no | Keep the signature synced from the provider. |
+| `signature_sync` | boolean | no | Append the signature to outgoing mail. Unrelated to where the signature came from. |
 | `signature_code` | boolean | no | Treat the HTML signature as raw code. |
+| `send_as_email` | string | no | A verified provider alias this mailbox sends from. Must be one the provider reported as verified (see [Get the sending identity](#get-the-sending-identity)) or the mailbox's own address; anything else returns `mailbox_send_as_unknown`. Send an empty string to go back to the mailbox address. Gmail only. |
 | `status` | string | no | `active`, `inactive`, or `revoked`. |
 | `campaign_limit` | integer | no | Daily cold-campaign cap for this mailbox, `0` to `5000`. Default `50`; `30` to `50`/day is the safe cold-outreach band. |
 | `min_wait_time` | integer | no | Minimum seconds between sends. |
@@ -159,6 +161,9 @@ Auth: **Scope** `WRITE_EMAILS` · **Org permission** `manage_emails`
 | `warmup_start_time` | string | no | Daily warmup window start, `HH:MM`. |
 | `warmup_end_time` | string | no | Daily warmup window end, `HH:MM`. |
 | `warmup_days` | integer | no | Number of active warmup days per week. |
+| `warmup_placement` | string | no | Where warmup mail is filed in the mailbox itself: `folder` (default), `inbox`, or `archive`. See [Warmup](/guides/warmup/#in-your-mail-client). |
+| `warmup_folder` | string | no | Folder (Gmail label) warmup mail is filed into when `warmup_placement` is `folder`. Empty string means the instance default, `Warmbly`. No folder separators or control characters; 64 characters max. |
+| `warmup_retention_days` | integer | no | How many days warmup mail stays in this mailbox before Warmbly deletes it, wherever `warmup_placement` keeps it: `3` to `3650`, or `0` to follow the instance setting (30 days unless the operator changed it). |
 | `tags` | string[] | no | Tag ids assigned to the mailbox. |
 
 ```json
@@ -176,6 +181,74 @@ Auth: **Scope** `WRITE_EMAILS` · **Org permission** `manage_emails`
 ### Response
 
 The updated mailbox object (same shape as Get a mailbox).
+
+## Get the sending identity
+
+`GET /emails/:id/identity`
+
+Reports which addresses the mailbox's provider will let it send as, which one it currently uses, and where its stored signature came from. Stored state only: the provider is not contacted, so this is cheap to call.
+
+Auth: **Scope** `READ_EMAILS` · **Org permission** `view_campaigns`
+
+| Parameter | In | Type | Description |
+|-----------|----|------|-------------|
+| `id` | path | string (UUID) | The mailbox id. |
+
+### Response
+
+```json
+{
+  "supported": true,
+  "provider": "gmail",
+  "mailbox_email": "sales@acme.com",
+  "send_as_email": "hello@acme.com",
+  "identities": [
+    { "email": "sales@acme.com", "name": "Acme Sales", "is_primary": true, "is_default": true, "verified": true },
+    { "email": "hello@acme.com", "name": "Acme", "is_primary": false, "is_default": false, "verified": true }
+  ],
+  "synced_at": "2026-09-13T11:02:00Z",
+  "signature_source": "provider",
+  "signature_imported_at": "2026-09-13T11:02:00Z"
+}
+```
+
+`supported` is `false` for Outlook and SMTP/IMAP mailboxes, which publish no send-as list; `identities` is then empty and the refresh below returns `mailbox_send_as_unsupported`. `send_as_email` is empty when the mailbox sends as its own address, which is the default. `verified` is `false` for an alias the provider has not finished verifying: it is listed, but setting `send_as_email` to it is refused. `signature_source` is `provider` when the stored signature was imported and `manual` once it is edited in Warmbly.
+
+## Refresh the sending identity
+
+`POST /emails/:id/identity/refresh`
+
+Re-reads the send-as addresses from the provider and stores them, optionally importing the provider's signature at the same time. This is the only call that contacts the provider, and it does so through the worker running the mailbox rather than from the API itself, so the provider keeps seeing this mailbox from the one address it always has.
+
+A send-as choice the provider no longer verifies is cleared by the same call, so a removed alias stops being used instead of failing every send.
+
+Auth: **Scope** `WRITE_EMAILS` · **Org permission** `manage_emails`
+
+| Parameter | In | Type | Description |
+|-----------|----|------|-------------|
+| `id` | path | string (UUID) | The mailbox id. |
+
+### Request body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `import_signature` | boolean | no | Also replace the mailbox's stored signature with the one configured at the provider, for whichever identity the mailbox sends as. Defaults to `false`. An empty signature at the provider changes nothing. |
+
+```json
+{ "import_signature": true }
+```
+
+The body may be omitted entirely, which refreshes the addresses only.
+
+Takes no `Idempotency-Key`: the call reads the provider's current state and stores exactly that, so repeating it converges on the same result.
+
+### Response
+
+The refreshed sending identity, same shape as Get the sending identity.
+
+Gmail only. Every other provider returns `400` with `mailbox_send_as_unsupported`, and a signature past the stored maximum returns `400` with `mailbox_signature_too_large` without storing anything.
+
+A mailbox that is not currently running on a worker returns `503` with `mailbox_identity_unavailable`: there is no machine to make the call, nothing was changed, and the next attempt is the fix. Mailboxes are placed within moments of connecting, so this is a mid-migration or just-restarted condition rather than a lasting one.
 
 ## Get the tracking domain
 
@@ -427,6 +500,7 @@ Auth: **Scope** `READ_EMAILS` · **Org permission** `view_campaigns`
   "spf_found": true,
   "spf_record": "v=spf1 include:_spf.google.com ~all",
   "dkim_found": true,
+  "dkim_status": "found",
   "dkim_selectors": ["google"],
   "dmarc_found": true,
   "dmarc_policy": "quarantine",
@@ -440,6 +514,8 @@ Auth: **Scope** `READ_EMAILS` · **Org permission** `view_campaigns`
 ```
 
 `spf_record`, `dkim_selectors`, `dmarc_policy`, and `dmarc_domain` are omitted when the corresponding record is not found.
+
+`dkim_status` is `found` or `undetermined`, and it is the field to read for DKIM. `dkim_found` is positive-only: a DKIM key sits at a selector its owner chose and DNS cannot be asked to list the selectors under a domain, so `false` means no key answered at the selectors probed, which is not evidence the domain has none. Do not present it as a missing record. The check derives candidate selectors from the domain's own SPF and MX records, which name the provider handling its mail, on top of a default set; a provider that mints a random per-account selector stays `undetermined` however well the domain is configured. DKIM never affects `auth_state`.
 
 `dmarc_inherited` is `true` when the sending domain has no DMARC record of its own and is covered by its organizational domain's policy, which is how a dedicated sending subdomain normally works; `dmarc_domain` then names the domain the record was read from, and `dmarc_policy` reports its `sp=` value when it publishes one. SPF never inherits, so it must be published on the exact sending domain.
 
@@ -571,6 +647,8 @@ Auth: **Scope** `WRITE_EMAILS` · **Org permission** `manage_emails`
 
 Disconnects and deletes a mailbox. It is removed from all warmup pools and an account-disconnected event fans out.
 
+Nothing is removed unless the two steps that cannot be repaired afterwards succeed first: the machine syncing the mailbox is told to drop it, and the mailbox's [Warmbly Cloud](/guides/warmbly-cloud/) link is released, which takes an enrolled mailbox's stored credentials out of the pool and returns a cloud-managed mirror to the cloud workspace. A failure at either point puts the mailbox back as it was and is safe to retry. If the record itself then fails to delete, the mailbox remains but its link is already released, so its warmup moves back to this instance until the delete is retried.
+
 Auth: **Scope** `WRITE_EMAILS` · **Org permission** `manage_emails`
 
 | Parameter | In | Type | Description |
@@ -580,6 +658,11 @@ Auth: **Scope** `WRITE_EMAILS` · **Org permission** `manage_emails`
 ### Response
 
 `204 No Content` with an empty body.
+
+| Status | `code` | Meaning |
+|--------|--------|---------|
+| `409` | `mailbox_cloud_unenroll_failed` | The mailbox's Warmbly Cloud link could not be released. See [error codes](/api/error-codes/#409-conflict) |
+| `503` | `mailbox_worker_unreachable` | The machine syncing the mailbox could not be told to drop it. See [error codes](/api/error-codes/#mailbox_worker_unreachable) |
 
 ## Send from a mailbox
 
@@ -642,7 +725,7 @@ Begins an OAuth round trip for a Gmail or Outlook mailbox and returns the provid
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `provider` | string | yes | `gmail` or `outlook`. |
+| `provider` | string | yes | `gmail` or `outlook`. `gmail` is refused with `403` `mailbox_gmail_oauth_disabled` unless `GET /auth/config` reports `gmail_oauth_connect: true`; new Gmail mailboxes go through [Connect SMTP/IMAP](#connect-smtpimap) with an app password instead. Re-authorizing an existing Gmail mailbox is not gated. |
 
 ```json
 {

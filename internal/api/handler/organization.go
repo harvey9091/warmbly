@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
+
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -14,6 +14,7 @@ import (
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/notify/templates"
+	"github.com/warmbly/warmbly/internal/pkg/displayname"
 )
 
 // CreateOrganization creates a new organization
@@ -209,17 +210,16 @@ func (h *Handler) InviteMember(c *gin.Context) {
 	// Get organization name for email
 	org, _ := h.OrganizationService.Get(c.Request.Context(), *orgID)
 	orgName := "your organization"
-	if org != nil {
-		orgName = org.Name
+	if org != nil && displayname.Displayable(org.Name) != "" {
+		orgName = displayname.Displayable(org.Name)
 	}
 
-	// Get inviter name
+	// Names predating the display-name rules fall back rather than render.
 	inviter, _ := h.UserService.GetUser(c.Request.Context(), userID)
 	inviterName := "A team member"
-	if inviter != nil && inviter.FirstName != "" {
-		inviterName = inviter.FirstName
-		if inviter.LastName != "" {
-			inviterName += " " + inviter.LastName
+	if inviter != nil {
+		if name := displayname.FullName(inviter.FirstName, inviter.LastName); name != "" {
+			inviterName = name
 		}
 	}
 
@@ -310,6 +310,11 @@ func (h *Handler) RemoveMember(c *gin.Context) {
 
 // TransferOwnership transfers organization ownership to another member
 func (h *Handler) TransferOwnership(c *gin.Context) {
+	session := middleware.GetSession(c)
+	if session == nil {
+		errx.JSON(c, errx.ErrUnauthorized)
+		return
+	}
 	orgID := middleware.GetOrganizationID(c)
 	if orgID == nil {
 		errx.JSON(c, errx.New(errx.BadRequest, "no organization selected"))
@@ -322,7 +327,7 @@ func (h *Handler) TransferOwnership(c *gin.Context) {
 		return
 	}
 
-	if xerr := h.OrganizationService.TransferOwnership(c.Request.Context(), *orgID, req.NewOwnerUserID); xerr != nil {
+	if xerr := h.OrganizationService.TransferOwnership(c.Request.Context(), *orgID, session.UserID, req.NewOwnerUserID); xerr != nil {
 		errx.JSON(c, xerr)
 		return
 	}
@@ -351,6 +356,11 @@ func (h *Handler) GetPendingInvitations(c *gin.Context) {
 
 // CancelInvitation cancels a pending invitation
 func (h *Handler) CancelInvitation(c *gin.Context) {
+	orgID := middleware.GetOrganizationID(c)
+	if orgID == nil {
+		errx.JSON(c, errx.ErrUnauthorized)
+		return
+	}
 	invIDStr := c.Param("id")
 	invID, err := uuid.Parse(invIDStr)
 	if err != nil {
@@ -358,7 +368,7 @@ func (h *Handler) CancelInvitation(c *gin.Context) {
 		return
 	}
 
-	if xerr := h.OrganizationService.CancelInvitation(c.Request.Context(), invID); xerr != nil {
+	if xerr := h.OrganizationService.CancelInvitation(c.Request.Context(), *orgID, invID); xerr != nil {
 		errx.JSON(c, xerr)
 		return
 	}
@@ -446,7 +456,7 @@ func (h *Handler) AcceptInvitation(c *gin.Context) {
 	// joiner). Detached + best-effort: a notification hiccup must not fail
 	// the accept.
 	if h.NotificationService != nil {
-		joiner := strings.TrimSpace(strings.TrimSpace(user.FirstName) + " " + strings.TrimSpace(user.LastName))
+		joiner := displayname.FullName(user.FirstName, user.LastName)
 		if joiner == "" {
 			joiner = user.Email
 		}

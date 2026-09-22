@@ -11,6 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithy "github.com/aws/smithy-go"
+	"github.com/rs/zerolog/log"
 )
 
 // High-level Store methods on *Client. These let callers depend on the
@@ -59,7 +61,6 @@ func (c *Client) PutPublic(ctx context.Context, key string, body io.Reader, cont
 		Key:          aws.String(key),
 		Body:         body,
 		CacheControl: aws.String("public, max-age=31536000, immutable"),
-		ACL:          types.ObjectCannedACLPublicRead,
 	}
 	if contentType != "" {
 		in.ContentType = aws.String(contentType)
@@ -67,10 +68,55 @@ func (c *Client) PutPublic(ctx context.Context, key string, body io.Reader, cont
 	if _, err := c.PutObject(ctx, in); err != nil {
 		return "", err
 	}
+	c.grantPublicRead(ctx, key)
 	if c.PublicBaseURL != "" {
 		return strings.TrimRight(c.PublicBaseURL, "/") + "/" + key, nil
 	}
 	return fmt.Sprintf("https://%s.s3.amazonaws.com/%s", c.Bucket, key), nil
+}
+
+// grantPublicRead marks an object world-readable on a store that still grants
+// access that way, and is a no-op on every store that does not.
+//
+// The canned ACL used to ride along on the PutObject itself, which refuses the
+// whole write on any bucket whose Object Ownership is BucketOwnerEnforced: the
+// default for every bucket created since April 2023, and the reason an upload
+// could fail with the object never written. It is a separate best-effort call
+// now, so the bytes land either way, and a store that will not take an ACL is
+// asked once per process rather than once per upload.
+//
+// Nothing here is the access control that matters. A bucket published through
+// a policy or a CDN needs no ACL, and an instance whose public base URL points
+// back at its own /public route proxies these objects itself.
+func (c *Client) grantPublicRead(ctx context.Context, key string) {
+	if c.aclRefused.Load() {
+		return
+	}
+	_, err := c.PutObjectAcl(ctx, &s3.PutObjectAclInput{
+		Bucket: aws.String(c.Bucket),
+		Key:    aws.String(key),
+		ACL:    types.ObjectCannedACLPublicRead,
+	})
+	if err == nil {
+		return
+	}
+
+	// Refusing the ACL and refusing us permission to set one mean the same
+	// thing here: this store does not publish objects that way, and asking it
+	// again on every upload buys nothing.
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "AccessControlListNotSupported", "AccessDenied", "NotImplemented", "MethodNotAllowed":
+			c.aclRefused.Store(true)
+			log.Debug().
+				Str("bucket", c.Bucket).
+				Str("code", apiErr.ErrorCode()).
+				Msg("storage: bucket does not take object ACLs; public objects rely on its policy or the /public route")
+			return
+		}
+	}
+	log.Warn().Err(err).Str("bucket", c.Bucket).Msg("storage: could not mark object public-read")
 }
 
 func (c *Client) Delete(ctx context.Context, key string) error {
@@ -150,4 +196,54 @@ func (c *Client) PresignedURL(ctx context.Context, op PresignOp, key, contentTyp
 	default:
 		return "", fmt.Errorf("storage: cannot presign unknown op %q", op)
 	}
+}
+
+// DeletePrefix removes every object under prefix, in pages, and reports how
+// many went. A mailbox's bodies are one object per message, so a busy mailbox
+// is thousands of keys; DeleteObjects takes a thousand at a time.
+//
+// Errors stop the walk rather than being collected: the caller retries the
+// whole prefix, and a partially-erased prefix that reported success would be
+// recorded as erased with bytes still in the bucket.
+func (c *Client) DeletePrefix(ctx context.Context, prefix string) (int, error) {
+	if err := CheckPrefix(prefix); err != nil {
+		return 0, err
+	}
+
+	deleted := 0
+	pager := s3.NewListObjectsV2Paginator(c.Client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(c.Bucket),
+		Prefix: aws.String(prefix),
+	})
+	for pager.HasMorePages() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return deleted, err
+		}
+		if len(page.Contents) == 0 {
+			continue
+		}
+		ids := make([]types.ObjectIdentifier, 0, len(page.Contents))
+		for _, obj := range page.Contents {
+			ids = append(ids, types.ObjectIdentifier{Key: obj.Key})
+		}
+		out, err := c.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+			Bucket: aws.String(c.Bucket),
+			Delete: &types.Delete{Objects: ids, Quiet: aws.Bool(true)},
+		})
+		if err != nil {
+			return deleted, err
+		}
+		// A 200 carrying per-key errors is the shape S3 uses for a partial
+		// failure; without this the caller is told the prefix is clean while
+		// some of the customer's mail is still in the bucket.
+		if len(out.Errors) > 0 {
+			first := out.Errors[0]
+			return deleted, fmt.Errorf("storage: %d of %d objects under %q could not be deleted: %s",
+				len(out.Errors), len(ids), prefix, aws.ToString(first.Message))
+		}
+		// Quiet mode returns only failures, and there were none.
+		deleted += len(ids)
+	}
+	return deleted, nil
 }

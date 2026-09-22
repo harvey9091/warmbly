@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	stripe "github.com/stripe/stripe-go/v76"
+	stripe "github.com/stripe/stripe-go/v86"
 
 	"github.com/warmbly/warmbly/internal/errx"
 )

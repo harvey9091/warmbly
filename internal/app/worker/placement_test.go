@@ -12,10 +12,8 @@ func candidate(id uuid.UUID, effective, load float64) PlacementCandidate {
 	c := PlacementCandidate{
 		WorkerID: id,
 		Health:   models.WorkerHealthHealthy,
-		// AgeMul 1: a mature worker, so the youth term stays out of the way
-		// unless a test sets it. Target tracks Effective because these helpers
-		// describe workers past the age ramp, where the two are equal.
-		Capacity: Capacity{Effective: effective, Target: effective, Load: load, AgeMul: 1},
+		// AgeMul 1 keeps the youth term out of the way unless a test sets it.
+		Capacity: Capacity{Target: effective, Load: load, AgeMul: 1},
 	}
 	if effective > 0 {
 		c.Capacity.Utilization = load / effective
@@ -68,6 +66,47 @@ func TestIncumbentOutranksMarginallyEmptierWorker(t *testing.T) {
 	got := SelectPlacement(cands, PlacementRequest{Weight: 1.0, CurrentWorkerID: &incumbent})
 	if got == nil || got.WorkerID != incumbent {
 		t.Fatalf("expected incumbent to win, got %v", got)
+	}
+}
+
+func TestRebalanceCanCorrectExistingConcentration(t *testing.T) {
+	incumbent, other := uuid.New(), uuid.New()
+	a := candidate(incumbent, 100, 32.75)
+	a.OrgMailboxesHere = 88
+	a.ProviderMailboxesHere = 70
+	b := candidate(other, 100, 0)
+
+	got := SelectPlacement([]PlacementCandidate{a, b}, PlacementRequest{
+		Weight:            0.4,
+		CurrentWorkerID:   &incumbent,
+		IgnoreIncumbency:  true,
+		OrgMailboxesTotal: 88,
+	})
+	if got == nil || got.WorkerID != other {
+		t.Fatal("an existing concentration review should choose the worker with headroom")
+	}
+}
+
+func TestConcentrationMoveUsesFreshCandidateCounts(t *testing.T) {
+	result := &PlacementResult{
+		CountsKnown:                  true,
+		IncumbentOrgMailboxes:        10,
+		IncumbentProviderMailboxes:   8,
+		DestinationOrgMailboxes:      9,
+		DestinationProviderMailboxes: 8,
+	}
+	if !result.RelievesConcentration(true, true) {
+		t.Fatal("a destination that reduces one concentration without worsening the other should be accepted")
+	}
+
+	result.DestinationProviderMailboxes = 9
+	if result.RelievesConcentration(true, true) {
+		t.Fatal("a destination that worsens provider concentration should be refused")
+	}
+
+	result.CountsKnown = false
+	if result.RelievesConcentration(true, false) {
+		t.Fatal("fallback placement without fresh neighbour counts must not drive a concentration move")
 	}
 }
 
@@ -208,14 +247,12 @@ func TestAmongOverloadedWorkersTheLeastOverloadedWins(t *testing.T) {
 
 func TestMailboxWeightCountsAgainstTheTarget(t *testing.T) {
 	id := uuid.New()
-	c := candidate(id, 16, 15.5)
+	c := candidate(id, 16, 15)
 
-	// The same worker is under target for a Gmail mailbox and over it for an
-	// smtp_imap one. Only the projected utilization can tell them apart.
-	light := c.Score(PlacementRequest{Weight: MailboxWeight("gmail", false)})
-	heavy := c.Score(PlacementRequest{Weight: MailboxWeight("smtp_imap", false)})
-	if !(light > 0 && heavy < -weightOverTarget+1) {
-		t.Fatalf("weight should change the verdict: light=%.3f heavy=%.3f", light, heavy)
+	gmail := c.Projected(PlacementRequest{Weight: MailboxWeight("gmail", false)})
+	smtp := c.Projected(PlacementRequest{Weight: MailboxWeight("smtp_imap", false)})
+	if gmail != 1 || smtp != 1 {
+		t.Fatalf("every assigned mailbox must count once: gmail=%.3f smtp=%.3f", gmail, smtp)
 	}
 }
 
@@ -267,10 +304,7 @@ func TestOverTargetLosesToStickinessButNotToEveryPenalty(t *testing.T) {
 func TestNewNodeRelievesAFullFleet(t *testing.T) {
 	fresh, mature := uuid.New(), uuid.New()
 
-	// A node enrolled an hour ago: the age ramp has collapsed Effective to its
-	// floor, but Target is what placement divides by, so it still reads empty.
-	// Scoring against Effective made this worker look 200% loaded after one
-	// mailbox and no full fleet could ever be relieved by adding a machine.
+	// A node enrolled an hour ago keeps its target while age remains a score.
 	n := ComputeCapacity(WorkerCapacityRow{BaseCapacity: 16, HealthMultiplier: 1, AgeMultiplier: 1.0 / 72, LoadScore: 1})
 	newNode := PlacementCandidate{WorkerID: fresh, Health: models.WorkerHealthHealthy, Capacity: n}
 	full := candidate(mature, 16, 20)

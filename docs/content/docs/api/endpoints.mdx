@@ -27,7 +27,10 @@ All paths below are relative to the versioned base URL `https://api.warmbly.com/
 | GET | `/emails/:id/track` | `READ_EMAILS` |
 | PATCH | `/emails/:id/track` | `WRITE_EMAILS` |
 | POST | `/emails/:id/track/verify` | `WRITE_EMAILS` |
+| PATCH | `/emails/:id/direct-tracking` | `WRITE_EMAILS` |
 | GET | `/emails/:id/sync` | `READ_EMAILS` |
+| GET | `/emails/:id/identity` | `READ_EMAILS` |
+| POST | `/emails/:id/identity/refresh` | `WRITE_EMAILS` |
 | GET | `/emails/:id/auth-check` | `READ_EMAILS` |
 | POST | `/emails/:id/auth-check` | `WRITE_EMAILS` |
 | GET | `/emails/:id/behavior` | `READ_EMAILS` |
@@ -39,6 +42,8 @@ All paths below are relative to the versioned base URL `https://api.warmbly.com/
 | POST | `/emails/:id/send` | `SEND_CAMPAIGNS` |
 
 ### Campaigns and sequences
+
+Campaigns, steps and activity logs are scoped to the selected organization for session callers and the key's organization for API-key callers. Access depends on the permissions below, regardless of who created the campaign. Step updates and deletes also require the step to belong to the campaign in the URL. Campaign analytics, including daily, hourly and comparison endpoints, use this same organization boundary and require `READ_ANALYTICS` (or **View analytics** for session callers).
 
 | Method | Path | API Permission |
 |--------|------|----------------|
@@ -66,7 +71,11 @@ All paths below are relative to the versioned base URL `https://api.warmbly.com/
 | POST | `/campaigns/:id/test-email` | `SEND_CAMPAIGNS` |
 | POST | `/campaigns/:id/start` | `SEND_CAMPAIGNS` |
 | POST | `/campaigns/:id/stop` | `SEND_CAMPAIGNS` |
+| GET | `/campaigns/:id/leads/:contactId/hold` | `READ_CAMPAIGNS` |
+| POST | `/campaigns/:id/leads/:contactId/pause` | `WRITE_CAMPAIGNS` |
+| POST | `/campaigns/:id/leads/:contactId/resume` | `WRITE_CAMPAIGNS` |
 | GET | `/campaigns/:id/logs` | `READ_CAMPAIGNS` |
+| GET | `/campaigns/:id/send-plan` | `READ_CAMPAIGNS` |
 | GET | `/campaigns/:id/forms` | `READ_CAMPAIGNS` |
 | GET/POST/PATCH/DELETE | `/campaigns/:id/steps[/:sid]` | `READ_CAMPAIGNS` for GET, `WRITE_CAMPAIGNS` otherwise |
 | PATCH | `/campaigns/:id/step-layout` | `WRITE_CAMPAIGNS` |
@@ -76,6 +85,8 @@ All paths below are relative to the versioned base URL `https://api.warmbly.com/
 | GET | `/email-images` | `READ_CAMPAIGNS` |
 | POST | `/email-images` | `WRITE_CAMPAIGNS` |
 | DELETE | `/email-images/:id` | `WRITE_CAMPAIGNS` |
+
+The three `/campaigns/:id/leads/:contactId/…` calls hold one contact's flow inside one campaign: an out-of-office auto-reply writes one automatically, and a member can write one by hand. The contact stays subscribed and stays a lead, so this is not an unsubscribe and not a suppression. Both writes state an absolute hold rather than applying a delta, and replacing a live hold keeps its original start, so a retry lands on the same row and neither needs an `Idempotency-Key`. See [pause a lead](/api/reference/campaigns/#pause-a-lead).
 
 `GET /campaigns/:id/forms` reports the forms this campaign links to and what its recipients did with them: personalized links handed out, who opened one, who started filling it in and who submitted. See the [forms guide](/guides/forms/).
 
@@ -198,7 +209,13 @@ A source's `column_mapping` is validated when the source is written, not on its 
 | POST | `/unibox/agent-drafts/:id/approve` | `WRITE_UNIBOX` |
 | POST | `/unibox/agent-drafts/:id/discard` | `WRITE_UNIBOX` |
 
-`PATCH /unibox/folder` re-files up to 500 messages into `inbox`, `archive` or `trash` at once. The move is Warmbly's own: the copy at the mail provider stays where it is, and the next sync will not undo it, because the provider's placement is tracked separately and followed only when the provider itself moves the message. `sent`, `drafts` and `spam` are placements a provider reaches rather than somewhere a person files mail, so they are rejected with a `400`. See [filing a conversation](/guides/unibox/#filing-a-conversation).
+`PATCH /unibox/folder` re-files into `inbox`, `archive` or `trash`. Name the messages with `email_ids`, the conversations with `thread_ids`, or both; up to 500 of each. Prefer `thread_ids` when you have one: filing part of a conversation leaves it listed, because a thread shows wherever any message of it still sits. The move is Warmbly's own: the copy at the mail provider stays where it is, and the next sync will not undo it, because the provider's placement is tracked separately and followed only when the provider itself moves the message. `sent`, `drafts` and `spam` are placements a provider reaches rather than somewhere a person files mail, so they are rejected with a `400`. See [filing a conversation](/guides/unibox/#filing-a-conversation).
+
+`PATCH /unibox/seen` takes the same two forms: `email_ids` for individual messages, `thread_ids` for whole conversations. `folder` sweeps one folder instead and cannot be combined with either.
+
+`GET /unibox` lists every working folder by default. Spam, trash and archive stay out, so a conversation you file leaves every view rather than only the Inbox folder; pass `include_archived=true` for the All mail behaviour, or `folder=archive` to read the folder itself.
+
+`POST /unibox/snooze` accepts `thread_id` for one conversation or `thread_ids` for up to 500. The single form answers with the snooze row, as before; the bulk form answers with `data`. `DELETE /unibox/snooze?thread_id=` accepts a comma-separated list.
 
 `POST /unibox/reply/draft` returns an AI-drafted reply (it never sends) grounded in the thread, the contact, and your [voice profile](/guides/unibox/#ai-reply-drafts). It charges AI credits; see [AI credits](/guides/ai-credits/).
 
@@ -216,9 +233,13 @@ The `/unibox/drafts` endpoints hold autosaved compose drafts, scoped to the call
 
 `GET /emails/allowance` reports how many mailboxes the workspace holds (`used`), how many it may hold (`allowance`, `null` for unlimited), `remaining`, and the `basis` of the number: `fair_use` (the plan's daily sends divided by `sends_per_mailbox`), `plan`, `override` (an approved request), `free`, or `unlimited`. `pending_request` is the open limit-increase request for mailboxes, if any. Every connect path refuses with `mailbox_allowance_reached` once `remaining` is `0`. See [mailbox allowance](/guides/mailboxes/#mailbox-allowance).
 
+`GET /emails/:id/identity` reports which addresses the mailbox's provider will let it send as, which one it uses, and whether its signature was imported or written here; it contacts no provider. `POST /emails/:id/identity/refresh` re-reads that list from the provider and stores it, and with `import_signature` also replaces the stored signature with the one configured at the provider. Storing the list is what a `send_as_email` choice is validated against, so the refresh needs `WRITE_EMAILS` rather than `READ_EMAILS`; it takes no `Idempotency-Key` because it writes exactly what the provider currently says. Gmail only. See [sending identity](/guides/mailboxes/#sending-identity).
+
 `PATCH /emails/:id` accepts `save_to_sent` (boolean) on SMTP/IMAP mailboxes: when true, which is the default, the worker files a copy of each outbound message in the mailbox's Sent folder. It has no effect on Gmail and Outlook mailboxes, whose APIs file their own copy. See [keeping a copy of sent mail](/guides/mailboxes/#keeping-a-copy-of-sent-mail).
 
-`GET /unibox` and `GET /unibox/thread` return message previews: each row carries `snippet`, a one-line summary, not the message body. Read a full message with `GET /unibox/:id`, which returns `body_plain` plus `body_html`. The HTML is sanitized before it leaves the API (scripts, event handlers, embedded frames, and unsafe URL schemes are removed), so it is safe to render, and links carry `target="_blank"` with `rel="noopener"`. `body_truncated` is `true` on the rare message whose stored body could not be read, where `body_plain` falls back to the snippet.
+`DELETE /emails/:id` releases the mailbox on Warmbly Cloud before removing the local mailbox. An enrolled mailbox's stored credential comes out of the pool, and a cloud-managed mirror's claim is released so the mailbox returns to the cloud workspace and can be adopted again. If the cloud cannot confirm the release, the delete returns `409 mailbox_cloud_unenroll_failed` and keeps the mailbox record so the request can be retried safely. Warmbly attempts to restore the mailbox onto its worker immediately, and the worker reconciler may restore it later if that attempt fails. See [mailboxes](/guides/mailboxes/).
+
+`GET /unibox` and `GET /unibox/thread` return message previews: each row carries `snippet`, a one-line summary, not the message body. Read a full message with `GET /unibox/:id`, which returns `body_plain` plus `body_html`. The HTML is sanitized before it leaves the API (scripts, event handlers, embedded frames, and unsafe URL schemes are removed), so it is safe to render, and links carry `target="_blank"` with `rel="noopener"`. Warmbly open-tracking pixels are also removed from this display copy, including quoted history, so rendering it does not record a campaign open. Stored and delivered copies keep their pixels. `body_truncated` is `true` on the rare message whose stored body could not be read, where `body_plain` falls back to the snippet. The same response carries the full envelope (`from`, `to`, `cc`, `bcc`, `ReplyTo`, `date`, `internal_date`, `message_id`, `in_reply_to`, `size`), the mailbox it belongs to (`email_id`) and its canonical `folder`.
 
 `GET /unibox` also accepts `address=<value>` (matches sender or recipient, for "every conversation with this person") and `direction=sent|received` (resolved against your own mailbox addresses).
 
@@ -238,13 +259,18 @@ The `agent-drafts` endpoints back the [inbox agent](/guides/inbox-agent/): the a
 | POST/PATCH/DELETE | `/crm/deals[/:id]` | `WRITE_CRM` |
 | GET | `/crm/tasks`, `/crm/tasks/:id` | `READ_CRM` |
 | POST/PATCH/DELETE | `/crm/tasks[/:id]` | `WRITE_CRM` |
+| PATCH/DELETE | `/crm/tasks` (bulk, over an id list or a whole filter) | `WRITE_CRM` |
 
 ### Analytics and audit
 
 | Method | Path | API Permission |
 |--------|------|----------------|
-| GET | `/analytics/*` (dashboard, deliverability, warmup, campaigns, accounts, usage) | `READ_ANALYTICS` |
+| GET | `/analytics/*` (dashboard, direct, inbox-tagging, deliverability, warmup, campaigns, accounts, usage) | `READ_ANALYTICS` |
 | GET | `/audit-logs` | `READ_AUDIT_LOGS` |
+
+Analytics reads use the selected workspace for JWT callers and the key's workspace for API-key callers. This includes warmup and usage totals, so teammates see the same workspace history regardless of which member connected a mailbox or created a campaign.
+
+`GET /analytics/inbox-tagging` accepts `limit`, opaque `cursor`, and `needs_review` query parameters and returns `data`, aggregate `summary`, and `pagination`. Each row carries `actions`, the list of what the verdict was allowed to do (`hold`, `stop`, `task`, `suppress`), and `summary.acted` counts the rows that did anything. Invalid cursors, limits, or booleans return `400`.
 
 ### Advisor
 
@@ -271,7 +297,7 @@ Changing Advisor settings (`PATCH /advisor/settings`) is JWT only, alongside the
 | Method | Path | API Permission |
 |--------|------|----------------|
 | GET | `/api-keys` | `API_KEYS` |
-| POST | `/api-keys` | `API_KEYS` |
+| POST | `/api-keys` | `API_KEYS`, JWT only |
 | GET | `/api-keys/permissions` | `API_KEYS` |
 | GET | `/api-keys/:id` | `API_KEYS` |
 | PATCH | `/api-keys/:id` | `API_KEYS` |
@@ -280,6 +306,8 @@ Changing Advisor settings (`PATCH /advisor/settings`) is JWT only, alongside the
 | DELETE | `/api-keys/self` | none |
 
 `DELETE /api-keys/:id/permanent` deletes a key that has already been revoked or has expired, taking its usage logs with it. A key that could still authenticate gets a `409`, because revoking is what records that a credential was ended and why. See [Ending a key](/api/authentication/).
+
+`POST /api-keys` requires a recent confirmation (`POST /auth/reauth`) when called from a signed-in session, because a key outlives the session that made it and a stolen browser token should not be able to leave one behind. An API key or OAuth token calling it is unaffected: it has no session and no second factor to present, it was itself minted from a confirmed session, and the `API_KEYS` scope is the explicit grant that governs it. Automation and the CLI keep working.
 
 `DELETE /api-keys/self` revokes the key the request was made with, and is the one route here that needs no scope. A credential must always be able to end itself: requiring `API_KEYS` to sign out would leave a read-only key on a laptop someone is handing back live, which is what [`warmbly auth logout`](/api/cli/) promises to prevent. A JWT caller gets a `400`: there is no key in that request to end, only a session, which `POST /auth/logout` ends.
 
@@ -369,10 +397,27 @@ Folders (on campaigns), tags (on mailboxes) and categories (on contacts and inbo
 These never accept an API key. They depend on a human-bound session: billing flows, governance, OAuth onboarding, websocket bootstrap, and operational destruction.
 
 - `POST /auth/login`, `/auth/login/confirm`, `/auth/register`, `/auth/register/confirm`, `/auth/refresh`, `/auth/reset-password`, `/auth/reset-password/confirm`
+- `POST /auth/reauth` (re-prove the account holder behind a live session, for the changes that require a recent confirmation)
 - `GET /auth/config` (public deployment capabilities: which sign-in methods this backend has enabled, whether a login code step follows, whether signups are open, whether the instance still needs claiming)
 - `GET /auth/instance` (JWT only: the running Warmbly version of a self-hosted instance and whether a newer release exists, for the dashboard's version pill; a hosted deployment answers `self_hosted: false` and nothing else)
 
 `POST /auth/register` accepts an optional `invite` field carrying an invitation token. On a deployment running `DISABLE_REGISTRATION=invite_only` it is what permits the signup, and the account is created inside the inviting organization rather than in a new one. The token must resolve to a live invitation whose email equals the submitted address, otherwise the request is refused with `invitation_invalid`. Omitting it on a closed deployment returns `registration_invite_only` or `registration_closed`. See [error codes](/api/error-codes/#registration-and-invitation-refusals).
+
+### Actions that need a recent confirmation
+
+Four changes require the session to have confirmed the account holder within the last five minutes, over and above the permission they already need:
+
+| Action | Route |
+|--------|-------|
+| Create an API key | `POST /api-keys` |
+| Add a passkey | `POST /auth/passkey/register/begin`, `/finish` |
+| Remove a passkey | `DELETE /auth/passkey/credentials/:id` |
+| Transfer a workspace | `POST /organizations/transfer-ownership` |
+| Schedule a workspace or account for deletion | `POST /organizations/current/danger-zone/delete`, `POST /me/danger-zone/delete` |
+
+Each either hands out a credential that outlives the session that created it, or cannot be reversed by the person it was done to. Without a confirmation they answer `403` with code `reauth_required`; confirm with `POST /auth/reauth` (password or a current two-factor code) and retry. See [error codes](/api/error-codes/#confirmation-required).
+
+This applies to session callers. An API key or OAuth token has no session to confirm and is not the threat here, so it passes straight through to the route's permission gate.
 
 `GET /auth/config` gained two fields: `invites_required` (boolean, true when an invitation token is needed to create an account) and `docs_url` (string, the deployment's link to the accounts and access documentation, for a client to surface next to a refusal).
 
@@ -380,12 +425,15 @@ These never accept an API key. They depend on a human-bound session: billing flo
 
 Alongside them, `api_url` is this API's own public base (for a copyable example that names the right server), and `brand` is who the deployment says it is: `name`, and `website_url`, `website_label`, `terms_url`, `privacy_url` and `support_email`, each omitted when unset. On a self-hosted instance that configured no `EMAIL_BRAND_*` only `name` is present, and a client should render no link at all rather than substituting one of its own. See [configuration](/development/configuration/).
 
+`GET /auth/config` also carries `gmail_oauth_connect` (boolean): whether a new Gmail mailbox may be connected with Google sign-in. It is `false` unless the deployment sets `BOX_GOOGLE_OAUTH_CONNECT=true`, and a client should then offer the app-password route (`POST /emails/onboarding/smtp-imap` against Gmail's servers) rather than start an OAuth round trip that returns `mailbox_gmail_oauth_disabled`. Mailboxes already connected with Google sign-in are unaffected either way.
+
 `GET /auth/config` also carries `billing_enabled` (boolean). It is `false` when the deployment runs with `BILLING_PROVIDER=none`, which is the self-host default: every feature is unlocked server-side, so the dashboard shows the workspace as self-hosted instead of on a free trial and hides the billing and referral pages. `self_hosted` alone does not imply this, because a self-hosted install may still run Stripe.
 - `POST /auth/setup` (first-run claim: exchanges the one-time token printed at boot for the owner account. Refused once any account exists)
 - `GET /auth/providers`, `POST /auth/apple`, `POST /auth/google` (native-app social sign-in)
 - `POST /auth/oidc/begin`, `GET /auth/oidc/callback` (generic OpenID Connect sign-in)
 - `POST /auth/google/begin`, `GET /auth/google/callback`, `POST /auth/apple/begin`, `POST /auth/apple/callback` (browser Sign in with Google and Sign in with Apple)
 - `POST /auth/sso/exchange` (swaps the single-use handoff code from any of those callbacks for the session; `POST /auth/oidc/exchange` is the older name for the same endpoint)
+- `POST /auth/sso/link` (completes a provider sign-in that resolved to an existing password account: takes that account's password, attaches the identity and returns the session)
 - `POST /auth/logout`, `POST /auth/logout-all`, `GET /auth/me`, `PATCH /auth/me/onboarding`
 - `POST /auth/me/avatar`, `DELETE /auth/me/avatar`
 - `POST /emails/onboarding/oauth/start`, `POST /emails/onboarding/oauth/finish`, `POST /emails/onboarding/smtp-imap`
@@ -396,13 +444,16 @@ Alongside them, `api_url` is this API's own public base (for a copyable example 
 - `POST /getaway` (websocket bootstrap)
 - `GET /realtime/info`
 - `GET /me/danger-zone`, `POST /me/danger-zone/delete`, `DELETE /me/danger-zone/delete`
+- `GET /me/views/:view`, `PUT /me/views/:view`, `DELETE /me/views/:view` (the signed-in member's own column layout and sort for a dashboard list in the current workspace; `view` is `contacts` or `campaign_leads`. Personal to the session, so no API scope reaches it)
 - `GET /invitations`, `POST /invitations/accept`
 - All of `/organization/*` (create, switch, members, invitations, transfer ownership, avatar, danger zone)
 - `GET /website-tracking/settings`, `PATCH /website-tracking/settings`, `POST /website-tracking/settings/rotate-key` (the [website tracking](/guides/website-tracking/) snippet's consent mode, location precision, allowed hosts and retention; JWT permission `MANAGE_SETTINGS`. The rotate is bodyless and safe to repeat, each call issues a new key)
 - All of `/subscription/*` (checkout, portal, cancel, change-plan, preview-change, enterprise-inquiry, discounts, referrals, etc.)
 - All of `/auth/cli/*` except the two handshake routes below (`GET /auth/cli/codes/:code`, `POST /auth/cli/codes/:code/approve`, `POST /auth/cli/codes/:code/deny`: the browser half of `warmbly auth login`, where a signed-in member reviews the code a CLI is showing and authorizes it. Approving mints an ordinary API key, so it requires the `MANAGE_API_KEYS` organization permission and is session-only: an API key must not be able to mint another one this way)
-- All of `/pool-link/*` and `/cloud-link/*` (the self-hosted warmup pool link: approving an instance's code, listing and unlinking instances, and on a self-hosted instance the connect flow and mailbox enrollment). `POST /pool-link/codes` and `POST /pool-link/poll` are public and per-IP rate limited: they are the device-code handshake an instance uses before it has a token, and `/pool-link/instance/*` accepts only an instance token. `/pool-link/instance/oauth/*`, `/pool-link/instance/mailboxes/:id/token`, `/pool-link/instance/workspace-mailboxes` and `/pool-link/instance/mailboxes/adopt` are the cloud-managed mailbox surface (Google and Microsoft sign-in on Warmbly's OAuth apps, brokered access tokens); their instance-side counterparts are `/cloud-link/oauth/*` and `/cloud-link/workspace-mailboxes/*`
+- All of `/pool-link/*` and `/cloud-link/*` (the self-hosted warmup pool link: approving an instance's code, listing and unlinking instances, reading the pool plan's price and opening its checkout, and on a self-hosted instance the connect flow and mailbox enrollment). `POST /pool-link/codes` and `POST /pool-link/poll` are public and per-IP rate limited: they are the device-code handshake an instance uses before it has a token, and `/pool-link/instance/*` accepts only an instance token. `/pool-link/instance/oauth/*`, `/pool-link/instance/mailboxes/:id/token`, `/pool-link/instance/workspace-mailboxes` and `/pool-link/instance/mailboxes/adopt` are the cloud-managed mailbox surface (Google and Microsoft sign-in on Warmbly's OAuth apps, brokered access tokens); their instance-side counterparts are `/cloud-link/oauth/*` and `/cloud-link/workspace-mailboxes/*`
 - All of `/admin/*`
+
+`POST /subscription/portal` requires an existing Stripe billing customer. A workspace without one receives `400` with code `bad_request` and a message to complete checkout first; free and operator-granted plans alone do not create a billing customer.
 
 ### Referrals and discounts
 

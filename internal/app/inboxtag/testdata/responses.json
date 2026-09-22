@@ -1,0 +1,3958 @@
+{
+ "agreed_partnership": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 1.0,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.0,
+     "2": 0.0,
+     "3": 1.0
+    },
+    "score": 3.0,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "agreed",
+    "confidence": 1.0,
+    "probabilities": {
+     "agreed": 1.0,
+     "in_progress": 0.0,
+     "not_interested": 0.0,
+     "not_now": 0.0,
+     "opt_out": 0.0,
+     "question_answered": 0.0,
+     "scheduling": 0.0,
+     "unclear": 0.0,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.76,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "human_reply",
+    "confidence": 1.0,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.0,
+     "human_reply": 1.0,
+     "internal": 0.0,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.07,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.05,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.92,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.79,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.93,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.56,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.33,
+     "1": 0.57,
+     "2": 0.09,
+     "3": 0.01
+    },
+    "score": 0.78,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.71,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.0,
+     "2": 0.0,
+     "3": 0.34,
+     "4": 0.66
+    },
+    "score": 3.66,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.05,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.46,
+     "1": 0.03,
+     "2": 0.5,
+     "3": 0.01
+    },
+    "score": 1.06,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1405,
+   "output_tokens": 542
+  }
+ },
+ "already_using_similar": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.96,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 1.0,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 1.0,
+     "1": 0.0,
+     "2": 0.0,
+     "3": 0.0
+    },
+    "score": 0.0,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "not_interested",
+    "confidence": 0.84,
+    "probabilities": {
+     "agreed": 0.0,
+     "in_progress": 0.0,
+     "not_interested": 0.87,
+     "not_now": 0.12,
+     "opt_out": 0.0,
+     "question_answered": 0.01,
+     "scheduling": 0.0,
+     "unclear": 0.0,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.67,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "human_reply",
+    "confidence": 0.99,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.0,
+     "human_reply": 1.0,
+     "internal": 0.0,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.08,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.87,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.14,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.82,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.07,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.66,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.67,
+     "1": 0.33,
+     "2": 0.0,
+     "3": 0.0
+    },
+    "score": 0.34,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.06,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.75,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.18,
+     "2": 0.7,
+     "3": 0.12,
+     "4": 0.0
+    },
+    "score": 1.94,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.99,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 1.0,
+     "1": 0.0,
+     "2": 0.0,
+     "3": 0.0
+    },
+    "score": 0.01,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1398,
+   "output_tokens": 544
+  }
+ },
+ "asks_for_call": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.98,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.99,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 0.82,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.0,
+     "2": 0.82,
+     "3": 0.18
+    },
+    "score": 2.17,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "scheduling",
+    "confidence": 0.99,
+    "probabilities": {
+     "agreed": 0.01,
+     "in_progress": 0.0,
+     "not_interested": 0.0,
+     "not_now": 0.0,
+     "opt_out": 0.0,
+     "question_answered": 0.0,
+     "scheduling": 0.99,
+     "unclear": 0.0,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.22,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "human_reply",
+    "confidence": 0.99,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.0,
+     "human_reply": 1.0,
+     "internal": 0.0,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.0,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.83,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.88,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.57,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.0,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.08,
+     "1": 0.37,
+     "2": 0.02,
+     "3": 0.53
+    },
+    "score": 2.0,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.91,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.0,
+     "2": 0.0,
+     "3": 0.9,
+     "4": 0.1
+    },
+    "score": 3.1,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.8,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.08,
+     "1": 0.8,
+     "2": 0.12,
+     "3": 0.0
+    },
+    "score": 1.05,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1394,
+   "output_tokens": 542
+  }
+ },
+ "auto_reply_ooo_body": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.08,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 0.78,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.81,
+     "1": 0.17,
+     "2": 0.02,
+     "3": 0.0
+    },
+    "score": 0.22,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "unclear",
+    "confidence": 0.53,
+    "probabilities": {
+     "agreed": 0.0,
+     "in_progress": 0.03,
+     "not_interested": 0.0,
+     "not_now": 0.22,
+     "opt_out": 0.0,
+     "question_answered": 0.07,
+     "scheduling": 0.01,
+     "unclear": 0.57,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.1
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.42,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "auto_reply_ooo",
+    "confidence": 0.98,
+    "probabilities": {
+     "auto_reply_ooo": 0.99,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.0,
+     "human_reply": 0.01,
+     "internal": 0.0,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.87,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.43,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.83,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.3,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.58,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.62,
+     "1": 0.33,
+     "2": 0.04,
+     "3": 0.01
+    },
+    "score": 0.42,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.95,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.05,
+     "2": 0.95,
+     "3": 0.0,
+     "4": 0.0
+    },
+    "score": 1.95,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.3,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.6,
+     "1": 0.13,
+     "2": 0.25,
+     "3": 0.02
+    },
+    "score": 0.7,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1390,
+   "output_tokens": 544
+  }
+ },
+ "auto_reply_ticket_body": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.11,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 0.46,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.18,
+     "1": 0.47,
+     "2": 0.34,
+     "3": 0.01
+    },
+    "score": 1.18,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "in_progress",
+    "confidence": 0.66,
+    "probabilities": {
+     "agreed": 0.0,
+     "in_progress": 0.7,
+     "not_interested": 0.0,
+     "not_now": 0.0,
+     "opt_out": 0.0,
+     "question_answered": 0.01,
+     "scheduling": 0.0,
+     "unclear": 0.29,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.2,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "auto_reply_ticket",
+    "confidence": 0.98,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.98,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.01,
+     "human_reply": 0.01,
+     "internal": 0.0,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.81,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.74,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.48,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.53,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.63,
+     "1": 0.28,
+     "2": 0.08,
+     "3": 0.01
+    },
+    "score": 0.47,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.88,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.03,
+     "2": 0.86,
+     "3": 0.11,
+     "4": 0.0
+    },
+    "score": 2.08,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.41,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.38,
+     "1": 0.43,
+     "2": 0.17,
+     "3": 0.02
+    },
+    "score": 0.82,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1402,
+   "output_tokens": 543
+  }
+ },
+ "bounce_hard_body": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.11,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 0.87,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.91,
+     "1": 0.05,
+     "2": 0.02,
+     "3": 0.02
+    },
+    "score": 0.13,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "unclear",
+    "confidence": 0.71,
+    "probabilities": {
+     "agreed": 0.0,
+     "in_progress": 0.01,
+     "not_interested": 0.06,
+     "not_now": 0.0,
+     "opt_out": 0.0,
+     "question_answered": 0.01,
+     "scheduling": 0.0,
+     "unclear": 0.74,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.18
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.12,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "bounce_hard",
+    "confidence": 0.99,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 1.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.0,
+     "human_reply": 0.0,
+     "internal": 0.0,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.05,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.13,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.65,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.8,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.74,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.77,
+     "1": 0.19,
+     "2": 0.03,
+     "3": 0.01
+    },
+    "score": 0.26,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.89,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.01,
+     "1": 0.1,
+     "2": 0.88,
+     "3": 0.01,
+     "4": 0.0
+    },
+    "score": 1.88,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.94,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.97,
+     "1": 0.02,
+     "2": 0.0,
+     "3": 0.01
+    },
+    "score": 0.06,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1417,
+   "output_tokens": 543
+  }
+ },
+ "bounce_soft_body": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.1,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 0.33,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.51,
+     "1": 0.35,
+     "2": 0.09,
+     "3": 0.05
+    },
+    "score": 0.67,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "unclear",
+    "confidence": 0.9,
+    "probabilities": {
+     "agreed": 0.0,
+     "in_progress": 0.08,
+     "not_interested": 0.0,
+     "not_now": 0.0,
+     "opt_out": 0.0,
+     "question_answered": 0.0,
+     "scheduling": 0.0,
+     "unclear": 0.92,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.08,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "bounce_soft",
+    "confidence": 0.98,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.98,
+     "cold_inbound": 0.0,
+     "human_reply": 0.0,
+     "internal": 0.0,
+     "notification": 0.02
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.07,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.62,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.78,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.81,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.67,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.72,
+     "1": 0.23,
+     "2": 0.04,
+     "3": 0.01
+    },
+    "score": 0.33,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.88,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.04,
+     "2": 0.87,
+     "3": 0.08,
+     "4": 0.01
+    },
+    "score": 2.04,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.57,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.72,
+     "1": 0.19,
+     "2": 0.03,
+     "3": 0.06
+    },
+    "score": 0.43,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1405,
+   "output_tokens": 542
+  }
+ },
+ "cold_inbound_pitch": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.1,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.05,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 0.0,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.22,
+     "1": 0.26,
+     "2": 0.2,
+     "3": 0.32
+    },
+    "score": 1.63,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "unclear",
+    "confidence": 0.98,
+    "probabilities": {
+     "agreed": 0.01,
+     "in_progress": 0.0,
+     "not_interested": 0.0,
+     "not_now": 0.0,
+     "opt_out": 0.0,
+     "question_answered": 0.0,
+     "scheduling": 0.0,
+     "unclear": 0.99,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.18,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "cold_inbound",
+    "confidence": 0.95,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.96,
+     "human_reply": 0.03,
+     "internal": 0.01,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.09,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.8,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.99,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.19,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.86,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.47,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.68,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.24,
+     "1": 0.7,
+     "2": 0.05,
+     "3": 0.01
+    },
+    "score": 0.83,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.4,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.09,
+     "2": 0.36,
+     "3": 0.36,
+     "4": 0.19
+    },
+    "score": 2.66,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.97,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.98,
+     "1": 0.02,
+     "2": 0.0,
+     "3": 0.0
+    },
+    "score": 0.03,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1387,
+   "output_tokens": 544
+  }
+ },
+ "decision_maker_urgent": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.05,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 1.0,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.0,
+     "2": 0.0,
+     "3": 1.0
+    },
+    "score": 3.0,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.21,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "agreed",
+    "confidence": 0.98,
+    "probabilities": {
+     "agreed": 0.99,
+     "in_progress": 0.0,
+     "not_interested": 0.0,
+     "not_now": 0.0,
+     "opt_out": 0.0,
+     "question_answered": 0.0,
+     "scheduling": 0.0,
+     "unclear": 0.0,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.01
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.97,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "human_reply",
+    "confidence": 0.99,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.01,
+     "human_reply": 0.99,
+     "internal": 0.0,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.17,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.98,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.89,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.62,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.58,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.03,
+     "1": 0.31,
+     "2": 0.62,
+     "3": 0.04
+    },
+    "score": 1.67,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.0,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.02,
+     "1": 0.31,
+     "2": 0.08,
+     "3": 0.22,
+     "4": 0.37
+    },
+    "score": 2.64,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.77,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.0,
+     "2": 0.22,
+     "3": 0.78
+    },
+    "score": 2.77,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1396,
+   "output_tokens": 542
+  }
+ },
+ "in_progress_their_side_done": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.06,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 0.77,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.02,
+     "1": 0.01,
+     "2": 0.15,
+     "3": 0.82
+    },
+    "score": 2.77,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "in_progress",
+    "confidence": 0.99,
+    "probabilities": {
+     "agreed": 0.0,
+     "in_progress": 0.99,
+     "not_interested": 0.0,
+     "not_now": 0.0,
+     "opt_out": 0.0,
+     "question_answered": 0.01,
+     "scheduling": 0.0,
+     "unclear": 0.0,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.36,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "human_reply",
+    "confidence": 0.99,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.0,
+     "human_reply": 0.99,
+     "internal": 0.01,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.46,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.84,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.77,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.79,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.19,
+     "1": 0.79,
+     "2": 0.02,
+     "3": 0.0
+    },
+    "score": 0.83,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.7,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.0,
+     "2": 0.64,
+     "3": 0.36,
+     "4": 0.0
+    },
+    "score": 2.35,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.1,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.38,
+     "1": 0.36,
+     "2": 0.26,
+     "3": 0.0
+    },
+    "score": 0.9,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1409,
+   "output_tokens": 542
+  }
+ },
+ "internal_forward": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.06,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.1,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.06,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 0.32,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.18,
+     "1": 0.41,
+     "2": 0.32,
+     "3": 0.09
+    },
+    "score": 1.32,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "wrong_person",
+    "confidence": 0.53,
+    "probabilities": {
+     "agreed": 0.05,
+     "in_progress": 0.02,
+     "not_interested": 0.0,
+     "not_now": 0.0,
+     "opt_out": 0.0,
+     "question_answered": 0.0,
+     "scheduling": 0.0,
+     "unclear": 0.34,
+     "wants_info": 0.01,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.58
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.21,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "internal",
+    "confidence": 0.95,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.03,
+     "human_reply": 0.01,
+     "internal": 0.96,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.07,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.41,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.13,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.72,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.24,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.55,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.26,
+     "1": 0.59,
+     "2": 0.12,
+     "3": 0.03
+    },
+    "score": 0.92,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.86,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.06,
+     "2": 0.84,
+     "3": 0.1,
+     "4": 0.0
+    },
+    "score": 2.04,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.69,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.71,
+     "1": 0.29,
+     "2": 0.0,
+     "3": 0.0
+    },
+    "score": 0.31,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1369,
+   "output_tokens": 541
+  }
+ },
+ "legal_threat": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.15,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 1.0,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 1.0,
+     "1": 0.0,
+     "2": 0.0,
+     "3": 0.0
+    },
+    "score": 0.0,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.76,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "opt_out",
+    "confidence": 1.0,
+    "probabilities": {
+     "agreed": 0.0,
+     "in_progress": 0.0,
+     "not_interested": 0.0,
+     "not_now": 0.0,
+     "opt_out": 1.0,
+     "question_answered": 0.0,
+     "scheduling": 0.0,
+     "unclear": 0.0,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.63,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "human_reply",
+    "confidence": 0.99,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.01,
+     "human_reply": 0.99,
+     "internal": 0.0,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.98,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.08,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.19,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.87,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.38,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.52,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.61,
+     "1": 0.31,
+     "2": 0.07,
+     "3": 0.01
+    },
+    "score": 0.48,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.93,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.98,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.97,
+     "1": 0.03,
+     "2": 0.0,
+     "3": 0.0,
+     "4": 0.0
+    },
+    "score": 0.03,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.0,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.19,
+     "1": 0.29,
+     "2": 0.02,
+     "3": 0.5
+    },
+    "score": 1.84,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1387,
+   "output_tokens": 542
+  }
+ },
+ "not_interested": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.05,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.1,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 1.0,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 1.0,
+     "1": 0.0,
+     "2": 0.0,
+     "3": 0.0
+    },
+    "score": 0.0,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.07,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "not_interested",
+    "confidence": 1.0,
+    "probabilities": {
+     "agreed": 0.0,
+     "in_progress": 0.0,
+     "not_interested": 1.0,
+     "not_now": 0.0,
+     "opt_out": 0.0,
+     "question_answered": 0.0,
+     "scheduling": 0.0,
+     "unclear": 0.0,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.73,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "human_reply",
+    "confidence": 0.99,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.01,
+     "human_reply": 0.99,
+     "internal": 0.0,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.13,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.75,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.41,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.88,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.88,
+     "1": 0.12,
+     "2": 0.0,
+     "3": 0.0
+    },
+    "score": 0.12,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.05,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.61,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.59,
+     "2": 0.36,
+     "3": 0.05,
+     "4": 0.0
+    },
+    "score": 1.46,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.97,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.98,
+     "1": 0.01,
+     "2": 0.0,
+     "3": 0.01
+    },
+    "score": 0.03,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1381,
+   "output_tokens": 544
+  }
+ },
+ "not_now": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.1,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 0.49,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.46,
+     "2": 0.51,
+     "3": 0.03
+    },
+    "score": 1.56,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "not_now",
+    "confidence": 1.0,
+    "probabilities": {
+     "agreed": 0.0,
+     "in_progress": 0.0,
+     "not_interested": 0.0,
+     "not_now": 1.0,
+     "opt_out": 0.0,
+     "question_answered": 0.0,
+     "scheduling": 0.0,
+     "unclear": 0.0,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.61,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "human_reply",
+    "confidence": 0.99,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.01,
+     "human_reply": 0.99,
+     "internal": 0.0,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.97,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.86,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.28,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.51,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.48,
+     "1": 0.51,
+     "2": 0.01,
+     "3": 0.0
+    },
+    "score": 0.53,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.6,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.03,
+     "2": 0.43,
+     "3": 0.54,
+     "4": 0.0
+    },
+    "score": 2.52,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.98,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.98,
+     "1": 0.02,
+     "2": 0.0,
+     "3": 0.0
+    },
+    "score": 0.02,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1390,
+   "output_tokens": 542
+  }
+ },
+ "notification_platform": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.07,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 0.42,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.51,
+     "1": 0.41,
+     "2": 0.07,
+     "3": 0.01
+    },
+    "score": 0.58,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "unclear",
+    "confidence": 0.51,
+    "probabilities": {
+     "agreed": 0.0,
+     "in_progress": 0.43,
+     "not_interested": 0.0,
+     "not_now": 0.0,
+     "opt_out": 0.0,
+     "question_answered": 0.01,
+     "scheduling": 0.0,
+     "unclear": 0.56,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.09,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "notification",
+    "confidence": 0.97,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.0,
+     "human_reply": 0.0,
+     "internal": 0.03,
+     "notification": 0.97
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.97,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.41,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.77,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.07,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.71,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.74,
+     "1": 0.24,
+     "2": 0.02,
+     "3": 0.0
+    },
+    "score": 0.29,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.98,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.02,
+     "2": 0.98,
+     "3": 0.0,
+     "4": 0.0
+    },
+    "score": 1.99,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.99,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 1.0,
+     "1": 0.0,
+     "2": 0.0,
+     "3": 0.0
+    },
+    "score": 0.01,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1373,
+   "output_tokens": 541
+  }
+ },
+ "opt_out_angry": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 1.0,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 1.0,
+     "1": 0.0,
+     "2": 0.0,
+     "3": 0.0
+    },
+    "score": 0.0,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.82,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "opt_out",
+    "confidence": 1.0,
+    "probabilities": {
+     "agreed": 0.0,
+     "in_progress": 0.0,
+     "not_interested": 0.0,
+     "not_now": 0.0,
+     "opt_out": 1.0,
+     "question_answered": 0.0,
+     "scheduling": 0.0,
+     "unclear": 0.0,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.84,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "human_reply",
+    "confidence": 1.0,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.0,
+     "human_reply": 1.0,
+     "internal": 0.0,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.1,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.19,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.86,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.07,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.73,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.76,
+     "1": 0.23,
+     "2": 0.01,
+     "3": 0.0
+    },
+    "score": 0.27,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.99,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.99,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.99,
+     "1": 0.01,
+     "2": 0.0,
+     "3": 0.0,
+     "4": 0.0
+    },
+    "score": 0.01,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.63,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.06,
+     "1": 0.09,
+     "2": 0.01,
+     "3": 0.84
+    },
+    "score": 2.63,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1390,
+   "output_tokens": 542
+  }
+ },
+ "question_answered": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.62,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.05,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 0.75,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.08,
+     "1": 0.75,
+     "2": 0.17,
+     "3": 0.0
+    },
+    "score": 1.1,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "question_answered",
+    "confidence": 1.0,
+    "probabilities": {
+     "agreed": 0.0,
+     "in_progress": 0.0,
+     "not_interested": 0.0,
+     "not_now": 0.0,
+     "opt_out": 0.0,
+     "question_answered": 1.0,
+     "scheduling": 0.0,
+     "unclear": 0.0,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.39,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "human_reply",
+    "confidence": 1.0,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.0,
+     "human_reply": 1.0,
+     "internal": 0.0,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.0,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.76,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.98,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.21,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.83,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.05,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.69,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.19,
+     "1": 0.7,
+     "2": 0.09,
+     "3": 0.02
+    },
+    "score": 0.93,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.76,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.0,
+     "2": 0.71,
+     "3": 0.29,
+     "4": 0.0
+    },
+    "score": 2.29,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.41,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.61,
+     "1": 0.28,
+     "2": 0.01,
+     "3": 0.1
+    },
+    "score": 0.59,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1407,
+   "output_tokens": 544
+  }
+ },
+ "scheduling_proposes_slot": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.97,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 0.62,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.0,
+     "2": 0.38,
+     "3": 0.62
+    },
+    "score": 2.62,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "scheduling",
+    "confidence": 1.0,
+    "probabilities": {
+     "agreed": 0.0,
+     "in_progress": 0.0,
+     "not_interested": 0.0,
+     "not_now": 0.0,
+     "opt_out": 0.0,
+     "question_answered": 0.0,
+     "scheduling": 1.0,
+     "unclear": 0.0,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.38,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "human_reply",
+    "confidence": 0.97,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.03,
+     "human_reply": 0.97,
+     "internal": 0.0,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.0,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.89,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.88,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.57,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.31,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.05,
+     "1": 0.62,
+     "2": 0.03,
+     "3": 0.3
+    },
+    "score": 1.59,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.98,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.0,
+     "2": 0.01,
+     "3": 0.98,
+     "4": 0.01
+    },
+    "score": 3.0,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.46,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.4,
+     "1": 0.48,
+     "2": 0.11,
+     "3": 0.01
+    },
+    "score": 0.74,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1403,
+   "output_tokens": 542
+  }
+ },
+ "technical_question": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.21,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.05,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.97,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 0.81,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.01,
+     "1": 0.18,
+     "2": 0.81,
+     "3": 0.0
+    },
+    "score": 1.81,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.05,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "wants_info",
+    "confidence": 1.0,
+    "probabilities": {
+     "agreed": 0.0,
+     "in_progress": 0.0,
+     "not_interested": 0.0,
+     "not_now": 0.0,
+     "opt_out": 0.0,
+     "question_answered": 0.0,
+     "scheduling": 0.0,
+     "unclear": 0.0,
+     "wants_info": 1.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.19,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "human_reply",
+    "confidence": 1.0,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.0,
+     "human_reply": 1.0,
+     "internal": 0.0,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.12,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.05,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.8,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.27,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.86,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.4,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.92,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.02,
+     "1": 0.93,
+     "2": 0.05,
+     "3": 0.0
+    },
+    "score": 1.05,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.71,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.25,
+     "2": 0.66,
+     "3": 0.09,
+     "4": 0.0
+    },
+    "score": 1.84,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.84,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.85,
+     "1": 0.14,
+     "2": 0.01,
+     "3": 0.0
+    },
+    "score": 0.16,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1408,
+   "output_tokens": 543
+  }
+ },
+ "unclear_short": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.05,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.09,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 0.7,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.17,
+     "1": 0.71,
+     "2": 0.12,
+     "3": 0.0
+    },
+    "score": 0.96,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "unclear",
+    "confidence": 0.9,
+    "probabilities": {
+     "agreed": 0.02,
+     "in_progress": 0.01,
+     "not_interested": 0.0,
+     "not_now": 0.0,
+     "opt_out": 0.0,
+     "question_answered": 0.07,
+     "scheduling": 0.0,
+     "unclear": 0.9,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.14,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "human_reply",
+    "confidence": 0.9,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.07,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.01,
+     "human_reply": 0.91,
+     "internal": 0.01,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.16,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.66,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.44,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.25,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.49,
+     "1": 0.28,
+     "2": 0.21,
+     "3": 0.02
+    },
+    "score": 0.75,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.87,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.15,
+     "2": 0.85,
+     "3": 0.0,
+     "4": 0.0
+    },
+    "score": 1.85,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.97,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.98,
+     "1": 0.02,
+     "2": 0.0,
+     "3": 0.0
+    },
+    "score": 0.03,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1366,
+   "output_tokens": 542
+  }
+ },
+ "wants_info": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.06,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.05,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.98,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 0.79,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.21,
+     "2": 0.79,
+     "3": 0.0
+    },
+    "score": 1.79,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "wants_info",
+    "confidence": 1.0,
+    "probabilities": {
+     "agreed": 0.0,
+     "in_progress": 0.0,
+     "not_interested": 0.0,
+     "not_now": 0.0,
+     "opt_out": 0.0,
+     "question_answered": 0.0,
+     "scheduling": 0.0,
+     "unclear": 0.0,
+     "wants_info": 1.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 0.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.18,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "human_reply",
+    "confidence": 1.0,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.0,
+     "human_reply": 1.0,
+     "internal": 0.0,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.09,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.97,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.17,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.84,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.49,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.64,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.65,
+     "2": 0.34,
+     "3": 0.01
+    },
+    "score": 1.35,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.68,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.0,
+     "2": 0.38,
+     "3": 0.62,
+     "4": 0.0
+    },
+    "score": 2.62,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.76,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.77,
+     "1": 0.22,
+     "2": 0.01,
+     "3": 0.0
+    },
+    "score": 0.24,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1398,
+   "output_tokens": 543
+  }
+ },
+ "wants_pricing": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.05,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 0.98,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.02,
+     "2": 0.98,
+     "3": 0.0
+    },
+    "score": 1.98,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "wants_pricing",
+    "confidence": 1.0,
+    "probabilities": {
+     "agreed": 0.0,
+     "in_progress": 0.0,
+     "not_interested": 0.0,
+     "not_now": 0.0,
+     "opt_out": 0.0,
+     "question_answered": 0.0,
+     "scheduling": 0.0,
+     "unclear": 0.0,
+     "wants_info": 0.0,
+     "wants_pricing": 1.0,
+     "wrong_person": 0.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.65,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "human_reply",
+    "confidence": 0.98,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.02,
+     "human_reply": 0.98,
+     "internal": 0.0,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.97,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.12,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.83,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.44,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.6,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.01,
+     "1": 0.37,
+     "2": 0.61,
+     "3": 0.01
+    },
+    "score": 1.61,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.83,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.05,
+     "2": 0.8,
+     "3": 0.15,
+     "4": 0.0
+    },
+    "score": 2.11,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.75,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.76,
+     "1": 0.24,
+     "2": 0.0,
+     "3": 0.0
+    },
+    "score": 0.25,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1386,
+   "output_tokens": 544
+  }
+ },
+ "wrong_person": {
+  "answers": {
+   "already_using_similar": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "asks_for_call": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "asks_technical_question": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "contains_scheduling_link": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "heat": {
+    "confidence": 0.1,
+    "legend": {
+     "0": "No interest",
+     "1": "Curious only",
+     "2": "Actively evaluating",
+     "3": "Ready to commit"
+    },
+    "probabilities": {
+     "0": 0.55,
+     "1": 0.15,
+     "2": 0.16,
+     "3": 0.14
+    },
+    "score": 0.9,
+    "type": "score"
+   },
+   "hostile_tone": {
+    "noul": 0.14,
+    "type": "noul"
+   },
+   "intent": {
+    "choice": "wrong_person",
+    "confidence": 1.0,
+    "probabilities": {
+     "agreed": 0.0,
+     "in_progress": 0.0,
+     "not_interested": 0.0,
+     "not_now": 0.0,
+     "opt_out": 0.0,
+     "question_answered": 0.0,
+     "scheduling": 0.0,
+     "unclear": 0.0,
+     "wants_info": 0.0,
+     "wants_pricing": 0.0,
+     "wrong_person": 1.0
+    },
+    "type": "choice"
+   },
+   "is_decision_maker": {
+    "noul": 0.31,
+    "type": "noul"
+   },
+   "kind": {
+    "choice": "human_reply",
+    "confidence": 0.81,
+    "probabilities": {
+     "auto_reply_ooo": 0.0,
+     "auto_reply_ticket": 0.0,
+     "bounce_hard": 0.0,
+     "bounce_soft": 0.0,
+     "cold_inbound": 0.07,
+     "human_reply": 0.84,
+     "internal": 0.09,
+     "notification": 0.0
+    },
+    "type": "choice"
+   },
+   "legal_threat": {
+    "noul": 0.01,
+    "type": "noul"
+   },
+   "mentions_competitor": {
+    "noul": 0.04,
+    "type": "noul"
+   },
+   "mentions_pricing": {
+    "noul": 0.03,
+    "type": "noul"
+   },
+   "mentions_shopify": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "mentions_timeline": {
+    "noul": 0.16,
+    "type": "noul"
+   },
+   "names_another_contact": {
+    "noul": 0.98,
+    "type": "noul"
+   },
+   "needs_human_judgement": {
+    "noul": 0.75,
+    "type": "noul"
+   },
+   "offers_something_back": {
+    "noul": 0.16,
+    "type": "noul"
+   },
+   "reply_effort": {
+    "confidence": 0.41,
+    "legend": {
+     "0": "One-line ack",
+     "1": "Short answer",
+     "2": "Needs a real write-up",
+     "3": "Needs a call"
+    },
+    "probabilities": {
+     "0": 0.51,
+     "1": 0.41,
+     "2": 0.07,
+     "3": 0.01
+    },
+    "score": 0.59,
+    "type": "score"
+   },
+   "requests_removal": {
+    "noul": 0.02,
+    "type": "noul"
+   },
+   "sentiment": {
+    "confidence": 0.75,
+    "legend": {
+     "0": "Hostile",
+     "1": "Cold",
+     "2": "Neutral",
+     "3": "Warm",
+     "4": "Enthusiastic"
+    },
+    "probabilities": {
+     "0": 0.0,
+     "1": 0.28,
+     "2": 0.71,
+     "3": 0.01,
+     "4": 0.0
+    },
+    "score": 1.72,
+    "type": "score"
+   },
+   "urgency": {
+    "confidence": 0.98,
+    "legend": {
+     "0": "No deadline",
+     "1": "Soon",
+     "2": "This week",
+     "3": "Today"
+    },
+    "probabilities": {
+     "0": 0.99,
+     "1": 0.01,
+     "2": 0.0,
+     "3": 0.0
+    },
+    "score": 0.02,
+    "type": "score"
+   }
+  },
+  "model": "jev-1.13.0",
+  "usage": {
+   "input_tokens": 1389,
+   "output_tokens": 542
+  }
+ }
+}

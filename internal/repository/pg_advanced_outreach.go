@@ -570,7 +570,7 @@ func (r *advancedOutreachRepository) CreateDeliverabilityEvent(ctx context.Conte
 			recipient_email, reason, idempotency_key, metadata, created_at
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
-		ON CONFLICT (idempotency_key) DO NOTHING
+		ON CONFLICT (organization_id, idempotency_key) DO NOTHING
 	`
 	_, err = r.db.Exec(ctx, query,
 		event.OrganizationID,
@@ -642,7 +642,8 @@ func (r *advancedOutreachRepository) GetDeliverabilityDashboard(ctx context.Cont
 			COUNT(*) FILTER (WHERE intent = 'negative') AS negative,
 			COUNT(*) FILTER (WHERE intent = 'out_of_office') AS ooo,
 			COUNT(*) FILTER (WHERE intent = 'question') AS question,
-			COUNT(*) FILTER (WHERE intent = 'neutral') AS neutral
+			COUNT(*) FILTER (WHERE intent = 'neutral') AS neutral,
+			COUNT(*) FILTER (WHERE intent = 'automated') AS automated
 		FROM reply_intents
 		WHERE organization_id = $1
 		  AND created_at >= $2
@@ -654,6 +655,7 @@ func (r *advancedOutreachRepository) GetDeliverabilityDashboard(ctx context.Cont
 		&out.IntentOOO,
 		&out.IntentQuestion,
 		&out.IntentNeutral,
+		&out.IntentAutomated,
 	); err != nil {
 		return nil, err
 	}

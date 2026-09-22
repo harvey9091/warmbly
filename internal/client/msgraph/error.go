@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/errx"
@@ -49,9 +52,27 @@ func HandleError(resp *http.Response) *errx.MailError {
 		logError()
 		return errx.ErrMailResourceNotFound
 	case http.StatusTooManyRequests:
-		return errx.ErrMailSendingTooFast
+		mailErr := errx.MError(
+			errx.ErrMailSendingTooFast.Type,
+			errx.ErrMailSendingTooFast.Code,
+			errx.ErrMailSendingTooFast.Message,
+			errx.ErrMailSendingTooFast.ResolveMethod,
+		)
+		mailErr.RetryAfter = retryAfter(resp.Header.Get("Retry-After"), time.Now())
+		return mailErr
 	default:
 		logError()
 		return errx.ErrMailServerUnreachable
 	}
+}
+
+func retryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if at, err := http.ParseTime(value); err == nil && at.After(now) {
+		return at.Sub(now)
+	}
+	return 0
 }

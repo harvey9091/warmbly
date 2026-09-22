@@ -152,7 +152,7 @@ export default function CloudLinkCard({
                         </p>
                     </div>
                     <ul className="space-y-2 text-[12.5px] text-slate-600">
-                        <Bullet icon={FlameIcon}>Free for up to 10 mailboxes. Unlimited mailboxes for $15 a month.</Bullet>
+                        <Bullet icon={FlameIcon}>Free for up to 10 mailboxes. Premium, $15 a month, brings better deliverability to every mailbox.</Bullet>
                         <Bullet icon={CloudIcon}>Sign in Google and Microsoft mailboxes through Warmbly's own apps: no OAuth client setup on this server.</Bullet>
                         <Bullet icon={LockIcon}>Only mailbox sign-ins live on the cloud, encrypted, for warmup and sending. Campaigns, contacts and inbox never leave here.</Bullet>
                         <Bullet icon={ShieldCheckIcon}>You can remove a mailbox or disconnect at any time; the cloud forgets it immediately.</Bullet>

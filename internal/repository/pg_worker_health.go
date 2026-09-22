@@ -32,6 +32,7 @@ type WorkerCapacityRowDB struct {
 // InsertWorkerHealthSample appends one telemetry row. Called by the
 // consumer side once per incoming WorkerHealth event.
 func (r *workerRepository) InsertWorkerHealthSample(ctx context.Context, sample *models.WorkerHealthSample) error {
+	// Use database time so a worker clock skew cannot erase activity from the rolling window.
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO worker_health_samples (
 			worker_id, observed_at,
@@ -41,15 +42,15 @@ func (r *workerRepository) InsertWorkerHealthSample(ctx context.Context, sample 
 			auth_errors, rate_limit_errors,
 			smtp_latency_p50_ms, smtp_latency_p99_ms
 		) VALUES (
-			$1, $2,
-			$3, $4, $5, $6,
-			$7, $8,
-			$9, $10, $11,
-			$12, $13,
-			$14, $15
+			$1, now(),
+			$2, $3, $4, $5,
+			$6, $7,
+			$8, $9, $10,
+			$11, $12,
+			$13, $14
 		)
 	`,
-		sample.WorkerID, sample.ObservedAt,
+		sample.WorkerID,
 		sample.AssignedCount, sample.ImapIdleCount, sample.MemoryMB, sample.GoroutineCount,
 		sample.SendsAttempted, sample.SendsSucceeded,
 		sample.BouncesHard, sample.BouncesSoft, sample.Complaints,
@@ -155,10 +156,8 @@ func (r *workerRepository) AddLoadScore(ctx context.Context, workerID uuid.UUID,
 	return err
 }
 
-// SetWorkerHealthState writes a new health label. Driven by the
-// placement loop, not by workers themselves: a worker reporting bad
-// health doesn't get to declare itself blocked, the control plane
-// decides.
+// SetWorkerHealthState writes an operator or machine-health label. Mailbox
+// delivery outcomes do not call this because they cannot diagnose the worker.
 func (r *workerRepository) SetWorkerHealthState(ctx context.Context, workerID uuid.UUID, state models.WorkerHealthState) error {
 	_, err := r.db.Exec(ctx, `
 		UPDATE workers

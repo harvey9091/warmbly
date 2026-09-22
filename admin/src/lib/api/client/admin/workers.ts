@@ -14,10 +14,11 @@ export function getWorkerEmails(
     id: string,
     cursor?: string,
 ): Promise<AdminWorkerEmailsResult> {
-    const q = cursor ? `?cursor=${cursor}` : "";
+    const params = new URLSearchParams({ limit: "100" });
+    if (cursor) params.set("cursor", cursor);
     return Request({
         method: "GET",
-        url: `/admin/workers/${id}/emails${q}`,
+        url: `/admin/workers/${id}/emails?${params.toString()}`,
         authorization: true,
     });
 }

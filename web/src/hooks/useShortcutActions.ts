@@ -22,6 +22,10 @@ export type ShortcutActions = Partial<{
     listOpen: () => void;
     /** Drop the selection. */
     listDeselect: () => void;
+    /** Tick or untick the focused row, for a list that supports multi-select. */
+    listToggleSelect: () => void;
+    /** Archive the ticked rows, or the focused one when nothing is ticked. */
+    listArchive: () => void;
     /** Put the caret in this screen's own search box. */
     focusSearch: () => void;
     /** Open the label menu for the open conversation. */

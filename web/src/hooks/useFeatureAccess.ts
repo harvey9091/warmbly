@@ -18,6 +18,7 @@
 // subscription row is ignored: it would otherwise report a free trial that
 // nothing enforces.
 
+import type Subscription from "@/lib/api/models/app/subscription/Subscription";
 import useSubscription from "@/lib/api/hooks/app/subscription/useSubscription";
 import useAuthConfig from "@/lib/api/hooks/auth/useAuthConfig";
 import { useAppStore } from "@/stores";
@@ -32,7 +33,7 @@ export type Plan = PlanID;
 
 export interface FeatureAccess {
     loading: boolean;
-    status?: "active" | "canceled" | "past_due" | "trialing" | "incomplete";
+    status?: Subscription["status"];
     plan: PlanID;
     /** False on a deployment running without a billing provider: every gate
      *  below is open and billing/referral surfaces do not apply. */

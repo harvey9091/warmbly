@@ -122,7 +122,7 @@ func (w *WMail) relayFlags(ctx context.Context, box *models.Mailbox, uid uint32,
 // answer "did this change", and the current fetch already carries the
 // Message-ID for any UID that did, so keeping the strings cost 74 MB per
 // mailbox at the window and folder limits against 14 MB for the digests, on
-// a worker whose base capacity is 16 mailboxes.
+// a worker at its configured workload target.
 type folderFlagScan struct {
 	at    time.Time
 	flags map[uint32]uint64

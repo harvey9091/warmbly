@@ -17,6 +17,11 @@ func (h *Handler) AdminListOrganizations(c *gin.Context) {
 		errx.JSON(c, errx.New(errx.BadRequest, "invalid query parameters"))
 		return
 	}
+	offset, ok := offsetCursor(c)
+	if !ok {
+		return
+	}
+	search.Offset = offset
 
 	result, xerr := h.OrganizationService.SearchOrganizationsForAdmin(c.Request.Context(), &search)
 	if xerr != nil {
@@ -56,6 +61,25 @@ func (h *Handler) AdminGetOrganizationMembers(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, &models.AdminOrgMembersResult{Data: members})
+}
+
+// AdminGetOrganizationRoles returns a workspace's roles. The Testers page
+// needs them: joining a tester to an existing workspace has to name a role, and
+// roles are ordinary rows an org can rename, add to and delete, so the panel
+// cannot offer a fixed list.
+func (h *Handler) AdminGetOrganizationRoles(c *gin.Context) {
+	orgID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		errx.JSON(c, errx.New(errx.BadRequest, "invalid organization ID"))
+		return
+	}
+
+	roles, xerr := h.OrganizationService.ListRoles(c.Request.Context(), orgID)
+	if xerr != nil {
+		errx.JSON(c, xerr)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": roles})
 }
 
 // AdminGetOrgOverrides returns the override row for an org, or 200 with

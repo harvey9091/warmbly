@@ -75,6 +75,22 @@ type CreditLedger struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
+// CreditAutoTopUpAttempt keeps one Stripe charge attempt stable across
+// worker retries so an ambiguous API response cannot create a second charge.
+type CreditAutoTopUpAttempt struct {
+	ID               uuid.UUID
+	OrgID            uuid.UUID
+	PackKey          string
+	Credits          int
+	Status           string
+	TaxCalculationID string
+	PaymentIntentID  string
+	FailureMessage   string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	CompletedAt      *time.Time
+}
+
 // Total is the spendable balance across both pools.
 func (l *CreditLedger) Total() int {
 	return l.Balance + l.PurchasedBalance

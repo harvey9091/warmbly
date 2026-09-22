@@ -26,17 +26,7 @@ export interface ExportContactsResult {
 }
 
 export default async function exportContacts(req: ExportContactsRequest): Promise<ExportContactsResult> {
-    // Request<T> would normally JSON-parse the response; pass
-    // responseType "blob" and reach into the raw axios response by
-    // duplicating the small bit of plumbing we need. Cheaper than
-    // generalising Request for one consumer.
-    //
-    // The full Request helper handles auth tokens for us — but it
-    // calls reviveDates() on the response and assumes JSON. We replicate
-    // the auth fetch by going through Request<unknown> and asking axios
-    // to return the blob via responseType. axios.request returns the
-    // whole AxiosResponse, but Request returns res.data. Date revival
-    // on a Blob is a no-op, so this works.
+    // The shared request helper preserves non-JSON responses by reference.
     const data = await Request<Blob>({
         method: "POST",
         url: "/contacts/export",

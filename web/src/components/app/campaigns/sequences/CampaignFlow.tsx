@@ -71,7 +71,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import type Sequence from "@/lib/api/models/app/campaigns/sequences/Sequence";
 import type { SequenceBranch, BranchCondition, BranchField } from "@/lib/api/models/app/campaigns/sequences/Branching";
-import { BRANCH_FIELD_LABELS, isReplyBranchField, isInstantCapableField } from "@/lib/api/models/app/campaigns/sequences/Branching";
+import { BRANCH_FIELD_LABELS, REPLY_INTENTS, isReplyBranchField, isInstantCapableField, replyIntentLabel } from "@/lib/api/models/app/campaigns/sequences/Branching";
 import useSequences from "@/lib/api/hooks/app/campaigns/sequences/useSequences";
 import useCreateSequence from "@/lib/api/hooks/app/campaigns/sequences/useCreateSequence";
 import useDeleteSequence from "@/lib/api/hooks/app/campaigns/sequences/useDeleteSequence";
@@ -95,9 +95,10 @@ import { SelectMenu, type SelectOption } from "@/components/ui/select-menu";
 import { PopoverMenu, PopoverMenuContent, PopoverMenuTrigger } from "@/components/ui/popover-menu";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
-import EntryDelayPicker from "@/components/app/campaigns/schedule/EntryDelay";
+import EntryDelayPicker from "@/components/app/campaigns/schedule/EntryDelayPicker";
 import { entryDelayLabel } from "@/components/app/campaigns/schedule/entryDelay";
 import StepEmailArms from "./StepEmailArms";
+import { conversationSubjectFor } from "./threading";
 import CategoryPicker from "@/components/app/contacts/CategoryPicker";
 import { SegmentMultiPicker } from "@/components/app/segments/SegmentPickers";
 import type { ActionKV, AITagRef, SequenceAction, SequenceActionType } from "@/lib/api/models/app/campaigns/sequences/Action";
@@ -182,6 +183,7 @@ function conditionText(b: SequenceBranch): string {
             const f = BRANCH_FIELD_LABELS[c.field] ?? c.field;
             // Reply-class conditions are "ever" (no day window).
             if (c.field === "ai_label") return `case: ${c.label ?? "…"}`;
+            if (c.field === "reply_intent") return `intent: ${replyIntentLabel(c.label)}`;
             if (isReplyBranchField(c.field)) return f;
             return `${f} within ${c.value ?? 3}d`;
         })
@@ -286,6 +288,9 @@ function stackComponents(nodes: Node[], edges: Edge[]): Node[] {
 type StepNodeData = {
     label: string;
     subtitle: string;
+    // The step is sent as a reply on the contact's existing conversation, so
+    // the subtitle is that conversation's subject rather than the step's own.
+    inThread: boolean;
     isStart: boolean;
     endsHere: boolean;
     orphan: boolean;
@@ -327,7 +332,9 @@ function StepNode({ data, selected }: NodeProps) {
                 </button>
             </div>
             <div className="px-2.5 py-2">
-                <div className="text-[9.5px] font-semibold uppercase tracking-[0.12em] text-slate-300">Email</div>
+                <div className="text-[9.5px] font-semibold uppercase tracking-[0.12em] text-slate-300">
+                    {d.inThread ? "Reply in thread" : "Email"}
+                </div>
                 <div className="mt-0.5 truncate text-[11.5px] text-slate-500">{d.subtitle || "No subject yet"}</div>
             </div>
             {d.orphan ? (
@@ -1506,13 +1513,19 @@ export default function CampaignFlow({ campaignId }: { campaignId: string }) {
                 };
             }
             emailNum += 1;
+            // A step that replies in the thread carries the conversation's
+            // subject, so showing its own (blank, by design) would read as an
+            // unfinished step.
+            const conv = conversationSubjectFor(sequences, i);
+            const threads = conv !== null && s.thread_reply;
             return {
                 id: s.id,
                 type: "step",
                 position: { x: 0, y: 0 },
                 data: {
                     label: s.name?.trim() || `Email ${emailNum}`,
-                    subtitle: s.subject,
+                    subtitle: threads ? conv || s.subject : s.subject,
+                    inThread: threads,
                     isStart: i === 0,
                     endsHere: branches.length === 0,
                     orphan: !reachable.has(s.id),
@@ -2205,7 +2218,12 @@ export default function CampaignFlow({ campaignId }: { campaignId: string }) {
                         {editStep.kind !== "email" ? (
                             <ActionEditor campaignId={campaignId} sequence={editStep} onSaved={invalidate} />
                         ) : (
-                            <StepEmailArms campaignId={campaignId} sequence={editStep} index={editIndex} />
+                            <StepEmailArms
+                                campaignId={campaignId}
+                                sequence={editStep}
+                                index={editIndex}
+                                conversationSubject={conversationSubjectFor(sequences, editIndex)}
+                            />
                         )}
                     </div>
                 </div>
@@ -2326,6 +2344,7 @@ const BRANCH_PATH_OPTIONS: SelectOption[] = [
     { value: "reply_negative", label: "if replied: negative", group: "Reply intent" },
     { value: "reply_neutral", label: "if replied: neutral", group: "Reply intent" },
     { value: "reply_automated", label: "if auto-reply / out of office", group: "Reply intent" },
+    { value: "reply_intent", label: "if reply intent is…", group: "Reply intent" },
     { value: "random", label: "random split" },
 ];
 
@@ -2357,6 +2376,8 @@ function ConnectionEditor({
     const c0 = branch.conditions?.[0];
     const [field, setField] = React.useState<string>(c0?.field ?? "always");
     const [value, setValue] = React.useState<number>(c0?.value ?? (c0?.field === "random" ? 50 : 3));
+    // The intent a reply_intent path routes on; stored in the condition's label.
+    const [intent, setIntent] = React.useState<string>(c0?.field === "reply_intent" ? (c0.label ?? "agreed") : "agreed");
     // Instant-capable branches (reply intent, opened, clicked) fire the moment
     // the event lands by default; this lets the user opt out so the path routes
     // at the next step boundary instead.
@@ -2369,6 +2390,7 @@ function ConnectionEditor({
     const isCasePath = c0?.field === "ai_label";
     const caseName = isCasePath ? (c0?.label ?? "").trim() : "";
     const isReply = isReplyBranchField(field as BranchField);
+    const isIntent = field === "reply_intent";
     const isInstantCapable = !isCasePath && isInstantCapableField(field as BranchField);
     const instantVerb = field === "opened" ? "open" : field === "clicked" ? "click" : "reply";
     const isNegative = field === "not_opened" || field === "not_clicked" || field === "not_replied";
@@ -2382,6 +2404,7 @@ function ConnectionEditor({
         if (isRandom) return [{ field: "random", operator: "chance", value }];
         // Reply-class conditions are checked once, ever (no day window / value).
         if (isReply) return [{ field: field as BranchField, operator: "ever" }];
+        if (isIntent) return [{ field: "reply_intent", operator: "is", label: intent }];
         return [{ field: field as BranchField, operator: "within_days", value }];
     };
     const save = (target_step_id: string | null) => {
@@ -2459,7 +2482,7 @@ function ConnectionEditor({
                             onChange={(f) => {
                                 setField(f);
                                 if (f === "random") setValue((v) => (v >= 1 && v <= 99 ? v : 50));
-                                else if (f !== "always" && !isReplyBranchField(f as BranchField))
+                                else if (f !== "always" && f !== "reply_intent" && !isReplyBranchField(f as BranchField))
                                     setValue((v) => (v >= 1 && v <= 60 ? v : 3));
                             }}
                         />
@@ -2472,6 +2495,12 @@ function ConnectionEditor({
                         <span>% of contacts (chosen at random)</span>
                     </div>
                 )}
+                {isIntent && (
+                    <div>
+                        <p className="mb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-slate-400">Reply intent</p>
+                        <SelectMenu className="w-full" value={intent} options={REPLY_INTENTS} onChange={setIntent} />
+                    </div>
+                )}
                 {isCasePath && (
                     <p className="rounded-md bg-slate-50 px-2 py-1.5 text-[11px] leading-relaxed text-slate-600 ring-1 ring-slate-200">
                         The “{caseName}” case of this switch: contacts take this path when{" "}
@@ -2479,7 +2508,7 @@ function ConnectionEditor({
                         step itself; routing happens at the step boundary with no extra credits.
                     </p>
                 )}
-                {!isAlways && !isRandom && !isReply && !isCasePath && (
+                {!isAlways && !isRandom && !isReply && !isIntent && !isCasePath && (
                     <div className="flex flex-wrap items-center gap-1.5">
                         <span>within</span>
                         <NumberInput value={value} onChange={(v) => setValue(Math.max(1, Math.min(60, Math.round(v) || 1)))} min={1} max={60} className="w-16" align="center" />
@@ -2523,10 +2552,12 @@ function ConnectionEditor({
                                 />
                             </button>
                         </div>
-                        {isReply ? (
+                        {isReply || isIntent ? (
                             <>
                                 <p className="text-[10.5px] text-slate-400">
-                                    {field === "reply_automated"
+                                    {isIntent
+                                        ? "Routes when automatic inbox tagging read the contact's reply as this intent, at 70% confidence or more. Needs inbox tagging on; an untagged reply takes the otherwise path."
+                                        : field === "reply_automated"
                                         ? "Routes when the contact's reply is an auto-reply or out-of-office bounce, not a real human reply. Pair this with action steps (create deal, move stage, notify) to react."
                                         : "Routes when the contact's reply is classified this way. Chain action steps after it, for example create deal then move stage then notify."}
                                 </p>

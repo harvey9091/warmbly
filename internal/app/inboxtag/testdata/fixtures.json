@@ -1,0 +1,186 @@
+[
+ {
+  "name": "agreed_partnership",
+  "subject": "Re: Collaboration idea \u2014 DynoWeb x Cart Revive",
+  "body": "Yes, let's do it. Happy to go ahead with the partnership. I'll get our side to add your link this week.",
+  "previous": "Would you be open to a partnership where we each feature the other?",
+  "expect_kind": "human_reply",
+  "expect_intent": "agreed"
+ },
+ {
+  "name": "wants_pricing",
+  "subject": "Re: Quick collab idea",
+  "body": "Interesting. What does this cost? Send over your pricing and terms and I'll take a look.",
+  "previous": "Would you be open to a partnership?",
+  "expect_kind": "human_reply",
+  "expect_intent": "wants_pricing"
+ },
+ {
+  "name": "wants_info",
+  "subject": "Re: Complementary Shopify apps",
+  "body": "Thanks for reaching out. How does the integration actually work? Does it need a theme change on our side?",
+  "previous": "We build DynoWeb, a Shopify app. Open to a collab?",
+  "expect_kind": "human_reply",
+  "expect_intent": "wants_info"
+ },
+ {
+  "name": "asks_for_call",
+  "subject": "Re: Partnership",
+  "body": "Sounds promising. Can we jump on a quick call next week to talk it through? Here is my calendar: https://cal.com/example/30min",
+  "previous": "Would you be open to a partnership?",
+  "expect_kind": "human_reply",
+  "expect_intent": "scheduling"
+ },
+ {
+  "name": "not_now",
+  "subject": "Re: Collaboration idea",
+  "body": "This looks good but we are heads down on a launch until Q1. Ping me after that and we can pick it up.",
+  "previous": "Would you be open to a partnership?",
+  "expect_kind": "human_reply",
+  "expect_intent": "not_now"
+ },
+ {
+  "name": "not_interested",
+  "subject": "Re: Quick question",
+  "body": "Thanks, but this isn't something we're looking for. Good luck with it.",
+  "previous": "Would you be open to a partnership?",
+  "expect_kind": "human_reply",
+  "expect_intent": "not_interested"
+ },
+ {
+  "name": "wrong_person",
+  "subject": "Re: Partnership idea",
+  "body": "I don't handle partnerships. You want Priya on our growth team, priya@example.com. Copying her in.",
+  "previous": "Would you be open to a partnership?",
+  "expect_kind": "human_reply",
+  "expect_intent": "wrong_person"
+ },
+ {
+  "name": "opt_out_angry",
+  "subject": "Re: Quick question",
+  "body": "Take me off your list immediately. I never signed up for this and I will report it as spam if you email me again.",
+  "previous": "Would you be open to a partnership?",
+  "expect_kind": "human_reply",
+  "expect_intent": "opt_out"
+ },
+ {
+  "name": "legal_threat",
+  "subject": "Re: Outreach",
+  "body": "This is unsolicited commercial email. Remove my address at once or I will refer this to the ICO under GDPR.",
+  "previous": "Would you be open to a partnership?",
+  "expect_kind": "human_reply",
+  "expect_intent": "opt_out"
+ },
+ {
+  "name": "unclear_short",
+  "subject": "Re: Collaboration idea",
+  "body": "ok noted",
+  "previous": "Would you be open to a partnership?",
+  "expect_kind": "human_reply",
+  "expect_intent": "unclear"
+ },
+ {
+  "name": "already_using_similar",
+  "subject": "Re: Shopify apps",
+  "body": "We already run something that does this in-house, so there's no gap for us right now. Appreciate the note.",
+  "previous": "We build DynoWeb, a Shopify app. Open to a collab?",
+  "expect_kind": "human_reply",
+  "expect_intent": "not_interested"
+ },
+ {
+  "name": "cold_inbound_pitch",
+  "subject": "Grow your Shopify revenue 30% \u2014 free audit",
+  "body": "Hi, I'm Marcus from GrowthLabs. We help Shopify brands lift conversion by 30%. Can I send over a free audit of your store?",
+  "previous": "",
+  "expect_kind": "cold_inbound",
+  "expect_intent": ""
+ },
+ {
+  "name": "notification_platform",
+  "subject": "Your weekly Shopify Partners summary",
+  "body": "Here is your weekly summary. 3 new installs, 1 uninstall. View the full report in your Partner Dashboard.",
+  "previous": "",
+  "expect_kind": "notification",
+  "expect_intent": ""
+ },
+ {
+  "name": "bounce_hard_body",
+  "subject": "Delivery Status Notification (Failure)",
+  "body": "Your message to jane@nosuchdomain-xyz.com could not be delivered. The email account that you tried to reach does not exist. 550 5.1.1 The email account that you tried to reach does not exist.",
+  "previous": "Would you be open to a partnership?",
+  "expect_kind": "bounce_hard",
+  "expect_intent": ""
+ },
+ {
+  "name": "bounce_soft_body",
+  "subject": "Delivery delayed: Quick question",
+  "body": "Your message has not been delivered yet. The recipient's mailbox is full. The server will keep trying for 48 hours. 452 4.2.2 Mailbox full.",
+  "previous": "Would you be open to a partnership?",
+  "expect_kind": "bounce_soft",
+  "expect_intent": ""
+ },
+ {
+  "name": "auto_reply_ooo_body",
+  "subject": "Away until Monday",
+  "body": "I am out of the office until Monday 23rd with limited access to email. For anything urgent please contact ops@example.com.",
+  "previous": "Would you be open to a partnership?",
+  "expect_kind": "auto_reply_ooo",
+  "expect_intent": ""
+ },
+ {
+  "name": "auto_reply_ticket_body",
+  "subject": "[#48213] We received your message",
+  "body": "Thanks for contacting support. Your request has been logged as ticket #48213 and a member of the team will respond within one business day.",
+  "previous": "Would you be open to a partnership?",
+  "expect_kind": "auto_reply_ticket",
+  "expect_intent": ""
+ },
+ {
+  "name": "internal_forward",
+  "subject": "Fwd: Collaboration idea",
+  "body": "Forwarding this to you \u2014 looks like one for your side. Can you pick it up?",
+  "previous": "",
+  "expect_kind": "internal",
+  "expect_intent": ""
+ },
+ {
+  "name": "decision_maker_urgent",
+  "subject": "Re: Partnership",
+  "body": "I'm the founder and I make this call. We want to move on this before the end of the week. Send the agreement today and I'll sign it.",
+  "previous": "Would you be open to a partnership?",
+  "expect_kind": "human_reply",
+  "expect_intent": "agreed"
+ },
+ {
+  "name": "technical_question",
+  "subject": "Re: DynoWeb",
+  "body": "Does your app write to the theme.liquid file directly, or does it use an app embed block? We had a bad experience with an app that edited the theme.",
+  "previous": "We build DynoWeb, a Shopify app. Open to a collab?",
+  "expect_kind": "human_reply",
+  "expect_intent": "wants_info"
+ },
+ {
+  "name": "scheduling_proposes_slot",
+  "subject": "Re: Collaboration idea",
+  "body": "Thanks for reaching out. The collaboration sounds interesting, and I would be happy to connect for a quick chat. Would 2pm GMT+8 on 22nd Sep work for you?",
+  "previous": "Would you be open to a partnership?",
+  "expect_kind": "human_reply",
+  "expect_intent": "scheduling"
+ },
+ {
+  "name": "in_progress_their_side_done",
+  "subject": "Re: Guest post exchange",
+  "body": "Hi Parteek, We have updated everything on our end. You can check the details and links in the tracking sheet. Please take a look and let us know if you have any questions.",
+  "previous": "I'll add your link this week, will you do the same?",
+  "expect_kind": "human_reply",
+  "expect_intent": "in_progress"
+ },
+ {
+  "name": "question_answered",
+  "subject": "Re: Quick question about your stack",
+  "body": "Hi, yes we are on Shopify Plus and we use Klaviyo for email. We have about 40,000 subscribers and we send two campaigns a week.",
+  "previous": "Which platform are you on, and roughly what list size?",
+  "expect_kind": "human_reply",
+  "expect_intent": "question_answered"
+ }
+]

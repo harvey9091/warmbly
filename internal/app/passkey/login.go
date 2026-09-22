@@ -85,7 +85,10 @@ func (s *service) FinishLogin(ctx context.Context, session string, credential []
 	// Social sign-in is the opposite case and does run the 2FA gate
 	// (auth.finishLoginAs), because there the second factor is the identity
 	// provider's business, not something this deployment can observe.
-	tok, xerr := s.token.GenerateSession(ctx, user.ID, user.Email, ipaddr, userAgent, token.AuthProviderWebAuthn)
+	// A passkey is itself multi-factor: the credential never leaves the device
+	// and the platform unlocks it with a biometric or a PIN. That is why this
+	// path skips the TOTP gate, and it is why the session counts as verified.
+	tok, xerr := s.token.GenerateMFASession(ctx, user.ID, user.Email, ipaddr, userAgent, token.AuthProviderWebAuthn)
 	if xerr != nil {
 		return nil, xerr
 	}

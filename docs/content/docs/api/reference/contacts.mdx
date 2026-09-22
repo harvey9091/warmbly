@@ -28,7 +28,7 @@ Every field is optional; an empty body matches all contacts in the organization.
 | `query` | string | No | Text search across core fields (name, email, company). |
 | `custom_field_filters` | array | No | Per custom-field filters: `{ "name", "value", "type" }` where `type` is one of `equal`, `starts_with`, `ends_with`, `contains`. |
 | `campaign_ids` | string[] | No | Contact must be in ALL of these campaigns. |
-| `lead_status` | string | No | Filter to one derived lead status: `pending`, `active`, `completed`, `replied`, `bounced`, `failed`, `undeliverable`, or `unsubscribed`. Requires exactly one `campaign_ids` entry, otherwise the request is rejected with `lead_filter_requires_campaign`; an unknown value is rejected with `invalid_lead_status`. |
+| `lead_status` | string | No | Filter to one derived lead status: `pending`, `active`, `completed`, `replied`, `bounced`, `failed`, `paused`, `undeliverable`, or `unsubscribed`. Requires exactly one `campaign_ids` entry, otherwise the request is rejected with `lead_filter_requires_campaign`; an unknown value is rejected with `invalid_lead_status`. |
 | `engagement` | string | No | Filter by engagement inside that campaign: `opened`, `not_opened`, `clicked`, `not_clicked`, `replied`, `not_replied`, or `bounced`. `opened` means a human open (machine opens never count); the `not_*` values match only leads sent at least one step. Combines with `lead_status` as AND. Requires exactly one `campaign_ids` entry (`lead_filter_requires_campaign`); an unknown value is rejected with `invalid_engagement`. |
 | `category_ids` | string[] | No | Contact must have ALL of these categories. |
 | `segment_ids` | string[] | No | Contact must be a member of ALL of these segments (conditions plus manual overrides). An id that is not a valid UUID is rejected with `400`; an unknown segment matches nothing. |
@@ -40,7 +40,7 @@ Every field is optional; an empty body matches all contacts in the organization.
 | `created_before` | string (RFC 3339) | No | Created on or before this time. |
 | `updated_after` | string (RFC 3339) | No | Updated on or after this time. |
 | `updated_before` | string (RFC 3339) | No | Updated on or before this time. |
-| `sort_by` | string | No | Sort column: `created_at` (the default), `updated_at`, `first_name`, `last_name`, `email`, or `campaign_count`. Any other value falls back to `created_at`. |
+| `sort_by` | string | No | Sort column: `created_at` (the default), `updated_at`, `first_name`, `last_name`, `email`, `company`, `phone`, or `campaign_count`. `custom:<key>` sorts on a custom field, as text, with contacts that lack the field (or have it blank) grouped last when ascending and first when descending. A custom-field name that could never exist is rejected with `invalid_sort_by`; any other unknown value falls back to `created_at`. |
 | `reverse` | boolean | No | Ascending when true. The default is descending. |
 
 ```json
@@ -94,20 +94,22 @@ Returns a `data` array of contacts plus a `pagination` envelope. Paginate by pas
 
 Every contact carries its address verification: `verification_status` (`valid`, `risky`, `invalid`, or `unknown`), `verification_sub_status` (`catch_all`, `disposable`, `role`, `spamtrap`, `mailbox_full`, `no_mx`, `syntax`, `undisclosed`, or empty), `verification_source` (`probe` for the built-in check, `provider` for a connected verification service, `imported` for a verdict that came with the contact, `manual` for one a member set, empty when never checked), `verification_provider` (who produced it), `verification_reason`, `verification_checked_at`, and `verification_confidence` (0 to 100, scored from the check plus what real mail to the address showed; see [what real mail teaches the check](/guides/deliverability/#what-real-mail-teaches-the-check)). Campaigns never send to `invalid`, and send to `risky` only when their `risky_emails` setting is on.
 
-When the search filters by exactly one campaign, each contact additionally carries a `campaign_lead` object with its processing state inside that campaign (`status`, `sent`, `opened`, `machine_opened`, `clicked`, `replied`, `bounced`, `current_step`, `sender`, `last_activity_at`, and `failure_reason` when failed). `sender` is the mailbox address the lead's whole sequence sends from, fixed when its first email went out and absent until then. `opened` counts steps opened by a person; steps fetched automatically by a mail client (Apple Mail Privacy Protection and similar) are in `machine_opened` instead, matching the machine opens the analytics summary reports. The `status` derivation, highest priority first, is `unsubscribed` (not subscribed), then `bounced`, `replied`, `failed` (a step could not be sent after every retry; `failure_reason` carries the sending worker's reason), `completed` (every email step sent, no reply), `active` (some steps sent, more to send), `undeliverable` (pre-send verification refused the address, so the campaign skips the lead and never sends to it), and `pending` (queued, nothing sent). A step counts as sent only once the sending worker has delivered it to the mailbox provider; a send the worker could not complete is retried on the campaign's next pass and never shows as sent. The `lead_status` filter narrows to one of these buckets.
+When the search filters by exactly one campaign, each contact additionally carries a `campaign_lead` object with its processing state inside that campaign (`status`, `sent`, `opened`, `machine_opened`, `clicked`, `replied`, `bounced`, `current_step`, `sender`, `last_activity_at`, `hold` when held, and `failure_reason` when failed). `sender` is the mailbox address the lead's whole sequence sends from, fixed when its first email went out and absent until then. `opened` counts steps opened by a person; steps fetched automatically by a mail client (Apple Mail Privacy Protection and similar) are in `machine_opened` instead, matching the machine opens the analytics summary reports. The `status` derivation, highest priority first, is `unsubscribed` (not subscribed), then `bounced`, `replied`, `failed` (a step could not be sent after every retry; `failure_reason` carries the sending worker's reason), `completed` (every email step sent, no reply), `paused` (the lead's flow is held, by an out-of-office auto-reply or by hand; the `hold` object carries `since`, `until`, `reason` and `source`), `active` (some steps sent, more to send), `undeliverable` (pre-send verification refused the address, so the campaign skips the lead and never sends to it), and `pending` (queued, nothing sent). A step counts as sent only once the sending worker has delivered it to the mailbox provider; a send the worker could not complete is retried on the campaign's next pass and never shows as sent. The `lead_status` filter narrows to one of these buckets.
 
-When the search filters by exactly one campaign, the first page (no `cursor`) also includes a `lead_counts` object: per-status lead totals for that campaign, independent of the `lead_status` and `engagement` filters so every scope's total is available at once. Alongside the status buckets it carries engagement totals that match the `engagement` filter: `contacted` (leads sent at least one step), `opened` (a human open on any step), `clicked`, and `replied_any` (a reply on any step, whatever the derived status).
+When the search filters by exactly one campaign, the first page (no `cursor`) also includes a `lead_counts` object: per-status lead totals for that campaign, independent of the `lead_status` and `engagement` filters so every scope's total is available at once. The status buckets include `paused`. Alongside them it carries engagement totals that match the `engagement` filter: `contacted` (leads sent at least one step), `opened` (a human open on any step), `clicked`, and `replied_any` (a reply on any step, whatever the derived status).
 
 ```json
 {
   "lead_counts": {
     "total": 3140,
-    "queued": 1980,
+    "queued": 1960,
     "processing": 910,
     "completed": 27,
     "replied": 180,
     "bounced": 22,
     "failed": 3,
+    "paused": 12,
+    "undeliverable": 8,
     "unsubscribed": 18
   }
 }
@@ -144,7 +146,7 @@ A JSON array of contact objects (at least one, up to the per-request maximum; an
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `email` | string | Yes | Contact email address. |
+| `email` | string | Yes | Contact email address. Stored lowercased; a display name (`Dana Reyes <dana@acme.com>`) is reduced to the address inside it, and anything that is not an address answers `400`. |
 | `first_name` | string | No | First name. |
 | `last_name` | string | No | Last name. |
 | `company` | string | No | Company name. |
@@ -583,6 +585,8 @@ When the contact is suppressed, `suppression` is an object: `{ "id", "kind", "va
 
 Partially updates a single contact. Only the fields present are changed. Campaign and category lists can be set wholesale or adjusted with diff-style add/remove.
 
+`email` replaces the contact's address. It is stored lowercased, a display name (`Dana Reyes <dana@acme.com>`) is reduced to the address inside it, and anything that is not an address answers `400`. The address has to be free: one another contact already holds answers `409` with `code` `contact_email_taken` rather than merging the two. A changed address drops the contact's verification verdict back to `unknown`, clears the delivery evidence behind it and forgets the cached `esp_provider`, because all three belonged to the old mailbox; the next verification pass checks the new address and the recipient provider is derived again from the new domain. Steps already sent went to the old address and keep their history.
+
 Auth: **Scope** `WRITE_CONTACTS` · **Org permission** `manage_contacts`
 
 | Parameter | In | Type | Description |
@@ -595,6 +599,7 @@ Auth: **Scope** `WRITE_CONTACTS` · **Org permission** `manage_contacts`
 | --- | --- | --- | --- |
 | `first_name` | string | No | First name. |
 | `last_name` | string | No | Last name. |
+| `email` | string | No | New email address. Normalized to lowercase; must be a valid address and unused by another contact. |
 | `company` | string | No | Company. |
 | `phone` | string | No | Phone. |
 | `custom_fields` | object | No | Replaces the custom-fields map. |
@@ -704,7 +709,7 @@ Returns a `data` array plus a `pagination` envelope.
 
 `GET /contacts/:id/timeline`
 
-Returns the merged activity feed for a contact: sends, opens, clicks (one per link, naming the link), replies, bounces, deliverability and suppression events, notes, meeting bookings, and lifecycle events (the contact's creation with its first-touch source, and every time it joined or left a campaign or a category). Requires a selected organization (org-scoped events would otherwise be hidden), so a request with no organization returns `400`.
+Returns the selected organization's merged activity feed for a contact: sends, opens, clicks (one per link, naming the link), replies, bounces, deliverability and suppression events, notes, meeting bookings, and lifecycle events (the contact's creation with its first-touch source, and every time it joined or left a campaign or a category). Every member with permission to view contacts receives the same timeline, regardless of who created the contact or its campaigns. A request with no selected organization returns `400`, and a contact outside the selected organization returns `404`.
 
 Auth: **Scope** `READ_CONTACTS` · **Org permission** `view_contacts`
 
@@ -782,7 +787,7 @@ Returns a `data` array and the standard `pagination` envelope. Paginate by passi
 
 `type` is one of `email_sent`, `email_opened`, `email_clicked`, `email_replied`, `email_bounced`, `reply_received`, `deliverability`, `suppressed`, `note`, `meeting_booked`, `meeting_rescheduled`, `meeting_canceled`, `contact_created`, `campaign_added`, `campaign_removed`, `category_added`, `category_removed`, `form_submitted`, or `page_hit`. Fields not relevant to an event type are omitted.
 
-`email_opened` and `email_clicked` carry `machine`: `true` when an automated fetcher did it rather than the person (a mail privacy proxy, a fetch inside the instance's automated-engagement window, which starts when the step is dispatched to a worker, several links followed within seconds). Per-link `email_clicked` events carry `machine_reason` (`prefetch`, `instant` or `burst`), and per-event `email_opened` rows carry it too (`prefetch` or `instant`); an open summarised from the lead alone carries only the flag. Both kinds carry an `origin` object when the event was logged: `client` when the user agent names a mail client or image proxy, `device_type`, `os`, `browser`, `browser_version`, and `country_code`, `region`, `city` when the consumer could resolve them. Opens appear once per event, so a contact who opened from two devices has two rows. Automated clicks are on the feed for the record but never count the step as clicked. An `email_clicked` event carries `link` with the link's `id`, `url`, `label` (its anchor text), the `utm_*` parameters the URL carried, and the `user_agent`; every link in an email is tracked on its own, so each link clicked is its own event. Clicks recorded before per-link attribution have no `link`.
+`email_opened` and `email_clicked` carry `machine`: `true` when an automated fetcher did it rather than the person (a mail privacy proxy, a fetch inside the instance's automated-engagement window, which starts when the step is dispatched to a worker, several links followed within seconds). Per-link `email_clicked` events carry `machine_reason` (`prefetch`, `instant`, `scanner` or `burst`), and per-event `email_opened` rows carry it too (`prefetch`, `instant` or `scanner`); an open summarised from the lead alone carries only the flag. Both kinds carry an `origin` object when the event was logged: `client` when the user agent names a mail client or image proxy, `device_type`, `os`, `browser`, `browser_version`, and `country_code`, `region`, `city` when the consumer could resolve them. A stripped WebKit image-proxy signature shared by Outlook and Apple is reported as `client: "Image proxy"` and omits device, operating-system and browser claims that the proxy header cannot support. Opens appear once per event, so a contact who opened from two devices has two rows. Automated clicks are on the feed for the record but never count the step as clicked. An `email_clicked` event carries `link` with the link's `id`, `url`, `label` (its anchor text), the `utm_*` parameters the URL carried, and the `user_agent`; every link in an email is tracked on its own, so each link clicked is its own event. Clicks recorded before per-link attribution have no `link`.
 
 A `form_submitted` event carries `form_id` and `form_name`. A `page_hit` event is a page view on your own site from a browser tied to the contact through an email-link ticket (see [Website tracking](/guides/website-tracking/)); `subject` is the page title, or its path when the page has none, and `page_hit` carries the full view: `url`, `path`, `title`, `referrer`, `referrer_domain`, `landing` (the first view of a session), the `utm_*` parameters, `device_type`, `os`, `browser`, `browser_version`, `device_brand`, `language`, `timezone`, `screen_width`, `screen_height`, and `country_code`, `region`, `city` when known.
 
@@ -847,7 +852,7 @@ Auth: **Scope** `READ_CONTACTS` · **Org permission** `view_contacts`
 
 `sender_id` and `sender_email` are the mailbox this lead's whole sequence sends from. Rotation picks it when the first email goes out and every follow-up keeps it, so the contact only ever hears from one address; both fields are absent until that first email. They change only when that mailbox can no longer send for the campaign.
 
-`lead_status` uses the same values as the campaign Leads view: `pending`, `active`, `completed`, `replied`, `bounced`, `failed`, `unsubscribed`, or `undeliverable`. Each step carries whichever of `sent_at`, `opened_at`, `clicked_at`, `replied_at`, `bounced_at` and `failed_at` apply, plus `attempts` and `in_flight` (reserved for a worker whose result has not come back). `opened_at` is a person's open, as it is in the Leads view: a step a mail client prefetched or a security gateway scanned carries no `opened_at`. While a branch condition is undecided, `next.step_id` is absent and `next.step_label` says the step depends on the contact's response.
+`lead_status` uses the same values as the campaign Leads view: `pending`, `active`, `completed`, `replied`, `bounced`, `failed`, `paused`, `unsubscribed`, or `undeliverable`. A held lead also carries a `hold` object (`since`, `until`, `reason`, `source`) and keeps its `next` action, with the hold as the reason it is waiting; see [pause a lead](/api/reference/campaigns/#pause-a-lead). Each step carries whichever of `sent_at`, `opened_at`, `clicked_at`, `replied_at`, `bounced_at` and `failed_at` apply, plus `attempts` and `in_flight` (reserved for a worker whose result has not come back). `opened_at` is a person's open, as it is in the Leads view: a step a mail client prefetched or a security gateway scanned carries no `opened_at`. While a branch condition is undecided, `next.step_id` is absent and `next.step_label` says the step depends on the contact's response.
 
 ## List a contact's activities
 
@@ -1144,6 +1149,6 @@ Sequence action steps `add_to_segment` and `remove_from_segment` take a `segment
 { "campaign_id": "…" }
 ```
 
-Enrols every current member as a lead. Contacts already in the campaign are skipped, each new lead gets a `campaign_added` activity, and a running campaign is woken so the leads are scheduled. Returns `{ "campaign_id", "added", "members" }`. This is a snapshot: later members are not added until the call is repeated. Safe to retry. For a live link that keeps enrolling members as they join the segment, see [linked segments](/api/reference/campaigns/#list-linked-segments).
+Enrols every current member as a lead. Contacts already in the campaign are skipped, each new lead gets a `campaign_added` activity, and a running campaign is woken so the leads are scheduled. Returns `{ "campaign_id", "added", "members" }`. This is a snapshot: later members are not added until the call is repeated. Safe to retry. It counts as choosing the leads it adds, so it clears any hand-made removal and the rows it writes are never withdrawn by [detaching a segment](/api/reference/campaigns/#replace-linked-segments). Members that are already leads are left exactly as they are, provenance included. For a live link that keeps enrolling members as they join the segment, see [linked segments](/api/reference/campaigns/#list-linked-segments).
 
 Auth: **Scope** `WRITE_CAMPAIGNS` · **Org permission** `manage_campaigns`

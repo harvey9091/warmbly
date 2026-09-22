@@ -67,6 +67,14 @@ type Retention struct {
 	FormEventDays int `json:"form_event_days"`
 	// AuditLogDays is how long the audit trail is kept.
 	AuditLogDays int `json:"audit_log_days"`
+	// WarmupMailDays is how long warmup mail stays in a mailbox before the
+	// platform deletes it from the warmup folder. A mailbox may set its own
+	// window; this is the one every other mailbox follows.
+	WarmupMailDays int `json:"warmup_mail_days"`
+	// WarmupEventDays is how long the per-message warmup records (tokens,
+	// receipts, tampering and spam reports) are kept. The daily warmup
+	// statistics behind the analytics are separate and never pruned.
+	WarmupEventDays int `json:"warmup_event_days"`
 }
 
 // Tracking holds the engagement-classification windows. Zero means "compiled
@@ -85,34 +93,55 @@ type Tracking struct {
 	// separately because a misjudged click costs an automation rather than a
 	// metric.
 	MachineWindowClickSeconds int `json:"machine_window_click_seconds"`
+	// MachineWindowProbableSeconds replaces both of the above when the
+	// tracking edge recognised the source as a scanner network that also
+	// carries people's own requests, which browser isolation makes true of
+	// Proofpoint, Mimecast and Cisco. Such a match moves the odds without
+	// settling them, so it widens the window instead of deciding: inside it
+	// the event is the delivery-time scan, outside it the person who got to
+	// the mail later. Never applied shorter than the window for the kind of
+	// event in hand, so it can only ever catch more.
+	MachineWindowProbableSeconds int `json:"machine_window_probable_seconds"`
 }
 
 // DefaultTracking is the compiled classification window for each event kind.
 func DefaultTracking() Tracking {
 	return Tracking{
-		MachineWindowOpenSeconds:  config.TrackingMachineWindowOpenSecondsDefault,
-		MachineWindowClickSeconds: config.TrackingMachineWindowClickSecondsDefault,
+		MachineWindowOpenSeconds:     config.TrackingMachineWindowOpenSecondsDefault,
+		MachineWindowClickSeconds:    config.TrackingMachineWindowClickSecondsDefault,
+		MachineWindowProbableSeconds: config.TrackingMachineWindowProbableSecondsDefault,
 	}
 }
 
-// Normalize clamps both windows into the accepted range. Zero and negative
+// Normalize clamps every window into its accepted range. Zero and negative
 // resolve to the compiled default rather than to "never automated", so a
 // document written before this section existed keeps the shipped behaviour.
 func (t *Tracking) Normalize() {
-	clamp := func(v, def int) int {
+	clamp := func(v, def, lo, hi int) int {
 		if v <= 0 {
 			return def
 		}
-		if v < config.TrackingMachineWindowSecondsMin {
-			return config.TrackingMachineWindowSecondsMin
+		if v < lo {
+			return lo
 		}
-		if v > config.TrackingMachineWindowSecondsMax {
-			return config.TrackingMachineWindowSecondsMax
+		if v > hi {
+			return hi
 		}
 		return v
 	}
-	t.MachineWindowOpenSeconds = clamp(t.MachineWindowOpenSeconds, config.TrackingMachineWindowOpenSecondsDefault)
-	t.MachineWindowClickSeconds = clamp(t.MachineWindowClickSeconds, config.TrackingMachineWindowClickSecondsDefault)
+	machine := func(v, def int) int {
+		return clamp(v, def, config.TrackingMachineWindowSecondsMin, config.TrackingMachineWindowSecondsMax)
+	}
+	t.MachineWindowOpenSeconds = machine(t.MachineWindowOpenSeconds, config.TrackingMachineWindowOpenSecondsDefault)
+	t.MachineWindowClickSeconds = machine(t.MachineWindowClickSeconds, config.TrackingMachineWindowClickSecondsDefault)
+	// The probable window has bounds of its own: it reaches a day, because how
+	// long a security vendor takes to detonate a link is the vendor's property.
+	t.MachineWindowProbableSeconds = clamp(
+		t.MachineWindowProbableSeconds,
+		config.TrackingMachineWindowProbableSecondsDefault,
+		config.TrackingMachineWindowProbableSecondsMin,
+		config.TrackingMachineWindowProbableSecondsMax,
+	)
 }
 
 // OpenWindow and ClickWindow are the normalized windows as durations.
@@ -122,6 +151,18 @@ func (t Tracking) OpenWindow() time.Duration {
 
 func (t Tracking) ClickWindow() time.Duration {
 	return time.Duration(t.MachineWindowClickSeconds) * time.Second
+}
+
+// ProbableWindow is the window a probable-scanner source is measured against,
+// never shorter than `kind`, the window that event would get on its own. The
+// floor is here rather than in Normalize so the two settings stay independent
+// on the way in and the rule stays one-way on the way out: naming a source can
+// only ever catch more, never fewer.
+func (t Tracking) ProbableWindow(kind time.Duration) time.Duration {
+	if probable := time.Duration(t.MachineWindowProbableSeconds) * time.Second; probable > kind {
+		return probable
+	}
+	return kind
 }
 
 // Bounds on the domain-authentication grace window. One hour is the shortest
@@ -202,6 +243,8 @@ func DefaultRetention() Retention {
 		EngagementEventDays: config.EngagementEventRetentionDaysDefault,
 		FormEventDays:       config.FormEventsRetentionDaysDefault,
 		AuditLogDays:        config.AuditLogRetentionDaysDefault,
+		WarmupMailDays:      config.WarmupMailRetentionDaysDefault,
+		WarmupEventDays:     config.WarmupEventRetentionDaysDefault,
 	}
 }
 
@@ -210,21 +253,26 @@ func DefaultRetention() Retention {
 // written before this section existed must not silently start deleting
 // everything on the next sweep.
 func (r *Retention) Normalize() {
-	clamp := func(v, def int) int {
+	clamp := func(v, def, floor int) int {
 		if v <= 0 {
 			return def
 		}
-		if v < config.RetentionDaysMin {
-			return config.RetentionDaysMin
+		if v < floor {
+			return floor
 		}
 		if v > config.RetentionDaysMax {
 			return config.RetentionDaysMax
 		}
 		return v
 	}
-	r.EngagementEventDays = clamp(r.EngagementEventDays, config.EngagementEventRetentionDaysDefault)
-	r.FormEventDays = clamp(r.FormEventDays, config.FormEventsRetentionDaysDefault)
-	r.AuditLogDays = clamp(r.AuditLogDays, config.AuditLogRetentionDaysDefault)
+	r.EngagementEventDays = clamp(r.EngagementEventDays, config.EngagementEventRetentionDaysDefault, config.RetentionDaysMin)
+	r.FormEventDays = clamp(r.FormEventDays, config.FormEventsRetentionDaysDefault, config.RetentionDaysMin)
+	r.AuditLogDays = clamp(r.AuditLogDays, config.AuditLogRetentionDaysDefault, config.RetentionDaysMin)
+	// The two warmup windows have floors of their own: mail has to outlive
+	// the engagement legs and a reply-back, and the records have to outlive
+	// the thirty-day health bands that read them.
+	r.WarmupMailDays = clamp(r.WarmupMailDays, config.WarmupMailRetentionDaysDefault, config.WarmupMailRetentionDaysMin)
+	r.WarmupEventDays = clamp(r.WarmupEventDays, config.WarmupEventRetentionDaysDefault, config.WarmupEventRetentionDaysMin)
 }
 
 // Normalize clamps a document into its accepted range. It is applied on read
@@ -311,10 +359,13 @@ type Patch struct {
 		EngagementEventDays *int `json:"engagement_event_days"`
 		FormEventDays       *int `json:"form_event_days"`
 		AuditLogDays        *int `json:"audit_log_days"`
+		WarmupMailDays      *int `json:"warmup_mail_days"`
+		WarmupEventDays     *int `json:"warmup_event_days"`
 	} `json:"retention"`
 	Tracking *struct {
-		MachineWindowOpenSeconds  *int `json:"machine_window_open_seconds"`
-		MachineWindowClickSeconds *int `json:"machine_window_click_seconds"`
+		MachineWindowOpenSeconds     *int `json:"machine_window_open_seconds"`
+		MachineWindowClickSeconds    *int `json:"machine_window_click_seconds"`
+		MachineWindowProbableSeconds *int `json:"machine_window_probable_seconds"`
 	} `json:"tracking"`
 	Deliverability *struct {
 		EnforceDomainAuth *bool `json:"enforce_domain_auth"`
@@ -370,6 +421,12 @@ func (p Patch) Apply(doc Document) Document {
 		if p.Retention.AuditLogDays != nil {
 			doc.Retention.AuditLogDays = *p.Retention.AuditLogDays
 		}
+		if p.Retention.WarmupMailDays != nil {
+			doc.Retention.WarmupMailDays = *p.Retention.WarmupMailDays
+		}
+		if p.Retention.WarmupEventDays != nil {
+			doc.Retention.WarmupEventDays = *p.Retention.WarmupEventDays
+		}
 	}
 	if p.Tracking != nil {
 		if p.Tracking.MachineWindowOpenSeconds != nil {
@@ -377,6 +434,9 @@ func (p Patch) Apply(doc Document) Document {
 		}
 		if p.Tracking.MachineWindowClickSeconds != nil {
 			doc.Tracking.MachineWindowClickSeconds = *p.Tracking.MachineWindowClickSeconds
+		}
+		if p.Tracking.MachineWindowProbableSeconds != nil {
+			doc.Tracking.MachineWindowProbableSeconds = *p.Tracking.MachineWindowProbableSeconds
 		}
 	}
 	if p.Deliverability != nil {

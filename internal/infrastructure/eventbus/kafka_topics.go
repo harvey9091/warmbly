@@ -4,7 +4,6 @@ package eventbus
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -73,6 +72,19 @@ func (b *KafkaBus) ensureTopics(ctx context.Context, names ...string) error {
 		case ckf.ErrTopicAlreadyExists:
 			// The steady state on every process after the first.
 		default:
+			// An authorization failure is not a missing topic. A managed
+			// cluster hands out a key with Write and Read and creates topics
+			// from its own console, so it answers this for a topic that is
+			// already there. Failing on it dropped every event and filed one
+			// issue per message forever, because the topic never became known.
+			// Remember it instead and let the produce decide: a topic that
+			// really is absent fails there, saying exactly that.
+			if isAuthorizationFailure(r.Error) {
+				log.Warn().
+					Str("topic", r.Topic).
+					Msg("eventbus kafka: not allowed to create topics on this cluster; assuming it owns them")
+				break
+			}
 			// A replication factor the cluster cannot satisfy is the usual
 			// cause on a single-broker development cluster, and the bare
 			// error does not say so.
@@ -93,13 +105,32 @@ func (b *KafkaBus) ensureTopics(ctx context.Context, names ...string) error {
 	return nil
 }
 
+// isAuthorizationFailure reports whether the broker refused the create because
+// this key may not make topics, rather than because the create itself was bad.
+//
+// The two codes are the answer; the description is a fallback because Confluent
+// Cloud substitutes its own "Authorization failed." for them and the code that
+// arrives with it is not documented. The fallback is the whole description and
+// not a substring on purpose: this waves a topic through as created, so an error
+// that merely mentions authorization must not be mistaken for a refusal to
+// create one, or the topic is remembered as present and every later publish to
+// it fails for a reason nothing reported.
+func isAuthorizationFailure(err ckf.Error) bool {
+	switch err.Code() {
+	case ckf.ErrTopicAuthorizationFailed, ckf.ErrClusterAuthorizationFailed:
+		return true
+	}
+	desc := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(err.String())), ".")
+	return desc == "authorization failed"
+}
+
 // unknownTopics returns specs for the names this process has not created yet.
 // Short critical section: no network happens under the lock.
 func (b *KafkaBus) unknownTopics(names []string) ([]ckf.TopicSpecification, error) {
 	b.topics.mu.Lock()
 	defer b.topics.mu.Unlock()
 	if b.topics.closed {
-		return nil, errors.New("eventbus kafka: bus closed")
+		return nil, ErrBusClosed
 	}
 	var missing []ckf.TopicSpecification
 	for _, n := range names {
@@ -126,7 +157,7 @@ func (b *KafkaBus) adminClient() (*ckf.AdminClient, error) {
 	// Close marks this before it clears the client, so a Publish that raced
 	// past the closed check cannot open a replacement nothing will shut.
 	if b.topics.closed {
-		return nil, errors.New("eventbus kafka: bus closed")
+		return nil, ErrBusClosed
 	}
 	if b.topics.admin != nil {
 		return b.topics.admin, nil

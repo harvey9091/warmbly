@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -60,6 +61,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/guardrail"
 	idempotencyapp "github.com/warmbly/warmbly/internal/app/idempotency"
 	"github.com/warmbly/warmbly/internal/app/inboxagent"
+	"github.com/warmbly/warmbly/internal/app/inboxtag"
 	"github.com/warmbly/warmbly/internal/app/instancecheck"
 	"github.com/warmbly/warmbly/internal/app/instanceconfig"
 	"github.com/warmbly/warmbly/internal/app/instancesettings"
@@ -100,6 +102,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/unibox"
 	"github.com/warmbly/warmbly/internal/app/updates"
 	"github.com/warmbly/warmbly/internal/app/user"
+	"github.com/warmbly/warmbly/internal/app/viewprefs"
 	warmupapp "github.com/warmbly/warmbly/internal/app/warmup"
 	"github.com/warmbly/warmbly/internal/app/warmupcontent"
 	"github.com/warmbly/warmbly/internal/app/webhook"
@@ -130,6 +133,7 @@ import (
 	"github.com/warmbly/warmbly/internal/pkg/generation"
 	"github.com/warmbly/warmbly/internal/pkg/geo"
 	"github.com/warmbly/warmbly/internal/pkg/idtoken"
+	"github.com/warmbly/warmbly/internal/pkg/typesafe"
 	"github.com/warmbly/warmbly/internal/repository"
 	"github.com/warmbly/warmbly/internal/scheduler"
 	"github.com/warmbly/warmbly/internal/tasks"
@@ -293,6 +297,9 @@ func main() {
 	var emailMessageMapForHandler repository.EmailMessageMapRepository
 	var emailSyncStateRepository repository.EmailSyncStateRepository
 	var trackedLinkRepository repository.TrackedLinkRepository
+	var inboxTagRepository repository.InboxTagRepository
+	var typeSafeClient *typesafe.Client
+	var unsubscribeLinkRepository repository.UnsubscribeLinkRepository
 	var customDomainRepository repository.CustomDomainRepository
 	// instanceSettings and the health registry are built after the handler
 	// dependencies, so the pool is hoisted out of the connection block.
@@ -311,6 +318,7 @@ func main() {
 	var oauthService *oauth.Service
 	var notificationService notification.Service
 	var twofaService twofa.Service
+	var viewPreferencesService viewprefs.Service
 	var contactRepoForHandler repository.ContactRepository
 	var attachmentRepoForHandler repository.AttachmentRepository
 	var emailImageRepoForHandler repository.EmailImageRepository
@@ -394,19 +402,29 @@ func main() {
 		// with a city, so a missing database is a cosmetic loss, not a reason to
 		// refuse to start: requiring a MaxMind licence to run APP_ENV=prod made
 		// self-hosting depend on an account nobody asked for.
-		var geoloc *geo.Client
-		geoloc, err = geo.New(geoPath)
-		if err != nil {
-			log.Printf("GeoIP database not found at %s; location lookups are disabled.", geoPath)
-			// geo.New returns a nil client on error; fall back to a usable,
-			// geo-disabled client so downstream callers never deref nil.
-			geoloc, _ = geo.New("")
-		}
+		//
+		// Nothing waits for it. The client starts answering Unknown and the
+		// database is swapped in when it lands, so a slow mirror costs city
+		// labels rather than the deploy's health check.
+		geoloc, _ := geo.New("")
+		geo.Start(ctx, geoloc, geoPath, cfg.LoadGeoDBURL(ctx))
 
 		s3, err := storage.NewFromEnv(ctx, awscfg, "main")
 		if err != nil {
 			errs.CaptureFatal(err)
 			log.Fatal(err)
+		}
+		// The brokered store asks the control plane to sign each operation, so
+		// on the control plane it is asking itself. It also cannot enumerate,
+		// which would leave every mailbox erasure stuck with the customer's
+		// mail still in the bucket. Refused here rather than discovered later
+		// as a queue that never drains.
+		//
+		// The empty prefix is a safe probe: every real backend refuses it with
+		// ErrUnsafePrefix before touching anything, and only the brokered one
+		// answers ErrUnsupported.
+		if _, err := s3.DeletePrefix(ctx, ""); errors.Is(err, storage.ErrUnsupported) {
+			log.Fatal("BLOB_PROVIDER=brokered is for fleet nodes, not the backend: it cannot delete a prefix, so mailbox erasure could never complete. Set s3 or filesystem.")
 		}
 		s3ForHandler = s3
 
@@ -429,6 +447,12 @@ func main() {
 			log.Fatal("Failed to run migrations: ", err)
 		}
 		log.Println("Database migrations completed")
+		// Once, not per warmup tick: the pools are fixed rows, and their absence
+		// (a data-only restore, a manual delete) otherwise fails every tick quietly.
+		if n, perr := instancecheck.CountSeededWarmupPools(ctx, primaryDB.Pool); perr == nil && n != 2 {
+			errs.CaptureException(fmt.Errorf("warmup pools missing: %d of 2 present; see the warmup_pools_missing health check", n))
+			log.Printf("WARNING: only %d of the 2 warmup pools exist; warmup cannot place any mailbox until they are restored", n)
+		}
 
 		primaryRedis, err := cfg.LoadPrimaryRedisEndpoint(ctx)
 		if err != nil {
@@ -607,6 +631,12 @@ func main() {
 		)
 		emailMessageMapForHandler = repository.NewEmailMessageMapRepository(primaryDB)
 		trackedLinkRepository = repository.NewTrackedLinkRepository(primaryDB.Pool)
+		inboxTagRepository = repository.NewInboxTagRepository(primaryDB.Pool)
+		if key := config.TypeSafeAPIKey(); key != "" {
+			// One TypeSafe client for every typed judgment in this process.
+			typeSafeClient = typesafe.NewClient(key)
+		}
+		unsubscribeLinkRepository = repository.NewUnsubscribeLinkRepository(primaryDB.Pool)
 		customDomainRepository = repository.NewCustomDomainRepository(primaryDB.Pool)
 		instanceChecksDB = primaryDB.Pool
 		instanceSettings = instancesettings.NewService(instancesettings.NewStore(primaryDB.Pool))
@@ -687,6 +717,11 @@ func main() {
 			generationClient = generation.NewClient(aiKey)
 		}
 		warmupContentService = warmupcontent.NewService(warmupContentRepo, generationClient)
+		if typeSafeClient != nil {
+			// Generated warmup threads are judged for pitches and filler before
+			// entering the bank.
+			warmupContentService.WireJudge(typeSafeClient)
+		}
 
 		// Writing assistant generator: the OpenAI-compatible provider implements
 		// WritingGenerator directly; the Anthropic connector delegates writing to
@@ -697,9 +732,10 @@ func main() {
 			writingGenerator = generation.NewAnthropicClient(aiKey)
 		}
 		creditRepository = repository.NewCreditRepository(primaryDB)
+		creditAutoTopUpAttemptRepository := repository.NewCreditAutoTopUpAttemptRepository(primaryDB)
 		aiSettingsRepository = repository.NewAISettingsRepository(primaryDB)
 		creditService = credits.NewService(creditRepository, aiSettingsRepository, cache)
-		webhookRepository := repository.NewWebhookRepository(primaryDB.Pool)
+		webhookRepository := repository.NewWebhookRepositorySealed(primaryDB.Pool, credEncrypter)
 		webhookService := webhook.NewService(webhookRepository)
 		webhookServiceForHandler = webhookService
 		webhookRepoForHandler = webhookRepository
@@ -762,6 +798,9 @@ func main() {
 			dailyThrottleService = dailythrottle.NewService(cache)
 		}
 		organizationService = organization.NewService(organizationRepository, subscriptionRepository, userRepostory, planRepository, dailyThrottleService)
+		// Every workspace gets its inbox labels the moment it exists, so the
+		// premade views in the inbox work before the first message arrives.
+		organizationService.WireWorkspaceSeeder(inboxtag.SeedLabels(repository.NewTagCategoryStore(primaryDB.Pool)))
 
 		// Plan-based webhook/integration fan-out throttle. The cap scales with
 		// the org's effective mailbox allowance (see WebhookDispatchLimit) so a
@@ -780,13 +819,23 @@ func main() {
 				errs.CaptureFatal(err)
 				log.Fatal(err)
 			}
-			stripeService = stripe.NewService(stripeCfg, subscriptionRepository, planRepository, workerAssignmentService, discountService)
+			stripeService = stripe.NewService(stripeCfg, subscriptionRepository, planRepository, workerAssignmentService, discountService, creditAutoTopUpAttemptRepository)
 		} else {
 			stripeService = stripe.NewDisabledService()
 		}
 
 		tokenService = token.NewService(primaryDB, tokenRepostory, cache, geoloc, authCfg.AuthSecret)
 		userService = user.NewService(userRepostory, cache)
+
+		// A login ban has to end the sessions the person already holds, or it
+		// does nothing until their tokens expire twelve hours later. Wired here
+		// rather than at construction because the admin service is built before
+		// the token service exists.
+		if withRevoker, ok := adminService.(interface {
+			WithSessionRevoker(admin.SessionRevoker)
+		}); ok && adminService != nil {
+			withRevoker.WithSessionRevoker(tokenService)
+		}
 
 		// Organization-wide audit trail (who did what, when, from where).
 		auditRepository := repository.NewAuditRepository(primaryDB.Pool)
@@ -899,7 +948,12 @@ func main() {
 		// Federated identities keyed on (issuer, subject). Without this,
 		// external sign-in resolves accounts by email alone, which is only safe
 		// for issuers that control their own email namespace.
-		authService.WireIdentities(repository.NewIdentityRepository(primaryDB.Pool))
+		identityRepository := repository.NewIdentityRepository(primaryDB.Pool)
+		authService.WireIdentities(identityRepository)
+		// A federated identity on a 2FA account links inside the 2FA verify.
+		if twofaService != nil {
+			twofaService.WireIdentityLinker(identityRepository)
+		}
 		// Where a signup came from, written onto the new org once it exists.
 		authService.WireAcquisition(organizationRepository)
 
@@ -1050,7 +1104,7 @@ func main() {
 		decisionLogRepo := repository.NewDecisionLogRepository(primaryDB)
 
 		// Refresh worker_capacity_view every minute so placement, rotation,
-		// scale and quarantine all see fresh rolling metrics. The materialized
+		// scale all see fresh rolling metrics. The materialized
 		// view is what aggregates the 1h windows across all workers.
 		go jobrun.Loop(ctx, "worker_capacity_refresh", time.Minute, false, workerRepository.RefreshWorkerCapacityView)
 
@@ -1063,11 +1117,6 @@ func main() {
 			WorkerRepo: workerRepository,
 			Decisions:  decisionLogRepo,
 		}).Run(ctx)
-		go (&fleet.QuarantineEvaluator{
-			WorkerRepo: workerRepository,
-			Decisions:  decisionLogRepo,
-		}).Run(ctx)
-
 		workerRepoForHandler = workerRepository
 
 		// Releases service. Off by default for self-host (no vendor image
@@ -1173,6 +1222,8 @@ func main() {
 		cloudLinkRepository := repository.NewCloudLinkRepository(primaryDB.Pool, credEncrypter)
 		emailService.WireCloudLink(cloudLinkRepository)
 		cloudLinkService = cloudlink.NewService(cloudLinkRepository, emailRepostory, emailService)
+		// Deleting a mailbox must also revoke its cloud-held credential.
+		emailService.WireCloudUnenroll(cloudLinkService)
 
 		rateLimitRepository := repository.NewRateLimitRepository(primaryDB)
 		rateLimitService = ratelimit.NewService(cache, rateLimitRepository)
@@ -1196,6 +1247,8 @@ func main() {
 		formService.SetContacts(contactService)
 		formService.SetRealtime(streamingPublisher)
 		formService.SetCaptcha(captcha)
+		// Per-form triage of submissions; off per form until switched on.
+		formService.SetTriage(typeSafeAsker(typeSafeClient))
 		formService.SetWebhooks(webhookServiceForHandler)
 		formService.SetContactReader(contactRepostory)
 		formService.SetGeo(geoloc)
@@ -1330,6 +1383,9 @@ func main() {
 		if aware, ok := emailSendService.(emailsend.OrgRiskAware); ok {
 			aware.WireOrgRisk(orgRiskRepository)
 		}
+		if aware, ok := emailSendService.(emailsend.TrackedLinksAware); ok {
+			aware.WireTrackedLinks(trackedLinkRepository)
+		}
 		composeService = compose.NewService(emailRepostory, repository.NewComposeRepository(primaryDB))
 		// uniboxService is constructed here (rather than alongside the
 		// other service constructors above) because cancel-scheduled
@@ -1337,6 +1393,9 @@ func main() {
 		// tasksClient isn't initialised until the Cloud Tasks config
 		// block runs.
 		uniboxService = unibox.NewService(cache, s3, uniboxRepository, taskRepository, tasksClient)
+		// Read and unread in the unibox are carried out to the mailbox itself,
+		// so a thread read here is read in Gmail too.
+		uniboxService.WireProviderRelay(eventsPublisher)
 
 		// Org AI skills (playbooks): CRUD for settings + prompt injection + the
 		// load_skill tool source.
@@ -1462,10 +1521,17 @@ func main() {
 				return res.Text, nil
 			})
 		}
+		if typeSafeClient != nil {
+			// The typed layer is asked before the LLM one, and answers from the
+			// tagger's stored verdict when the message has one.
+			replyclassify.SetTypedClassifier(inboxtag.ReplyClassifier(typeSafeClient, inboxTagRepository))
+		}
 		// In-app notifications: API reads/writes happen here; also wire the gate
 		// onto the backend's advanced service (deliverability webhooks can ingest
 		// here too).
 		notificationService = notification.NewService(repository.NewNotificationRepository(primaryDB.Pool), streamingPublisher)
+		// Saved list layouts: each member's columns and sort per dashboard list.
+		viewPreferencesService = viewprefs.NewService(repository.NewViewPreferencesRepository(primaryDB.Pool))
 		notificationService.WireDelivery(emailNotificationService, integrationServiceForHandler, userRepostory, organizationRepoForHandler)
 		// Mobile push (APNs): device registration always works; delivery only
 		// activates when the APNS_* env is configured. The Redis client backs
@@ -1488,11 +1554,23 @@ func main() {
 		// agent wired onto the advanced service so any reply processed here also
 		// drafts. Paid + opt-in checked inside; nil provider leaves it inert.
 		aiDraftRepo = repository.NewAIDraftRepository(primaryDB.Pool)
-		advancedService.WireInboxAgent(inboxagent.NewService(
+		inboxAgentService := inboxagent.NewService(
 			aiProvider, creditService, featureGateService,
 			organizationRepository, uniboxRepository, skillsService,
 			contactRepostory, aiDraftRepo, streamingPublisher,
-		))
+		)
+		if typeSafeClient != nil {
+			inboxAgentService.WireDraftGate(inboxtag.NewDraftGate(inboxTagRepository))
+		}
+		advancedService.WireInboxAgent(inboxAgentService)
+		// The classified intent lands on the contact's progress for the
+		// reply_intent branch condition.
+		advancedService.WireInboxTags(inboxTagRepository)
+		if typeSafeClient != nil {
+			// A bounce whose reason does not name the recipient is classified, so a
+			// reputation or policy block does not suppress a good address.
+			advancedService.WireBounceJudge(typeSafeClient)
+		}
 		emailSender := tasks.NewEmailSender(emailRepostory, eventsPublisher)
 		// Never hand a send to a worker that stopped heartbeating: nothing
 		// would execute it and nothing would report it, so the step would
@@ -1525,7 +1603,7 @@ func main() {
 			trackedLinkRepository,
 			integrationServiceForHandler, // AutomationRunner for campaign run_automation steps
 		)
-		tasksService.SetUnsubscribeLinks(unsubSigner)
+		tasksService.SetUnsubscribeLinks(unsubSigner, unsubscribeLinkRepository)
 		// Sequence action nodes that pin a contact into or out of a segment,
 		// both on the scheduled path (tasks) and the instant reply path (advanced).
 		if aware, ok := tasksService.(tasks.SegmentAware); ok {
@@ -1642,11 +1720,23 @@ func main() {
 			organizationRepository,
 			userRepostory,
 			emailNotificationService,
+			eventsPublisher,
 			os.Getenv("FRONTEND_BASE_URL"),
 		)
 		dangerZoneJob := jobs.NewDangerZoneJob(dangerZoneService)
 		dangerZoneScheduler := jobs.NewDangerZoneScheduler(dangerZoneJob, 1*time.Hour)
 		go dangerZoneScheduler.Start(ctx)
+
+		// Finish deleting a mailbox: revoke its OAuth grant at Google, and
+		// remove the message bodies it synced from the blob store. Both
+		// outlive the transaction that deleted the rows, so both are queued by
+		// it and worked off here. A minute, because this is the "delete my
+		// data" path and the provider's clock is the one that matters.
+		go jobs.NewMailboxErasureJob(
+			repository.NewMailboxErasureRepository(primaryDB),
+			s3,
+			credEncrypter,
+		).Start(ctx, 1*time.Minute)
 
 		// Workspace archives: export a whole organization to a portable file
 		// and import one back, so a workspace can move between instances.
@@ -1792,6 +1882,9 @@ func main() {
 			// Normalized: the CNAME value the advisor hands over has to be the
 			// bare host, whatever shape TRACKING_DOMAIN was set in.
 			advisor.WithTrackingHost(config.TrackingHostname()),
+			// Each step's copy is judged for how it reads to its recipient,
+			// cached by the hash of the words so unchanged copy costs nothing.
+			advisor.WithCopyJudge(typeSafeAsker(typeSafeClient), repository.NewCopyJudgmentRepository(primaryDB.Pool)),
 			// So the domain-auth finding reports this install's actual gate
 			// (enforced or not, and the grace window) instead of a default one.
 			advisor.WithDomainAuthPolicy(instanceSettings))
@@ -1887,11 +1980,12 @@ func main() {
 		TagService:      tagService,
 		CategoryService: categoryService,
 
-		TzService:           tzService,
-		SocketService:       socketService,
-		TasksService:        tasksService,
-		NotificationService: notificationService,
-		TwoFAService:        twofaService,
+		TzService:              tzService,
+		SocketService:          socketService,
+		TasksService:           tasksService,
+		NotificationService:    notificationService,
+		TwoFAService:           twofaService,
+		ViewPreferencesService: viewPreferencesService,
 
 		// API Keys
 		APIKeyService: apiKeyService,
@@ -1950,6 +2044,7 @@ func main() {
 		CreditService:    creditService,
 		WritingGenerator: writingGenerator,
 		AIProvider:       aiProvider,
+		TypeSafe:         typeSafeAsker(typeSafeClient),
 		AISearch:         aiSearch,
 		AITools:          aiToolRegistry,
 		AIAgentService:   aiAgentService,
@@ -1990,6 +2085,8 @@ func main() {
 		EmailMessageMap:        emailMessageMapForHandler,
 		EmailSyncState:         emailSyncStateRepository,
 		TrackedLinks:           trackedLinkRepository,
+		InboxTagRepo:           inboxTagRepository,
+		UnsubscribeTickets:     unsubscribeLinkRepository,
 		CustomDomains:          customDomainRepository,
 		WebsiteTrackingService: websiteTrackingService,
 		UserRepo:               userRepoForHandler,
@@ -2038,7 +2135,7 @@ func main() {
 		AppEnv:         os.Getenv("APP_ENV"),
 	}
 
-	errs.CaptureMessage("Starting the backend on " + addr)
+	log.Printf("Starting the backend on %s", addr)
 
 	router := api.Run(h, m, oidcH, addr, ginMode, allowedOrigins)
 
@@ -2204,4 +2301,13 @@ func bootstrapInstanceSettings(ctx context.Context, svc instancesettings.Service
 	if applied {
 		log.Printf("instance settings seeded from WARMBLY_SETTINGS_BOOTSTRAP")
 	}
+}
+
+// typeSafeAsker turns a possibly-nil client into a possibly-nil interface, so
+// a handler's nil check means "not configured" rather than "a typed nil".
+func typeSafeAsker(c *typesafe.Client) typesafe.Asker {
+	if c == nil {
+		return nil
+	}
+	return c
 }

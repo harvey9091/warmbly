@@ -11,7 +11,7 @@ import (
 )
 
 func (s *tokenService) RefreshToken(ctx context.Context, refreshToken string) (*models.Token, *errx.Error) {
-	t, err := s.VerifyToken(refreshToken)
+	t, err := s.VerifyTokenFor(PurposeRefresh, refreshToken)
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +43,7 @@ func (s *tokenService) RefreshToken(ctx context.Context, refreshToken string) (*
 		return nil, errx.InternalError()
 	}
 
-	newAccessToken, xerr := s.GenerateToken(sess.UserID, sess.ID, "", accessNonce, issuedAt, accessTokenExpiresAt)
+	newAccessToken, xerr := s.GenerateTokenFor(PurposeAccess, sess.UserID, sess.ID, "", accessNonce, issuedAt, accessTokenExpiresAt)
 	if xerr != nil {
 		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
@@ -56,13 +56,24 @@ func (s *tokenService) RefreshToken(ctx context.Context, refreshToken string) (*
 		return nil, errx.InternalError()
 	}
 
-	newRefreshToken, xerr := s.GenerateToken(sess.UserID, sess.ID, "", refreshNonce, issuedAt, refreshTokenExpiresAt)
+	// Explicitly PurposeRefresh. GenerateToken defaults to PurposeAccess, so
+	// minting the rotated refresh token through it produced one this very
+	// function would refuse on the next call: the session survived one refresh
+	// and died on the second, about a day after every sign-in.
+	newRefreshToken, xerr := s.GenerateTokenFor(PurposeRefresh, sess.UserID, sess.ID, "", refreshNonce, issuedAt, refreshTokenExpiresAt)
 	if xerr != nil {
 		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 
 	if err := s.tokenRepository.RefreshToken(ctx, sess.ID, t.Nonce, accessNonce, refreshNonce, issuedAt); err != nil {
+		// No row matched means the nonce was already rotated, which is two
+		// tabs refreshing at once, not a fault. It has to stay the 401 that
+		// tells the client to re-authenticate: reporting it and answering 500
+		// paged on every lost race and left the client with nothing to do.
+		if err == errx.ErrToken {
+			return nil, err
+		}
 		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}

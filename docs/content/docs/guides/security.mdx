@@ -15,23 +15,35 @@ Everything here lives under **Settings > Security** and concerns signing in to W
 
 A first sign-in with a new address via Google or Apple creates your account, workspace, and free trial automatically.
 
+If the address already has a Warmbly account with a password, the first Google, Apple or single sign-on with it asks for that password before the provider is attached to the account. The provider confirms the address is yours; the password confirms the account is. Once linked, later sign-ins with that provider go straight through. An account that never set a password (created through a provider or an invitation) is linked on the first sign-in.
+
+Accounts created through an external sign-in provider have no password initially. Trying password sign-in returns the same invalid-credentials response as an incorrect password. Continue with your provider, or use **Forgot password** to set a password before signing in with it. A reset link works once and only for the password it was requested against: changing your password by any route, including using another reset link, makes every earlier link invalid before it expires.
+
 <Callout type="info" title="Passwordless by design">
 A passkey is tied to your device and unlocked with biometrics or a PIN, so it already proves both something you have and something you are or know. That is why it skips the emailed code.
 </Callout>
 
 ## Two-factor authentication
 
-2FA (TOTP) adds a rotating 6-digit code to every password sign-in, so a stolen password alone is not enough. Any standard authenticator works: Google Authenticator, 1Password, Authy.
+2FA (TOTP) adds a rotating 6-digit code to every password sign-in, so a stolen password alone is not enough. Any standard authenticator works: Google Authenticator, Microsoft Authenticator, 1Password, Authy, Bitwarden.
 
-**Enable 2FA** runs three steps: copy the setup secret into your authenticator, enter a code to confirm it works (it verifies as soon as the sixth digit lands), and save your one-time recovery codes.
+**Set up** walks through three steps:
+
+1. **Scan.** Point your authenticator at the QR code. If you cannot scan (a desktop password manager, say), open **Can't scan it? Enter the key manually** and copy the setup key; the account, issuer, digit count, interval and algorithm are listed beside it for apps that ask.
+2. **Verify.** Type the 6-digit code the app now shows for Warmbly. It verifies as soon as the sixth digit lands, and a wrong code clears the field so you can try the next one.
+3. **Save codes.** Ten recovery codes appear once. **Download** saves them as a text file, **Copy** puts them on the clipboard, and **Print** opens a printable sheet. The wizard cannot be closed until you confirm you have saved them.
 
 <Callout type="warn" title="Recovery codes are shown only once">
-They are displayed a single time during setup, each works once, and they are your way back in if you lose your authenticator. Store them in a password manager before closing the wizard; **Copy all** grabs them at once.
+Each works once, and they are your way back in if you lose your authenticator. Store them in a password manager before closing the wizard. With no codes and no authenticator you are locked out of your account.
 </Callout>
+
+Once 2FA is on, the Security page shows when it was enabled and how many recovery codes are left. **Regenerate** issues a fresh set of ten after a current code; every previous code stops working the moment the new ones are shown. The row turns amber when three or fewer remain.
 
 At sign-in, the code submits automatically once six digits are in. Without your authenticator, choose **Use a recovery code**.
 
-Disabling asks for a current code or a recovery code first. With 2FA off you are protected only by your password plus the emailed code, and setting it up again issues a fresh secret and new recovery codes, invalidating the old ones.
+Each code works once. An authenticator code stays valid for about a minute so a slow connection still works, but once it has signed you in, that same code is spent and cannot be used again.
+
+**Turn off** asks for a current code or a recovery code first, then an explicit confirmation. With 2FA off you are protected only by your password plus the emailed code, your recovery codes stop working, and setting it up again issues a fresh secret and new recovery codes.
 
 ## Passkeys
 
@@ -45,6 +57,21 @@ Each entry shows when it was added and last used, and can be renamed or removed.
 Unsynced passkeys live only on the device that created them. On a device without one, Warmbly says none was found and you sign in with your password, then add a passkey there.
 </Callout>
 
+## Confirming sensitive changes
+
+Some changes ask you to confirm it is you even though you are already signed in:
+
+- creating an API key
+- adding or removing a passkey
+- transferring a workspace to someone else
+- scheduling a workspace or account for deletion
+
+Enter your password or a code from your authenticator, whichever your account has. The confirmation lasts five minutes, so a run of related changes only asks once.
+
+If you signed up with Google, Apple or your company's single sign-on, your account may have neither a password nor 2FA yet. There is nothing to confirm with in that case, so turn on 2FA first; the prompt says so rather than refusing a password you never set.
+
+This exists because the things on that list either hand out a credential that outlives the session that made it, or cannot be undone from your side. Someone who got hold of a signed-in browser should not be able to do any of them without knowing something you know.
+
 ## Sessions
 
 Every signed-in device appears under **Sessions** with its device (`Chrome on macOS`), location where known, sign-in method (Email, Google, Apple, or Passkey), and last activity. Your current device is tagged **This device**.
@@ -55,9 +82,21 @@ Every signed-in device appears under **Sessions** with its device (`Chrome on ma
 Sign out the session, change your password, and make sure 2FA is on. Signing out other sessions is the fastest way to cut off access.
 </Callout>
 
+## Choosing a password
+
+A password has to be between 8 and 128 characters, and it is checked against a list of the 100,000 most commonly breached passwords published by the UK National Cyber Security Centre. If yours appears there, it is refused and you are told why. The check is case-insensitive, so capitalising the first letter of a known password does not get past it.
+
+There is no rule about mixing upper case, digits and symbols. A long passphrase you can remember beats a short one with a symbol bolted on, which is what current guidance from NIST and the NCSC both say. The dashboard shows a strength meter as you type.
+
+Repeated wrong passwords are counted per account, not just per device, so guessing one account from many addresses does not buy an attacker more attempts. After ten failures the account stops accepting password attempts for an hour. Signing in correctly clears the count.
+
+## Names
+
+Your name and your workspace's name appear in emails Warmbly sends to other people, such as invitations. They are plain text only: a name that contains a link, a web address, an email address or invisible formatting characters is refused, and the field tells you why. The full rules are in [Name refusals](/api/error-codes/#name-refusals).
+
 ## Password and alerts
 
-Change your password under **Password**: current password, then a new one of at least 12 characters with upper and lower case and a number. **Changing it signs out every other device automatically**, while the device you change it on stays in. Accounts that only use Google, Apple, or a passkey have no password to change.
+Change your password under **Password**: current password, then a new one. **Changing it ends every session, including the one you change it from.** The device you are on is signed straight back in with a new session, so you notice nothing, while anything that held your old session, on any device, is signed out. Accounts that only use Google, Apple, or a passkey have no password to change.
 
 **Sign-in alerts** notify you when your account is accessed from a new browser and OS combination, naming the device and location with a reminder to act if it was not you. They appear in your in-app feed by default; enable email under **Settings > Notifications**, Security section, Email channel. Your first sign-in is never alerted, as there is nothing to compare against.
 

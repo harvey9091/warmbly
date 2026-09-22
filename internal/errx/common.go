@@ -26,20 +26,28 @@ var (
 	ErrToken = New(Unauthorized, "Invalid or expired token.")
 	ErrAuth  = New(Unauthorized, "Missing or invalid Authorization header.")
 
-	ErrUser        = New(BadRequest, "User doesn't exists.")
-	ErrPassword    = New(BadRequest, "Password must be at least 8 characters long.")
-	ErrEmail       = New(BadRequest, "Invalid email address.")
-	ErrCredentials = New(BadRequest, "Invalid email or password.")
-	ErrSession     = New(BadRequest, "Invalid or expired session.")
-	ErrCodeLimit   = New(BadRequest, "Too many attempts. Start a new session and try again later.")
-	ErrCode        = New(BadRequest, "Invalid or expired verification code.")
-	ErrAuthLimit   = New(BadRequest, "Too many attempts, please try again later.")
+	ErrUser     = New(BadRequest, "User doesn't exists.")
+	ErrPassword = New(BadRequest, "Password must be at least 8 characters long.")
+	// ErrPasswordTooLong and ErrPasswordBreached separate the two other ways a
+	// password is refused, so nobody is told to lengthen a 40-character
+	// passphrase that was rejected for appearing in a breach corpus.
+	ErrPasswordTooLong  = New(BadRequest, "Password must be at most 128 characters long.")
+	ErrPasswordBreached = NewWithIdentifier(BadRequest, "password_breached", "This password appears in a public list of breached passwords. Choose one that does not.")
+	ErrEmail            = New(BadRequest, "Invalid email address.")
+	ErrCredentials      = New(BadRequest, "Invalid email or password.")
+	ErrSession          = New(BadRequest, "Invalid or expired session.")
+	ErrCodeLimit        = New(BadRequest, "Too many attempts. Start a new session and try again later.")
+	ErrCode             = New(BadRequest, "Invalid or expired verification code.")
+	ErrAuthLimit        = New(BadRequest, "Too many attempts, please try again later.")
 
 	// ErrMailUndeliverable separates "we could not send you the email" from
 	// every other internal fault. It used to be a bare 500, which on a
 	// self-hosted install with no working relay is the single least helpful
 	// thing to show someone who cannot log in.
-	ErrMailUndeliverable = New(Internal, "We couldn't send the email. If you administer this server, check the mail transport configuration.")
+	// Public: this is the one internal fault whose message the person reading
+	// it can act on, and blanking it leaves a self-hoster with a broken relay
+	// no way to tell that is the problem.
+	ErrMailUndeliverable = NewPublic(Internal, "We couldn't send the email. If you administer this server, check the mail transport configuration.")
 
 	// Registration refusals. Each names the deployment policy rather than the
 	// person, and carries its own identifier so a client can branch on the
@@ -66,6 +74,11 @@ var (
 	// workspace.
 	ErrSSOBrowser = NewWithIdentifier(Unauthorized, "sso_wrong_browser",
 		"Finish signing in in the browser you started in. Open the sign-in page there and try again.")
+
+	// ErrSSOLinkExpired ends a link challenge: an unknown or expired pending
+	// token, or too many wrong passwords. The client starts the sign-in over.
+	ErrSSOLinkExpired = NewWithIdentifier(BadRequest, "sso_link_expired",
+		"That sign-in request expired or had too many attempts. Start the sign-in again.")
 
 	ErrExternalCode     = New(BadRequest, "Invalid or expired code, please try again.")
 	ErrExternalEmail    = New(BadRequest, "Invalid or unverified email address.")
@@ -102,8 +115,12 @@ var (
 	ErrGroupMax   = New(BadRequest, "You reached the maximum amount.")
 
 	// Email
-	ErrEmailCredentials     = New(BadRequest, "Invalid email credentials.")
-	ErrEmailValidation      = New(BadRequest, "Deadline exceed, try again later.")
+	ErrEmailCredentials = New(BadRequest, "Invalid email credentials.")
+	// Raised when no worker reported back on a credential check at all. The
+	// per-leg timeout, where a worker did answer and names the server that
+	// stayed silent, is built in the email service under the same code.
+	ErrEmailValidation = NewWithIdentifier(BadRequest, "mailbox_validation_timeout",
+		"Warmbly's worker did not report back on this mailbox in time, so the mail server was not tested. Nothing was saved. Try again in a moment, and contact support if it keeps happening.")
 	ErrEmailOnboardProvider = New(BadRequest, "Unsupported email provider. Use 'gmail', 'outlook', or 'smtp_imap'.")
 	// Raised when the provider is supported but this deployment has no OAuth
 	// client for it. Self-host only: the hosted product always has both set. The
@@ -113,6 +130,12 @@ var (
 		"Gmail is not configured on this deployment. Set BOX_GOOGLE_CLIENT_ID and BOX_GOOGLE_CLIENT_SECRET in your .env, then restart. See https://docs.warmbly.com/development/deployment-guide/#connect-mailboxes")
 	ErrEmailOnboardOutlookNotConfigured = NewWithIdentifier(ServiceUnavailable, "mailbox_provider_not_configured",
 		"Microsoft 365 is not configured on this deployment. Set BOX_OUTLOOK_CLIENT_ID and BOX_OUTLOOK_CLIENT_SECRET in your .env, then restart. See https://docs.warmbly.com/development/deployment-guide/#connect-mailboxes")
+	// Raised when a new Gmail mailbox asks for Google sign-in while the
+	// deployment routes new Gmail mailboxes through an app password instead
+	// (config.GoogleOAuthConnect). Re-authorizing an existing mailbox never
+	// hits this.
+	ErrEmailOnboardGoogleOAuthDisabled = NewWithIdentifier(Forbidden, "mailbox_gmail_oauth_disabled",
+		"New Gmail mailboxes connect with an app password over IMAP and SMTP on this deployment, not with Google sign-in. Mailboxes already connected with Google sign-in keep working and can still be re-authorized. See https://docs.warmbly.com/guides/mailboxes/#gmail-and-google-workspace")
 	ErrEmailOnboardState         = New(BadRequest, "Invalid or expired onboarding state.")
 	ErrEmailOnboardCode          = New(BadRequest, "Authorization code is missing or invalid.")
 	ErrEmailOnboardExchange      = New(BadRequest, "Could not exchange the authorization code with the provider.")
@@ -150,12 +173,32 @@ var (
 	ErrEmailWarmupMax            = New(BadRequest, "Warmup max amount must be between 0 and 100.")
 	ErrEmailWarmupIncrease       = New(BadRequest, "Warmup increase amount must be between 0 and 100.")
 	ErrEmailReplyRate            = New(BadRequest, "Warmup reply rate must be between 0 and 100.")
+	ErrEmailWarmupPlacement      = New(BadRequest, "Warmup filing must be one of: folder, inbox, archive.")
+	ErrEmailWarmupFolder         = New(BadRequest, fmt.Sprintf("Warmup folder must be at most %d characters and contain no folder separators or control characters.", config.WarmupFolderMaxLen))
+	ErrEmailWarmupRetention      = New(BadRequest, fmt.Sprintf("Warmup retention must be between %d and %d days, or 0 to follow the instance setting.", config.WarmupMailRetentionDaysMin, config.RetentionDaysMax))
 
 	// Disconnecting a mailbox has to reach the machine syncing it before the
 	// row goes: afterwards there is no assignment left to read and nothing that
 	// can repair a missed removal, so the mailbox would sync on forever.
 	ErrEmailWorkerUnreachable = NewWithIdentifier(ServiceUnavailable, "mailbox_worker_unreachable",
 		"This mailbox could not be disconnected right now because the machine syncing it could not be reached. Nothing was removed, so try again in a moment.")
+
+	// Sending identity: the provider's own send-as list is the only authority
+	// on which addresses a mailbox may use, so a choice outside it is refused
+	// here rather than at send time, where the provider's refusal names
+	// nothing the customer could act on.
+	ErrEmailSendAsUnsupported = NewWithIdentifier(BadRequest, "mailbox_send_as_unsupported",
+		"This mailbox's provider does not expose send-as addresses. Only Gmail and Google Workspace mailboxes do.")
+	ErrEmailSendAsUnknown = NewWithIdentifier(BadRequest, "mailbox_send_as_unknown",
+		"That address is not one your provider has verified this mailbox to send as. Refresh the list, or add and verify the address in your provider first.")
+	// Reading a mailbox's sending identity is an account operation and runs on
+	// the worker holding the mailbox, so it is unavailable exactly when that
+	// machine is: mid-migration, just after a restart, or while the mailbox is
+	// unplaced. Nothing was changed, and the next attempt is the fix.
+	ErrEmailIdentityUnavailable = NewWithIdentifier(ServiceUnavailable, "mailbox_identity_unavailable",
+		"Warmbly could not reach the machine running this mailbox, so its sending addresses were not refreshed. Nothing was changed; try again in a moment.")
+	ErrEmailSignatureTooLarge = NewWithIdentifier(BadRequest, "mailbox_signature_too_large",
+		fmt.Sprintf("The signature on this mailbox is larger than Warmbly stores (%d characters). Shorten it in your provider and import it again.", config.SignatureHTMLMax))
 
 	// Campaign
 	ErrCampaignName        = New(BadRequest, "Campaign name length must be between 3 and 50 characters.")
@@ -178,6 +221,11 @@ var (
 	// Contact
 	ErrContactSerialize = New(BadRequest, "Failed to serialize contact.")
 	ErrContactSize      = New(BadRequest, "Contact size cannot be bigger than 10KB.")
+	// A contact's address is unique within the workspace, so an edit that
+	// collides with another contact is refused rather than merged: merging two
+	// people's campaign progress is not something an edit can undo.
+	ErrContactEmailTaken = NewWithIdentifier(Conflict, "contact_email_taken",
+		"Another contact already uses this email address.")
 
 	// Unibox
 	ErrUniboxLimit = New(BadRequest, fmt.Sprintf("Limit must be between %d and %d.", config.UniboxLimitMin, config.UniboxLimitMax))

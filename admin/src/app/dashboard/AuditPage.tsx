@@ -183,7 +183,7 @@ export default function AuditPage() {
                             {(data?.data ?? []).map((row) => (
                                 <Row key={row.id} row={row} />
                             ))}
-                            {data && data.data.length === 0 && (
+                            {data && !data.data?.length && (
                                 <tr>
                                     <td colSpan={6} className="text-center text-muted-foreground py-8 text-sm">
                                         No audit entries match these filters.
@@ -213,10 +213,10 @@ export default function AuditPage() {
                         size="sm"
                         variant="outline"
                         onClick={() => {
-                            const c = data?.pagination?.cursor;
+                            const c = data?.pagination?.next_cursor;
                             if (c) setCursors((prev) => [...prev, c]);
                         }}
-                        disabled={!data?.pagination?.cursor}
+                        disabled={!data?.pagination?.next_cursor}
                     >
                         Next
                     </Button>

@@ -135,6 +135,15 @@ func (r *emailAccountErrorRepository) CreateOnce(ctx context.Context, data *Crea
 		// The row the caller wanted is already on screen, unresolved.
 		return nil, nil
 	}
+	// The mailbox was deleted between the worker relaying the failure and this
+	// write. Nothing is left to attach the error to and nobody can read it, so
+	// declining is the same answer as the duplicate above rather than an
+	// incident: every one of these events names an id a worker held minutes
+	// ago, so a deleted mailbox with a busy sync loop reported one of these a
+	// minute.
+	if isForeignKeyViolation(err) {
+		return nil, nil
+	}
 	if err != nil {
 		db.CaptureError(err, query, params, "queryrow")
 		return nil, errx.InternalError()

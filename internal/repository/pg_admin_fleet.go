@@ -81,11 +81,11 @@ func (r *adminFleetRepository) Capacity(ctx context.Context) ([]models.AdminFlee
 		if row.Tags == nil {
 			row.Tags = []string{}
 		}
-		row.EffectiveCapacity = row.BaseCapacity * row.HealthMultiplier * row.AgeMultiplier
-		if row.EffectiveCapacity <= 0 {
-			row.EffectiveCapacity = 1
-		}
-		row.Utilization = row.LoadScore / row.EffectiveCapacity
+		row.EffectiveCapacity, row.Utilization = models.WorkerOperationalCapacity(
+			row.LoadScore,
+			row.BaseCapacity,
+			row.HealthMultiplier,
+		)
 		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {

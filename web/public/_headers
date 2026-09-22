@@ -1,0 +1,15 @@
+# Security response headers for the Cloudflare Pages deployment of the
+# dashboard. The nginx image carries the same set in
+# nginx-security-headers.conf; both exist because the hosted service serves the
+# frontends from Pages while a self-host serves them from the image.
+#
+# No script-src or connect-src: the API origin is runtime configuration
+# (config.js), so an allowlist fixed at build time would break an instance that
+# points the dashboard elsewhere.
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=()
+  Content-Security-Policy: frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'
+  Strict-Transport-Security: max-age=31536000; includeSubDomains

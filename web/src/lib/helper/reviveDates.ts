@@ -10,6 +10,10 @@ export default function reviveDates<T>(obj: T): T {
     }
 
     if (typeof obj === "object") {
+        // Blob, Date, File, and other class instances are already fully decoded.
+        const prototype = Object.getPrototypeOf(obj)
+        if (prototype !== Object.prototype && prototype !== null) return obj
+
         const entries = Object.entries(obj as Record<string, unknown>).map(
             ([key, value]) => [key, reviveDates(value)]
         )

@@ -38,6 +38,7 @@ type TrackingConsumer struct {
 	dedupeRepo           repository.TrackingDedupeRepository
 	trackedLinks         repository.TrackedLinkRepository
 	linkClicks           repository.LinkClickRepository
+	emailRepo            repository.EmailRepository
 	// afterBurstWindow runs fn once the click burst window has passed, so a
 	// human click's side effects wait for the burst rule's verdict.
 	afterBurstWindow func(fn func())
@@ -90,6 +91,9 @@ type TrackingPolicySource interface {
 // WireTrackingPolicy attaches the instance settings the machine-window rule
 // reads its windows from.
 func (tc *TrackingConsumer) WireTrackingPolicy(src TrackingPolicySource) { tc.tracking = src }
+
+// WireDirectMail attaches mailbox metadata used for org-scoped direct-mail events.
+func (tc *TrackingConsumer) WireDirectMail(repo repository.EmailRepository) { tc.emailRepo = repo }
 
 // machineWindows are the windows the next classification uses. An unwired
 // source falls back to the compiled defaults, which is what the consumer runs
@@ -281,8 +285,10 @@ func (tc *TrackingConsumer) HandleTrackingEvent(ctx context.Context, event *even
 		return nil
 	}
 	if campaignTask == nil || campaignTask.CampaignID == nil || campaignTask.ContactID == nil || campaignTask.SequenceID == nil {
-		// Task not found, not a campaign task, or missing its linkage: skip
-		return nil
+		// Not a campaign send. It may still be a direct one the mailbox opted
+		// into tracking, which has no contact or sequence to classify against
+		// and so takes a much simpler path.
+		return tc.handleDirectTrackingEvent(ctx, taskID, event)
 	}
 	campaignID, contactID, sequenceID := *campaignTask.CampaignID, *campaignTask.ContactID, *campaignTask.SequenceID
 
@@ -299,11 +305,20 @@ func (tc *TrackingConsumer) HandleTrackingEvent(ctx context.Context, event *even
 	var machine bool
 	var reason string
 	windows := tc.machineWindows(ctx)
+	seen := engagement{
+		userAgent: event.UserAgent,
+		scanner:   event.Scanner,
+		probable:  event.ScannerProbable,
+		sentAt:    sentAt,
+		at:        at,
+	}
 	switch event.EventType {
 	case events.EventTypeEmailOpened:
-		machine, reason = classifyOpen(event.UserAgent, event.Scanner, sentAt, at, windows.OpenWindow())
+		kind := windows.OpenWindow()
+		machine, reason = classifyOpen(seen, kind, windows.ProbableWindow(kind))
 	case events.EventTypeEmailClicked:
-		machine, reason = classifyClick(event.UserAgent, event.Scanner, sentAt, at, windows.ClickWindow())
+		kind := windows.ClickWindow()
+		machine, reason = classifyClick(seen, kind, windows.ProbableWindow(kind))
 	default:
 		// Unknown event type, skip
 		return nil
@@ -359,7 +374,7 @@ func (tc *TrackingConsumer) HandleTrackingEvent(ctx context.Context, event *even
 			// A human open proves the mailbox is live; a prefetch proves
 			// only that a proxy fetched an image.
 			if tc.evidence != nil {
-				tc.evidence.RecordEvidence(ctx, contactID, "opened", sequenceID.String(), "")
+				tc.evidence.RecordEvidence(ctx, contactID, models.Step(&campaignID, &sequenceID), "opened", sequenceID.String(), "")
 			}
 		}
 	case events.EventTypeEmailClicked:
@@ -379,7 +394,7 @@ func (tc *TrackingConsumer) HandleTrackingEvent(ctx context.Context, event *even
 			} else if err == nil {
 				instantKind = "click"
 				if tc.evidence != nil {
-					tc.evidence.RecordEvidence(ctx, contactID, "clicked", sequenceID.String(), "")
+					tc.evidence.RecordEvidence(ctx, contactID, models.Step(&campaignID, &sequenceID), "clicked", sequenceID.String(), "")
 				}
 			}
 		}
@@ -461,7 +476,7 @@ func (tc *TrackingConsumer) finishHumanClick(task *repository.CampaignTask, even
 		tc.publishTrackingEvent(ctx, task, event, true, label, origin)
 	} else {
 		if tc.evidence != nil {
-			tc.evidence.RecordEvidence(ctx, *task.ContactID, "clicked", task.SequenceID.String(), "")
+			tc.evidence.RecordEvidence(ctx, *task.ContactID, models.Step(task.CampaignID, task.SequenceID), "clicked", task.SequenceID.String(), "")
 		}
 		if tc.advancedService != nil {
 			tc.advancedService.FireInstantActions(ctx, *task.CampaignID, *task.ContactID, *task.SequenceID, "click")
@@ -636,10 +651,15 @@ func (tc *TrackingConsumer) logOpen(ctx context.Context, task *repository.Campai
 func (tc *TrackingConsumer) originOf(event *events.TrackingEvent) models.EngagementOrigin {
 	var o models.EngagementOrigin
 	if event.UserAgent != nil && strings.TrimSpace(*event.UserAgent) != "" {
-		ua := useragent.Parse(*event.UserAgent)
-		o.OS, o.Browser, o.BrowserVersion = ua.OS, ua.Name, ua.Version
-		o.DeviceType = deviceType(ua)
-		o.Client = clientName(*event.UserAgent)
+		if isBareWebKit(event.UserAgent) {
+			// The signature's Macintosh platform belongs to the proxy, not the recipient.
+			o.Client = clientName(*event.UserAgent)
+		} else {
+			ua := useragent.Parse(*event.UserAgent)
+			o.OS, o.Browser, o.BrowserVersion = ua.OS, ua.Name, ua.Version
+			o.DeviceType = deviceType(ua)
+			o.Client = clientName(*event.UserAgent)
+		}
 	}
 	if event.ClientIP != nil && tc.geo != nil {
 		if addr, err := netip.ParseAddr(strings.TrimSpace(*event.ClientIP)); err == nil && !addr.IsPrivate() && !addr.IsLoopback() {
@@ -763,4 +783,78 @@ func hashURL(u string) string {
 	}
 	h := sha256.Sum256([]byte(u))
 	return hex.EncodeToString(h[:8])
+}
+
+// handleDirectTrackingEvent records an open or a click on a hand-written send.
+//
+// Deliberately thinner than the campaign path. There is no contact, sequence or
+// step progress to update, nothing to feed the automation engine, and no
+// per-link row: email_link_clicks requires a campaign, contact and sequence,
+// and every campaign analytics query joins on all three. The repository writes
+// are no-ops unless the send was actually tracked, so a task that turns out to
+// be neither kind costs one UPDATE that matches nothing.
+func (tc *TrackingConsumer) handleDirectTrackingEvent(ctx context.Context, taskID uuid.UUID, event *events.TrackingEvent) error {
+	if tc.taskRepo == nil {
+		return nil
+	}
+	task, err := tc.taskRepo.GetTask(ctx, taskID)
+	if err != nil || task == nil || task.TaskType != "email" {
+		return nil
+	}
+	at := eventTime(event.Timestamp)
+	seen := engagement{
+		userAgent: event.UserAgent,
+		scanner:   event.Scanner,
+		probable:  event.ScannerProbable,
+		sentAt:    task.CompletedAt,
+		at:        at,
+	}
+	windows := tc.machineWindows(ctx)
+
+	switch event.EventType {
+	case events.EventTypeEmailOpened:
+		kind := windows.OpenWindow()
+		machine, reason := classifyOpen(seen, kind, windows.ProbableWindow(kind))
+
+		changed, err := tc.taskRepo.MarkDirectOpened(ctx, taskID, at, machine)
+		if err != nil {
+			log.Warn().Err(err).Str("task_id", taskID.String()).Msg("failed to record direct-mail open")
+			return nil
+		}
+		if changed {
+			log.Debug().Str("task_id", taskID.String()).Bool("machine", machine).Str("reason", reason).Msg("direct-mail open")
+			tc.publishDirectTrackingEvent(ctx, task, pubsub.EventDirectEmailOpened, machine, at)
+		}
+	case events.EventTypeEmailClicked:
+		kind := windows.ClickWindow()
+		machine, reason := classifyClick(seen, kind, windows.ProbableWindow(kind))
+		if machine {
+			log.Debug().Str("task_id", taskID.String()).Str("reason", reason).Msg("direct-mail click classified as machine")
+			return nil
+		}
+		first, err := tc.taskRepo.MarkDirectClicked(ctx, taskID, at)
+		if err != nil {
+			log.Warn().Err(err).Str("task_id", taskID.String()).Msg("failed to record direct-mail click")
+		} else if first {
+			tc.publishDirectTrackingEvent(ctx, task, pubsub.EventDirectEmailClicked, false, at)
+		}
+	}
+	return nil
+}
+
+func (tc *TrackingConsumer) publishDirectTrackingEvent(ctx context.Context, task *repository.Task, eventType pubsub.EventType, machine bool, at time.Time) {
+	if tc.streamingPublisher == nil || tc.emailRepo == nil {
+		return
+	}
+	account, xerr := tc.emailRepo.GetByID(ctx, task.EmailAccountID)
+	if xerr != nil || account == nil || account.OrganizationID == nil {
+		return
+	}
+	tc.streamingPublisher.PublishTrackingEvent(ctx, &pubsub.TrackingEventPayload{
+		BaseEvent:      pubsub.BaseEvent{EventType: eventType, UserID: account.UserID},
+		OrgID:          account.OrganizationID.String(),
+		EmailAccountID: account.ID.String(),
+		Machine:        machine,
+		OccurredAt:     at,
+	})
 }

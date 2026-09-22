@@ -242,9 +242,9 @@ struct AnalyticsWarmupSection: View {
                 AnalyticsMiniStat(label: "Warmup sent", value: AnalyticsFmt.count(summary.totalSent), tone: .orange)
                 AnalyticsMiniStat(label: "Replies", value: AnalyticsFmt.count(summary.totalReplied))
                 AnalyticsMiniStat(label: "Reply rate", value: AnalyticsFmt.rate(summary.replyRate))
-                AnalyticsMiniStat(label: "Avg / day", value: String(format: "%.1f", summary.averageDaily ?? 0))
+                AnalyticsMiniStat(label: "Avg / active day", value: String(format: "%.1f", summary.averageDaily ?? 0))
                 AnalyticsMiniStat(label: "Days active", value: "\(summary.daysActive ?? 0)")
-                AnalyticsMiniStat(label: "To target", value: String(format: "%.0f%%", summary.targetProgress ?? 0))
+                AnalyticsMiniStat(label: "Target met", value: String(format: "%.0f%%", summary.targetProgress ?? 0))
             }
             .padding(.vertical, 10)
             .analyticsPlainRow(separator: .hidden)

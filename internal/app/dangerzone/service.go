@@ -16,13 +16,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/config"
+	"github.com/warmbly/warmbly/internal/events"
 	"github.com/warmbly/warmbly/internal/observability/errs"
 
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/notify"
 	"github.com/warmbly/warmbly/internal/notify/templates"
+	"github.com/warmbly/warmbly/internal/pkg/displayname"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -57,6 +60,11 @@ type service struct {
 
 	notifier notify.EmailNotificationService
 
+	// publisher evicts destroyed mailboxes from the workers executing them.
+	// Nil-safe: an instance wired without one still deletes, it just leaves
+	// the eviction to a worker restart.
+	publisher events.Publisher
+
 	// frontendBaseURL is used when building cancellation links in emails.
 	// Falls back to this deployment's own dashboard origin if empty.
 	frontendBaseURL string
@@ -68,6 +76,7 @@ func NewService(
 	orgRepo repository.OrganizationRepository,
 	userRepo repository.UserRepository,
 	notifier notify.EmailNotificationService,
+	publisher events.Publisher,
 	frontendBaseURL string,
 ) Service {
 	if frontendBaseURL == "" {
@@ -78,6 +87,7 @@ func NewService(
 		orgRepo:         orgRepo,
 		userRepo:        userRepo,
 		notifier:        notifier,
+		publisher:       publisher,
 		frontendBaseURL: frontendBaseURL,
 	}
 }
@@ -367,13 +377,48 @@ func (s *service) ExecuteDuePendingDeletions(ctx context.Context) (int, int, err
 // runHardDelete performs the actual destructive DB operation for a single
 // scheduled deletion. Errors propagate so the row can be marked failed.
 func (s *service) runHardDelete(ctx context.Context, d *models.ScheduledDeletion) error {
+	var (
+		placements []repository.MailboxPlacement
+		err        error
+	)
 	switch d.ResourceType {
 	case models.DeletionResourceOrganization:
-		return s.repo.HardDeleteOrganization(ctx, d.ResourceID)
+		placements, err = s.repo.HardDeleteOrganization(ctx, d.ResourceID)
 	case models.DeletionResourceUser:
-		return s.repo.HardDeleteUser(ctx, d.ResourceID)
+		placements, err = s.repo.HardDeleteUser(ctx, d.ResourceID)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", d.ResourceType)
+	}
+	if err != nil {
+		return err
+	}
+	s.evictMailboxes(ctx, placements)
+	return nil
+}
+
+// evictMailboxes tells each worker to drop the mailboxes this deletion
+// destroyed. Best effort and after the commit: the rows are already gone, so a
+// failure here must not fail the deletion, and retrying it is impossible
+// because the assignments went with them.
+//
+// Skipping it is not free. A worker holds its mailboxes in memory, so one it
+// is never told about keeps authenticating against a provider on behalf of an
+// account that no longer exists, failing every pass and reporting every
+// failure, until that worker restarts.
+func (s *service) evictMailboxes(ctx context.Context, placements []repository.MailboxPlacement) {
+	if s.publisher == nil || len(placements) == 0 {
+		return
+	}
+	for _, p := range placements {
+		if err := s.publisher.PublishRemoveEmail(ctx, p.WorkerID, &models.RemoveWorkerEmail{
+			UserID:  p.UserID.String(),
+			EmailID: p.EmailID.String(),
+		}); err != nil {
+			log.Warn().Err(err).
+				Str("email_id", p.EmailID.String()).
+				Str("worker_id", p.WorkerID.String()).
+				Msg("could not tell the worker to drop a mailbox destroyed by a scheduled deletion")
+		}
 	}
 }
 
@@ -414,8 +459,8 @@ func (s *service) sendOrgScheduledEmail(ctx context.Context, org *models.Organiz
 	if len(recipients) == 0 {
 		return
 	}
-	subject := fmt.Sprintf("%s scheduled for deletion", org.Name)
-	body, err := templates.GenerateOrgDeletionScheduledHTML(org.Name, d.ExecuteAfter, d.GraceDays, s.frontendBaseURL+orgDangerZonePath)
+	subject := fmt.Sprintf("%s scheduled for deletion", emailOrgName(org))
+	body, err := templates.GenerateOrgDeletionScheduledHTML(emailOrgName(org), d.ExecuteAfter, d.GraceDays, s.frontendBaseURL+orgDangerZonePath)
 	if err != nil {
 		return
 	}
@@ -430,8 +475,8 @@ func (s *service) sendOrgCancelledEmail(ctx context.Context, org *models.Organiz
 	if len(recipients) == 0 {
 		return
 	}
-	subject := fmt.Sprintf("Deletion cancelled for %s", org.Name)
-	body, err := templates.GenerateOrgDeletionCancelledHTML(org.Name, d.ExecuteAfter)
+	subject := fmt.Sprintf("Deletion cancelled for %s", emailOrgName(org))
+	body, err := templates.GenerateOrgDeletionCancelledHTML(emailOrgName(org), d.ExecuteAfter)
 	if err != nil {
 		return
 	}
@@ -487,7 +532,7 @@ func (s *service) buildReminder(ctx context.Context, d *models.ScheduledDeletion
 			return nil, "", ""
 		}
 		recipients = s.orgRecipients(ctx, org)
-		resourceName = org.Name
+		resourceName = emailOrgName(org)
 	case models.DeletionResourceUser:
 		user, _ := s.userRepo.GetUser(ctx, d.ResourceID)
 		if user == nil {
@@ -569,8 +614,7 @@ func nilIfEmpty(s string) *string {
 }
 
 func displayName(u *models.User) string {
-	name := strings.TrimSpace(strings.TrimSpace(u.FirstName) + " " + strings.TrimSpace(u.LastName))
-	if name != "" {
+	if name := displayname.FullName(u.FirstName, u.LastName); name != "" {
 		return name
 	}
 	return u.Email
@@ -579,10 +623,18 @@ func displayName(u *models.User) string {
 // firstNameOrEmail is the friendly greeting name for deletion emails:
 // the user's first name when set, otherwise their email address.
 func firstNameOrEmail(u *models.User) string {
-	if strings.TrimSpace(u.FirstName) != "" {
-		return u.FirstName
+	if name := displayname.Displayable(u.FirstName); name != "" {
+		return name
 	}
 	return u.Email
+}
+
+// emailOrgName is the workspace name as deletion emails show it.
+func emailOrgName(org *models.Organization) string {
+	if name := displayname.Displayable(org.Name); name != "" {
+		return name
+	}
+	return "Your workspace"
 }
 
 // orgRecipients returns every member email for an org, owner first.

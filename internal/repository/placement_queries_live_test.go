@@ -102,9 +102,6 @@ func TestPlacementQueriesLive(t *testing.T) {
 	if _, err := repo.CountOrgMailboxes(ctx, orgID); err != nil {
 		t.Fatalf("CountOrgMailboxes: %v", err)
 	}
-	if _, err := repo.GetMailboxPlacementState(ctx, uuid.New()); err != nil {
-		t.Fatalf("GetMailboxPlacementState: %v", err)
-	}
 	if _, err := repo.ListRotationCandidates(ctx, 0.85, 10); err != nil {
 		t.Fatalf("ListRotationCandidates: %v", err)
 	}
@@ -125,7 +122,7 @@ func TestAdminWorkerQueriesLive(t *testing.T) {
 	}
 
 	admin := NewAdminRepository(pool)
-	res, err := admin.ListWorkers(ctx, nil, 5)
+	res, err := admin.ListWorkers(ctx, 0, 5)
 	if err != nil {
 		t.Fatalf("admin ListWorkers: %v", err)
 	}
@@ -148,4 +145,80 @@ func TestAdminWorkerQueriesLive(t *testing.T) {
 		t.Fatalf("admin UpdateWorker: %v", err)
 	}
 	_, _ = pool.Exec(ctx, `DELETE FROM fleet_nodes WHERE id = $1`, id)
+}
+
+func TestMailboxPlacementStateExcludesDedicatedWorkerMailboxesLive(t *testing.T) {
+	pool := placementLiveDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+	userID := uuid.New()
+	orgID := uuid.New()
+	subscriptionID := uuid.New()
+	sharedWorkerID := uuid.New()
+	secondSharedWorkerID := uuid.New()
+	dedicatedWorkerID := uuid.New()
+	sharedMailboxID := uuid.New()
+	dedicatedMailboxID := uuid.New()
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO users (id, first_name, last_name, email)
+		VALUES ($1, 'Placement', 'Test', $2)`, userID, userID.String()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO organizations (id, name, owner_user_id)
+		VALUES ($1, 'Placement Test', $2)`, orgID, userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO subscriptions (id, user_id, organization_id, plan_id, stripe_customer_id, status)
+		VALUES ($1, $2, $3, '00000000-0000-0000-0000-000000000001', $4, 'active')`,
+		subscriptionID, userID, orgID, "test_"+subscriptionID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO fleet_nodes (id, role, active, last_seen_at)
+		VALUES ($1, 'worker', true, now()), ($2, 'worker', true, now()), ($3, 'worker', true, now())`,
+		sharedWorkerID, secondSharedWorkerID, dedicatedWorkerID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO workers (id) VALUES ($1), ($2), ($3)`,
+		sharedWorkerID, secondSharedWorkerID, dedicatedWorkerID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO dedicated_worker_assignments (worker_id, organization_id, subscription_id)
+		VALUES ($1, $2, $3)`, dedicatedWorkerID, orgID, subscriptionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO email_accounts (
+			id, user_id, organization_id, worker_id, email, name,
+			signature_plain, signature_html, provider, warmup_tag, worker_assigned_at
+		) VALUES
+			($1, $2, $3, $4, $5, 'Shared', '', '', 'gmail', '', now()),
+			($6, $2, $3, $7, $8, 'Dedicated', '', '', 'gmail', '', now())`,
+		sharedMailboxID, userID, orgID, sharedWorkerID, sharedMailboxID.String()+"@example.test",
+		dedicatedMailboxID, dedicatedWorkerID, dedicatedMailboxID.String()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := scanMailboxPlacementState(tx.QueryRow(ctx,
+		mailboxPlacementStateSelect+` WHERE ea.id = $2`, WorkerLivenessWindow, sharedMailboxID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.LiveWorkerCount != 2 {
+		t.Fatalf("LiveWorkerCount = %d, want 2 shared workers", state.LiveWorkerCount)
+	}
+	if state.OrgTotalMailboxes != 1 || state.ProviderTotalMailboxes != 1 {
+		t.Fatalf("concentration totals = org %d, provider %d; dedicated mailbox must be excluded",
+			state.OrgTotalMailboxes, state.ProviderTotalMailboxes)
+	}
 }

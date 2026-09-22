@@ -65,6 +65,13 @@ var apiSpecs = []apiSpec{
 	{name: "campaign start", summary: "Start the campaign. This sends real mail", method: "POST", path: "/campaigns/{id}/start", sends: true},
 	{name: "campaign stop", summary: "Stop the campaign", method: "POST", path: "/campaigns/{id}/stop"},
 	{name: "campaign logs", summary: "The campaign's send log", method: "GET", path: "/campaigns/{id}/logs", query: []string{"limit", "cursor"}},
+	{name: "campaign plan", summary: "Today's sending plan and every limit that decided it", method: "GET", path: "/campaigns/{id}/send-plan"},
+	// Per-lead hold: park ONE contact's flow in THIS campaign without
+	// unsubscribing them or removing them from it. --data carries
+	// {"until": "<RFC 3339>", "reason": "..."}; no until holds with no end.
+	{name: "campaign lead-hold", summary: "Whether one lead's flow is held", method: "GET", path: "/campaigns/{id}/leads/{child}/hold", child: "contact"},
+	{name: "campaign pause-lead", summary: "Hold one lead's flow until a date, or until resumed", method: "POST", path: "/campaigns/{id}/leads/{child}/pause", body: bodyOptional, child: "contact"},
+	{name: "campaign resume-lead", summary: "Lift one lead's hold now", method: "POST", path: "/campaigns/{id}/leads/{child}/resume", child: "contact"},
 
 	// Contacts.
 	{name: "contact list", summary: "List or search contacts; --data carries the filter body", method: "POST", path: "/contacts/search", body: bodyOptional, query: []string{"limit", "cursor"}},
@@ -94,6 +101,8 @@ var apiSpecs = []apiSpec{
 	{name: "mailbox delete", summary: "Disconnect a mailbox", method: "DELETE", path: "/emails/{id}"},
 	{name: "mailbox auth-check", summary: "Check the mailbox's SPF, DKIM and DMARC", method: "GET", path: "/emails/{id}/auth-check"},
 	{name: "mailbox sync", summary: "The mailbox's sync state and backfill progress", method: "GET", path: "/emails/{id}/sync"},
+	{name: "mailbox identity", summary: "The addresses this mailbox may send as (Gmail only)", method: "GET", path: "/emails/{id}/identity"},
+	{name: "mailbox refresh-identity", summary: "Re-read the send-as addresses from the provider, optionally importing its signature", method: "POST", path: "/emails/{id}/identity/refresh", body: bodyOptional},
 	{name: "mailbox behavior", summary: "The mailbox's human-sending ranges", method: "GET", path: "/emails/{id}/behavior"},
 	{name: "mailbox set-behavior", summary: "Update the mailbox's sending behaviour", method: "PUT", path: "/emails/{id}/behavior", body: bodyRequired},
 	{name: "mailbox verify", summary: "Verify an email address without sending", method: "POST", path: "/emails/verify", body: bodyRequired},

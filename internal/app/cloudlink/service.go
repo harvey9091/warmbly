@@ -98,6 +98,9 @@ type Service interface {
 	ListMailboxes(ctx context.Context, orgID uuid.UUID) ([]models.CloudLinkMailboxRow, *errx.Error)
 	Enroll(ctx context.Context, orgID, accountID uuid.UUID) (*models.CloudLinkMailboxRow, *errx.Error)
 	Unenroll(ctx context.Context, orgID, accountID uuid.UUID) *errx.Error
+	// RevokeForDelete releases the mailbox on the cloud, credential and link
+	// alike, without ever calling back into the email service.
+	RevokeForDelete(ctx context.Context, orgID, accountID uuid.UUID) *errx.Error
 	SetLifecycle(ctx context.Context, orgID, accountID uuid.UUID, action string) (*models.CloudLinkMailboxRow, *errx.Error)
 
 	// Cloud-managed mailboxes: consent through the cloud, tokens brokered from it (managed.go).
@@ -110,10 +113,14 @@ type Service interface {
 
 	// IsEnrolled is the local warmup scheduler's stand-down check; fails closed to false.
 	IsEnrolled(ctx context.Context, accountID uuid.UUID) bool
+	CheckEnrollment(ctx context.Context, accountID uuid.UUID) (bool, error)
 	// VerifyWarmupToken is the consumer's check that warmup mail in an enrolled mailbox is the cloud's.
 	VerifyWarmupToken(ctx context.Context, accountID uuid.UUID, token string) (bool, error)
 	// IsCloudWarmupDelivery is the same check for warmup mail whose verify header did not survive.
 	IsCloudWarmupDelivery(ctx context.Context, accountID uuid.UUID, sender, messageID, subject string) (bool, error)
+	// IsCloudWarmupThreadReply asks by ancestry: whether what a tokenless
+	// message answers is a turn of one of the cloud's warmup conversations.
+	IsCloudWarmupThreadReply(ctx context.Context, accountID uuid.UUID, messageID string, inReplyTo []string) (bool, error)
 }
 
 type service struct {
@@ -303,9 +310,9 @@ func (s *service) Disconnect(ctx context.Context) *errx.Error {
 		if s.emailSvc == nil {
 			continue
 		}
-		if acc, xerr := s.emails.GetByID(ctx, m.EmailAccountID); xerr == nil {
+		if acc, xerr := s.emails.GetByID(ctx, m.EmailAccountID); xerr == nil && acc.OrganizationID != nil {
 			s.forgetToken(m.EmailAccountID)
-			_ = s.emailSvc.Delete(ctx, acc.UserID, acc.ID.String())
+			_ = s.emailSvc.Delete(ctx, acc.OrganizationID.String(), acc.ID.String())
 		}
 	}
 	if err := s.repo.UnenrollAll(ctx); err != nil {
@@ -324,6 +331,10 @@ func (s *service) Disconnect(ctx context.Context) *errx.Error {
 func (s *service) IsEnrolled(ctx context.Context, accountID uuid.UUID) bool {
 	ok, err := s.repo.IsEnrolled(ctx, accountID)
 	return err == nil && ok
+}
+
+func (s *service) CheckEnrollment(ctx context.Context, accountID uuid.UUID) (bool, error) {
+	return s.repo.IsEnrolled(ctx, accountID)
 }
 
 func (s *service) ListMailboxes(ctx context.Context, orgID uuid.UUID) ([]models.CloudLinkMailboxRow, *errx.Error) {
@@ -472,8 +483,9 @@ func (s *service) Enroll(ctx context.Context, orgID, accountID uuid.UUID) (*mode
 }
 
 func (s *service) Unenroll(ctx context.Context, orgID, accountID uuid.UUID) *errx.Error {
-	acc, xerr := s.ownedAccount(ctx, orgID, accountID)
-	if xerr != nil {
+	// Called for the tenant check, not the row: everything below keys on the
+	// workspace the caller proved here.
+	if _, xerr := s.ownedAccount(ctx, orgID, accountID); xerr != nil {
 		return xerr
 	}
 	m, err := s.repo.GetByAccount(ctx, accountID)
@@ -484,7 +496,7 @@ func (s *service) Unenroll(ctx context.Context, orgID, accountID uuid.UUID) *err
 		return nil
 	}
 	if m.Managed {
-		return s.removeManaged(ctx, acc.UserID, m)
+		return s.removeManaged(ctx, orgID.String(), m)
 	}
 	// Local row first, so a failed cloud call can be retried from a consistent
 	// state instead of leaving the mailbox with no warmup anywhere.
@@ -500,6 +512,41 @@ func (s *service) Unenroll(ctx context.Context, orgID, accountID uuid.UUID) *err
 		}
 	}
 	s.syncLocalPool(ctx, accountID)
+	return nil
+}
+
+// RevokeForDelete releases the mailbox on the cloud before local deletion makes
+// retries impossible. It is a leaf, so the email service can call it for a
+// managed mirror without recursing through removeManaged.
+func (s *service) RevokeForDelete(ctx context.Context, orgID, accountID uuid.UUID) *errx.Error {
+	if _, xerr := s.ownedAccount(ctx, orgID, accountID); xerr != nil {
+		return xerr
+	}
+	m, err := s.repo.GetByAccount(ctx, accountID)
+	if err != nil {
+		return errx.InternalError()
+	}
+	if m == nil {
+		return nil
+	}
+	l, err := s.repo.Get(ctx)
+	if err != nil {
+		log.Error().Err(err).Str("account_id", accountID.String()).Msg("cloud link: link unreadable, so the mailbox's enrollment cannot be revoked")
+		return errx.InternalError()
+	}
+	if l == nil {
+		log.Error().Str("account_id", accountID.String()).Msg("cloud link: enrollment exists without a link, so remote revocation cannot be confirmed")
+		return errx.InternalError()
+	}
+	// A revoked link already released every mailbox on the cloud side (RevokeInstance), so Disconnect's mirror deletes succeed.
+	if xerr := s.clientFor(l).do(ctx, http.MethodDelete, "/instance/mailboxes/"+m.RemoteID.String(), nil, nil); xerr != nil && xerr.Identifier != "pool_link_mailbox_not_found" && !linkAlreadyGone(xerr) {
+		return xerr
+	}
+	s.forgetToken(accountID)
+	// The mailbox delete also removes any stale local enrollment by cascade.
+	if err := s.repo.Unenroll(ctx, accountID); err != nil {
+		log.Warn().Err(err).Str("account_id", accountID.String()).Msg("cloud link: enrollment revoked but the local row could not be dropped; the mailbox delete removes it")
+	}
 	return nil
 }
 

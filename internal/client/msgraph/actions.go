@@ -2,6 +2,8 @@ package msgraph
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"net/url"
 	"strings"
 )
@@ -91,13 +93,20 @@ func (c *Client) messageParentFolder(ctx context.Context, messageID string) (str
 }
 
 // MoveToFolder moves the message into a named folder, creating it if needed.
-// Used for the "Warmbly" sorting folder. Returns the message's new id.
+// Used for the warmup sorting folder. Returns the message's new id.
 func (c *Client) MoveToFolder(ctx context.Context, messageID, folderName string) (string, error) {
 	folderID, err := c.ensureFolder(ctx, folderName)
 	if err != nil {
 		return "", err
 	}
 	return c.move(ctx, messageID, folderID)
+}
+
+// MoveToArchive moves the message into the mailbox's Archive, the destination
+// for the warmup placement that wants the mail out of sight without a folder of
+// its own. Returns the message's new id.
+func (c *Client) MoveToArchive(ctx context.Context, messageID string) (string, error) {
+	return c.move(ctx, messageID, FolderArchive)
 }
 
 // move relocates a message and returns the new id from the destination folder
@@ -181,4 +190,32 @@ func (c *Client) cacheFolder(name, id string) {
 	c.mu.Lock()
 	c.folderIDs[name] = id
 	c.mu.Unlock()
+}
+
+// SetSeen flips the read state of one message. Graph has no batch equivalent
+// of Gmail's batchModify that is worth the complexity here, so the caller
+// loops.
+func (c *Client) SetSeen(ctx context.Context, messageID string, seen bool) error {
+	return c.doJSON(ctx, "PATCH", c.messageURL(messageID), map[string]any{"isRead": seen}, nil)
+}
+
+// Delete removes a message the way Outlook's Delete key does: into Deleted
+// Items, where the mailbox's own retention policy takes it from. Exchange
+// answers a message that is already gone with 404, which is the state being
+// asked for, so that is not an error here.
+func (c *Client) Delete(ctx context.Context, messageID string) error {
+	resp, err := c.do(ctx, http.MethodDelete, c.messageURL(messageID), "", nil)
+	if err != nil {
+		return transportError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return HandleError(resp)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,6 +87,22 @@ func TestHandleErrorSeparatesNotFoundFromUnreachable(t *testing.T) {
 				t.Errorf("status %d classified as %s, want %s", tc.status, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestHandleErrorPreservesGraphRetryAfter(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     http.Header{"Retry-After": []string{"90"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"code":"TooManyRequests"}}`)),
+	}
+
+	mailErr := HandleError(resp)
+	if mailErr.Code != errx.MailErrorCodeSendingTooFast {
+		t.Fatalf("code = %s, want %s", mailErr.Code, errx.MailErrorCodeSendingTooFast)
+	}
+	if mailErr.RetryAfter != 90*time.Second {
+		t.Fatalf("retry after = %s, want 90s", mailErr.RetryAfter)
 	}
 }
 

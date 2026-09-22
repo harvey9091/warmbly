@@ -13,6 +13,13 @@ const (
 
 	CampaignDailyLimitMin = 3
 
+	// SignatureHTMLMax/SignaturePlainMax bound a stored mailbox signature.
+	// The old ceiling was 1000 characters for both, which a real signature
+	// exceeds the moment it carries a logo or a table: Gmail itself allows
+	// 10,000, so an imported one had nowhere to go.
+	SignatureHTMLMax  = 20000
+	SignaturePlainMax = 10000
+
 	CampaignLimitDefault  = 50
 	MinWaitTimeDefault    = 600
 	WarmupBaseDefault     = 10
@@ -198,6 +205,29 @@ const (
 	TrackingMachineWindowSecondsMin = 1
 	TrackingMachineWindowSecondsMax = 900
 
+	// TrackingMachineWindowProbableSecondsDefault is the window used instead
+	// of the two above when the tracking edge recognised the source as a
+	// scanner network that ALSO carries people's own requests: Proofpoint
+	// Isolation and Mimecast Browser Isolation render a clicked page in the
+	// vendor's own cloud, so the request may have a person behind it.
+	//
+	// Such a match cannot settle the verdict, but it moves the odds a long
+	// way, which is what buys the wider window: inside it the event is the
+	// delivery-time scan, outside it the person who got to the mail later. Ten
+	// minutes covers a gateway scanning on arrival behind a slow provider
+	// queue while leaving all but the fastest recipients on the human side.
+	//
+	// Never shorter than the per-kind window in effect: the classifier takes
+	// the wider of the two, so this setting can only ever catch more.
+	TrackingMachineWindowProbableSecondsDefault = 600
+
+	// Bounds on that window. It reaches a day because how long a vendor takes
+	// to detonate a link is the vendor's property, not the instance's, and an
+	// operator whose recipients sit almost entirely behind one may want the
+	// whole of it.
+	TrackingMachineWindowProbableSecondsMin = 1
+	TrackingMachineWindowProbableSecondsMax = 86400
+
 	// TrackingClickBurstSeconds is the window inside which clicks on two
 	// different links of the same email from the same source are treated as
 	// a scanner walking the message. A person follows one link at a time.
@@ -221,6 +251,30 @@ const (
 	// there is always a window in which an event can be read.
 	RetentionDaysMin = 1
 	RetentionDaysMax = 3650
+
+	// Warmup mail is real mail in the customer's mailbox, and nothing about
+	// it is worth keeping once its engagement has been recorded. The platform
+	// deletes it from the warmup folder after this many days (per mailbox
+	// override in email_accounts.warmup_retention_days), so a mailbox on a
+	// fixed quota never fills up with it and the deletion is the platform's
+	// own. The floor leaves room for the delayed engagement legs and for a
+	// reply-back in the thread to finish before its opener goes.
+	WarmupMailRetentionDaysDefault = 30
+	WarmupMailRetentionDaysMin     = 3
+
+	// WarmupEventRetentionDaysDefault is how long the per-message warmup
+	// records (tokens, receipts, tampering and spam reports) are kept. The
+	// health bands read at most thirty days, which is the floor; the daily
+	// warmup_statistics rows carry the analytics and are never pruned.
+	WarmupEventRetentionDaysDefault = 365
+	WarmupEventRetentionDaysMin     = 30
+
+	// WarmupDeletionStrikeHours is how soon after arrival a deletion of a
+	// warmup email still costs the pool its engagement and so counts as
+	// tampering. Later on it is housekeeping: the platform was going to delete
+	// it anyway, and a mailbox owner tidying a folder, a provider purging its
+	// Trash or a server retention rule must not read as harm.
+	WarmupDeletionStrikeHours = 24
 
 	// CampaignSendStampAttempts is how many times the control plane retries the
 	// sent_at stamp after a send is already on the bus. The reservation is what
@@ -300,6 +354,15 @@ const (
 	// cluster on the header name to fingerprint warmup traffic.
 	WarmupVerifyHeader = "X-Mailtrace-Verify"
 
+	// WarmupFolderDefault is the folder (a label on Gmail) warmup mail is
+	// filed into when a mailbox has not named its own. Both directions land
+	// there — the copy a mailbox received and the copy of what it sent — so
+	// the folder is what identifies warmup traffic in a real mail client.
+	WarmupFolderDefault = "Warmbly"
+	// WarmupFolderMaxLen bounds a customer-supplied folder name. It becomes a
+	// mailbox name on the provider, so it is short and single-level.
+	WarmupFolderMaxLen = 64
+
 	// Product-level hard caps. These are the backstop for plans that
 	// advertise "unlimited" on campaigns, seats, contacts and daily sends.
 	// Each cap is the floor that GetEffectiveLimits falls back to when both
@@ -355,9 +418,18 @@ const (
 	PoolLinkPollIntervalSeconds  = 3
 	PoolLinkPlanID               = "00000000-0000-0000-0000-000000000002"
 	PoolLinkPlanPriceUSD         = 15
-	WarmupPoolTierFallbackFloor  = 25 // below this many same-tier recipients, healthy other-tier mailboxes fill in
-	WarmupPoolFallbackMinAgeDays = 3  // other-tier mailboxes must be this old before they fill in
-	DailyThrottleNewOrgs         = 3  // new workspaces per owner per day
+	WarmupPoolTierFallbackFloor  = 25 // below this many own-tier recipients, a premium tier borrows up to this many proven free mailboxes
+	WarmupPoolFallbackMinAgeDays = 3  // a free mailbox must have been a pool member this long before premium may borrow it, or write back to one
+	WarmupPoolReturnVisitDays    = 14 // a proven free mailbox may write back to a paying mailbox that wrote to it this recently
+	// What one inbox may receive from the pool in a day: WarmupInboundDailyMultiple
+	// times its own daily sends, never below the floor (a recipient-only mailbox
+	// sends nothing) and never above the ceiling. A recipient at its cap is left
+	// out of every draw for the rest of the day, so paying the pool's debt to a
+	// thin tier never turns into flooding it.
+	WarmupInboundDailyFloor    = 10
+	WarmupInboundDailyCeiling  = 60
+	WarmupInboundDailyMultiple = 2
+	DailyThrottleNewOrgs       = 3 // new workspaces per owner per day
 
 	// CLI sign-in handshake (`warmbly auth login`). Shorter-lived than the pool
 	// link handshake because a person is watching the terminal while it runs.

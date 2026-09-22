@@ -14,8 +14,14 @@ The bus is an abstraction (`internal/infrastructure/eventbus/`) with two provide
 
 Message encoding is orthogonal to transport, selected by `CODEC_PROVIDER`:
 
-- `json`: plain JSON, no external dependencies. Required for the self-host stack (the worker command and result envelopes carry untyped bodies Avro cannot serialize).
-- `avro`: Avro with Confluent Schema Registry (`SCHEMA_REGISTRY_URL` plus optional key/secret), also behind the `kafka` build tag. The topic name is used as the Schema Registry subject.
+- `json`: plain JSON, no external dependencies, and the default for the self-host stack.
+- `avro`: Avro with Confluent Schema Registry (`SCHEMA_REGISTRY_URL` plus optional key/secret), also behind the `kafka` build tag. The subject is the topic name plus `-value`, Confluent's default naming strategy, so `warmup-events` registers under `warmup-events-value`.
+
+<Callout type="warn" title="Every derived field carries a default">
+Schemas are derived from the Go structs (`internal/models/event_schema.go`), and each field is given the Avro default matching its zero value. This is what makes adding a field safe: a reader on the new schema can still decode data written under the schema registered before it, filling the field it did not carry from the default, so the registry accepts the new version. A newly added field with no default is rejected under `BACKWARD` compatibility, and because the publisher registers before it serializes, the rejection stops every publish on that topic rather than degrading one field.
+
+Two things follow. The registered document is the marshalled schema, not `Schema.String()`, which omits defaults and would throw the guarantee away. And the registry stays on `BACKWARD` rather than `FORWARD`: adding a field is safe under both, but adding a new event type adds a union branch, which `BACKWARD` accepts and `FORWARD` refuses.
+</Callout>
 
 The Rust tracking service follows both switches. It speaks Kafka only when compiled with its `kafka` cargo feature, which is what the `tracking:*-kafka` image is, and it encodes with `CODEC_PROVIDER` on either transport. So a Kafka deployment on `CODEC_PROVIDER=json` needs no Schema Registry at all, and `avro` there is refused at boot without `SCHEMA_REGISTRY_URL` rather than failing at the first published event.
 
@@ -48,7 +54,11 @@ The backend drives workers with a `{type, body}` envelope (`internal/models/even
 }
 ```
 
-Types: `SEND_EMAIL`, `ADD_EMAIL`, `REMOVE_EMAIL`, `EMAIL_VALIDATION`, `WARMUP_ACTION`. Each has a typed body struct in `internal/models/` (for example `models.SendEmail` for `SEND_EMAIL`).
+Types: `SEND_EMAIL`, `ADD_EMAIL`, `REMOVE_EMAIL`, `EMAIL_VALIDATION`, `WARMUP_ACTION`, `MESSAGE_SEEN`, `MAILBOX_IDENTITY`. Each has a typed body struct in `internal/models/` (for example `models.SendEmail` for `SEND_EMAIL`).
+
+`MESSAGE_SEEN` carries a read or unread change made in the unified inbox out to the mailbox provider, one event per mailbox and at most `models.SeenRelayChunk` messages each. It answers with nothing: the store was written before the event was published, so the provider's copy is the only thing it changes, and a failure is logged rather than retried because the next sync reports whatever the provider actually holds. Each message carries all three providers' handles and the worker takes the ones its client uses: a provider message id for Gmail and Graph, an IMAP folder plus UID, and the immutable RFC Message-ID, which Graph re-resolves the live id from because a Graph id changes whenever a message moves. The state relayed is the one the row holds when the relay reads it back, not the one the request asked for, so a conflicting toggle leaves the provider agreeing with the store rather than with whoever published last.
+
+`MAILBOX_IDENTITY` asks the worker holding a mailbox to read its send-as addresses, and one signature, from the provider. It answers on a Redis channel named by the request's `process_id` rather than on the worker-events topic, the same round trip `EMAIL_VALIDATION` uses, because the caller is an HTTP request waiting for it. The control plane makes this call itself in exactly one place, the OAuth handshake, where the token came from the consent the customer just completed and the mailbox has no worker yet.
 
 ## Worker results
 
@@ -81,13 +91,20 @@ Produced by the Rust tracking service when a pixel loads or a tracked link is cl
   "link_id": "uuid",
   "timestamp": "2026-01-29T12:00:00Z",
   "user_agent": "Mozilla/5.0...",
-  "ip_hash": "sha256..."
+  "ip_hash": "sha256...",
+  "client_ip": "203.0.113.0",
+  "scanner": "proofpoint",
+  "scanner_probable": true
 }
 ```
 
-`event_type` is `EMAIL_OPENED` or `EMAIL_CLICKED`; `original_url` and `link_id` (the click ticket, which names the link's stored destination and anchor text) are set only for clicks; IPs are stored as hashes, never raw. The struct is `events.TrackingEvent` in `internal/events/schemas.go`, mirrored in `tracking/src/events.rs`.
+`event_type` is `EMAIL_OPENED` or `EMAIL_CLICKED`; `original_url` and `link_id` (the click ticket, which names the link's stored destination and anchor text) are set only for clicks; IPs are stored as hashes, never raw, and `client_ip` carries only the source network. `scanner` names the mail-filtering network the edge recognised, and `scanner_probable` says that network can also carry a person, which is what browser isolation makes true of the mail-security vendors. Both are absent from events written before those fields existed, and an absent `scanner_probable` reads as `false`, the conservative side. The struct is `events.TrackingEvent` in `internal/events/schemas.go`, mirrored in `tracking/src/events.rs`.
 
 The consumer classifies each event before it counts. An open is automated when the user agent is a mail privacy proxy or missing, or when it arrives within `tracking.machine_window_open_seconds` of the step's dispatch; it is recorded with `opened_machine` and upgraded by a later human open. A click is automated for a missing user agent, for arriving inside `tracking.machine_window_click_seconds` of the same dispatch (`30` by default, set independently of the open window and accepting the same 1 to 900 seconds; it ships shorter because a misjudged click costs an automation rather than a metric), or when the same source clicked another link of the same email within `TrackingClickBurstSeconds`; every click is logged per link in `email_link_clicks` with its reason, and only a human click stamps `clicked_at`, fires instant actions, or emits a webhook. A burst is only recognisable from its second click, so a human click's stamp and log row are written at once but its effects (evidence, instant actions, webhook, realtime event) run after the burst window plus a second, on the classification the click has by then; a burst recognised meanwhile relabels the earlier click and withdraws the stamp when no human click remains. A consumer restart inside the window loses only those deferred effects, and routing still follows the clicked branch at the next step boundary.
+
+`scanner` overrides all of that: a request from a recognised mail-filtering network is automated whatever its user agent claims and however late it arrives, because a security gateway walks a message with an ordinary browser. `scanner_probable` qualifies it. A probable source is measured against `tracking.machine_window_probable_seconds` instead of the window for its event kind (whichever is wider), and outside that window it is judged exactly as an unrecognised source would be. That is what lets the vendor ASNs ship enabled: the delivery-time scan is classified automated, and the recipient who clicks through browser isolation an hour later still counts. A recipient who genuinely clicks inside the window is classified automated too, which is the cost of the widening.
+
+The label carries one effect the consumer does not decide. The tracking service withholds the click's identification ticket from **any** recognised network, probable included, because the edge has no dispatch time and so cannot separate the delivery-time scan from the isolated human click. A probable click the consumer later counts as a person's is therefore still a click with no website-visit attribution behind it.
 
 Website page views do not ride this topic. The tracking service forwards each accepted view to the backend's internal API (`POST /api/v1/internal/page-hits`) instead, because the backend is where the user agent and IP are turned into device and location, and the IP must not sit in a durable stream on the way there.
 

@@ -125,6 +125,13 @@ type CreateDiscountCodeRequest struct {
 
 // UpdateDiscountCodeRequest is the admin partial-update payload. The discount
 // `type` is immutable; recreate the code to change kinds.
+//
+// The three optional caps are nullable rather than plain pointers: an operator
+// lifting an expiry or uncapping redemptions has to be able to say "no value",
+// which an omitempty pointer cannot express. They are NOT themselves pointers:
+// encoding/json sets a settable outer pointer to nil for a JSON null without
+// calling the wrapper's UnmarshalJSON, so a *NullableTime can never observe the
+// null it exists to catch.
 type UpdateDiscountCodeRequest struct {
 	Description        *string             `json:"description,omitempty"`
 	PercentOff         *int                `json:"percent_off,omitempty"`
@@ -133,13 +140,13 @@ type UpdateDiscountCodeRequest struct {
 	TrialExtensionDays *int                `json:"trial_extension_days,omitempty"`
 	Duration           *DiscountDuration   `json:"duration,omitempty"`
 	DurationInMonths   *int                `json:"duration_in_months,omitempty"`
-	MaxRedemptions     *int                `json:"max_redemptions,omitempty"`
+	MaxRedemptions     NullableInt         `json:"max_redemptions"`
 	PerAccountLimit    *int                `json:"per_account_limit,omitempty"`
 	AppliesToAllPlans  *bool               `json:"applies_to_all_plans,omitempty"`
 	PlanIDs            *[]uuid.UUID        `json:"plan_ids,omitempty"`
 	Status             *DiscountCodeStatus `json:"status,omitempty"`
-	StartsAt           *time.Time          `json:"starts_at,omitempty"`
-	ExpiresAt          *time.Time          `json:"expires_at,omitempty"`
+	StartsAt           NullableTime        `json:"starts_at"`
+	ExpiresAt          NullableTime        `json:"expires_at"`
 }
 
 // AdminDiscountSearch filters the admin discount list. Note the free-text key
@@ -152,7 +159,7 @@ type AdminDiscountSearch struct {
 
 	// Plan eligibility
 	PlanScope string     `form:"plan_scope"` // all|specific
-	PlanID    *uuid.UUID `form:"plan_id"`
+	PlanID    *ParamUUID `form:"plan_id"`
 
 	// Flag / relationship existence
 	HasRedemptions    bool `form:"has_redemptions"`

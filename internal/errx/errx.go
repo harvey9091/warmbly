@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog/log"
 )
 
 // Error represents a business error with a code and message.
@@ -16,6 +17,12 @@ type Error struct {
 	// to a client, so a caller that needs to branch on a specific condition has
 	// nothing stable to match on. Empty means "derive it from Code".
 	Identifier string `json:"-"`
+	// Public marks an Internal-class message that was written for the caller
+	// and is safe to show. Internal messages are otherwise replaced with a
+	// generic sentence, because they are usually built from the underlying
+	// error. The exceptions are the few that tell an operator something they
+	// can act on, like a mail transport that cannot deliver.
+	Public bool `json:"-"`
 }
 
 // Error implements error interface.
@@ -26,6 +33,13 @@ func (e *Error) Error() string {
 // New creates a new business error.
 func New(code Code, message string) *Error {
 	return &Error{Code: code, Message: message}
+}
+
+// NewPublic creates an error whose message is shown to the caller even when it
+// is server-class. Use it only for a message a person can act on, never for one
+// derived from an underlying error.
+func NewPublic(code Code, message string) *Error {
+	return &Error{Code: code, Message: message, Public: true}
 }
 
 // NewWithIdentifier creates a business error carrying its own machine-readable
@@ -86,14 +100,7 @@ func InternalError() *Error {
 func Handle(c *gin.Context, err error) {
 	var bizErr *Error
 	if errors.As(err, &bizErr) {
-		// Business error – send clean JSON
-		httpCode, httpError := bizErr.resolve()
-		c.JSON(httpCode, response{
-			Error:     httpError,
-			Message:   bizErr.Message,
-			Code:      bizErr.identifier(),
-			RequestID: c.GetString("request_id"),
-		})
+		JSON(c, bizErr)
 		return
 	}
 
@@ -101,13 +108,48 @@ func Handle(c *gin.Context, err error) {
 	Handle(c, InternalError())
 }
 
-// JSON sends a business error as JSON response
+// JSON sends a business error as JSON response.
 func JSON(c *gin.Context, err *Error) {
 	httpCode, httpError := err.resolve()
 	c.JSON(httpCode, response{
 		Error:     httpError,
-		Message:   err.Message,
+		Message:   clientMessage(c, err),
 		Code:      err.identifier(),
 		RequestID: c.GetString("request_id"),
 	})
+}
+
+// genericServerMessage is the only thing a 5xx says to a caller.
+const genericServerMessage = "Something went wrong."
+
+// clientMessage is what the caller is told.
+//
+// An Internal message describes something that went wrong inside the service,
+// and handlers routinely built one from the underlying error: driver text with
+// SQLSTATE codes and column names, provider responses, file paths. None of that
+// helps the caller and all of it helps somebody mapping the system, which is
+// what CASA 6.2.1 is about.
+//
+// So an Internal error answers with one fixed sentence and the request id. The
+// real message is logged against that id, which is where an operator should be
+// reading it from anyway.
+//
+// Only Internal. The other server-class codes carry messages a developer wrote
+// for the caller and that the caller can act on ("no mailbox workers are
+// available right now", "this provider is not configured on this instance"),
+// and blanking those would replace working guidance with a shrug.
+func clientMessage(c *gin.Context, err *Error) string {
+	status, _ := err.resolve()
+	if err.Code != Internal || err.Public {
+		return err.Message
+	}
+	if detail := err.Message; detail != "" && detail != genericServerMessage {
+		log.Error().
+			Str("request_id", c.GetString("request_id")).
+			Str("path", c.FullPath()).
+			Int("status", status).
+			Str("detail", detail).
+			Msg("server error returned to client")
+	}
+	return genericServerMessage
 }

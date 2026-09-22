@@ -20,6 +20,9 @@ export WARMBLY_API_URL=https://api.your-instance.com  # omit for the hosted serv
 
 Keys are created in the dashboard under Settings > API keys, or with
 `warmblyctl apikey create` if you already hold a key with the API_KEYS scope.
+Creating one in the dashboard asks you to confirm your password or a two-factor
+code first; creating one with an existing key does not, because the key's scope
+is already that grant.
 Everything you can do is bounded by the key's scopes; `warmblyctl me` shows
 who the key is and what it holds. On the local dev stack the seeded
 full-access key is `wmbly_seed_acme_owner_full_access_0000000000` with
@@ -33,9 +36,9 @@ Run `warmblyctl <family> --help` for subcommands and `warmblyctl <family>
 | Family | Covers |
 |---|---|
 | `me` | Identity and granted scopes |
-| `campaign` | list, get, create, update, delete, steps, senders, preflight, start, stop, test-email, logs |
+| `campaign` | list, get, create, update, delete, steps, senders, preflight, start, stop, test-email, logs, plan, pause-lead / resume-lead |
 | `contact` | list (search), get, lookup, create, update, delete, notes, timeline, import, export |
-| `mailbox` | list, get, update, delete, auth-check, sync, behavior, verify, send, warmup-start/pause/resume/stop/status |
+| `mailbox` | list, get, update, delete, auth-check, sync, identity, refresh-identity, behavior, verify, send, warmup-start/pause/resume/stop/status |
 | `inbox` | list, count, thread, seen, reply, compose, agent drafts, scheduled sends |
 | `analytics` | dashboard, deliverability, warmup, accounts, campaigns, usage, audit-logs |
 | `settings` | outreach and suppression settings |
@@ -80,12 +83,22 @@ These commands put real mail on the wire: `campaign start`,
 - Run `campaign preflight --id <id>` before `campaign start` and act on what
   it reports. It costs nothing and catches missing senders, empty audiences
   and broken tracking.
+- When a campaign sends less than expected, `campaign plan --id <id>` is the
+  answer: today's projected sends and every limit that lowered them. Read it
+  before touching a cap.
 - Never raise a mailbox's daily cap casually. The platform default is 50
   campaign emails per mailbox per day with 600 seconds between sends; a fresh
   mailbox should start around 10-20. Do not set a cap above 50 unless the
   user explicitly asked for it and the mailbox has history to justify it.
 - Keep warmup running on mailboxes that campaign; do not stop warmup just
   because a campaign started.
+- To stop emailing ONE contact for a while, hold that lead:
+  `campaign pause-lead --id <campaign> --contact <contact> --data
+  '{"until":"2026-09-21T17:00:00Z"}'`. Do not unsubscribe them and do not add
+  them to the suppression list for this: both are workspace-wide and permanent.
+  `campaign resume-lead` lifts it. An out-of-office auto-reply already writes
+  the same hold by itself, across every campaign that contact is a lead of, so
+  a lead reading `paused` for that reason needs nothing from you.
 - If deliverability analytics show rising bounces or complaints, stop the
   campaign first and report; do not push volume into a degrading mailbox.
 

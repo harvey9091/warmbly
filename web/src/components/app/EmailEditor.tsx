@@ -25,6 +25,7 @@ import {
     RiText,
     RiCodeView,
 } from "@remixicon/react";
+import DOMPurify, { type Config as DOMPurifyConfig } from "dompurify";
 import { useEffect, useRef, useState } from "react";
 import { RiEyeLine } from "@remixicon/react";
 import { cn } from "@/lib/utils";
@@ -68,6 +69,28 @@ function needsSource(html: string): boolean {
     return UNHOSTABLE_TAG.test(html) || EVENT_HANDLER.test(html);
 }
 
+// needsSource decides which editing surface to show. It must not be the only
+// thing standing between a signature and script execution, because a regex
+// does not tokenise HTML the way the parser does: `<img/onerror=alert(1) src=x>`
+// separates the attribute with a slash rather than whitespace, and
+// `<img src="x>" onerror=alert(1)>` hides the handler behind a `>` inside a
+// quoted value. The parser accepts both; the pattern above matches neither.
+//
+// A signature is organisation data one teammate writes and another renders, so
+// that is stored cross-user script in the dashboard. Everything assigned to a
+// live element goes through the parser-based sanitizer instead.
+const SIGNATURE_SANITIZE_CONFIG: DOMPurifyConfig = {
+    FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "form", "base", "meta", "link"],
+    FORBID_ATTR: ["srcdoc", "formaction", "ping"],
+    ALLOW_DATA_ATTR: false,
+};
+
+function sanitizeForEditing(html: string): string {
+    // String(...) because the Trusted Types overload widens the return type;
+    // RETURN_TRUSTED_TYPE is not set, so this is already a string at runtime.
+    return String(DOMPurify.sanitize(html, SIGNATURE_SANITIZE_CONFIG));
+}
+
 interface EmailEditorProps {
     id: string;
     htmlText: string;
@@ -104,7 +127,10 @@ export default function EmailEditor({
     useEffect(() => {
         if (sourceView || activeTab !== "html") return;
         const el = editorRef.current;
-        if (el && el.innerHTML !== htmlText) el.innerHTML = htmlText;
+        // Sanitized on the way in, not merely inspected: this is the assignment
+        // that would execute a handler the source-view heuristic missed.
+        const safe = sanitizeForEditing(htmlText);
+        if (el && el.innerHTML !== safe) el.innerHTML = safe;
     }, [htmlText, activeTab, sourceView]);
     const [urlPopover, setUrlPopover] = useState<"link" | "image" | null>(null);
     const [url, setUrl] = useState("");

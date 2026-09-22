@@ -16,7 +16,6 @@ import (
 
 func TestComputeCapacity_TableDriven(t *testing.T) {
 	type want struct {
-		effective   float64
 		utilization float64
 		healthMul   float64
 		ageMul      float64
@@ -35,7 +34,7 @@ func TestComputeCapacity_TableDriven(t *testing.T) {
 				LoadScore:        0,
 			},
 			// floor(16 * 1 * 0) = 0, then floored to 1
-			want: want{effective: 1, utilization: 0, healthMul: 1.0, ageMul: 0.0},
+			want: want{utilization: 0, healthMul: 1.0, ageMul: 0.0},
 		},
 		{
 			name: "perfect_health_full_age_oauth_worker",
@@ -45,7 +44,7 @@ func TestComputeCapacity_TableDriven(t *testing.T) {
 				AgeMultiplier:    1.0,
 				LoadScore:        100,
 			},
-			want: want{effective: 400, utilization: 100.0 / 400.0, healthMul: 1.0, ageMul: 1.0},
+			want: want{utilization: 100.0 / 400.0, healthMul: 1.0, ageMul: 1.0},
 		},
 		{
 			name: "half_health_half_age_cold_smtp",
@@ -55,8 +54,7 @@ func TestComputeCapacity_TableDriven(t *testing.T) {
 				AgeMultiplier:    0.5,
 				LoadScore:        2,
 			},
-			// 16 * 0.5 * 0.5 = 4
-			want: want{effective: 4, utilization: 0.5, healthMul: 0.5, ageMul: 0.5},
+			want: want{utilization: 0.25, healthMul: 0.5, ageMul: 0.5},
 		},
 		{
 			name: "disaster_health_zero_age_warmup_only",
@@ -67,7 +65,7 @@ func TestComputeCapacity_TableDriven(t *testing.T) {
 				LoadScore:        12,
 			},
 			// 25 * 0 * 0 = 0, floored to 1; utilisation 12/1
-			want: want{effective: 1, utilization: 12, healthMul: 0, ageMul: 0},
+			want: want{utilization: 12, healthMul: 0, ageMul: 0},
 		},
 		{
 			name: "nan_health_mul_coerced_to_zero",
@@ -78,7 +76,7 @@ func TestComputeCapacity_TableDriven(t *testing.T) {
 				LoadScore:        0,
 			},
 			// NaN -> 0; floor(16 * 0 * 1) = 0, floored to 1
-			want: want{effective: 1, utilization: 0, healthMul: 0, ageMul: 1},
+			want: want{utilization: 0, healthMul: 0, ageMul: 1},
 		},
 		{
 			name: "negative_age_mul_coerced_to_zero",
@@ -88,7 +86,7 @@ func TestComputeCapacity_TableDriven(t *testing.T) {
 				AgeMultiplier:    -0.5,
 				LoadScore:        0,
 			},
-			want: want{effective: 1, utilization: 0, healthMul: 1, ageMul: 0},
+			want: want{utilization: 0, healthMul: 1, ageMul: 0},
 		},
 		{
 			name: "over_one_health_mul_clamped",
@@ -98,7 +96,7 @@ func TestComputeCapacity_TableDriven(t *testing.T) {
 				AgeMultiplier:    1.0,
 				LoadScore:        0,
 			},
-			want: want{effective: 16, utilization: 0, healthMul: 1, ageMul: 1},
+			want: want{utilization: 0, healthMul: 1, ageMul: 1},
 		},
 		{
 			name: "high_bounce_high_age_oauth_worker",
@@ -109,15 +107,12 @@ func TestComputeCapacity_TableDriven(t *testing.T) {
 				LoadScore:        50,
 			},
 			// floor(400 * 0.2 * 1) = 80
-			want: want{effective: 80, utilization: 50.0 / 80.0, healthMul: 0.2, ageMul: 1},
+			want: want{utilization: 50.0 / 80.0, healthMul: 0.2, ageMul: 1},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := ComputeCapacity(tc.row)
-			if got.Effective != tc.want.effective {
-				t.Errorf("Effective = %v, want %v", got.Effective, tc.want.effective)
-			}
 			if math.Abs(got.Utilization-tc.want.utilization) > 1e-9 {
 				t.Errorf("Utilization = %v, want %v", got.Utilization, tc.want.utilization)
 			}
@@ -132,9 +127,7 @@ func TestComputeCapacity_TableDriven(t *testing.T) {
 }
 
 func TestComputeCapacity_NewWorkerStillEligible(t *testing.T) {
-	// A brand-new worker has age_multiplier=0 and zero history. The floor
-	// at Effective=1 guarantees it can still be probed instead of being
-	// permanently skipped by the placement loop.
+	// A brand-new worker keeps its target while the age score slows admission.
 	c := ComputeCapacity(WorkerCapacityRow{
 		WorkerID:         uuid.New(),
 		BaseCapacity:     16,
@@ -142,25 +135,22 @@ func TestComputeCapacity_NewWorkerStillEligible(t *testing.T) {
 		AgeMultiplier:    0,
 		LoadScore:        0,
 	})
-	if c.Effective < 1 {
-		t.Fatalf("Effective should never fall below 1, got %v", c.Effective)
+	if c.Target != 16 {
+		t.Fatalf("Target = %v, want 16", c.Target)
 	}
 }
 
-func TestMailboxWeight_TableDriven(t *testing.T) {
+func TestMailboxWeightCountsEveryMailbox(t *testing.T) {
 	cases := []struct {
 		name     string
 		provider string
 		warmup   bool
 		want     float64
 	}{
-		// The provider strings are the email_provider enum values as stored.
-		// The old table asserted "gmail-api"/"graph-api", which nothing ever
-		// wrote, so the API-mailbox weight never actually applied in production.
-		{"warmup_overrides_provider", "gmail", true, 0.4},
-		{"warmup_overrides_smtp_imap", "smtp_imap", true, 0.4},
-		{"gmail_cold", "gmail", false, 0.05},
-		{"outlook_cold", "outlook", false, 0.05},
+		{"gmail_warmup", "gmail", true, 1},
+		{"smtp_imap_warmup", "smtp_imap", true, 1},
+		{"gmail_cold", "gmail", false, 1},
+		{"outlook_cold", "outlook", false, 1},
 		{"smtp_imap_cold", "smtp_imap", false, 1.0},
 		{"empty_provider_cold", "", false, 1.0},
 		{"unknown_provider_cold", "exchange-rpc", false, 1.0},
@@ -193,21 +183,17 @@ func TestComputeCapacity_HealthStatesArePassedThrough(t *testing.T) {
 			HealthState:      state,
 		}
 		got := ComputeCapacity(row)
-		if got.Effective != 16 {
-			t.Errorf("state %s: Effective changed unexpectedly (%v)", state, got.Effective)
+		if got.Target != 16 {
+			t.Errorf("state %s: target changed unexpectedly (%v)", state, got.Target)
 		}
 	}
 }
 
 func TestComputeCapacity_TargetIgnoresTheAgeRamp(t *testing.T) {
-	// One hour into the 72h ramp. Effective collapses to its floor, which is
-	// what the placer used to divide by; Target must not.
+	// One hour into the 72h ramp must not shrink the target.
 	c := ComputeCapacity(WorkerCapacityRow{
 		BaseCapacity: 16, HealthMultiplier: 1, AgeMultiplier: 1.0 / 72, LoadScore: 0,
 	})
-	if c.Effective != 1 {
-		t.Fatalf("effective: got %v want the floor of 1", c.Effective)
-	}
 	if c.Target != 16 {
 		t.Fatalf("target: got %v want 16", c.Target)
 	}

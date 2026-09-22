@@ -1,6 +1,7 @@
 package models
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -33,15 +34,101 @@ type ABTestingSettings struct {
 }
 
 type ReplyIntentSettings struct {
-	Enabled                 bool     `json:"enabled"`
-	PositiveKeywords        []string `json:"positive_keywords"`
-	NegativeKeywords        []string `json:"negative_keywords"`
-	OutOfOfficeKeywords     []string `json:"out_of_office_keywords"`
-	QuestionKeywords        []string `json:"question_keywords"`
-	AutoCreateCRMTask       bool     `json:"auto_create_crm_task"`
-	AutoPauseOnNegative     bool     `json:"auto_pause_on_negative"`
-	AutoSuppressOnUnsubWord bool     `json:"auto_suppress_on_unsubscribe_keyword"`
+	Enabled             bool     `json:"enabled"`
+	PositiveKeywords    []string `json:"positive_keywords"`
+	NegativeKeywords    []string `json:"negative_keywords"`
+	OutOfOfficeKeywords []string `json:"out_of_office_keywords"`
+	QuestionKeywords    []string `json:"question_keywords"`
+	AutoCreateCRMTask   bool     `json:"auto_create_crm_task"`
+	// CRMTaskIntents narrows the switch above to the intents worth a
+	// follow-up. Absent means DefaultCRMTaskIntents (human replies only); an
+	// explicit empty list means none, same as turning the switch off.
+	CRMTaskIntents          []ReplyIntentType `json:"crm_task_intents"`
+	AutoPauseOnNegative     bool              `json:"auto_pause_on_negative"`
+	AutoSuppressOnUnsubWord bool              `json:"auto_suppress_on_unsubscribe_keyword"`
+	// HoldOnOutOfOffice parks the contact's next step when an auto-reply says
+	// they are away, and resumes it when they are back. Without it the
+	// follow-up goes out on schedule to an empty desk and the sequence is over
+	// before the person reads any of it (issue #470).
+	HoldOnOutOfOffice bool `json:"hold_on_out_of_office"`
+	// OutOfOfficeHoldDays is the hold applied when the auto-reply carries no
+	// return date we can read. Clamped to OOOHoldDaysMin..OOOHoldDaysMax.
+	OutOfOfficeHoldDays int `json:"out_of_office_hold_days"`
 }
+
+// InboxTaggingSettings are the actions a workspace lets a classified reply
+// take. The three reversible ones default on; the suppression defaults off,
+// because it is the one the system cannot undo.
+type InboxTaggingSettings struct {
+	// HoldOnNotNow parks the contact's sequences when they answer "not now",
+	// for NotNowHoldDays, so the follow-up lands after the timing they named
+	// rather than three days later.
+	HoldOnNotNow   bool `json:"hold_on_not_now"`
+	NotNowHoldDays int  `json:"not_now_hold_days"`
+	// StopOnDeclined parks a contact with no end when they decline or say they
+	// are the wrong person. The hold is visible on the lead and a member lifts
+	// it; nothing is unsubscribed and nothing is deleted.
+	StopOnDeclined bool `json:"stop_on_declined"`
+	// TaskOnCallRequest opens a CRM task for the mailbox owner when a reply
+	// asks for a call or proposes a time.
+	TaskOnCallRequest bool `json:"task_on_call_request"`
+	// SuppressOnRemovalRequest adds the sender to the suppression list when
+	// the reply asks to be removed and the classifier is strongly sure of it.
+	// Phase 3: the one irreversible action, and the one with the highest floor.
+	SuppressOnRemovalRequest bool `json:"suppress_on_removal_request"`
+}
+
+// Bounds on the not-now hold.
+const (
+	NotNowHoldDaysMin     = 1
+	NotNowHoldDaysMax     = 90
+	NotNowHoldDaysDefault = 30
+)
+
+// DefaultCRMTaskIntents is the task-worthy set a workspace gets when it has
+// never chosen one: every human intent, and no automated one. A vacation
+// notice or a bounce is not follow-up work, and one week of sending makes
+// enough of them to bury the real replies.
+func DefaultCRMTaskIntents() []ReplyIntentType {
+	return []ReplyIntentType{
+		ReplyIntentPositive,
+		ReplyIntentQuestion,
+		ReplyIntentNeutral,
+		ReplyIntentNegative,
+	}
+}
+
+// TaskIntents resolves the configured set, falling back to the default when
+// the workspace has never set one.
+func (s ReplyIntentSettings) TaskIntents() []ReplyIntentType {
+	if s.CRMTaskIntents == nil {
+		return DefaultCRMTaskIntents()
+	}
+	return s.CRMTaskIntents
+}
+
+// CreatesTaskFor reports whether a reply classified as intent should open a
+// CRM follow-up task.
+func (s ReplyIntentSettings) CreatesTaskFor(intent ReplyIntentType) bool {
+	if !s.AutoCreateCRMTask {
+		return false
+	}
+	for _, want := range s.TaskIntents() {
+		if want == intent {
+			return true
+		}
+	}
+	return false
+}
+
+// Bounds on the fallback out-of-office hold. A hold of zero days would send
+// into the away message it was triggered by; one of months would silently
+// abandon a lead nobody thinks to check on.
+const (
+	OOOHoldDaysMin     = 1
+	OOOHoldDaysMax     = 90
+	OOOHoldDaysDefault = 7
+)
 
 type SendTimeOptimizationSettings struct {
 	Enabled                 bool    `json:"enabled"`
@@ -78,20 +165,78 @@ func (s *AdvancedOutreachSettings) Normalize() {
 	if s.Preflight.MinContentScore < 1 {
 		s.Preflight.MinContentScore = 1
 	}
+	// A workspace that has never seen this setting stores a zero here; read it
+	// as "the default", not as "resume the instant the auto-reply lands".
+	if s.ReplyIntent.OutOfOfficeHoldDays == 0 {
+		s.ReplyIntent.OutOfOfficeHoldDays = OOOHoldDaysDefault
+	}
+	if s.ReplyIntent.OutOfOfficeHoldDays < OOOHoldDaysMin {
+		s.ReplyIntent.OutOfOfficeHoldDays = OOOHoldDaysMin
+	}
+	if s.ReplyIntent.OutOfOfficeHoldDays > OOOHoldDaysMax {
+		s.ReplyIntent.OutOfOfficeHoldDays = OOOHoldDaysMax
+	}
+	if s.InboxTagging.NotNowHoldDays == 0 {
+		s.InboxTagging.NotNowHoldDays = NotNowHoldDaysDefault
+	}
+	s.InboxTagging.NotNowHoldDays = min(max(s.InboxTagging.NotNowHoldDays, NotNowHoldDaysMin), NotNowHoldDaysMax)
 	if !ValidUnsubscribeMode(string(s.Unsubscribe.Mode)) || s.Unsubscribe.Mode == UnsubscribeModeInherit {
 		s.Unsubscribe.Mode = UnsubscribeModeText
 	}
 	s.Unsubscribe.Text = clampLine(s.Unsubscribe.Text)
 	s.Unsubscribe.LinkIntro = clampLine(s.Unsubscribe.LinkIntro)
 	s.Unsubscribe.LinkText = clampLine(s.Unsubscribe.LinkText)
+	s.ReplyIntent.CRMTaskIntents = normalizeIntents(s.ReplyIntent.CRMTaskIntents)
+}
+
+// Validate reports the settings a caller may not store. Normalize handles what
+// can be clamped; this covers what can only be refused, so a bad value is a
+// 400 rather than a silently different setting.
+func (s *AdvancedOutreachSettings) Validate() error {
+	if s == nil {
+		return nil
+	}
+	for _, intent := range s.ReplyIntent.CRMTaskIntents {
+		if !ValidReplyIntent(intent) {
+			return fmt.Errorf("%q is not a reply intent", intent)
+		}
+	}
+	return nil
+}
+
+// normalizeIntents lower-cases, trims and de-duplicates an intent list while
+// keeping the caller's order. A nil list stays nil: absent means "the default
+// set", which an empty list would not.
+func normalizeIntents(in []ReplyIntentType) []ReplyIntentType {
+	if in == nil {
+		return nil
+	}
+	out := make([]ReplyIntentType, 0, len(in))
+	seen := make(map[ReplyIntentType]struct{}, len(in))
+	for _, v := range in {
+		v = ReplyIntentType(strings.ToLower(strings.TrimSpace(string(v))))
+		if v == "" {
+			continue
+		}
+		if _, dup := seen[v]; dup {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
 }
 
 // clampLine trims a one-line copy field and caps it; the email footer is not
 // the place for a paragraph or for line breaks.
-func clampLine(v string) string {
+func clampLine(v string) string { return ClampLine(v, UnsubscribeCopyMaxLen) }
+
+// ClampLine collapses a one-line user string to single spaces and caps it at
+// max runes. Shared by every field that is a single line of copy.
+func ClampLine(v string, max int) string {
 	v = strings.Join(strings.Fields(v), " ")
-	if r := []rune(v); len(r) > UnsubscribeCopyMaxLen {
-		v = string(r[:UnsubscribeCopyMaxLen])
+	if r := []rune(v); len(r) > max {
+		v = strings.TrimSpace(string(r[:max]))
 	}
 	return v
 }
@@ -178,6 +323,7 @@ type AdvancedOutreachSettings struct {
 	TaskReliability      TaskReliabilitySettings         `json:"task_reliability"`
 	ABTesting            ABTestingSettings               `json:"ab_testing"`
 	ReplyIntent          ReplyIntentSettings             `json:"reply_intent"`
+	InboxTagging         InboxTaggingSettings            `json:"inbox_tagging"`
 	SendTimeOptimization SendTimeOptimizationSettings    `json:"send_time_optimization"`
 	Preflight            PreflightValidationSettings     `json:"preflight"`
 	Dashboard            DeliverabilityDashboardSettings `json:"dashboard"`
@@ -359,7 +505,28 @@ const (
 	ReplyIntentOutOfOffice ReplyIntentType = "out_of_office"
 	ReplyIntentQuestion    ReplyIntentType = "question"
 	ReplyIntentNeutral     ReplyIntentType = "neutral"
+	// ReplyIntentAutomated is a machine reply that is not a vacation notice:
+	// an autoresponder, a ticket acknowledgement, a bounce or a delivery
+	// report. Recorded from the header layer of the reply classifier, which
+	// sees markers the keyword lists never could.
+	ReplyIntentAutomated ReplyIntentType = "automated"
 )
+
+// ValidReplyIntent reports whether v is an intent the classifier can record
+// and a setting may name.
+func ValidReplyIntent(v ReplyIntentType) bool {
+	switch v {
+	case ReplyIntentPositive, ReplyIntentNegative, ReplyIntentOutOfOffice,
+		ReplyIntentQuestion, ReplyIntentNeutral, ReplyIntentAutomated:
+		return true
+	}
+	return false
+}
+
+// IsAutomatedIntent reports whether an intent describes a machine reply.
+func IsAutomatedIntent(v ReplyIntentType) bool {
+	return v == ReplyIntentOutOfOffice || v == ReplyIntentAutomated
+}
 
 type ReplyIntentRecord struct {
 	ID             uuid.UUID              `json:"id"`
@@ -410,6 +577,7 @@ type DeliverabilityDashboard struct {
 	IntentOOO            int       `json:"intent_out_of_office"`
 	IntentQuestion       int       `json:"intent_question"`
 	IntentNeutral        int       `json:"intent_neutral"`
+	IntentAutomated      int       `json:"intent_automated"`
 
 	// Computed rates (percent, 0-100; 0 when no sends in the window). EmailsSent
 	// is the count of completed campaign sends in the window (rate denominator).
@@ -586,14 +754,39 @@ func DefaultAdvancedOutreachSettings() AdvancedOutreachSettings {
 			MinSampleSize:      30,
 		},
 		ReplyIntent: ReplyIntentSettings{
-			Enabled:                 true,
-			PositiveKeywords:        []string{"interested", "sounds good", "let's talk", "book", "demo", "pricing"},
-			NegativeKeywords:        []string{"not interested", "unsubscribe", "remove me", "stop", "no thanks"},
-			OutOfOfficeKeywords:     []string{"out of office", "ooo", "vacation", "automatic reply"},
+			Enabled:          true,
+			PositiveKeywords: []string{"interested", "sounds good", "let's talk", "book", "demo", "pricing"},
+			NegativeKeywords: []string{"not interested", "unsubscribe", "remove me", "stop", "no thanks"},
+			// Not English-only: a German or French auto-reply is the common
+			// case on a European list, and matching only English left it to be
+			// caught by headers alone (issue #470). The layered classifier in
+			// internal/app/replyclassify carries the same vocabulary, so
+			// detection does not depend on a workspace having refreshed this
+			// list.
+			OutOfOfficeKeywords: []string{
+				"out of office", "ooo", "vacation", "automatic reply", "annual leave",
+				"abwesenheitsnotiz", "abwesend", "außer haus", "nicht im büro",
+				"im urlaub", "zurück am", "automatische antwort",
+				"réponse automatique", "absence du bureau",
+				"respuesta automática", "risposta automatica", "automatisch antwoord",
+			},
 			QuestionKeywords:        []string{"?", "how", "what", "when", "price"},
 			AutoCreateCRMTask:       true,
 			AutoPauseOnNegative:     false,
 			AutoSuppressOnUnsubWord: true,
+			HoldOnOutOfOffice:       true,
+			OutOfOfficeHoldDays:     OOOHoldDaysDefault,
+		},
+		InboxTagging: InboxTaggingSettings{
+			// The reversible actions are on from the start, so a classified
+			// reply does something useful on day one: a hold and a stop show
+			// on the Leads tab and lift with a click, and a task is a task.
+			// Suppression is the one that cannot be undone by the system, so
+			// it waits for the workspace to turn it on.
+			HoldOnNotNow:      true,
+			NotNowHoldDays:    NotNowHoldDaysDefault,
+			StopOnDeclined:    true,
+			TaskOnCallRequest: true,
 		},
 		SendTimeOptimization: SendTimeOptimizationSettings{
 			// Off by default: turning it on delays sends to reach the

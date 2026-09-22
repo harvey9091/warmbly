@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"os"
 	"sort"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/observability/errs"
 )
 
 // The fleet is pull-based. A node joins with the instance token, gets the
@@ -103,10 +105,7 @@ func (h *Handler) FleetJoin(c *gin.Context) {
 		nodeID = parsed
 	}
 
-	address := strings.TrimSpace(req.Address)
-	if address == "" {
-		address = c.ClientIP()
-	}
+	address := heartbeatAddress(req.Address, c.ClientIP())
 
 	// Registering here rather than waiting for the first beat means the node
 	// shows up in the dashboard the moment it joins, even if it then fails to
@@ -154,6 +153,7 @@ func (h *Handler) FleetHeartbeat(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "decode body"})
 		return
 	}
+	beat.Address = heartbeatAddress(beat.Address, c.ClientIP())
 	reply, err := h.FleetNodes.Heartbeat(c.Request.Context(), beat)
 	if err != nil {
 		switch {
@@ -162,7 +162,12 @@ func (h *Handler) FleetHeartbeat(c *gin.Context) {
 		case errors.Is(err, fleetnode.ErrRoleChanged):
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			// The heartbeat is answered to a machine, not a person, and the
+			// caller authenticates with a node credential rather than an
+			// operator session. The detail goes to the log where an operator
+			// reads it; the node only needs to know to retry.
+			errs.CaptureException(err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "heartbeat could not be recorded"})
 		}
 		return
 	}
@@ -180,6 +185,49 @@ func (h *Handler) FleetHeartbeat(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, reply)
+}
+
+// heartbeatAddress prefers the public IPv4 observed by the trusted backend edge.
+func heartbeatAddress(reported, observed string) string {
+	reported = strings.TrimSpace(reported)
+	observed = strings.TrimSpace(observed)
+	if normalized, ok := normalizedPublicIPv4(observed); ok {
+		return normalized
+	}
+	if normalized, ok := normalizedPublicIPv4(reported); ok {
+		return normalized
+	}
+	if observed != "" {
+		return observed
+	}
+	return reported
+}
+
+func normalizedPublicIPv4(raw string) (string, bool) {
+	ip, err := netip.ParseAddr(raw)
+	if err != nil {
+		return "", false
+	}
+	ip = ip.Unmap()
+	if !ip.Is4() || !ip.IsGlobalUnicast() || ip.IsPrivate() {
+		return "", false
+	}
+	for _, prefix := range nonPublicIPv4Prefixes {
+		if prefix.Contains(ip) {
+			return "", false
+		}
+	}
+	return ip.String(), true
+}
+
+var nonPublicIPv4Prefixes = []netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
 }
 
 // nodeHeartbeatSeconds derives the beat interval from the server's liveness
@@ -348,7 +396,7 @@ func (h *Handler) AdminFleetNodes(c *gin.Context) {
 	}
 	nodes, err := h.FleetNodes.List(c.Request.Context(), role)
 	if err != nil {
-		errx.JSON(c, errx.New(errx.Internal, err.Error()))
+		errx.JSON(c, errx.NewPublic(errx.Internal, err.Error()))
 		return
 	}
 	sort.SliceStable(nodes, func(i, j int) bool { return nodes[i].Role < nodes[j].Role })
@@ -364,7 +412,7 @@ func (h *Handler) AdminFleetIssueJoinToken(c *gin.Context) {
 	}
 	token, err := h.FleetNodes.IssueJoinToken(c.Request.Context())
 	if err != nil {
-		errx.JSON(c, errx.New(errx.Internal, err.Error()))
+		errx.JSON(c, errx.NewPublic(errx.Internal, err.Error()))
 		return
 	}
 	h.audit(c, "fleet_join_token_issued", models.AuditEntityWorker, nil, nil)
@@ -384,7 +432,7 @@ type setTagsBody struct {
 func (h *Handler) AdminListWorkerTags(c *gin.Context) {
 	tags, err := h.WorkerRepo.ListAllWorkerTags(c.Request.Context())
 	if err != nil {
-		errx.JSON(c, errx.New(errx.Internal, err.Error()))
+		errx.JSON(c, errx.NewPublic(errx.Internal, err.Error()))
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": tags})
@@ -468,7 +516,7 @@ func (h *Handler) AdminFleetReserveWorker(c *gin.Context) {
 	ctx := c.Request.Context()
 	w, err := h.WorkerRepo.GetWorkerDetail(ctx, id)
 	if err != nil {
-		errx.JSON(c, errx.New(errx.Internal, err.Error()))
+		errx.JSON(c, errx.NewPublic(errx.Internal, err.Error()))
 		return
 	}
 	if w == nil {
@@ -513,7 +561,7 @@ func (h *Handler) AdminFleetDeleteNode(c *gin.Context) {
 		return
 	}
 	if err := h.FleetNodeRepo.Delete(c.Request.Context(), id); err != nil {
-		errx.JSON(c, errx.New(errx.Internal, err.Error()))
+		errx.JSON(c, errx.NewPublic(errx.Internal, err.Error()))
 		return
 	}
 	h.audit(c, models.AuditActionDelete, models.AuditEntityWorker, &id, nil)
@@ -553,21 +601,21 @@ func (h *Handler) AdminFleetPatchNode(c *gin.Context) {
 	changed := map[string]string{}
 	if body.Name != nil {
 		if err := h.FleetNodeRepo.SetName(ctx, id, *body.Name); err != nil {
-			errx.JSON(c, errx.New(errx.Internal, err.Error()))
+			errx.JSON(c, errx.NewPublic(errx.Internal, err.Error()))
 			return
 		}
 		changed["name"] = *body.Name
 	}
 	if body.Notes != nil {
 		if err := h.FleetNodeRepo.SetNotes(ctx, id, *body.Notes); err != nil {
-			errx.JSON(c, errx.New(errx.Internal, err.Error()))
+			errx.JSON(c, errx.NewPublic(errx.Internal, err.Error()))
 			return
 		}
 		changed["notes"] = *body.Notes
 	}
 	if body.PinnedVersion != nil {
 		if err := h.FleetNodeRepo.SetPinnedVersion(ctx, id, *body.PinnedVersion); err != nil {
-			errx.JSON(c, errx.New(errx.Internal, err.Error()))
+			errx.JSON(c, errx.NewPublic(errx.Internal, err.Error()))
 			return
 		}
 		changed["pinned_version"] = *body.PinnedVersion
@@ -580,7 +628,7 @@ func (h *Handler) AdminFleetPatchNode(c *gin.Context) {
 	h.audit(c, models.AuditActionUpdate, models.AuditEntityWorker, &id, changed)
 	node, err := h.FleetNodes.Get(ctx, id)
 	if err != nil {
-		errx.JSON(c, errx.New(errx.Internal, err.Error()))
+		errx.JSON(c, errx.NewPublic(errx.Internal, err.Error()))
 		return
 	}
 	c.JSON(http.StatusOK, node)
@@ -595,7 +643,7 @@ func (h *Handler) AdminFleetRelease(c *gin.Context) {
 	}
 	state, err := h.FleetSettingsRepo.GetRelease(c.Request.Context())
 	if err != nil {
-		errx.JSON(c, errx.New(errx.Internal, err.Error()))
+		errx.JSON(c, errx.NewPublic(errx.Internal, err.Error()))
 		return
 	}
 	if state == nil {
@@ -626,7 +674,7 @@ func (h *Handler) AdminFleetSetRelease(c *gin.Context) {
 	ctx := c.Request.Context()
 	state, err := h.FleetSettingsRepo.GetRelease(ctx)
 	if err != nil {
-		errx.JSON(c, errx.New(errx.Internal, err.Error()))
+		errx.JSON(c, errx.NewPublic(errx.Internal, err.Error()))
 		return
 	}
 	if state == nil {
@@ -652,7 +700,7 @@ func (h *Handler) AdminFleetSetRelease(c *gin.Context) {
 	}
 
 	if err := h.FleetSettingsRepo.SetRelease(ctx, state); err != nil {
-		errx.JSON(c, errx.New(errx.Internal, err.Error()))
+		errx.JSON(c, errx.NewPublic(errx.Internal, err.Error()))
 		return
 	}
 	h.audit(c, "fleet_release_set", models.AuditEntityWorker, nil, map[string]string{

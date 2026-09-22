@@ -21,6 +21,78 @@ export interface PreflightSettings {
     min_content_score: number;
 }
 
+// The classifier buckets a reply can land in. "automated" is a machine reply
+// that is not a vacation notice: an autoresponder, a ticket acknowledgement,
+// a bounce or a delivery report.
+export type ReplyIntent =
+    | "positive"
+    | "question"
+    | "neutral"
+    | "negative"
+    | "out_of_office"
+    | "automated";
+
+export interface ReplyIntentSettings {
+    enabled: boolean;
+    positive_keywords: string[];
+    negative_keywords: string[];
+    out_of_office_keywords: string[];
+    question_keywords: string[];
+    auto_create_crm_task: boolean;
+    // Which intents get a follow-up task. null/absent means the default set.
+    crm_task_intents?: ReplyIntent[] | null;
+    auto_pause_on_negative: boolean;
+    auto_suppress_on_unsubscribe_keyword: boolean;
+    // Park a contact's next step while their mailbox says they are away.
+    hold_on_out_of_office: boolean;
+    // The fallback hold, used when the auto-reply names no return date.
+    out_of_office_hold_days: number;
+}
+
+// What a classified reply may do beyond labelling, from automatic inbox
+// tagging. The reversible three default on; the suppression waits for the
+// workspace to turn it on.
+export interface InboxTaggingSettings {
+    hold_on_not_now: boolean;
+    not_now_hold_days: number;
+    stop_on_declined: boolean;
+    task_on_call_request: boolean;
+    suppress_on_removal_request: boolean;
+}
+
+export const DEFAULT_INBOX_TAGGING: InboxTaggingSettings = {
+    hold_on_not_now: true,
+    not_now_hold_days: 30,
+    stop_on_declined: true,
+    task_on_call_request: true,
+    suppress_on_removal_request: false,
+};
+
+// Matches models.DefaultCRMTaskIntents: every human intent, no automated one.
+export const DEFAULT_CRM_TASK_INTENTS: ReplyIntent[] = [
+    "positive",
+    "question",
+    "neutral",
+    "negative",
+];
+
+// The two machine classes are one choice in the UI: a vacation notice and a
+// helpdesk autoresponder are the same kind of noise on a task list.
+export const AUTOMATED_INTENTS: ReplyIntent[] = ["out_of_office", "automated"];
+
+export const REPLY_INTENT_CHOICES: { id: ReplyIntent; label: string; hint: string }[] = [
+    { id: "positive", label: "Positive", hint: "Interested, wants a call" },
+    { id: "question", label: "Question", hint: "Asked something" },
+    { id: "neutral", label: "Neutral", hint: "A human reply we could not bucket" },
+    { id: "negative", label: "Negative", hint: "Not interested" },
+    { id: "out_of_office", label: "Automated", hint: "Out of office, autoresponders, bounces" },
+];
+
+/** The effective set: an unset list means the default, not "none". */
+export function taskIntents(s?: ReplyIntentSettings): ReplyIntent[] {
+    return s?.crm_task_intents ?? DEFAULT_CRM_TASK_INTENTS;
+}
+
 // The in-body opt-out every campaign email carries unless a campaign
 // overrides it. "text" is a reply-to-opt-out sentence, "link" a sentence with
 // a real unsubscribe link, "off" nothing.
@@ -44,7 +116,8 @@ export interface OutreachSettings {
     bounce_pipeline: Record<string, unknown>;
     task_reliability: Record<string, unknown>;
     ab_testing: Record<string, unknown>;
-    reply_intent: Record<string, unknown>;
+    reply_intent: ReplyIntentSettings;
+    inbox_tagging?: InboxTaggingSettings;
     send_time_optimization: SendTimeOptimizationSettings;
     preflight: PreflightSettings;
     dashboard: Record<string, unknown>;

@@ -3,6 +3,7 @@ import {
     twoFactorStatus,
     twoFactorEnrollStart,
     twoFactorEnrollConfirm,
+    twoFactorRegenerateRecoveryCodes,
     twoFactorDisable,
     twoFactorVerify,
 } from "../../client/auth/twoFactor";
@@ -21,6 +22,14 @@ export function useTwoFactorEnrollConfirm() {
     const qc = useQueryClient();
     return useMutation({
         mutationFn: (code: string) => twoFactorEnrollConfirm(code),
+        onSuccess: () => qc.invalidateQueries({ queryKey: STATUS_KEY }),
+    });
+}
+
+export function useTwoFactorRegenerateRecoveryCodes() {
+    const qc = useQueryClient();
+    return useMutation({
+        mutationFn: (code: string) => twoFactorRegenerateRecoveryCodes(code),
         onSuccess: () => qc.invalidateQueries({ queryKey: STATUS_KEY }),
     });
 }

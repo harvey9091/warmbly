@@ -89,7 +89,7 @@ export function useRealtimeEvents() {
       }
 
       if (includes('EMAIL_UPDATED', 'EMAIL_DELETED', 'INBOX_UPDATE')) {
-        invalidate([['unibox'], ['analytics']])
+        invalidate([['unibox'], ['analytics'], ['inbox-tagging']])
         if (threadId) invalidate([['unibox', 'thread', threadId]])
         if (emailId) invalidate([['unibox', 'email', emailId]])
         return
@@ -165,6 +165,11 @@ export function useRealtimeEvents() {
       // timeline moves.
       if (event === 'PAGE_HIT') {
         if (contactId) invalidate([['contacts', contactId, 'timeline']])
+        return
+      }
+
+      if (event === 'DIRECT_EMAIL_OPENED' || event === 'DIRECT_EMAIL_CLICKED') {
+        invalidate([['analytics'], ['analytics', 'direct']])
         return
       }
 
@@ -348,6 +353,9 @@ export function useRealtimeEvents() {
           segment: [['segments'], ['contacts', 'list']],
           form: [['forms']],
           campaign: [['campaigns'], ['analytics']],
+          // One lead paused or resumed inside one campaign: the Leads list and
+          // its scope-chip counts move, and so does the contact drawer.
+          campaign_lead: [['contacts'], ['campaigns']],
           step: [['campaigns']],
           // ['emails'] rather than ['emails', 'list']: it prefix-matches the
           // per-mailbox detail reads too (['emails', id, 'behavior'] and its

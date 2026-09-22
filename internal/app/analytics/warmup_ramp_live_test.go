@@ -70,6 +70,7 @@ func newRampFixture(t *testing.T, daysWarming, base, increase, max int) *rampFix
 		}{
 			{`DELETE FROM warmup_spam_reports WHERE reported_account_id = $1`, f.mailbox},
 			{`DELETE FROM warmup_statistics WHERE email_account_id = $1`, f.mailbox},
+			{`DELETE FROM campaigns WHERE organization_id = $1`, f.org},
 			{`DELETE FROM email_accounts WHERE id = $1`, f.mailbox},
 			{`DELETE FROM organizations WHERE id = $1`, f.org},
 			{`DELETE FROM users WHERE id = $1`, f.user},
@@ -105,6 +106,16 @@ func (f *rampFixture) placement(t *testing.T, hoursAgo int) {
 	}
 }
 
+func (f *rampFixture) addActiveCampaign(t *testing.T) {
+	t.Helper()
+	if _, err := f.pool.Exec(context.Background(), `
+		INSERT INTO campaigns (id, user_id, organization_id, name, description, days, status, created_at, updated_at)
+		VALUES ($1, $2, $3, 'Active warmup cap', '', 62, 'active', NOW(), NOW())
+	`, uuid.New(), f.user, f.org); err != nil {
+		t.Fatalf("active campaign: %v", err)
+	}
+}
+
 func (f *rampFixture) status(t *testing.T) (int, bool) {
 	t.Helper()
 	st, xerr := f.svc.GetAccountStatus(context.Background(), f.org, f.mailbox)
@@ -125,6 +136,16 @@ func TestLiveWarmupTargetIsCleanWithoutASignal(t *testing.T) {
 	}
 	if held {
 		t.Error("ramp reported as held with no placement on record")
+	}
+}
+
+func TestLiveWarmupTargetMatchesActiveCampaignCap(t *testing.T) {
+	f := newRampFixture(t, 10, 10, 1, 40)
+	f.addActiveCampaign(t)
+
+	target, _ := f.status(t)
+	if target != 5 {
+		t.Errorf("target = %d, want the active-campaign cap of 5", target)
 	}
 }
 

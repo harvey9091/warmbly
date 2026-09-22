@@ -4,11 +4,12 @@
 //
 //   no active subscription  → Stripe Checkout (redirect), returns to `returnTo`
 //   already on a paid plan  → in-place plan change with the chosen interval
-//   enterprise / unresolved → the Stripe billing portal
+//   enterprise              → contact sales
+//   missing price           → explain that the plan is unavailable
 
 import React from "react";
 import toast from "react-hot-toast";
-import useFeatureAccess from "@/hooks/useFeatureAccess";
+import useSubscription from "@/lib/api/hooks/app/subscription/useSubscription";
 import useCreateCheckoutSession from "@/lib/api/hooks/app/subscription/useCreateCheckoutSession";
 import useChangePlan from "@/lib/api/hooks/app/subscription/useChangePlan";
 import useCreatePortalSession from "@/lib/api/hooks/app/subscription/useCreatePortalSession";
@@ -38,7 +39,10 @@ function returnUrl(path: string, result: "success" | "cancel"): string {
 }
 
 export default function useUpgradeFlow() {
-    const access = useFeatureAccess();
+    const subscription = useSubscription();
+    const hasBillingCustomer = !!subscription.data?.stripe_customer_id?.trim();
+    const hasStripeSubscription = !!subscription.data?.stripe_subscription_id?.trim() &&
+        !["canceled", "incomplete_expired"].includes(subscription.data?.status ?? "");
     const plansQuery = usePlans();
     const checkout = useCreateCheckoutSession();
     const changePlan = useChangePlan();
@@ -71,6 +75,10 @@ export default function useUpgradeFlow() {
     );
 
     const openPortal = React.useCallback(async (): Promise<boolean> => {
+        if (!hasBillingCustomer) {
+            toast.error(subscription.isPending ? "Still loading billing. Try again in a moment." : "Complete checkout to set up billing before opening the portal.");
+            return false;
+        }
         try {
             // Stripe returns the browser to wherever the portal was opened from.
             const { url } = await toast.promise(portal.mutateAsync({ return_url: window.location.href }), {
@@ -83,16 +91,18 @@ export default function useUpgradeFlow() {
         } catch {
             return false;
         }
-    }, [portal]);
+    }, [portal, hasBillingCustomer, subscription.isPending]);
 
     const upgrade = React.useCallback(
         async (catalogId: PlanID, opts: UpgradeOptions): Promise<UpgradeOutcome> => {
             if (pending) return "failed";
-            // Plans are still loading: resolveServerPlan would return undefined
-            // and the caller would be sent to the billing portal instead of
-            // Stripe Checkout. Refuse rather than take the wrong branch.
-            if (plansQuery.isPending) {
+            // Wait for billing state before choosing checkout or a plan change.
+            if (plansQuery.isPending || subscription.isPending) {
                 toast.error("Still loading plans. Try again in a moment.");
+                return "failed";
+            }
+            if (subscription.isError || plansQuery.isError) {
+                toast.error("Could not load billing. Reload the page before trying again.");
                 return "failed";
             }
             setPending(catalogId);
@@ -103,12 +113,13 @@ export default function useUpgradeFlow() {
                     return outcome;
                 }
                 const target = resolveServerPlan(catalogId);
-                const onPaid = getPlan(access.plan).id !== "free";
+                const onPaid = hasStripeSubscription;
                 const annual = opts.interval === "annual";
                 const priceId = annual ? target?.stripe_price_id_yearly : target?.stripe_price_id;
 
-                if (!target || (!onPaid && !priceId)) {
-                    outcome = (await openPortal()) ? "portal" : "failed";
+                if (!target || !priceId) {
+                    toast.error("This plan is not available for the selected billing interval. Please contact support.");
+                    outcome = "failed";
                     return outcome;
                 }
 
@@ -150,17 +161,19 @@ export default function useUpgradeFlow() {
                 return "failed";
             } finally {
                 // A redirect keeps its spinner until the page unloads.
-                if (outcome !== "redirect" && outcome !== "portal") {
+                if (outcome !== "redirect") {
                     setPending((p) => (p === catalogId ? null : p));
                 }
             }
         },
-        [pending, plansQuery.isPending, access.plan, resolveServerPlan, openPortal, changePlan, checkout],
+        [pending, plansQuery.isPending, plansQuery.isError, subscription.isPending, subscription.isError, hasStripeSubscription, resolveServerPlan, changePlan, checkout],
     );
 
     return {
         upgrade,
         openPortal,
+        hasBillingCustomer,
+        hasStripeSubscription,
         resolveServerPlan,
         /** Catalog plan whose upgrade is in flight, if any. */
         pending,

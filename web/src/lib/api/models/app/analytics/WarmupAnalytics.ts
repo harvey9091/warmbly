@@ -4,9 +4,10 @@
 export interface WarmupSummary {
     total_sent: number;
     total_replied: number;
-    average_daily: number;
+    total_received: number; // verified warmup mail that arrived from partners
+    average_daily: number; // per active day in the selected range
     reply_rate: number; // percentage
-    target_progress: number; // percentage to max
+    target_progress: number; // actual sends / planned target volume
     days_active: number;
 }
 
@@ -14,6 +15,7 @@ export interface WarmupDailyStat {
     date: string; // YYYY-MM-DD
     emails_sent: number;
     emails_replied: number;
+    emails_received: number;
     target_volume: number;
 }
 

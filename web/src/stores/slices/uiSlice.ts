@@ -183,7 +183,7 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set, get) 
 
   // Unibox layout
   uniboxListWidth: UNIBOX_LIST_DEFAULT_WIDTH,
-  uniboxContactRailOpen: true,
+  uniboxContactRailOpen: false,
 
   // Actions - Sidebar
   toggleSidebar: () => set((state) => ({ navCollapsed: !state.navCollapsed })),

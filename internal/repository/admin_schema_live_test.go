@@ -112,7 +112,7 @@ func TestLiveAdminUserPreviewListsMailboxes(t *testing.T) {
 
 	// The paginated mailbox list behind the user detail page compared the same
 	// uuid column against a text parameter, and that one surfaced as a 500.
-	emails, pagination, err := repo.GetUserEmails(context.Background(), f.user, nil, 50)
+	emails, pagination, err := repo.GetUserEmails(context.Background(), f.user, 0, 50)
 	if err != nil {
 		t.Fatalf("GetUserEmails: %v", err)
 	}

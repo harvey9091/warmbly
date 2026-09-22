@@ -57,6 +57,21 @@ export interface SpamFinding {
     category?: string;
 }
 
+// How the copy reads to its recipient, judged by TypeSafe: calibrated numbers
+// the panel thresholds on, not prose. reads_as and personalization are 0..1
+// positions on their scale, 0 being the personal end.
+export interface CopyJudgment {
+    reads_as: number;
+    personalization: number;
+    ask: "one_clear_ask" | "several_asks" | "no_ask";
+    /** Probability the copy makes a claim a spam filter would object to. */
+    spam_claim: number;
+    /** The lowest confidence across the scored answers. */
+    confidence: number;
+    model: string;
+    input_tokens: number;
+}
+
 // Result of POST /templates/analyze — the AI half of the content check.
 export interface TemplateAnalysis {
     score: number;
@@ -66,6 +81,9 @@ export interface TemplateAnalysis {
     improvements?: string[];
     /** The rules pass, scored from the same copy in the same request. */
     rules: TemplateScore;
+    /** Present when the deployment has TypeSafe configured. On a deployment
+     *  with no LLM provider it is the whole analysis, and nothing is charged. */
+    judgment?: CopyJudgment | null;
     model: string;
     tokens_used: number;
     credits_remaining: number;

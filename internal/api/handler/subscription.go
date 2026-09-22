@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"github.com/warmbly/warmbly/internal/api/middleware"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/displayname"
 )
 
 // GetSubscription returns the current organization's subscription
@@ -83,7 +85,12 @@ func (h *Handler) CreateCheckoutSession(c *gin.Context) {
 		return
 	}
 
-	session, errX := h.StripeService.CreateCheckoutSession(c.Request.Context(), uid, *orgID, req.PriceID, req.SuccessURL, req.CancelURL, req.DiscountCode)
+	// Pinned to this instance's dashboard: Stripe will redirect the customer
+	// to whatever is set here.
+	successURL := billingReturnURL(req.SuccessURL, "/app/settings/billing?checkout=done")
+	cancelURL := billingReturnURL(req.CancelURL, "/app/settings/billing")
+
+	session, errX := h.StripeService.CreateCheckoutSession(c.Request.Context(), uid, *orgID, req.PriceID, successURL, cancelURL, req.DiscountCode)
 	if errX != nil {
 		errx.JSON(c, errX)
 		return
@@ -122,7 +129,8 @@ func (h *Handler) CreateBillingPortalSession(c *gin.Context) {
 		return
 	}
 
-	portalURL, errX := h.StripeService.CreatePortalSession(c.Request.Context(), sub.StripeCustomerID, req.ReturnURL)
+	portalURL, errX := h.StripeService.CreatePortalSession(c.Request.Context(), sub.StripeCustomerID,
+		billingReturnURL(req.ReturnURL, "/app/settings/billing"))
 	if errX != nil {
 		errx.JSON(c, errX)
 		return
@@ -340,6 +348,8 @@ type EnterpriseInquiryRequest struct {
 	Notes           string `json:"notes,omitempty"`
 }
 
+const enterpriseNotesMaxLength = 2000
+
 // SubmitEnterpriseInquiry submits an enterprise pricing inquiry
 func (h *Handler) SubmitEnterpriseInquiry(c *gin.Context) {
 	var req EnterpriseInquiryRequest
@@ -348,9 +358,24 @@ func (h *Handler) SubmitEnterpriseInquiry(c *gin.Context) {
 		return
 	}
 
+	company, xerr := displayname.Validate("Company name", req.CompanyName, displayname.Workspace, false)
+	if xerr != nil {
+		errx.JSON(c, xerr)
+		return
+	}
+	contact, xerr := displayname.Validate("Contact name", req.ContactName, displayname.Person, false)
+	if xerr != nil {
+		errx.JSON(c, xerr)
+		return
+	}
+	if len([]rune(req.Notes)) > enterpriseNotesMaxLength {
+		errx.JSON(c, errx.New(errx.BadRequest, fmt.Sprintf("Notes must be %d characters or less.", enterpriseNotesMaxLength)))
+		return
+	}
+
 	inquiry := &models.EnterpriseInquiry{
-		CompanyName:     req.CompanyName,
-		ContactName:     req.ContactName,
+		CompanyName:     company,
+		ContactName:     contact,
 		ContactEmail:    req.ContactEmail,
 		EstimatedVolume: req.EstimatedVolume,
 		TeamSize:        req.TeamSize,

@@ -11,11 +11,63 @@
 // so the message reads as part of the page rather than a scroll box.
 
 import React from "react";
+import { MoreHorizontalIcon } from "lucide-react";
 import { plainToDisplayHtml } from "@/lib/email/body";
 
 interface EmailBodyProps {
     html?: string | null;
     plain?: string | null;
+}
+
+// Collapse only recognizable history; ambiguous inline replies stay visible.
+const QUOTE_SELECTORS = [
+    ".gmail_quote",
+    ".gmail_quote_container",
+    'blockquote[type="cite"]',
+    ".yahoo_quoted",
+    ".moz-cite-prefix",
+    "#divRplyFwdMsg",
+    "#appendonsend",
+    "[data-warmbly-quote]",
+].join(", ");
+
+const PLAIN_ATTRIBUTION = /^(?:On\b.{0,200}\bwrote:|-{2,}\s*(?:Original Message|Forwarded message)\s*-{2,})$/;
+
+function plainToBody(text: string): string {
+    const lines = text.replace(/\r\n/g, "\n").split("\n");
+    const at = lines.findIndex((line) => PLAIN_ATTRIBUTION.test(line.trim()) || line.trim().startsWith(">"));
+    if (at <= 0 || !lines.slice(0, at).join("").trim()) return plainToDisplayHtml(text);
+    // An unprefixed answer after a > quote may be an inline reply, not history.
+    const quotedAt = lines.findIndex((line, index) => index >= at && line.trim().startsWith(">"));
+    if (quotedAt >= 0 && lines.slice(quotedAt).some((line) => line.trim() && !line.trim().startsWith(">"))) {
+        return plainToDisplayHtml(text);
+    }
+    return `${plainToDisplayHtml(lines.slice(0, at).join("\n"))}<div data-warmbly-quote>${plainToDisplayHtml(lines.slice(at).join("\n"))}</div>`;
+}
+
+function prepareQuotes(body: string): { expanded: string; collapsed: string; hasQuote: boolean } {
+    const doc = new DOMParser().parseFromString(body, "text/html");
+    const quotes = new Set<HTMLElement>(doc.body.querySelectorAll(QUOTE_SELECTORS));
+    doc.body.querySelectorAll(".moz-cite-prefix").forEach((marker) => {
+        const quote = marker.nextElementSibling;
+        if (quote instanceof HTMLElement && quote.tagName === "BLOCKQUOTE") quotes.add(quote);
+    });
+    // Outlook puts history after its header rather than inside it.
+    doc.body.querySelectorAll<HTMLElement>("#divRplyFwdMsg, #appendonsend").forEach((marker) => {
+        const tail = doc.createElement("div");
+        marker.before(tail);
+        while (tail.nextSibling) tail.append(tail.nextSibling);
+        quotes.add(tail);
+    });
+    // Test Outlook tails as a unit, including any text-only siblings.
+    quotes.forEach((node) => node.setAttribute("data-warmbly-quote", ""));
+    const unquoted = doc.body.cloneNode(true) as HTMLElement;
+    unquoted.querySelectorAll("[data-warmbly-quote], script, style").forEach((node) => node.remove());
+    const hasContent = !!unquoted.textContent?.trim() || !!unquoted.querySelector("img, hr");
+    if (!quotes.size || !hasContent) return { expanded: body, collapsed: body, hasQuote: false };
+    const expanded = doc.documentElement.outerHTML;
+    quotes.forEach((node) => node.style.setProperty("display", "none", "important"));
+    return { expanded, collapsed: doc.documentElement.outerHTML, hasQuote: true };
 }
 
 // Typography for the message document. Deliberately minimal: the message
@@ -56,7 +108,6 @@ const HTML_OPEN = /<html\b[^>]*>/i;
 
 const SHELL =
     `<meta charset="utf-8"><meta name="referrer" content="no-referrer">` +
-    // Every link in the message leaves the dashboard in a new tab.
     `<base target="_blank"><style>${DOCUMENT_CSS}</style>`;
 
 function buildDocument(body: string): string {
@@ -74,14 +125,24 @@ function buildDocument(body: string): string {
 export default function EmailBody({ html, plain }: EmailBodyProps) {
     const frameRef = React.useRef<HTMLIFrameElement>(null);
     const [height, setHeight] = React.useState(0);
+    const [showQuoted, setShowQuoted] = React.useState(false);
 
-    const srcDoc = React.useMemo(() => {
+    // The message body, before the shell. Split from srcDoc so toggling the
+    // quote does not re-run the plain-text conversion.
+    const body = React.useMemo(() => {
         const trimmedHtml = (html ?? "").trim();
-        if (trimmedHtml) return buildDocument(trimmedHtml);
+        if (trimmedHtml) return trimmedHtml;
         const trimmedPlain = (plain ?? "").trim();
-        if (trimmedPlain) return buildDocument(plainToDisplayHtml(trimmedPlain));
+        if (trimmedPlain) return plainToBody(trimmedPlain);
         return "";
     }, [html, plain]);
+
+    const quotes = React.useMemo(() => prepareQuotes(body), [body]);
+    const hasQuote = quotes.hasQuote;
+    const srcDoc = React.useMemo(
+        () => (body ? buildDocument(showQuoted ? quotes.expanded : quotes.collapsed) : ""),
+        [body, quotes, showQuoted],
+    );
 
     // Late-loading remote images change the document height after onLoad, so
     // measurement repeats until the size settles rather than running once.
@@ -119,17 +180,31 @@ export default function EmailBody({ html, plain }: EmailBodyProps) {
     }
 
     return (
-        <iframe
-            ref={frameRef}
-            title="Message body"
-            srcDoc={srcDoc}
-            onLoad={onLoad}
-            // No allow-scripts: message markup can never run code. allow-popups
-            // (plus escape-to-normal-context) is what lets a link actually open.
-            sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-            referrerPolicy="no-referrer"
-            className="w-full border-0 block"
-            style={{ height: height ? `${height}px` : "80px" }}
-        />
+        <>
+            <iframe
+                ref={frameRef}
+                title="Message body"
+                srcDoc={srcDoc}
+                onLoad={onLoad}
+                // No allow-scripts: message markup can never run code. allow-popups
+                // (plus escape-to-normal-context) is what lets a link actually open.
+                sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+                referrerPolicy="no-referrer"
+                className="w-full border-0 block"
+                style={{ height: height ? `${height}px` : "80px" }}
+            />
+            {hasQuote && (
+                <button
+                    type="button"
+                    onClick={() => setShowQuoted((v) => !v)}
+                    aria-expanded={showQuoted}
+                    title={showQuoted ? "Hide the quoted conversation" : "Show the quoted conversation"}
+                    className="mt-1 h-5 px-1.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-700 inline-flex items-center gap-1 text-[10.5px] transition-colors"
+                >
+                    <MoreHorizontalIcon className="w-3 h-3" />
+                    {showQuoted ? "Hide quoted text" : "Show quoted text"}
+                </button>
+            )}
+        </>
     );
 }

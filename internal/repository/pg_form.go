@@ -46,7 +46,7 @@ func NewFormRepository(d *db.DB) FormRepository {
 }
 
 const formColumns = `f.id, f.organization_id, f.created_by, f.public_id, f.name, f.status, f.fields, f.design,
-	f.success_message, f.redirect_url, f.campaign_id, f.allowed_domains, f.captcha_enabled,
+	f.success_message, f.redirect_url, f.campaign_id, f.allowed_domains, f.captcha_enabled, f.triage_enabled,
 	f.logo_url, f.cover_url, f.background_url,
 	f.views_count, f.submissions_count, f.last_submission_at, f.published_at,
 	(SELECT COALESCE(array_agg(fc.category_id), ARRAY[]::uuid[]) FROM form_categories fc WHERE fc.form_id = f.id),
@@ -56,7 +56,7 @@ func scanForm(row pgx.Row) (*models.Form, error) {
 	var f models.Form
 	var fieldsRaw, designRaw []byte
 	if err := row.Scan(&f.ID, &f.OrganizationID, &f.CreatedBy, &f.PublicID, &f.Name, &f.Status, &fieldsRaw, &designRaw,
-		&f.SuccessMessage, &f.RedirectURL, &f.CampaignID, &f.AllowedDomains, &f.CaptchaEnabled,
+		&f.SuccessMessage, &f.RedirectURL, &f.CampaignID, &f.AllowedDomains, &f.CaptchaEnabled, &f.TriageEnabled,
 		&f.LogoURL, &f.CoverURL, &f.BackgroundURL,
 		&f.ViewsCount, &f.SubmissionsCount, &f.LastSubmissionAt, &f.PublishedAt,
 		&f.CategoryIDs, &f.CreatedAt, &f.UpdatedAt); err != nil {
@@ -169,11 +169,11 @@ func (r *formRepository) Create(ctx context.Context, orgID uuid.UUID, createdBy 
 	var id uuid.UUID
 	err = tx.QueryRow(ctx, `
 		INSERT INTO forms (organization_id, created_by, public_id, name, status, fields, design,
-			success_message, redirect_url, campaign_id, allowed_domains, captcha_enabled)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			success_message, redirect_url, campaign_id, allowed_domains, captcha_enabled, triage_enabled)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING id
 	`, orgID, createdBy, f.PublicID, f.Name, f.Status, fields, design,
-		f.SuccessMessage, f.RedirectURL, f.CampaignID, domains, f.CaptchaEnabled).Scan(&id)
+		f.SuccessMessage, f.RedirectURL, f.CampaignID, domains, f.CaptchaEnabled, f.TriageEnabled).Scan(&id)
 	if err != nil {
 		db.CaptureError(err, "forms create", nil, "insert")
 		return nil, errx.InternalError()
@@ -205,10 +205,10 @@ func (r *formRepository) Update(ctx context.Context, orgID uuid.UUID, f *models.
 	tag, err := tx.Exec(ctx, `
 		UPDATE forms SET name = $3, status = $4, fields = $5, design = $6, success_message = $7,
 			redirect_url = $8, campaign_id = $9, allowed_domains = $10, captcha_enabled = $11,
-			published_at = $12, updated_at = NOW()
+			published_at = $12, triage_enabled = $13, updated_at = NOW()
 		WHERE organization_id = $1 AND id = $2
 	`, orgID, f.ID, f.Name, f.Status, fields, design, f.SuccessMessage,
-		f.RedirectURL, f.CampaignID, domains, f.CaptchaEnabled, f.PublishedAt)
+		f.RedirectURL, f.CampaignID, domains, f.CaptchaEnabled, f.PublishedAt, f.TriageEnabled)
 	if err != nil {
 		db.CaptureError(err, "forms update", nil, "exec")
 		return nil, errx.InternalError()
@@ -305,10 +305,10 @@ func (r *formRepository) CreateSubmission(ctx context.Context, sub *models.FormS
 	defer tx.Rollback(ctx)
 
 	err = tx.QueryRow(ctx, `
-		INSERT INTO form_submissions (form_id, organization_id, contact_id, campaign_id, data, source_url)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO form_submissions (form_id, organization_id, contact_id, campaign_id, data, source_url, triage, triage_confidence)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id, created_at
-	`, sub.FormID, sub.OrganizationID, sub.ContactID, sub.CampaignID, data, sub.SourceURL).Scan(&sub.ID, &sub.CreatedAt)
+	`, sub.FormID, sub.OrganizationID, sub.ContactID, sub.CampaignID, data, sub.SourceURL, sub.Triage, float32(sub.TriageConfidence)).Scan(&sub.ID, &sub.CreatedAt)
 	if err != nil {
 		db.CaptureError(err, "form submission", nil, "insert")
 		return nil, errx.InternalError()
@@ -331,7 +331,7 @@ func (r *formRepository) ListSubmissions(ctx context.Context, orgID, formID uuid
 		limit = 50
 	}
 	rows, err := r.DB.Query(ctx, `
-		SELECT s.id, s.form_id, s.organization_id, s.contact_id, s.campaign_id, s.data, s.source_url, s.created_at,
+		SELECT s.id, s.form_id, s.organization_id, s.contact_id, s.campaign_id, s.data, s.source_url, s.triage, s.triage_confidence, s.created_at,
 			COALESCE(c.email, ''), COALESCE(TRIM(c.first_name || ' ' || c.last_name), ''), COALESCE(cp.name, '')
 		FROM form_submissions s
 		LEFT JOIN contacts c ON c.id = s.contact_id
@@ -349,11 +349,13 @@ func (r *formRepository) ListSubmissions(ctx context.Context, orgID, formID uuid
 	for rows.Next() {
 		var s models.FormSubmission
 		var data []byte
-		if err := rows.Scan(&s.ID, &s.FormID, &s.OrganizationID, &s.ContactID, &s.CampaignID, &data, &s.SourceURL, &s.CreatedAt,
+		var confidence float32
+		if err := rows.Scan(&s.ID, &s.FormID, &s.OrganizationID, &s.ContactID, &s.CampaignID, &data, &s.SourceURL, &s.Triage, &confidence, &s.CreatedAt,
 			&s.ContactEmail, &s.ContactName, &s.CampaignName); err != nil {
 			db.CaptureError(err, "form submissions list", nil, "scan")
 			return nil, false, errx.InternalError()
 		}
+		s.TriageConfidence = float64(confidence)
 		s.Data = map[string]any{}
 		if len(data) > 0 {
 			if err := json.Unmarshal(data, &s.Data); err != nil {

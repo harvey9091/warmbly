@@ -63,6 +63,19 @@ function route(url: string): unknown {
     if (/^\/campaigns\/[^/?]+$/.test(url)) {
         return { id: "camp-1", name: "Probe campaign", status: "draft", description: "" };
     }
+    if (url.endsWith("/send-plan")) {
+        return {
+            campaign_id: "camp-1", status: "draft", day: "2026-09-19", timezone: "UTC",
+            computed_at: new Date().toISOString(), configured_ceiling: 0, projected_today: 0,
+            sent_today: 0, expected_remaining: 0, bottleneck: "", limits: [],
+            window: { sending_day: true, open_now: true, minutes_left: 60 },
+            leads: {
+                due_now: 0, due_later_today: 0, new_leads_due_today: 0, waiting_on_step: 0,
+                waiting_on_condition: 0, held: 0, waiting_on_sender: 0, new_leads_started_today: 0, max_new_leads_per_day: 0,
+            },
+            mailboxes: [],
+        };
+    }
     if (url === "/auth/me" || url === "/me") {
         return {
             id: "u1", email: "d@w.com", first_name: "D", last_name: "W",

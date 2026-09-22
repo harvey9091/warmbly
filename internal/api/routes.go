@@ -39,7 +39,7 @@ func Run(
 	// ours, which reports the panic with its request context before returning
 	// the same 500. Everything else about the pair is unchanged.
 	r := gin.New()
-	r.Use(gin.Logger())
+	r.Use(middleware.RequestLogger())
 	r.Use(middleware.Recovery())
 
 	// Gin trusts every proxy by default, which makes X-Forwarded-For (and so
@@ -54,6 +54,10 @@ func Run(
 	} else {
 		_ = r.SetTrustedProxies(nil)
 	}
+
+	// Registered before every route, including the public ones below, so the
+	// headers reach the OAuth bouncer pages and /public as well as the API.
+	r.Use(middleware.SecurityHeaders())
 
 	r.Use(middleware.RequestIDMiddleware())
 	r.Use(middleware.APIVersionMiddleware(middleware.APIVersion))
@@ -93,7 +97,7 @@ func Run(
 	// token rather than an operator session, because the machine running it
 	// has no credentials yet.
 	r.GET("/join.sh", h.ServeJoinScript)
-	r.POST("/api/v1/fleet/join", h.FleetJoin)
+	r.POST("/api/v1/fleet/join", m.PublicIPRateLimitMiddleware(), h.FleetJoin)
 
 	// Public OAuth-bouncer pages used by the mailbox onboarding popup.
 	// The provider redirects here; the page postMessages the code/state
@@ -109,13 +113,13 @@ func Run(
 	// Public recipient unsubscribe (RFC 8058 one-click and the link in the
 	// email). The path token is signed per recipient; GET only shows a
 	// confirm page, POST suppresses. Unauthenticated by design.
-	r.GET("/unsubscribe/:token", h.UnsubscribePage)
-	r.POST("/unsubscribe/:token", h.UnsubscribeSubmit)
-	r.POST("/unsubscribe/:token/resubscribe", h.UnsubscribeUndo)
+	r.GET("/unsubscribe/:token", m.PublicIPRateLimitMiddleware(), h.UnsubscribePage)
+	r.POST("/unsubscribe/:token", m.PublicIPRateLimitMiddleware(), h.UnsubscribeSubmit)
+	r.POST("/unsubscribe/:token/resubscribe", m.PublicIPRateLimitMiddleware(), h.UnsubscribeUndo)
 
 	// Public invitation preview for the /invite landing page. Unauthenticated:
 	// the secret token in the query is the capability.
-	r.GET("/invitations/lookup", h.PreviewInvitation)
+	r.GET("/invitations/lookup", m.PublicIPRateLimitMiddleware(), h.PreviewInvitation)
 
 	// On-demand TLS gate for the reverse proxy in front of this instance
 	// (Caddy's `ask`). Unauthenticated because the proxy has no credential to
@@ -126,7 +130,7 @@ func Run(
 	// PostHog reverse proxy. Content blockers drop requests to posthog.com, so
 	// the frontends are pointed here and this forwards them. Public by
 	// necessity: it serves the browser before anyone has signed in.
-	r.Any("/ingest/*path", h.PostHogProxy)
+	r.Any("/ingest/*path", m.PublicIPRateLimitMiddleware(), h.PostHogProxy)
 
 	// Internal backend-to-backend endpoints. Workers call these instead of
 	// touching Postgres directly, per the no-direct-data-services rule in
@@ -178,6 +182,10 @@ func Run(
 		// Sync governor priority lane: "is this new message a reply to
 		// something the mailbox sent?" (tasks, message map, unibox threads).
 		internal.GET("/sync/own-conversation", h.InternalSyncOwnConversation)
+
+		// Expunge reconciliation: what the platform still holds for one IMAP
+		// folder, so the worker can drop the rows the server no longer reports.
+		internal.GET("/sync/folder-messages", h.InternalSyncFolderMessages)
 
 		// Worker bootstrap config + heartbeat. Workers POST their identity
 		// on boot (worker_id + bind_ip + tag) and pull their runtime config
@@ -291,6 +299,17 @@ func Run(
 		cliAuthPublic.POST("/poll", h.CLIAuthPoll)
 	}
 
+	// Minting a discoverable-login challenge is page furniture, not an attempt
+	// at anything: the sign-in screen asks for one on load, before the person
+	// has typed. It gets its own per-IP budget so opening that page repeatedly
+	// cannot spend the allowance password sign-in, registration and reset all
+	// draw on. Finishing the ceremony is an attempt and stays on /auth below.
+	passkeyPublic := v1.Group("/auth/passkey")
+	passkeyPublic.Use(m.PasskeyChallengeIPRateLimitMiddleware())
+	{
+		passkeyPublic.POST("/login/begin", h.PasskeyLoginBegin)
+	}
+
 	auth := v1.Group("/auth")
 	// Every unauthenticated auth route shares one per-IP budget. Nothing
 	// throttled these before: RateLimitMiddleware is keyed on the user id and
@@ -318,8 +337,8 @@ func Run(
 		// Passkey (WebAuthn) sign-in is discoverable/usernameless: a passkey
 		// is already strong auth, so it's a single step with no email OTP.
 		// Public on purpose — there's no account context until the assertion
-		// resolves, and the challenge + signature are the protection.
-		auth.POST("/passkey/login/begin", h.PasskeyLoginBegin)
+		// resolves, and the challenge + signature are the protection. The
+		// challenge half is minted above, on a budget of its own.
 		auth.POST("/passkey/login/finish", h.PasskeyLoginFinish)
 
 		// Native-app social sign-in: the app authenticates with Apple/Google
@@ -348,6 +367,10 @@ func Run(
 		// The name the exchange shipped under when OIDC was the only browser
 		// flow, kept so a client written against it keeps working.
 		auth.POST("/oidc/exchange", h.SSOExchange)
+		// A federated sign-in whose address belongs to an existing password
+		// account comes back link_required; this takes the password, attaches
+		// the identity and issues the session.
+		auth.POST("/sso/link", h.SSOLink)
 
 		// 2FA login challenge (PUBLIC): exchanges a single-use pending token +
 		// TOTP/recovery code for a real session. Rate-limited in the service
@@ -396,13 +419,24 @@ func Run(
 		protectedAuth.POST("/2fa/enroll/start", h.TwoFAEnrollStart)
 		protectedAuth.POST("/2fa/enroll/confirm", h.TwoFAEnrollConfirm)
 		protectedAuth.DELETE("/2fa", h.TwoFADisable)
+		// No Idempotency-Key: the proof code is single-use, so a retry is refused rather than rotating twice.
+		protectedAuth.POST("/2fa/recovery-codes", h.TwoFARegenerateRecoveryCodes)
+
+		// Re-prove the account holder behind a live session. What the routes
+		// marked RequireFreshAuth below are waiting for.
+		protectedAuth.POST("/reauth", h.Reauth)
 
 		// Passkey enrollment + management require an authenticated session.
-		protectedAuth.POST("/passkey/register/begin", h.PasskeyRegisterBegin)
-		protectedAuth.POST("/passkey/register/finish", h.PasskeyRegisterFinish)
+		//
+		// Registering a passkey adds a credential that signs in on its own, so
+		// it is a sensitive change in the CASA 2.4.1 sense: a stolen token must
+		// not be enough to leave a permanent way back in. Listing and renaming
+		// are not.
+		protectedAuth.POST("/passkey/register/begin", middleware.RequireFreshAuth(), h.PasskeyRegisterBegin)
+		protectedAuth.POST("/passkey/register/finish", middleware.RequireFreshAuth(), h.PasskeyRegisterFinish)
 		protectedAuth.GET("/passkey/credentials", h.PasskeyListCredentials)
 		protectedAuth.PATCH("/passkey/credentials/:id", h.PasskeyRenameCredential)
-		protectedAuth.DELETE("/passkey/credentials/:id", h.PasskeyDeleteCredential)
+		protectedAuth.DELETE("/passkey/credentials/:id", middleware.RequireFreshAuth(), h.PasskeyDeleteCredential)
 	}
 
 	// The full customer-facing API surface (the API-key-capable `protected`
@@ -454,6 +488,7 @@ func Run(
 				emails.GET("/allowance", m.RequireOrganization(), m.RequireAccess(models.PermManageEmails, models.APIPermReadEmails), h.GetMailboxAllowance)
 				emails.GET("/:id/track", m.RequireAccess(models.PermViewCampaigns, models.APIPermReadEmails), middleware.RequireAPIKeyEmailAccountParam("id"), h.GetEmailTrackingDomain)
 				emails.PATCH("/:id/track", m.RequireAccess(models.PermManageEmails, models.APIPermWriteEmails), middleware.RequireAPIKeyEmailAccountParam("id"), h.UpdateEmailTrackingDomain)
+				emails.PATCH("/:id/direct-tracking", m.RequireAccess(models.PermManageEmails, models.APIPermWriteEmails), middleware.RequireAPIKeyEmailAccountParam("id"), h.UpdateEmailDirectTracking)
 				// Write-scoped like the auth-check refresh: persisting the
 				// verdict is what routes real links through the custom host.
 				emails.POST("/:id/track/verify", m.RequireAccess(models.PermManageEmails, models.APIPermWriteEmails), middleware.RequireAPIKeyEmailAccountParam("id"), h.VerifyEmailTrackingDomain)
@@ -469,6 +504,12 @@ func Run(
 				// and warmup gate, so a read-only key must not reach it.
 				emails.POST("/:id/auth-check", m.RequireAccess(models.PermManageEmails, models.APIPermWriteEmails), middleware.RequireAPIKeyEmailAccountParam("id"), h.RefreshEmailAuthCheck)
 				emails.GET("/:id/sync", m.RequireAccess(models.PermViewCampaigns, models.APIPermReadEmails), middleware.RequireAPIKeyEmailAccountParam("id"), h.GetEmailSync)
+				// Which addresses the provider will let this mailbox send as,
+				// and where its signature came from. The refresh is the only
+				// half that calls the provider, and storing its answer is what
+				// a send-as choice is validated against, so it is write-scoped.
+				emails.GET("/:id/identity", m.RequireAccess(models.PermViewCampaigns, models.APIPermReadEmails), middleware.RequireAPIKeyEmailAccountParam("id"), h.GetEmailSendIdentity)
+				emails.POST("/:id/identity/refresh", m.RequireAccess(models.PermManageEmails, models.APIPermWriteEmails), middleware.RequireAPIKeyEmailAccountParam("id"), h.RefreshEmailSendIdentity)
 				// Human sending behaviour: the ranges the mailbox rolls its
 				// workday from, and the workday it rolled for today.
 				emails.GET("/:id/behavior", m.RequireAccess(models.PermViewCampaigns, models.APIPermReadEmails), middleware.RequireAPIKeyEmailAccountParam("id"), h.GetEmailBehavior)
@@ -553,6 +594,9 @@ func Run(
 				campaigns.POST("/:id/start", m.RequireOrganization(), m.RequireAccess(models.PermSendCampaigns, models.APIPermSendCampaigns), h.StartCampaign)
 				campaigns.POST("/:id/stop", m.RequireOrganization(), m.RequireAccess(models.PermSendCampaigns, models.APIPermSendCampaigns), h.StopCampaign)
 				campaigns.GET("/:id/logs", m.RequireAccess(models.PermViewCampaigns, models.APIPermReadCampaigns), h.GetCampaignLogs)
+				// Today's sending plan: derived through the scheduler's gates on
+				// every read, never stored.
+				campaigns.GET("/:id/send-plan", m.RateLimitMiddleware(models.RateLimitRead), m.RequireOrganization(), m.RequireAccess(models.PermViewCampaigns, models.APIPermReadCampaigns), h.GetCampaignSendPlan)
 
 				// Form performance for this campaign's recipients.
 				campaigns.GET("/:id/forms", m.RequireOrganization(), m.RequireAccess(models.PermViewCampaigns, models.APIPermReadCampaigns), h.GetCampaignForms)
@@ -569,6 +613,15 @@ func Run(
 
 				// Campaign-scoped tracking-domain verification.
 				campaigns.POST("/:id/tracking-domain/verify", m.RequireOrganization(), m.RequireAccess(models.PermManageCampaigns, models.APIPermWriteCampaigns), h.VerifyCampaignTrackingDomain)
+
+				// Per-lead hold: park ONE contact's flow in THIS campaign
+				// until a date (or until someone lifts it) without
+				// unsubscribing them or removing them from the campaign. Both
+				// writes state an absolute hold rather than a delta, so a
+				// retry lands on the same state and needs no Idempotency-Key.
+				campaigns.GET("/:id/leads/:contactId/hold", m.RequireOrganization(), m.RequireAccess(models.PermViewCampaigns, models.APIPermReadCampaigns), h.GetCampaignLeadHold)
+				campaigns.POST("/:id/leads/:contactId/pause", m.RequireOrganization(), m.RequireAccess(models.PermManageCampaigns, models.APIPermWriteCampaigns), h.PauseCampaignLead)
+				campaigns.POST("/:id/leads/:contactId/resume", m.RequireOrganization(), m.RequireAccess(models.PermManageCampaigns, models.APIPermWriteCampaigns), h.ResumeCampaignLead)
 
 				sequences := campaigns.Group("/:id/steps")
 				{
@@ -816,7 +869,11 @@ func Run(
 			apiKeys.Use(m.RateLimitMiddleware(models.RateLimitWrite))
 			{
 				apiKeys.GET("", h.ListAPIKeys)
-				apiKeys.POST("", h.CreateAPIKey)
+				// A new key is a durable credential that outlives the session
+				// that made it, so a session caller confirms first. A key or
+				// OAuth caller has no session to confirm and passes through to
+				// the permission gate.
+				apiKeys.POST("", middleware.RequireFreshAuth(), h.CreateAPIKey)
 				apiKeys.GET("/permissions", h.ListAPIPermissions)
 				apiKeys.GET("/usage/summary", h.GetAPIKeyUsageSummary)
 				apiKeys.GET("/usage/analytics", h.GetAPIKeyAnalytics)
@@ -835,6 +892,9 @@ func Run(
 			analytics.Use(m.RateLimitMiddleware(models.RateLimitAnalytics), m.RequireAccess(models.PermViewAnalytics, models.APIPermReadAnalytics))
 			{
 				analytics.GET("/dashboard", h.GetDashboardAnalytics)
+				analytics.GET("/direct", h.GetDirectMailAnalytics)
+				// Automatic inbox tagging: the phase-1 review surface (read-only).
+				analytics.GET("/inbox-tagging", h.GetInboxTaggingReview)
 				analytics.GET("/deliverability", m.RequireOrganization(), h.GetDeliverabilityDashboard)
 				analytics.GET("/warmup", h.GetWarmupAnalytics)
 				analytics.GET("/campaigns/compare", h.CompareCampaigns)
@@ -1122,6 +1182,11 @@ func Run(
 				{
 					crmTasks.GET("", m.RequireAccess(models.PermViewContacts, models.APIPermReadCRM), h.ListCRMTasks)
 					crmTasks.POST("", m.RequireAccess(models.PermManageContacts, models.APIPermWriteCRM), h.CreateCRMTask)
+					// Bulk status/priority and bulk delete over a selection: the
+					// ids ticked, or the whole current filter. Same scope as
+					// the single-task routes they stand in for.
+					crmTasks.PATCH("", m.RequireAccess(models.PermManageContacts, models.APIPermWriteCRM), h.BulkUpdateCRMTasks)
+					crmTasks.DELETE("", m.RequireAccess(models.PermManageContacts, models.APIPermWriteCRM), h.BulkDeleteCRMTasks)
 					crmTasks.POST("/search", m.RequireAccess(models.PermViewContacts, models.APIPermReadCRM), h.SearchCRMTasks)
 					crmTasks.POST("/summary", m.RequireAccess(models.PermViewContacts, models.APIPermReadCRM), h.TasksSummary)
 					crmTasks.GET("/:id", m.RequireAccess(models.PermViewContacts, models.APIPermReadCRM), h.GetCRMTask)
@@ -1188,7 +1253,7 @@ func Run(
 				org.DELETE("/invitations/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageTeam), h.CancelInvitation)
 				org.GET("/invitations/:id/link", m.RequireOrganization(), m.RequirePermission(models.PermManageTeam), h.GetInvitationLink)
 
-				org.POST("/transfer-ownership", m.RequireOrganization(), m.RequirePermission(models.PermTransferOwnership), h.TransferOwnership)
+				org.POST("/transfer-ownership", m.RequireOrganization(), m.RequirePermission(models.PermTransferOwnership), middleware.RequireFreshAuth(), h.TransferOwnership)
 
 				org.POST("/avatar", m.RequireOrganization(), h.UploadOrganizationAvatar)
 				org.DELETE("/avatar", m.RequireOrganization(), h.DeleteOrganizationAvatar)
@@ -1210,7 +1275,7 @@ func Run(
 				org.GET("/current/import/:id", m.RequireOrganization(), h.GetOrgImport)
 
 				org.GET("/current/danger-zone", m.RequireOrganization(), h.GetOrganizationDangerZone)
-				org.POST("/current/danger-zone/delete", m.RequireOrganization(), h.ScheduleOrganizationDeletion)
+				org.POST("/current/danger-zone/delete", m.RequireOrganization(), middleware.RequireFreshAuth(), h.ScheduleOrganizationDeletion)
 				org.DELETE("/current/danger-zone/delete", m.RequireOrganization(), h.CancelOrganizationDeletion)
 
 				// Customer-facing limit-increase requests. The "current
@@ -1251,8 +1316,15 @@ func Run(
 			account := jwtOnly.Group("/me")
 			{
 				account.GET("/danger-zone", h.GetAccountDangerZone)
-				account.POST("/danger-zone/delete", h.ScheduleAccountDeletion)
+				account.POST("/danger-zone/delete", middleware.RequireFreshAuth(), h.ScheduleAccountDeletion)
 				account.DELETE("/danger-zone/delete", h.CancelAccountDeletion)
+
+				// A member's own layout of a dashboard list (columns, order,
+				// sort) in the current workspace. Personal, so JWT only: an API
+				// key has no screen to lay out.
+				account.GET("/views/:view", m.RequireOrganization(), h.GetViewPreferences)
+				account.PUT("/views/:view", m.RequireOrganization(), h.UpdateViewPreferences)
+				account.DELETE("/views/:view", m.RequireOrganization(), h.ResetViewPreferences)
 			}
 
 			jwtOnly.GET("/invitations", h.GetMyPendingInvitations)
@@ -1297,6 +1369,11 @@ func Run(
 				poolLink.GET("/codes/:code", h.PoolLinkDescribeCode)
 				poolLink.POST("/codes/:code/approve", h.PoolLinkApproveCode)
 				poolLink.POST("/codes/:code/deny", h.PoolLinkDenyCode)
+				// The pool plan is not in the public plan list, so the
+				// dashboard has no other way to learn its price or reach a
+				// checkout for it.
+				poolLink.GET("/offer", h.PoolLinkOffer)
+				poolLink.POST("/checkout", m.RequireOrganization(), m.RequirePermission(models.PermManageBilling), h.PoolLinkCheckout)
 				poolLink.GET("/instances", m.RequireOrganization(), m.RequirePermission(models.PermManageSettings), h.PoolLinkListInstances)
 				poolLink.DELETE("/instances/:id", m.RequireOrganization(), m.RequirePermission(models.PermManageSettings), h.PoolLinkRevokeInstance)
 			}
@@ -1441,6 +1518,7 @@ func Run(
 		adminRoutes.GET("/organizations", middleware.RequireAdminPermission(models.AdminPermViewOrganizations), h.AdminListOrganizations)
 		adminRoutes.GET("/organizations/:id", middleware.RequireAdminPermission(models.AdminPermViewOrganizations), h.AdminGetOrganization)
 		adminRoutes.GET("/organizations/:id/members", middleware.RequireAdminPermission(models.AdminPermViewOrganizations), h.AdminGetOrganizationMembers)
+		adminRoutes.GET("/organizations/:id/roles", middleware.RequireAdminPermission(models.AdminPermViewOrganizations), h.AdminGetOrganizationRoles)
 		adminRoutes.GET("/organizations/:id/overrides", middleware.RequireAdminPermission(models.AdminPermViewOrganizations), h.AdminGetOrgOverrides)
 		adminRoutes.PUT("/organizations/:id/overrides", middleware.RequireAdminPermission(models.AdminPermManageOrganizations), h.AdminUpdateOrgOverrides)
 		// A plan granted by an operator rather than Stripe. Same permission as
@@ -1449,6 +1527,18 @@ func Run(
 		adminRoutes.GET("/organizations/:id/managed-plan", middleware.RequireAdminPermission(models.AdminPermViewOrganizations), h.AdminGetOrgManagedPlan)
 		adminRoutes.PUT("/organizations/:id/managed-plan", middleware.RequireAdminPermission(models.AdminPermManageOrganizations), h.AdminGrantOrgManagedPlan)
 		adminRoutes.DELETE("/organizations/:id/managed-plan", middleware.RequireAdminPermission(models.AdminPermManageOrganizations), h.AdminRevokeOrgManagedPlan)
+
+		// Promo codes. The customer-facing half (validate + redeem at
+		// checkout) has always existed; this is the operator half that
+		// creates one, so a launch offer no longer means an INSERT against
+		// production. Codes decide what a workspace is charged, which is the
+		// same entitlement story as a managed plan, so they reuse its bits.
+		adminRoutes.GET("/discounts", middleware.RequireAdminPermission(models.AdminPermViewOrganizations), h.AdminListDiscounts)
+		adminRoutes.POST("/discounts", middleware.RequireAdminPermission(models.AdminPermManageOrganizations), h.AdminCreateDiscount)
+		adminRoutes.GET("/discounts/:id", middleware.RequireAdminPermission(models.AdminPermViewOrganizations), h.AdminGetDiscount)
+		adminRoutes.PATCH("/discounts/:id", middleware.RequireAdminPermission(models.AdminPermManageOrganizations), h.AdminUpdateDiscount)
+		adminRoutes.DELETE("/discounts/:id", middleware.RequireAdminPermission(models.AdminPermManageOrganizations), h.AdminDeleteDiscount)
+		adminRoutes.GET("/discounts/:id/redemptions", middleware.RequireAdminPermission(models.AdminPermViewOrganizations), h.AdminListDiscountRedemptions)
 
 		// Workspace abuse posture. The customer route withholds the evidence;
 		// this is where an operator reads it, pins a decision over it, and

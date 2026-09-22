@@ -55,7 +55,7 @@ Five values protect the whole instance. Compose ships a working default for each
 
 | Variable | Format | What it protects | Restart needed |
 |---|---|---|---|
-| `AUTH_SECRET` | 32 characters or more | JWT and session signing. The realtime service reads the same value as `JWT_SECRET` | yes |
+| `AUTH_SECRET` | 32 characters or more, enforced at boot | JWT and session signing. The realtime service reads the same value as `JWT_SECRET` and applies the same floor. Both refuse to start below it: a shorter HS256 key can be recovered offline from any token the service has issued | yes |
 | `INTERNAL_API_TOKEN` | any random string | The backend's `/api/v1/internal/` routes, which workers and the tracking service authenticate against | yes |
 | `NODE_BROKER_TOKEN` | any random string | The routes that perform a privileged operation for the caller: opening a sealed data key, signing a blob operation, and minting a provider access token for a mailbox Warmbly Cloud manages. Optional, and falls back to `INTERNAL_API_TOKEN`. The same value has to be set on the control plane and on every node that calls those routes, or they answer 401. Worth setting in a split deployment, where the tracking and forms services are internet-facing and hold the shared token | yes |
 | `SECRET_KEY_BASE` | 64 characters or more | Phoenix session signing in the realtime service | yes |
@@ -143,10 +143,12 @@ TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12
 | `SSO_AUTO_PROVISION` | `true` lets a verified identity provider assertion create an account regardless of `DISABLE_REGISTRATION` | `false` | yes |
 | `AUTH_IP_RATE_LIMIT` | Unauthenticated auth requests allowed per source IP per 15 minutes | `60` | yes |
 | `CLI_AUTH_IP_RATE_LIMIT` | CLI sign-in handshake requests allowed per source IP per 15 minutes. Its own budget, because one `warmbly auth login` polls around 200 times and must not exhaust the allowance above | `500` | yes |
+| `PASSKEY_IP_RATE_LIMIT` | Passkey login challenges allowed per source IP per 15 minutes. Its own budget, because the sign-in page asks for a challenge on load rather than when someone acts, so opening that page must not spend the allowance above. Finishing the ceremony is an authentication attempt and counts against `AUTH_IP_RATE_LIMIT` | `300` | yes |
+| `PUBLIC_IP_RATE_LIMIT` | Requests allowed per source IP per 15 minutes on the remaining public routes: unsubscribe, invitation preview, fleet enrolment and the analytics proxy. Each carries its authorization in a high-entropy token, so this bounds unmetered writes and relayed bandwidth rather than guessing. Counts reads as well as writes, unlike the auth limiter | `600` | yes |
 | `WARMBLY_BOOTSTRAP_EMAIL` | First owner's address, read only while the users table is empty | unset | yes |
 | `WARMBLY_BOOTSTRAP_PASSWORD_HASH` | Argon2 PHC string for that owner. Preferred over the plaintext form | unset | yes |
 | `WARMBLY_BOOTSTRAP_PASSWORD` | Plaintext convenience form. Warns at boot, and leaves a password in your process environment | unset | yes |
-| `WARMBLY_BOOTSTRAP_ORG` | Name of the organization created with that owner | derived from the name | yes |
+| `WARMBLY_BOOTSTRAP_ORG` | Name of the organization created with that owner. A value that breaks the [naming rules](/api/error-codes/#name-refusals) is ignored with a warning | derived from the name | yes |
 | `TWOFA_SECRET` | Key that encrypts stored TOTP secrets. Falls back to `AUTH_SECRET`, so existing deployments keep working; rotating it invalidates every enrolled TOTP secret | `AUTH_SECRET` | yes |
 | `WEBAUTHN_RP_ID` | Passkey relying party id. Derived from `APP_URL` when unset. Changing it invalidates every enrolled passkey | derived | yes |
 | `WEBAUTHN_RP_ORIGINS` | Origins accepted for passkey ceremonies | derived from `APP_URL` | yes |
@@ -310,7 +312,7 @@ A worker's command topic is named after the node id issued when it joined, so th
 </Callout>
 
 
-`CODEC_PROVIDER=json` is required wherever workers run: the worker command and result envelopes carry untyped bodies Avro cannot serialize, so any other value makes every worker command fail to encode. `PUBSUB_ENABLED` must agree across backend, consumer and realtime.
+`json` needs nothing and is the default. `avro` resolves every event against `SCHEMA_REGISTRY_URL` and ships only in the `-kafka` images. Producers and consumers have to agree on one: there is no in-band marker, so a consumer on the other codec cannot read what is already on the bus. Change it by draining the bus, not in place. `PUBSUB_ENABLED` must agree across backend, consumer and realtime.
 
 <Callout type="warn" title="The tracking topic is read by two languages">
 `KAFKA_TRACKING_TOPIC` is read by the Rust publisher and the Go subscriber. Override it in one place only and opens and clicks stop being consumed, with no error anywhere.
@@ -322,6 +324,8 @@ A worker's command topic is named after the node id issued when it joined, so th
 |---|---|---|---|
 | `PRIMARY_DB` | PostgreSQL connection string. Carries inline credentials, so it is never returned by any API | the compose postgres | yes |
 | `PGSSLROOTCERT` | Certificate bundle used to verify the database's TLS certificate, read by the Postgres driver. Amazon RDS chains to a root in no public trust store, so `sslmode=verify-full` against it needs AWS's bundle; the backend and consumer images ship it at `/etc/ssl/rds/global-bundle.pem`. Prefer `sslrootcert=` in the DSN so the setting travels with the connection it applies to | unset (system trust store) | yes |
+| `DB_MAX_CONNS` | Maximum pooled Postgres connections for one Go process (backend, consumer). The ceiling that matters is the database's `max_connections`, and every replica, consumer and `warmblyctl` run takes its own share of it. At boot a process asks the server for that ceiling and lowers its own pool to a quarter of the connections the server leaves unreserved. The quarter assumes four database clients, which is backend and consumer with a rolling deploy running two of each, so it is a per-process guard and not a fleet-wide allocation: more than four clients, or anything else sharing the server, still needs this set deliberately. The clamp only ever lowers the pool, and only when the probe succeeds; a probe that cannot reach the server or read the setting leaves the value below in force. A `pool_max_conns` in the DSN is honoured when this is unset | `25`, lowered to the probed share | yes |
+| `DB_MIN_CONNS` | Connections each Go process keeps open while idle. Capped at `DB_MAX_CONNS` | `2` | yes |
 | `DATABASE_URL` | The realtime service's own name for the same database | the compose postgres | yes |
 | `DATABASE_POOL_SIZE` | Maximum pooled connections **for the realtime service only**. The Go services use the driver default and do not read it | `10` | yes |
 | `DATABASE_SSL` | Whether the realtime service connects to Postgres over TLS | `true`, and `false` under compose | yes |
@@ -343,8 +347,74 @@ Redis holds rate limit counters, the organization key cache, the realtime bridge
 | Variable | What it does | Default | Restart needed |
 |---|---|---|---|
 | `GEODB_PATH` | Path to a GeoLite2 City database | none, and the backend refuses to start without the variable | yes |
+| `GEODB_URL` | Where to download that database from when nothing is at `GEODB_PATH` yet | unset, and only a file already there is used | yes |
+| `TRACKING_SCANNER_ASN_DB` | Path to a GeoLite2 ASN database, on the tracking service | unset, and ASN matching is off | yes |
+| `TRACKING_SCANNER_ASN_DB_URL` | Where the tracking service downloads that database from | unset | yes |
 
-The variable must be set on the backend in every environment. The file itself is optional: a missing file at that path means sessions and audit rows are recorded without a city, and nothing else changes. The consumer reads the same variable, optionally, to put a country and city on each email open and click; without it those records carry client and device only.
+`GEODB_PATH` must be set on the backend in every environment. The file itself is optional: a missing file at that path means sessions and audit rows are recorded without a city, and nothing else changes. The consumer reads the same variable, optionally, to put a country and city on each email open and click; without it those records carry client and device only.
+
+These are two different databases and two different files. GeoLite2-City answers where an address is; GeoLite2-ASN answers which network announces it, which is what makes the tracking service's `asn:` scanner entries match. Neither file contains the other's data, so a reader pointed at the wrong one resolves nothing. Both are free on one MaxMind account, as the `GeoLite2-City` and `GeoLite2-ASN` editions, and `geoipupdate` fetches either.
+
+`GEODB_PATH` belongs on the backend and the consumer, `TRACKING_SCANNER_ASN_DB` on the tracking service, and each is ignored when its file is absent: a missing city database costs location labels, a missing ASN database costs `asn:` matching. Pointing `TRACKING_SCANNER_ASN_DB` at a City database is refused at boot with a line naming what it found, rather than matching nothing and saying nothing.
+
+### Getting the databases in
+
+A file you can mount is the simplest answer and needs none of the variables below. Where there is nothing to mount from, which is most container hosts, set the matching `_URL` variable and the service fetches its own copy at startup.
+
+```bash
+# MaxMind's download endpoint, which always serves the current build of an
+# edition, so a restart is how an instance picks up a newer one. Both halves of
+# the credential come from the same page of your MaxMind account: the account
+# id is the username and the licence key is the password.
+GEODB_URL=https://ACCOUNT_ID:LICENCE_KEY@download.maxmind.com/geoip/databases/GeoLite2-City/download?suffix=tar.gz
+TRACKING_SCANNER_ASN_DB_URL=https://ACCOUNT_ID:LICENCE_KEY@download.maxmind.com/geoip/databases/GeoLite2-ASN/download?suffix=tar.gz
+```
+
+<Callout type="warn" title="The older permalink no longer works">
+MaxMind's `app/geoip_download?license_key=` URL is the form most guides still
+show, and a licence key issued today is refused by it with `Invalid license
+key`. Current keys end in `_mmk` and authenticate against the endpoint above,
+with the account id, so a URL that carries only the key fails whatever the key
+is.
+</Callout>
+
+Any URL serving a MaxMind-format database works, and the shape is read from the content rather than the file name, so a `.tar.gz`, a `.mmdb.gz` and a bare `.mmdb` are all accepted. A credential in the userinfo, as above, is sent as HTTP basic authentication. DB-IP's free [Lite databases](https://db-ip.com/db/lite.php) need no account at all and are published in the same format under `dbip-city-lite` and `dbip-asn-lite`; their country data is comparable and their city data is weaker.
+
+Two things to know:
+
+- **Nothing waits for it.** The service starts with location lookups answering `Unknown` and picks the database up when it arrives, so a mirror that is slow or gone costs city labels rather than a deploy's health check.
+- **A file that is already there is kept until it goes stale.** A database less than seven days old is used as it is, with no request at all, so a mounted copy, a volume that survived a restart and a copy you dropped in by hand all win. Past seven days the file is revalidated with `If-Modified-Since`, which normally answers `304 Not Modified`, costs nothing and does not count against MaxMind's daily allowance; only a genuinely newer database is downloaded. With no URL set nothing is ever requested and the file is yours alone.
+- **A refused download is retried.** Four attempts with a growing wait, obeying a `Retry-After` when the server sends one. A throttled or briefly unreachable mirror used to cost that container its geo data for the whole of its life, because the fetch ran once at boot and never again. A refusal that will repeat, such as a bad licence key or a name that does not resolve, is not retried.
+- **A download that is not a database is thrown away, not installed.** An expired licence key returns an error page, and storing that would disable location lookups permanently, because the next start would find a file and not retry. The bytes are opened before they are put in place, and a failure leaves the path empty and one line in the log.
+- **Plain `http` is refused for a URL carrying a credential**, in the query or the userinfo, because it would put the licence key on the wire in the clear. An `http` mirror with nothing secret in its URL is allowed, and a redirect from `https` down to `http` is refused either way.
+
+<Callout type="warn" title="Both URLs are secrets">
+These URLs carry the account's credential, in the userinfo above and in the query on an older-style link. The backend treats both variables as secrets: their values are never returned by any API, and the admin panel reports them as set rather than showing them. Nothing logs either one intact: the userinfo and the query are both stripped, including from the errors `net/http` and `reqwest` build, which embed the URL they were given.
+</Callout>
+
+The tracking service is the exception to the path: it holds its ASN database in memory and never writes it out, so `TRACKING_SCANNER_ASN_DB_URL` works on its own and `TRACKING_SCANNER_ASN_DB` can stay unset.
+
+### Mirror the databases rather than pulling from MaxMind
+
+A GeoLite2 account is allowed 30 direct downloads per 24 hours and answers `429` past that; a paid GeoIP account gets 2,000. Each consumer boot fetches GeoLite2-City and each tracking boot fetches GeoLite2-ASN, so a release costs two downloads and a restart loop costs one per restart. That is a ceiling you can reach on a busy day, and reaching it is worse than a failed download: a container that starts into a `429` has no geo data until it is replaced.
+
+Point the URLs at your own copy instead. `.github/workflows/geoip-mirror.yml` runs on Tuesdays and Fridays, which is MaxMind's own publish cadence, downloads both editions once and uploads them to a private bucket. The whole fleet then reads from there, and MaxMind sees two requests a week however often you deploy. An intra-region pull of a 60 MB file is also a second or two rather than however long MaxMind takes.
+
+It needs these repository settings, and skips itself when `MAXMIND_ACCOUNT_ID` is unset so a fork never fails on it:
+
+| Setting | Kind | Meaning |
+| --- | --- | --- |
+| `MAXMIND_ACCOUNT_ID` | variable | The numeric account id |
+| `MAXMIND_LICENSE_KEY` | secret | A licence key for that account |
+| `GEOIP_MIRROR_BUCKET` | variable | Bucket the copies are written to |
+| `GEOIP_MIRROR_REGION` | variable | Its region |
+| `GEOIP_MIRROR_PREFIX` | variable | Key prefix, including the trailing slash |
+| `GEOIP_MIRROR_AWS_ACCESS_KEY_ID` | secret | Credentials that may write that prefix, and nothing else |
+| `GEOIP_MIRROR_AWS_SECRET_ACCESS_KEY` | secret | |
+
+Then set `GEODB_URL` and `TRACKING_SCANNER_ASN_DB_URL` to the mirrored objects. Both accept a credential in the userinfo or the query, so a presigned URL or an object under a non-guessable key works without the services holding bucket credentials. Only the mirror job holds the MaxMind licence key, which is the other reason to prefer this: the key stops being deployment configuration on several services and becomes one repository secret.
+
+Keep the copies private. GeoLite2 may not be redistributed, which is also why nothing is ever baked into the published images. If you would rather have no account at all, DB-IP's Lite databases are CC-BY 4.0 and need none.
 
 ## Workers
 
@@ -352,7 +422,8 @@ The variable must be set on the backend in every environment. The file itself is
 |---|---|---|---|
 | `WORKER_ID` | Stable uuid for this worker. Leave unset when running scaled replicas, which share one environment | derived, then random | yes |
 | `WORKER_BIND_IP` | Source address to bind outbound connections to, and the seed for a derived `WORKER_ID` | unset | yes |
-| `WORKER_PUBLIC_IP` | The address the worker reports to the control plane | detected | yes |
+| `WORKER_PUBLIC_IP` | Public IPv4 fallback reported by the worker. The control plane uses the address observed on the heartbeat when it is public | detected | yes |
+| `WARMBLY_WORKER_CAPACITY` | Assigned-mailbox planning target for this worker. This guides placement and is not a mailbox-provider send limit | `100` | yes |
 | `WARMBLY_NODE_REGION` | Free-form label for where this node egresses from, e.g. `eu-central`. Placement prefers a worker near where a mailbox's provider expects sign-ins; unset scores neutral. Written by the join script from `--region` | unset | yes |
 | `ENCRYPTED_KEYS_BACKEND_URL` | Backend base the worker fetches organization keys from | unset | yes |
 | `ENCRYPTED_KEYS_WORKER_TOKEN` | The worker's copy of `INTERNAL_API_TOKEN` | unset | yes |
@@ -389,7 +460,8 @@ Needed on the backend **and** every worker: the backend starts the OAuth flow, a
 
 | Variable | What it does | Default |
 |---|---|---|
-| `BOX_GOOGLE_CLIENT_ID`, `BOX_GOOGLE_CLIENT_SECRET` | Connect Gmail and Google Workspace mailboxes. Redirect URI is your API base plus `/addresses/google/callback` | unset |
+| `BOX_GOOGLE_CLIENT_ID`, `BOX_GOOGLE_CLIENT_SECRET` | The Google app used by Gmail mailboxes connected with Google sign-in: the ones already connected that way, and new ones once `BOX_GOOGLE_OAUTH_CONNECT` is on. Redirect URI is your API base plus `/addresses/google/callback` | unset |
+| `BOX_GOOGLE_OAUTH_CONNECT` | `true` lets a new Gmail mailbox connect with Google sign-in. Off, the connect dialog walks through an app password over IMAP and SMTP instead, which needs no Google app; mailboxes already on Google sign-in keep working and can be re-authorized either way. Announced to clients as `gmail_oauth_connect` on `GET /auth/config` | `false` |
 | `BOX_OUTLOOK_CLIENT_ID`, `BOX_OUTLOOK_CLIENT_SECRET` | Connect Outlook and Microsoft 365 mailboxes. Redirect URI is your API base plus `/addresses/outlook/callback` | unset |
 
 Plain SMTP and IMAP mailboxes need none of this. If a worker is missing these values, the mailbox connects fine and then silently stops about an hour later, when its first access token expires.
@@ -411,12 +483,18 @@ Plain SMTP and IMAP mailboxes need none of this. If a worker is missing these va
 | `AI_BASE_URL` | Required for `custom`. Any OpenAI compatible endpoint | unset |
 | `AI_FREE` | Treats AI usage as uncharged | derived |
 | `SEARCH_PROVIDER`, `SEARCH_API_URL`, `SEARCH_API_KEY` | Web search for the assistant (`serper` or `searxng`) | unset |
+| `TYPESAFE_API_KEY` | TypeSafe API key. Turns on the typed judgments: reply classification, the copy judgment in the Advisor and the editor, warmup content lint, bounce classification and per-form triage. Inbox tagging needs the switch below as well. See [data control](/development/data-control/#typesafe-judgments) for what each one sends | unset |
+| `INBOX_TAGGING_ENABLED` | `true` enables automatic inbox tagging when `TYPESAFE_API_KEY` is also set. Message subject, current body, and the previous outbound body are sent to TypeSafe | `false` |
 
 <Callout type="warn" title="An unset provider still uses a key">
 An empty `AI_PROVIDER` with a set `AI_API_KEY` falls back to `api.openai.com`, so the key goes to OpenAI. Set both or neither.
 </Callout>
 
+Model compatibility needs no configuration. Backends disagree about the request shape: newer OpenAI models want `max_completion_tokens` rather than `max_tokens`, refuse any temperature but the default, and some refuse function tools unless reasoning is switched off, while most OpenAI compatible backends only know the older shape. The provider learns this from the first rejection of each parameter and remembers it, so a model is walked to a working shape on its first call and every later call starts there.
+
 Set these on the backend and the consumer.
+
+Automatic inbox tagging is read by the backend, consumer, and `warmblyctl`. Both inbox-tagging variables are required; a key by itself does not start classification. See [Automatic inbox tagging](/guides/inbox-tagging/).
 
 ## Tasks and billing
 
@@ -426,6 +504,16 @@ Set these on the backend and the consumer.
 | `TASKS_LOCAL_POLL_INTERVAL` | How often the local poller looks for due work | `1s` |
 | `BILLING_PROVIDER` | `none` (every feature unlocked, no trial expiry; the dashboard reports the workspace as self-hosted rather than on a free tier and hides billing) or `stripe` | `none` |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PUBLISHABLE_KEY` | Required together when `BILLING_PROVIDER=stripe`. The backend exits at boot if any is missing | unset |
+
+Stripe Tax also needs account-side setup. In **Tax > Settings**, confirm the head office address, use the business-use SaaS product tax code (`txcd_10103001`) as the default, and choose whether prices include tax or have tax added at checkout. Apply the same tax code and an explicit tax behavior to every subscription and credit-pack product and price. A price set to inclusive or exclusive cannot be changed later, so replacing that choice requires a new Price and an update to the matching plan or `STRIPE_CREDIT_PACK_*_PRICE_ID` value.
+
+Add a Tax registration only after the business is registered with that tax authority. Automatic tax returns zero with a `not_collecting` reason in jurisdictions where no active registration applies. Enabling Stripe Tax is not a substitute for registering or filing.
+
+Stripe Checkout always requests the billing address needed for tax and lets business buyers provide a legal name and business tax ID. The active default billing portal configuration must allow updates to payment methods, billing email, billing address, name, and tax ID, and must show invoice history. This lets a customer correct its tax location or registration before a renewal.
+
+Point the webhook endpoint at `/webhook/stripe` using API version `2026-08-26.dahlia`, matching stripe-go v86. Subscribe to `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.expired`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`, `invoice.finalization_failed`, `payment_intent.succeeded` and `charge.refunded`. If you replace the endpoint, update `STRIPE_WEBHOOK_SECRET` to the new endpoint's signing secret before disabling the old endpoint. The handler accepts the previous webhook shape during an endpoint upgrade, but new endpoints should use the matching version.
+
+Turning on Stripe Tax does not update existing subscriptions. Review and migrate them from **Tax > Migrations** after setting the prices' tax behavior. Stripe applies the tax change from the next billing cycle without prorating it. The Dashboard migration does not operate on sandbox subscriptions, so update those individually when testing.
 
 Delayed sends run through the local poller, so the backend must be running for scheduled work to fire.
 
@@ -457,10 +545,11 @@ Set both and every error goes to both. Each variable is read by one process, so 
 | `SENTRY_DSN` | forms service | The forms service's own errors | unset |
 | `SENTRY_DSN` | tracking service | Rust errors and panics. An invalid DSN disables reporting with a log line rather than stopping the service | unset |
 | `SENTRY_DSN` | realtime service | An empty string is treated as unset on purpose, because the library rejects `""` hard enough to take the node down | unset |
-| `WARMBLY_POSTHOG_KEY` | web, admin containers | Browser error tracking, read at container start like the other `WARMBLY_*` values. On the dashboard the same key also carries the product analytics below; the admin panel reports only exceptions | unset |
-| `WARMBLY_POSTHOG_KEY` | forms service | Stamped into the public form page for the form app's browser errors. Separate from the forms service's own `POSTHOG_KEY`: one is a Go process, the other is a page a stranger loads | unset |
+| `WARMBLY_POSTHOG_KEY` | web, admin containers | Browser error tracking, read at container start like the other `WARMBLY_*` values. The same key carries the product analytics and session replay below | unset |
+| `WARMBLY_POSTHOG_KEY` | forms service | Stamped into the public form page for the form app's pageviews, web vitals and browser errors. Separate from the forms service's own `POSTHOG_KEY`: one is a Go process, the other is a page a stranger loads | unset |
 | `WARMBLY_POSTHOG_HOST` | web, admin containers, forms service | Capture host for the browser | `https://us.i.posthog.com` |
-| `WARMBLY_POSTHOG_ERROR_TRACKING` | web, admin containers, forms service | `false` reports no browser exceptions to PostHog anywhere, including the form pages the forms service stamps. The dashboard keeps sending product analytics | `true` |
+| `WARMBLY_POSTHOG_ERROR_TRACKING` | web, admin containers, forms service | `false` reports no browser exceptions to PostHog anywhere, including the form pages the forms service stamps. Everything else the key turns on keeps running | `true` |
+| `WARMBLY_POSTHOG_SESSION_REPLAY` | web, admin containers | `false` records no sessions and keeps everything else. Form pages never record, whatever this says | `true` |
 | `WARMBLY_SENTRY_DSN` | web, admin containers | The Sentry half of the same thing. Unset means the SDK is never fetched and no host is contacted | unset |
 | `WARMBLY_SENTRY_DSN` | forms service | Stamped into the public form page, along with the service's `APP_ENV` as the environment | unset |
 | `WARMBLY_SENTRY_ENVIRONMENT` | web, admin containers | The environment label browser events carry, whichever backend receives them. Defaults to the build mode. Form pages do not read it: the forms service stamps its own `APP_ENV` into the page instead | unset |
@@ -471,18 +560,18 @@ Configuring neither backend means nothing leaves the process and no host is cont
 
 A PostHog key can name PostHog Cloud (US or EU) or your own PostHog through `POSTHOG_HOST`. A Sentry DSN can point at Sentry Cloud, a self-hosted Sentry, or any Sentry-compatible server such as GlitchTip; nothing in Warmbly assumes sentry.io.
 
-The distinct id on a PostHog exception names the process that raised it (`warmbly-backend`, `warmbly-worker`), person profiles are switched off per event, and IP geolocation is disabled. Nothing here calls `identify` and nothing is stored in a visitor's browser.
+The distinct id on a server-side PostHog exception names the process that raised it (`warmbly-backend`, `warmbly-worker`), person profiles are switched off per event, and IP geolocation is disabled, since the address would be the server's. A browser exception belongs to the signed-in person the app identified, so it sits next to that person's session replay.
 
 Exceptions still carry the context that makes them answerable, as searchable properties:
 
 | Property | On | What it is for |
 |---|---|---|
-| `organization_id`, `user_id` | browser and request-scoped server exceptions | "Show me every error this workspace hit." Set on exception events only; product analytics stays anonymous |
+| `organization_id`, `user_id` | browser and request-scoped server exceptions | "Show me every error this workspace hit." Flat properties, so one filter finds them on the server side too, where no person is identified |
 | `request_id` | server panics, and browser exceptions whose trail includes a failed call | The id the API already returns in its error envelope, so one incident is findable in PostHog and in the backend's logs |
 | `http_route`, `http_method` | server panics | The route pattern, never the raw path: one issue per route instead of one per record, and a probe for `/wp-admin` cannot mint issues |
 | `service`, `environment`, `release` | everything | Which process, which deployment, which build |
 
-Browser exceptions also carry a trail of steps: the routes visited and the API calls that failed just before, each with its method, route, status and request id. Record ids in a path are masked to `:id` before anything is sent. There is no session recording anywhere; the dashboard renders mailboxes and contacts.
+Browser exceptions also carry a trail of steps: the routes visited and the API calls that failed just before, each with its method, path, status and request id. In the dashboard and the admin panel the exception also sits next to the session replay it happened in, when `WARMBLY_POSTHOG_SESSION_REPLAY` is on; see the analytics section below for what those two surfaces record.
 
 The `admin` panel and the dashboard also tag events with the build they were served from. That value is baked at image build time, because it has to match the release the source maps were uploaded under, so it cannot be changed by a container variable afterwards.
 
@@ -492,26 +581,40 @@ A browser stack trace is minified without them. Uploading them is optional and o
 
 | Build variable | Backend | What it does |
 |---|---|---|
-| `POSTHOG_CLI_API_KEY`, `POSTHOG_CLI_PROJECT_ID` | PostHog | Both set makes the image build run `pnpm sourcemaps:posthog` after `vite build`, which injects a chunk id, uploads, and deletes the `.map` files it sent |
+| `POSTHOG_CLI_API_KEY`, `POSTHOG_CLI_PROJECT_ID` | PostHog | Both set makes the build run `pnpm sourcemaps:posthog` after `vite build`, which injects a chunk id, uploads, and deletes the `.map` files it sent. The `web`, `admin` and `forms` images all do this, so a form page's stack trace is readable too |
 | `POSTHOG_CLI_HOST` | PostHog | The instance to upload to, for PostHog EU or a self-hosted one |
 | `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` | Sentry | All three set puts the Sentry Vite plugin in the build |
 
-In this repository's release workflow the two project ids are repository variables and the two keys are repository secrets, passed to the image build as build secrets.
+In this repository's release workflow the two project ids are repository variables and the two keys are repository secrets, passed to the image build as build secrets. Nothing in the app has to match a release name: PostHog pairs a stack frame with its map through the chunk id the CLI injected into the served file, so an event from any build resolves as long as that build's maps were uploaded.
 
-### Product analytics
+A static host builds with `pnpm build:pages` instead of an image, and that runs the same upload when the same two variables are set in the host's build environment. Setting them there matters more than it looks: with no maps uploaded, PostHog falls back to fetching `<bundle>.js.map` from the site itself, a static host answers that with its SPA fallback, and every frame in every issue reads `Invalid source map: bad json` beside a minified function name.
 
-These are the same two keys as the error tracking above, and they exist for the hosted service. A self-hosted instance that sets no key loads no analytics and sends no usage data: the installer never asks about them, and a build with none of them set contains no analytics script to block. An instance that does set a key for error tracking also gets the handful of product events listed here, which are counts of things happening and never carry an identifier.
+### Product analytics and session replay
+
+These are the same two keys as the error tracking above, and they exist for the hosted service. A self-hosted instance that sets no key loads no analytics and sends no usage data: the installer never asks about them, and a build with none of them set contains no analytics script to block. An instance that does set a key gets everything below.
 
 | Variable | Read by | What it does | Default |
 |---|---|---|---|
-| `POSTHOG_KEY` | backend | Server-side product events (a completed signup, a started subscription). Unset means no client is built and nothing is sent | unset |
+| `POSTHOG_KEY` | backend | Server-side product events (a completed signup, a started trial, a started subscription), under the account id of the person they happened to, with the workspace as a group | unset |
 | `POSTHOG_HOST` | backend | Capture host. Point it at a self-hosted PostHog if you run one | `https://us.i.posthog.com` |
-| `WARMBLY_POSTHOG_KEY` | web container | Browser analytics for the dashboard, read at container start. Unset means the SDK chunk is never fetched | unset |
-| `WARMBLY_POSTHOG_HOST` | web container | Capture host for the browser | `https://us.i.posthog.com` |
+| `WARMBLY_POSTHOG_KEY` | web, admin containers | Browser analytics and session replay, read at container start. Unset means the SDK chunk is never fetched | unset |
+| `WARMBLY_POSTHOG_HOST` | web, admin containers | Capture host for the browser | `https://us.i.posthog.com` |
+| `WARMBLY_POSTHOG_SESSION_REPLAY` | web, admin containers | `false` keeps the analytics and records no sessions | `true` |
 | `PUBLIC_POSTHOG_KEY` | `site/` build | Marketing site analytics. Build-time: unset produces a site with no analytics code in it at all | unset |
 | `PUBLIC_POSTHOG_HOST` | `site/` build | Capture host for the site | `https://us.i.posthog.com` |
 
-Everything runs in PostHog's cookieless mode: nothing is stored in the visitor's browser, no `identify` is ever called, and no event property carries a user id, an organization id or an email. The admin panel gets none of it and never will; it is the operator surface and it ships to self-hosters, so it reports exceptions and measures nothing.
+What each surface sends, with a key set:
+
+| Surface | Identity | Captured |
+|---|---|---|
+| Dashboard | The signed-in account (`identify` with email and name) and its workspace as an `organization` group | Pageviews and pageleaves, autocapture of every click, heatmaps, rage and dead clicks, web vitals and network timing, session replay with console logs, surveys, exceptions, and the named events `mailbox_connected` and `campaign_launched` |
+| Admin panel | The signed-in operator | The same set, so a slow screen or a broken action in the operator surface is findable the same way |
+| Marketing site | Nobody. Cookieless: nothing is stored in the browser and no person is ever created | Pageviews and pageleaves with scroll depth, autocapture, heatmaps, rage and dead clicks, web vitals, exceptions. No session replay: the SDK has no session in cookieless mode, and one would need a consent banner |
+| Public form pages | Nobody. Cookieless, for the stranger filling in a customer's form | Pageviews, autocapture, heatmaps, web vitals, exceptions and the funnel events `form_viewed`, `form_started` and `form_submitted`, each carrying the form's public id. Never recorded |
+
+The person in the dashboard and the person on a server-side event are the same account id, so a signup counted by the backend, the session that led to it and the subscription the Stripe webhook later reports are one funnel. The acquisition parameters the marketing site carries into the signup link land on that person write-once at signup. Countries come from PostHog's own GeoIP on the address the event arrived from; the `/ingest` proxy above forwards the visitor's address for exactly this, and the server-side events send the signup request's address along.
+
+Session replay masks what is typed into a password field in the browser, before anything is sent. Every other input and every screen is recorded, which is what makes a replay answer "what exactly happened", and it is also why the hosted service's privacy page describes it in those words.
 
 ### Push
 
@@ -554,6 +657,8 @@ The public face of hosted forms (`cmd/forms`): it serves the React (TanStack) fo
 
 The Rust open and click service. It reads its own environment, so these have to be set on that container, and none of them appear in the admin panel.
 
+Run a single copy of it. Its event deduplication, its per-source rate limits and its click-ticket caches are per process and in memory, with no shared store behind them, so a second replica does not halve the work: it doubles the budgets a flooding source gets and lets the same open be published twice. One container handles the pixel and click load of a large instance comfortably; scale the workers instead. If you must run more than one, put a sticky-by-source-address hash in front of them, which keeps a given source on one process and restores both properties.
+
 | Variable | What it does | Default |
 |---|---|---|
 | `TRACKING_HOST`, `TRACKING_PORT` | Listen address | `0.0.0.0`, `3000` |
@@ -567,7 +672,9 @@ The Rust open and click service. It reads its own environment, so these have to 
 | `TRACKING_SCANNER_BUILTINS` | Whether the known-scanner catalogue shipped with Warmbly is loaded: Microsoft 365's Exchange Online Protection ranges and Barracuda's Email Gateway Defense blocks. `false` leaves only your own entries | `true` |
 | `TRACKING_SCANNER_NETWORKS` | Extra scanner sources, comma separated, each a CIDR or `asn:<number>` with an optional label. For sources that never carry a person's own request, so their pixel fetches and their clicks are both treated as automated | empty |
 | `TRACKING_SCANNER_CLICK_NETWORKS` | The same, for sources that also proxy a mail client's own image fetches. Only their click tickets are treated as automated, because their pixel fetches are genuine opens | empty |
-| `TRACKING_SCANNER_ASN_HEADER` | Header a trusted proxy sets with the source ASN, which is what makes `asn:` entries match. Read only from a proxy in `TRACKING_TRUSTED_PROXIES`. On Cloudflare, a transform rule writing `ip.src.asnum`. Empty disables ASN matching | empty |
+| `TRACKING_SCANNER_ASN_DB` | Path to a MaxMind GeoLite2-ASN database, which is what makes `asn:` entries match on an instance whose edge writes no ASN header. A separate file from `GEODB_PATH`; unset or unreadable logs one line at boot and leaves ASN matching off. It removes the need for an edge header, not for `TRACKING_TRUSTED_PROXIES`: the lookup reads the client address, and behind a reverse proxy without that variable the client address is the proxy | unset |
+| `TRACKING_SCANNER_ASN_DB_URL` | Where to download that database from when no file is mounted at the path above. The result is held in memory and never written out, so this needs no writable path and no volume. Carries a licence key on a MaxMind permalink, so it is treated as a secret and never logged. See [GeoIP](/development/configuration/#geoip) | unset |
+| `TRACKING_SCANNER_ASN_HEADER` | Header a trusted proxy sets with the source ASN, an alternative to the database above and preferred over it where both are set. Read only from a proxy in `TRACKING_TRUSTED_PROXIES`. On Cloudflare, a transform rule writing `ip.src.asnum` | empty |
 | `EVENTBUS_PROVIDER` | `nats` or `kafka`. Kafka needs the `tracking:*-kafka` image, or a build with `CARGO_FEATURES=kafka` | `nats` |
 | `NATS_URL`, `NATS_SUBJECT_PREFIX` | JetStream address and subject prefix. The publish subject is `<prefix>.<topic>` | `nats://localhost:4222`, `warmbly` |
 | `CODEC_PROVIDER` | `json` or `avro`, and it has to match the consumer's. `avro` is refused at boot without `SCHEMA_REGISTRY_URL` | `json` |
@@ -580,7 +687,15 @@ The Rust open and click service. It reads its own environment, so these have to 
 | `SENTRY_DSN` | The same through Sentry. An invalid value logs and disables it rather than stopping the service | unset |
 | `WARMBLY_RELEASE` | The build reported errors are tagged with | `dev` |
 
-The shipped catalogue also carries Proofpoint, Mimecast and Cisco Secure Email by ASN, and the rest of Microsoft's and Google's networks, all commented out. The file (`tracking/scanner-networks.txt`) explains each one; the short version is that a whole network is only safe to treat as a scanner when no recipient can be behind it, and these fail that test in two different ways. Microsoft's and Google's clouds carry ordinary browsing, so a recipient on Windows 365 or a corporate NAT gateway sits inside them. Proofpoint Isolation and Mimecast Browser Isolation render a clicked page in the vendor's own cloud and stream it to the recipient, so when a policy sends a link to isolation the click on your ticket comes from the vendor's network with a person on the other end. Isolation is usually scoped to uncategorised URLs, which is what a new outreach domain looks like. Enable these when your recipients' scanner noise costs you more than the clicks and automations they will take with them, and prefer leaving the automated-engagement windows to catch the delivery-time half.
+A catalogue entry is `<source> <scope> <certainty> <label>`. **Scope** is which requests it may judge: `all` for a network that never carries a person's own request, `clicks` for one that also proxies a mail client's image fetches, where a pixel fetch is a genuine open. **Certainty** is how much the match settles, and defaults to `certain`: the source only ever filters mail, so a match is the whole verdict. `probable` says the source can also carry a person, which browser isolation makes true of the mail-security vendors, and a match then widens the consumer's machine window (`tracking.machine_window_probable_seconds`) instead of deciding. The two columns are independent. A `probable` entry moves events in one direction only, from counted-as-human to counted-as-automated, so it can never let a scan count as engagement; outside the window the event is judged exactly as an unrecognised one would be. The cost is the other side of that: a recipient who really does click inside the window is classified automated, and separately, a click from **any** recognised network is redirected without its identification ticket, because the edge has no dispatch time and cannot tell the delivery-time scan from the isolated human click the way the consumer can. So an isolated click the consumer later counts as a person's still leaves no website-visit attribution for that contact.
+
+`asn:` entries need the source ASN, and there are two ways to have it. `TRACKING_SCANNER_ASN_DB` resolves it from the address itself and needs no ASN header and no transform rule, which is the option for an instance behind nginx, Caddy, a cloud load balancer, or exposed directly. `TRACKING_SCANNER_ASN_HEADER` takes it from a header your edge writes, which on Cloudflare is one transform rule. Where both are configured the header wins on any request that carries one, so adding the database never changes a verdict your edge has already given; a request the header does not cover falls through to the database.
+
+Neither removes the need for `TRACKING_TRUSTED_PROXIES` behind a reverse proxy, for different reasons. The header is read **only** from a peer listed there, so a header with that variable empty resolves nothing at all. The database reads the client address, and with that variable empty the client address is the proxy's, so the lookup returns the proxy's network rather than the requester's. With no usable source at all, the ASN half of the catalogue is inert and the tracking service says so at boot, naming both.
+
+Which entries ship on, and how, follows from that. Microsoft 365's Exchange Online Protection ranges and Barracuda's Email Gateway Defense blocks are the mail-filtering tier itself, where no recipient ever reads their mail, so they are `certain` and settle the verdict outright. Proofpoint, Mimecast and Cisco Secure Email are `probable` and matched by ASN: they are pure mail-security networks, but Proofpoint Isolation and Mimecast Browser Isolation render a clicked page in the vendor's own cloud and stream it to the recipient, so a click from there can have a person behind it. Isolation is usually scoped to uncategorised URLs, which is what a new outreach domain looks like. The probable window is what makes them safe to ship on: the scan runs within minutes of the send, and the isolated click runs whenever the person got to it.
+
+The rest of Microsoft's and Google's networks stay commented out even as `probable`, because they are whole cloud allocations rather than mail-security networks. A recipient on Windows 365, Azure Virtual Desktop or a corporate NAT gateway sits inside them all day, so a match says almost nothing about who is asking. `tracking/scanner-networks.txt` documents every entry and is the place to change them.
 
 ## Realtime service
 
@@ -594,7 +709,8 @@ The Elixir websocket service. Its runtime configuration is read only when the re
 | `REDIS_URL` | The Redis bridge the backend publishes events onto | `redis://localhost:6379/0` |
 | `PHX_HOST` | The service's own hostname | `localhost` |
 | `PORT` | Listen port | `4000` |
-| `CHECK_ORIGIN` | `true` accepts a websocket upgrade only from `PHX_HOST` | `false` |
+| `CHECK_ORIGIN_HOSTS` | Origins a browser may open a socket from, comma separated, e.g. `https://app.example.com,https://admin.example.com`. Not this service's own host | unset |
+| `CHECK_ORIGIN` | Legacy host-based form, consulted only when `CHECK_ORIGIN_HOSTS` is empty. `true` accepts an upgrade only from `PHX_HOST` | `false` |
 | `PUBSUB_ENABLED` | `true` swaps the Redis bridge for Google Pub/Sub | `false` |
 | `GCP_PROJECT_ID` | Required when `PUBSUB_ENABLED=true`; the service refuses to boot without it | unset |
 | `MAX_CONNECTIONS_PER_USER` | Concurrent sockets one account may hold. The caller's plan limit applies too, whichever is lower | `10` |
@@ -608,8 +724,10 @@ The Elixir websocket service. Its runtime configuration is read only when the re
 | `SENTRY_DSN` | The same through Sentry. An empty string is treated as unset on purpose, because the library rejects `""` hard enough to take the node down | unset |
 | `WARMBLY_RELEASE` | The build reported errors are tagged with | `dev` |
 
-<Callout type="warn" title="CHECK_ORIGIN is false by default">
-The shipped default accepts a websocket upgrade from **any** origin. A token is still required to join a channel, so an attacker needs a valid JWT either way, but on a deployment reachable from the internet set `PHX_HOST` to the public websocket hostname and `CHECK_ORIGIN=true` so only your own dashboard can open a socket.
+<Callout type="warn" title="The origin check is off until you list your origins">
+With neither variable set, a websocket upgrade is accepted from any origin. A short-lived ticket is still required to open the socket, and channel membership is checked on every join, so an attacker needs a real credential either way. On a deployment reachable from the internet, set `CHECK_ORIGIN_HOSTS` to your dashboard and admin origins.
+
+List the origins the **browser connects from**, not the websocket host. The `Origin` header on an upgrade names the page that opened the socket, which is the dashboard. Setting `CHECK_ORIGIN=true` and pointing `PHX_HOST` at the websocket hostname refuses every real connection, which is the trap this variable replaces. The installer sets `CHECK_ORIGIN_HOSTS` correctly for you.
 </Callout>
 
 ## Settings stored in the database
@@ -628,14 +746,17 @@ These are the only settings a browser can change, and no environment variable ow
 | `retention.engagement_event_days` | integer, 1 to 3650 | `365` | How long the per-event open and click logs (client, device, approximate location) are kept. Campaign progress keeps its own summary that outlives them, so counts, filters and branching never change |
 | `retention.form_event_days` | integer, 1 to 3650 | `180` | How long form funnel events (views, starts, field-level drop-off) are kept. Funnel reports range up to 90 days, so anything shorter shortens the report too |
 | `retention.audit_log_days` | integer, 1 to 3650 | `90` | How long the audit trail is kept. It carries IP addresses, user agents and change payloads, so this is also how long that data is held |
+| `retention.warmup_mail_days` | integer, 3 to 3650 | `30` | How long warmup mail stays in each mailbox before Warmbly deletes it, wherever the mailbox's filing setting keeps it (Trash on Gmail), with the stored copy of its body. A mailbox can set its own window on the Warmup tab of its drawer or through `warmup_retention_days` on the API; this is what every other mailbox follows. The floor leaves room for the engagement and for a reply in the thread to finish |
+| `retention.warmup_event_days` | integer, 30 to 3650 | `365` | How long the per-message warmup records (tokens, receipts, tampering events, spam reports) are kept. The pool health bands read the last 30 days, which is the floor. The daily sent and received counts behind the warmup analytics are separate and never pruned |
 | `tracking.machine_window_open_seconds` | integer, 1 to 900 | `60` | How soon after a send was dispatched an open is recorded as automated rather than a person's. The clock starts when the send is handed to a worker, so this window also covers the sending provider's queue and the transit to the recipient, not just reading time. Raise it when delivery-time scanners are being counted as opens; lower it when recipients who read immediately are being missed. A change applies within a minute and only to events recorded after it |
 | `tracking.machine_window_click_seconds` | integer, 1 to 900 | `30` | The same window for click tickets. Kept separate because the two mistakes cost different things: a misjudged open loses a metric, a misjudged click loses the automation behind an interested lead |
+| `tracking.machine_window_probable_seconds` | integer, 1 to 86400 | `600` | The window used instead of the two above when the tracking service recognised the source as a mail-security network that also renders clicked pages for people, which Proofpoint, Mimecast and Cisco do through browser isolation. Such a match cannot settle whether a person is behind the request, so it widens the window rather than deciding: inside it the event is the delivery-time scan, past it the recipient who got to the mail later. Never applied shorter than the window for the kind of event in hand, so naming a network can only ever catch more scans. Its ceiling reaches a day because how long a vendor takes to detonate a link is the vendor's property, not the instance's |
 | `deliverability.enforce_domain_auth` | boolean | `true` | Whether a sending domain that fails SPF or DMARC stops cold campaign sending and warmup sending from every mailbox on it. Off keeps the check running and still shows the state and the Advisor card, it just never blocks |
 | `deliverability.auth_grace_hours` | integer, 1 to 720 | `72` | How long a domain must stay failing before the gate applies. The clock starts when the background check first sees the failure, so this is also how much warning the owner gets |
 
 The four `sync.*` values are read by the backend when a mailbox is loaded onto a worker (on connect, on reassignment, and by the reconciler's periodic republish), so a change reaches every mailbox within a few minutes without a restart. The fixed pacing numbers around them (burst per five minutes, hourly, backfill pace, the flood threshold and the chronic-overage rule) are compiled constants listed under **Instance > Configuration > Effective limits**; see [Mailboxes](/guides/mailboxes/#what-gets-synced) for how the budgets behave. The four `sync.*` values also have a companion read view on **Operations > Sync**, which shows each mailbox's backfill progress and fair-use throttle against them and can clear a throttle or restart a backfill.
 
-The three `retention.*` values are read by the pruning sweeps on every pass, so shortening one takes effect on the next sweep rather than at the next restart. Deletion is permanent and there is no grace period: what already sits outside a shortened window goes on that sweep. See [data control](/development/data-control/#what-is-kept-and-for-how-long) for what each log holds and what a shorter window costs.
+The five `retention.*` values are read by the pruning sweeps on every pass, so shortening one takes effect on the next sweep rather than at the next restart. Deletion is permanent and there is no grace period: what already sits outside a shortened window goes on that sweep. The warmup mail window is the one that reaches into customers' mailboxes: the consumer retires each message and the worker holding the mailbox deletes it there, so shortening it empties the warmup folders of the whole instance down to the new window within a few hours. See [data control](/development/data-control/#what-is-kept-and-for-how-long) for what each log holds and what a shorter window costs.
 
 An unattended install can seed the whole document before anyone signs in, with `WARMBLY_SETTINGS_BOOTSTRAP` holding the same partial JSON the admin API takes:
 

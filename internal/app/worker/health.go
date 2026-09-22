@@ -4,7 +4,7 @@
 // in-process counters that describe how the worker is doing, packages them
 // into a models.WorkerHealthSample, and publishes the sample to Kafka via
 // WorkerService.Produce. The consumer side persists the sample into
-// worker_health_samples; the assignment loop reads the rolled-up view.
+// worker_health_samples; the admin fleet view reads the rolling activity.
 //
 // All counters except the gauges (assigned_count, imap_idle_count,
 // memory_mb, goroutine_count) are window deltas: each emission resets the
@@ -80,28 +80,22 @@ func (c *HealthCounters) RecordSendAttempt() { c.sendsAttempted.Add(1) }
 // RecordSendSuccess marks the most recent attempt as successful.
 func (c *HealthCounters) RecordSendSuccess() { c.sendsSucceeded.Add(1) }
 
-// RecordBounceHard increments the hard bounce counter. A hard bounce is a
-// permanent rejection (5xx) and the strongest negative signal for
-// placement health.
+// RecordBounceHard increments the hard bounce activity counter. A hard bounce
+// is a permanent rejection (5xx) tied to the mailbox or message.
 func (c *HealthCounters) RecordBounceHard() { c.bouncesHard.Add(1) }
 
-// RecordBounceSoft records a temporary failure (4xx). Logged but
-// weighted much lower than hard bounces in the capacity view.
+// RecordBounceSoft records a temporary failure (4xx).
 func (c *HealthCounters) RecordBounceSoft() { c.bouncesSoft.Add(1) }
 
-// RecordComplaint records a recipient spam complaint. Rare but
-// disproportionately bad for IP reputation; the capacity view weights
-// each complaint 100x as much as a delivered send when computing the
-// health multiplier.
+// RecordComplaint records a recipient spam complaint for activity reporting.
 func (c *HealthCounters) RecordComplaint() { c.complaints.Add(1) }
 
 // RecordAuthError increments the auth error counter. A burst of these
 // usually means a token expired or credentials were rotated.
 func (c *HealthCounters) RecordAuthError() { c.authErrors.Add(1) }
 
-// RecordRateLimitError increments the provider rate-limit counter. Used
-// to detect when a worker is sending too aggressively for the provider's
-// liking even if no bounces are coming back.
+// RecordRateLimitError increments the provider rate-limit counter so pacing
+// can respond at the scope reported by the provider.
 func (c *HealthCounters) RecordRateLimitError() { c.rateLimitErrors.Add(1) }
 
 // RecordSMTPLatency adds a single SMTP latency observation in
@@ -163,8 +157,7 @@ type healthWindow struct {
 // Quantile rounding uses ceil(total*q): the p99 of three samples is
 // "the third sample" (i.e. the max), not "the second". The alternative
 // (floor) makes tiny-sample p99 numbers look much rosier than reality,
-// which is exactly the case the placement loop cares about - the first
-// few sends from a fresh worker.
+// which is exactly where a tiny sample can otherwise hide a slow send.
 func latencyPercentile(buckets []int32, q float64) int32 {
 	var total int32
 	for _, b := range buckets {

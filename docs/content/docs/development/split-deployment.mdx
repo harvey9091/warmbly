@@ -191,6 +191,7 @@ Set these as build environment variables on the host:
 | `WARMBLY_APP_URL` | `WARMBLY_DASHBOARD_URL` |
 | `WARMBLY_TURNSTILE_KEY` | `WARMBLY_ENV_LABEL` |
 | `WARMBLY_POSTHOG_KEY` | `WARMBLY_POSTHOG_KEY` |
+| `WARMBLY_POSTHOG_SESSION_REPLAY` | `WARMBLY_POSTHOG_SESSION_REPLAY` |
 | `WARMBLY_SENTRY_DSN` | `WARMBLY_SENTRY_DSN` |
 
 <Callout title="Both apps ship a _redirects">
@@ -212,9 +213,9 @@ systemctl restart warmbly-consumer
 
 ## Sizing the fleet
 
-A worker's capacity is 16 cold-mailbox equivalents, and each mailbox declares its own weight: an SMTP or IMAP mailbox costs `1.0`, a Gmail or Outlook mailbox `0.05`, a warmup-only mailbox `0.4`.
+A worker defaults to a planning target of `100` assigned mailboxes. Every assigned mailbox counts as one, regardless of provider or whether warmup is enabled.
 
-So one worker holds 16 SMTP mailboxes or around 300 OAuth ones. OAuth-heavy customers cost almost nothing in machines; SMTP and IMAP customers are what drive the count.
+The target is a local planning value, not a sending quota or a tested maximum. Google and Microsoft enforce their sending and API limits per mailbox, tenant, or API project. Set `WARMBLY_WORKER_CAPACITY` in a machine's `/etc/warmbly/node.local.env` when benchmarks show that host should carry more or less than the conservative default, then restart the worker. Placement spreads mailbox counts, limits provider and tenant concentration, and keeps a mailbox on its existing worker when capacity allows so its provider sees a stable login address.
 
 Give NATS and Redis their own machine once you have more than one worker. Until then the control plane depends on a box that also runs a worker, and restarting that worker takes the bus with it.
 

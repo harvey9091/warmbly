@@ -99,7 +99,7 @@ A k8s `DaemonSet` was the previous shape. It was removed because k8s nodes typic
 
 A node's id is assigned at enrolment and persisted on the machine, so re-running the join command re-joins under the same identity and the node keeps its history and its mailboxes.
 
-A machine with several public addresses can instead run one node per address: with `WORKER_BIND_IP` set and no `WORKER_ID`, the worker derives `UUIDv5(URL_namespace, public_ipv4)`. Same IP, same worker, with no state at the control plane needed to recover it, which is what lets each address be its own stable sending identity.
+A machine with several public addresses can instead run one node per address: with `WORKER_BIND_IP` set and no `WORKER_ID`, the worker derives `UUIDv5(URL_namespace, public_ipv4)`. Same IP, same worker, with no state at the control plane needed to recover it, which lets each address remain a stable provider-facing login identity.
 
 ## Worker placement
 
@@ -126,19 +126,23 @@ Placement scores every live worker and takes the best (`internal/app/worker/plac
 | Node youth | A worker that enrolled minutes ago has proved nothing, so it is probed gently rather than handed every placement for being empty |
 | Foreign tenants | Only for organizations entitled to isolated egress |
 
-Capacity is one number for every worker, in cold-mailbox equivalents, because each mailbox already declares its own cost: an `smtp_imap` mailbox weighs `1.0`, a Gmail or Outlook API mailbox `0.05`, and a warmup-only assignment `0.4`. The mailbox being placed counts against the target too, so the same nearly-full worker can be under target for a Gmail mailbox and over it for an `smtp_imap` one.
+Capacity is a per-worker assigned-mailbox planning target because a small shared VM and a dedicated host do not have the same headroom. It defaults to a conservative `100` and can be set per machine with `WARMBLY_WORKER_CAPACITY`. Every assigned mailbox counts as one. The value guides placement; it is not a tested maximum or a mailbox-provider sending quota. Provider limits remain attached to the mailbox, tenant, or API project.
 
-**Capacity is a target, not a ceiling.** Nothing refuses a placement for being over it. Going over costs more than any bonus a candidate can earn, so stickiness alone can never keep a mailbox on an over-target worker; it does not outweigh the penalty terms, so a worker with room but crowded with foreign tenants can still lose. Once no worker has room, the least-overloaded one wins with region, blast radius and provider crowding all applied. This is deliberate: the target is a flat `16` for every worker regardless of the machine, so refusing on it refuses on a guess, and refusing exactly when the fleet is full is when good placement matters most.
+**Capacity is a target, not a ceiling.** Nothing refuses a placement for being over it. Going over costs more than any bonus a candidate can earn, so stickiness alone cannot keep a mailbox on an over-target worker. Once no worker has room, the least-overloaded one wins with region, blast radius and provider crowding all applied. A new worker keeps its full displayed target while node youth slows how quickly it fills. Recipient bounces and complaints remain mailbox and campaign signals; they do not shrink machine capacity or quarantine a worker.
 
 ### Moving a mailbox
 
-Rotation (`internal/app/worker/rotation.go`) is deliberately reluctant, and a fleet where nothing moves is a healthy one. Only mailboxes whose worker is dead, degraded, over capacity, or on the wrong side of an isolated-egress reservation are considered at all:
+Rotation (`internal/app/worker/rotation.go`) is deliberately reluctant. Mailbox outcomes never mark a machine unhealthy. The loop responds to liveness, workload, isolated-egress drift, and measurable provider or workspace concentration:
 
 | Urgency | Trigger | Residency floor | Destination bar |
 |---|---|---|---|
-| Immediate | Worker inactive, not heartbeating, blocked or quarantined | none | anything eligible |
-| Elevated | Worker throttled | 6 hours | anything eligible |
-| Opportunistic | Worker over 85% utilization, or isolated-egress drift | 72 hours | must score materially better |
+| Immediate | Worker inactive, not heartbeating, or externally marked blocked or quarantined | none | anything eligible |
+| Elevated | Worker externally marked throttled, or mailbox is on another workspace's reserved worker | 6 hours | anything eligible |
+| Opportunistic | Worker over 85% utilization, isolated-egress drift, or placement concentration | 72 hours | must score materially better |
+
+The externally managed health labels describe machine or operator state. Mailbox delivery outcomes do not set them.
+
+A worker that stops answering is a separate path (`internal/app/consumer/dead_worker.go`), and it waits before acting. The heartbeat key lives three minutes, which a version rollout can outlast while the container is replaced, so a missing key alone is not death: the worker also has to have been absent from the registry for `MailboxEvacuationGrace` (10 minutes) before its mailboxes are moved. Both signals are required, because during a cache outage every heartbeat key disappears at once while the registry stays current, and moving a mailbox is a real cost rather than a neutral rebalance: it changes the address the mailbox's provider sees and can earn a sign-in challenge.
 
 ### Isolated egress
 

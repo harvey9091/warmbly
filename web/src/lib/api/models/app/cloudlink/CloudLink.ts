@@ -29,8 +29,22 @@ export interface PoolLinkPlan {
     mailbox_limit: number | null;
     enrolled: number;
     price_usd: number;
+    /** The cloud's billing page with the warmup plan checkout open; only on the free tier. */
     upgrade_url?: string;
+    /** The cloud's billing page; absent when the cloud runs without billing. */
+    manage_url?: string;
     warmup_entitled: boolean;
+}
+
+/** GET /pool-link/offer — the pool plan's price, and whether it can be bought
+ *  here at all. Unavailable means billing is off or no Stripe price is set. */
+export interface PoolLinkOffer {
+    available: boolean;
+    monthly_available: boolean;
+    yearly_available: boolean;
+    monthly_usd: number;
+    yearly_usd: number;
+    currency: string;
 }
 
 export interface PoolLinkInstanceInfo {
@@ -78,9 +92,15 @@ export interface PoolLinkWarmupHealth {
     state: "healthy" | "watch" | "throttled" | "quarantined" | "blocked";
     score: number;
     reason?: string;
+    /** @deprecated Always 0 since the warmup spam score was retired; read score and reason. */
     spam_score: number;
     blocked_until?: Date | null;
     evaluated_at?: Date | null;
+    partner_mailboxes_7d?: number;
+    partner_domains_7d?: number;
+    partner_organizations_7d?: number;
+    received_7d?: number;
+    senders_7d?: number;
 }
 
 export interface PoolLinkMailboxError {

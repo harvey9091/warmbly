@@ -612,6 +612,59 @@
         }
       }
     },
+    "/auth/sso/link": {
+      "post": {
+        "operationId": "auth_sso_link",
+        "summary": "Link a provider sign-in to an existing password account",
+        "description": "Completes a Google, Apple or OpenID Connect sign-in that came back link_required: the provider's verified address already belongs to an account with a password. A correct password attaches the provider identity to that account and returns the session, or a 2FA challenge when the account has TOTP enrolled (the identity is then attached once /auth/2fa/verify passes). A wrong password is refused like a sign-in and counts against the same per-address budget; three wrong answers, or ten minutes, end the challenge with the code sso_link_expired and the sign-in has to be started again.",
+        "tags": [
+          "auth"
+        ],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SSOLinkRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The session, or a 2FA challenge.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body, wrong password (Invalid email or password.), or an unknown, expired, used or exhausted pending token (code sso_link_expired).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account or the identity can no longer be linked: the account is suspended, already holds a different identity from this provider, or the identity belongs to another account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/passkey/login/begin": {
       "post": {
         "operationId": "auth_passkey_login_begin",
@@ -959,7 +1012,7 @@
       "post": {
         "operationId": "auth_change_password",
         "summary": "Change password",
-        "description": "Changes the signed-in user's password (current + new). Requires a user session token (not an API key).",
+        "description": "Changes the signed-in user's password (current + new). Every session the account holds is ended, the calling one included, and the response is the token pair of a new session for the calling device; tokens issued before the change are refused after it. Requires a user session token (not an API key).",
         "tags": [
           "auth"
         ],
@@ -985,7 +1038,14 @@
         },
         "responses": {
           "200": {
-            "description": "Password changed."
+            "description": "Password changed. The body is the token pair of the new session; every earlier token is now refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPair"
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid request body or weak new password.",
@@ -1009,6 +1069,16 @@
           },
           "403": {
             "description": "Not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The new password is stored but the calling device could not be issued a new session (code `password_changed_sign_in_again`). Discard the old tokens and sign in again.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1375,6 +1445,83 @@
           },
           "401": {
             "description": "Wrong code or session invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/2fa/recovery-codes": {
+      "post": {
+        "operationId": "auth_2fa_regenerate_recovery_codes",
+        "summary": "Regenerate recovery codes",
+        "description": "Replaces every recovery code with a fresh set, returned once. Requires a current TOTP or recovery code in the body; a mismatch answers 400 with code two_fa_invalid_code. Requires a user session token (not an API key). Idempotency-Key is not needed: the proof code is single-use, so a retried request is refused rather than rotating the set twice. Wrong codes share the per-account attempt budget with /auth/reauth.",
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TwoFACodeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The new recovery codes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwoFARecoveryCodes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body, 2FA not enabled, or the code did not match (two_fa_invalid_code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2020,7 +2167,7 @@
       "delete": {
         "operationId": "mailboxes_delete",
         "summary": "Delete a mailbox",
-        "description": "Disconnects and deletes a mailbox. It is removed from all warmup pools.",
+        "description": "Disconnects and deletes a mailbox. It is removed from all warmup pools, and everything belonging to it goes with it: imported mail, warmup history, credentials, sender links and any scheduled send.\n\nTwo parts of the erasure finish just after the response, because neither can be done in the instant the record goes. A Gmail mailbox's OAuth grant is handed back to Google, which invalidates its tokens and removes the app from the customer's third-party access list; Microsoft publishes no per-application revocation endpoint, so an Outlook mailbox's tokens are destroyed locally and the customer removes the app at their Microsoft account. The message bodies stored outside the database are deleted. Both are retried until they succeed.",
         "tags": [
           "mailboxes"
         ],
@@ -2737,6 +2884,204 @@
           },
           "429": {
             "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/{id}/identity": {
+      "get": {
+        "operationId": "mailboxes_send_identity",
+        "summary": "Get the sending identity",
+        "description": "Which addresses the mailbox's provider will let it send as, which one it uses, and where its stored signature came from. Stored state only: the provider is not contacted.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The mailbox id.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The mailbox's sending identity.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxSendIdentity"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, permission, or mailbox not allowed for this key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Mailbox not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/{id}/identity/refresh": {
+      "post": {
+        "operationId": "mailboxes_refresh_send_identity",
+        "summary": "Refresh the sending identity",
+        "description": "Re-reads the send-as addresses from the provider and stores them, optionally importing the provider's signature. The read runs on the worker holding the mailbox, never from the API itself, so the provider keeps seeing the mailbox from one address. A send-as choice the provider no longer verifies is cleared by the same call. Gmail only. Retry-safe without an Idempotency-Key: it stores exactly what the provider currently reports.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The mailbox id.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MailboxSendIdentityRefreshRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The refreshed sending identity.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxSendIdentity"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid id, a provider with no send-as list (mailbox_send_as_unsupported), or a signature larger than Warmbly stores (mailbox_signature_too_large).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, permission, or mailbox not allowed for this key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Mailbox not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The mailbox is not running on a worker right now (mailbox_identity_unavailable); nothing was changed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4804,6 +5149,287 @@
         }
       }
     },
+    "/campaigns/{id}/leads/{contactId}/hold": {
+      "get": {
+        "operationId": "campaigns_get_lead_hold",
+        "summary": "Get a lead's hold",
+        "description": "Read whether one contact's flow inside this campaign is currently held. Scope READ_CAMPAIGNS, org permission view_campaigns.",
+        "tags": [
+          "campaigns"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "contactId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignLeadHoldResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The campaign is not the caller's organization's, or the contact is not a lead of it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/campaigns/{id}/leads/{contactId}/pause": {
+      "post": {
+        "operationId": "campaigns_pause_lead",
+        "summary": "Pause a lead",
+        "description": "Hold one contact's flow inside one campaign until a date, or with no end. The contact stays subscribed and stays a lead. The body states an absolute hold rather than a delta, so a retry lands on the same state. Scope WRITE_CAMPAIGNS, org permission manage_campaigns.",
+        "tags": [
+          "campaigns"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "contactId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignLeadPauseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignLeadHoldResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "until is in the past, or more than a year away.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The campaign is not the caller's organization's, or the contact is not a lead of it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/campaigns/{id}/leads/{contactId}/resume": {
+      "post": {
+        "operationId": "campaigns_resume_lead",
+        "summary": "Resume a lead",
+        "description": "Lift the hold now. The held time is dropped rather than carried, and the campaign's wakeup is pulled forward. Resuming a lead that is not held succeeds and changes nothing. Scope WRITE_CAMPAIGNS, org permission manage_campaigns.",
+        "tags": [
+          "campaigns"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "contactId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignLeadHoldResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The campaign is not the caller's organization's, or the contact is not a lead of it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/campaigns/{id}/logs": {
       "get": {
         "operationId": "campaigns_list_logs",
@@ -4892,6 +5518,54 @@
           },
           "404": {
             "description": "Not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/campaigns/{id}/send-plan": {
+      "get": {
+        "operationId": "campaigns_send_plan",
+        "summary": "Today's sending plan",
+        "description": "What the campaign sends today and every limit that decided it, worked out through the scheduler's own gates. Nothing is stored or written. Scope READ_CAMPAIGNS, org permission view_campaigns.",
+        "tags": [
+          "campaigns"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Today's plan.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignSendPlan"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Campaign not found.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6497,7 +7171,7 @@
         ],
         "operationId": "contacts_update",
         "summary": "Update a contact",
-        "description": "Partially updates a single contact; only the fields present change. Category lists can be set wholesale or adjusted with diff-style add/remove. Scope `WRITE_CONTACTS`.",
+        "description": "Partially updates a single contact; only the fields present change. Category lists can be set wholesale or adjusted with diff-style add/remove. `email` replaces the contact's address and resets its verification verdict. Scope `WRITE_CONTACTS`.",
         "security": [
           {
             "bearerAuth": []
@@ -6570,6 +7244,16 @@
           },
           "404": {
             "description": "Contact not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another contact already uses the supplied email address (code contact_email_taken).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7526,7 +8210,7 @@
       "get": {
         "operationId": "unibox_list",
         "summary": "List incoming mail",
-        "description": "Org-wide inbox list, collapsed to one row per thread (newest message), with filtering and cursor pagination. Excludes snoozed threads unless `snoozed=true`, and the `spam` and `trash` folders unless `folder` selects one of them.",
+        "description": "Org-wide inbox list, collapsed to one row per thread (newest message), with filtering and cursor pagination. Excludes snoozed threads unless `snoozed=true`, and the `spam`, `trash` and `archive` folders unless `folder` selects one of them or `include_archived=true` is passed.",
         "tags": [
           "unibox"
         ],
@@ -7578,7 +8262,7 @@
             "name": "folder",
             "in": "query",
             "required": false,
-            "description": "Canonical folder scope. Omit for every folder except `spam` and `trash`.",
+            "description": "Canonical folder scope. Omit for every working folder: `spam`, `trash` and `archive` stay out.",
             "schema": {
               "type": "string",
               "enum": [
@@ -7589,6 +8273,15 @@
                 "spam",
                 "trash"
               ]
+            }
+          },
+          {
+            "name": "include_archived",
+            "in": "query",
+            "required": false,
+            "description": "`true` puts archived conversations back into the result, which is what the All mail view does. Ignored when `folder` is set.",
+            "schema": {
+              "type": "boolean"
             }
           },
           {
@@ -7604,7 +8297,7 @@
             "name": "awaiting_reply",
             "in": "query",
             "required": false,
-            "description": "`true` returns only threads whose latest message was sent by you.",
+            "description": "`true` returns only threads whose latest message was sent by one of your mailboxes.",
             "schema": {
               "type": "boolean"
             }
@@ -8137,7 +8830,7 @@
       "patch": {
         "operationId": "unibox_mark_seen",
         "summary": "Mark messages seen",
-        "description": "Marks a batch of messages as read or unread, org-wide. Up to 500 ids per call.",
+        "description": "Marks messages as read or unread, org-wide. Name them with `email_ids`, whole conversations with `thread_ids`, or sweep a folder with `folder`. Up to 500 ids of each per call.",
         "tags": [
           "unibox"
         ],
@@ -8218,8 +8911,8 @@
     "/unibox/folder": {
       "patch": {
         "operationId": "unibox_move_folder",
-        "summary": "Move messages between folders",
-        "description": "Re-files a batch of messages into Inbox, Archive or Trash, org-wide. Up to 500 ids per call.\n\nThis is a move in Warmbly only. The copy at the mail provider stays where it is, and a later sync will not undo the move: Warmbly tracks the provider's own placement separately and follows it only when the provider itself moves the message. `sent`, `drafts` and `spam` are placements the provider reaches, so they are rejected here with a `400`.",
+        "summary": "Move conversations between folders",
+        "description": "Re-files messages into Inbox, Archive or Trash, org-wide. Name them with `email_ids`, whole conversations with `thread_ids`, or both; up to 500 of each. Prefer `thread_ids`: filing part of a conversation leaves it listed.\n\nThis is a move in Warmbly only. The copy at the mail provider stays where it is, and a later sync will not undo the move: Warmbly tracks the provider's own placement separately and follows it only when the provider itself moves the message. `sent`, `drafts` and `spam` are placements the provider reaches, so they are rejected here with a `400`.",
         "tags": [
           "unibox"
         ],
@@ -8449,8 +9142,8 @@
     "/unibox/snooze": {
       "post": {
         "operationId": "unibox_snooze",
-        "summary": "Snooze a thread",
-        "description": "Hides a thread from your inbox until `snoozed_until` passes. Upsert semantics: a second call on the same thread updates the time in place.",
+        "summary": "Snooze one or more threads",
+        "description": "Hides threads from your inbox until `snoozed_until` passes. Upsert semantics: a second call on the same thread updates the time in place. A request naming one thread answers with that row; one naming several answers with `data`.",
         "tags": [
           "unibox"
         ],
@@ -8529,8 +9222,8 @@
       },
       "delete": {
         "operationId": "unibox_unsnooze",
-        "summary": "Unsnooze a thread",
-        "description": "Un-snoozes a thread immediately. Idempotent: deleting a snooze that does not exist still succeeds with 204.",
+        "summary": "Unsnooze one or more threads",
+        "description": "Un-snoozes threads immediately. Idempotent: deleting a snooze that does not exist still succeeds with 204.",
         "tags": [
           "unibox"
         ],
@@ -8544,7 +9237,7 @@
             "name": "thread_id",
             "in": "query",
             "required": true,
-            "description": "The thread to un-snooze.",
+            "description": "The thread to un-snooze, or a comma-separated list of them.",
             "schema": {
               "type": "string"
             }
@@ -10720,6 +11413,171 @@
           },
           "400": {
             "description": "Invalid request body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing required scope or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "crm_bulk_update_tasks",
+        "summary": "Bulk update tasks",
+        "description": "Write a status, a priority, or both onto every task in a selection: the ids given, or every task the supplied filter matches minus the ids in exclude.",
+        "tags": [
+          "crm"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkUpdateTasks"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Number of tasks updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkTasksResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, an unknown status or priority, a selection with no ids, more than 1000 ids or more than 50000 exclusions (too_many_tasks), a filter naming something that is not an id (invalid_filter), or a selection resolving to more than 50000 tasks (selection_too_large).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing required scope or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "crm_bulk_delete_tasks",
+        "summary": "Bulk delete tasks",
+        "description": "Delete every task in a selection. The body is the selection object, or a bare array of task ids.",
+        "tags": [
+          "crm"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/TaskSelection"
+                  },
+                  {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1000,
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "description": "A bare list of task ids, equivalent to sending {\"tasks\": [...]}."
+                  }
+                ],
+                "description": "The selection object, or a bare array of task ids."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Number of tasks deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkTasksResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, a task id that is not an id, a selection with no ids, more than 1000 ids or more than 50000 exclusions (too_many_tasks), a filter naming something that is not an id (invalid_filter), or a selection resolving to more than 50000 tasks (selection_too_large).",
             "content": {
               "application/json": {
                 "schema": {
@@ -19936,7 +20794,7 @@
       },
       "LoginResult": {
         "type": "object",
-        "description": "Result of /auth/login/confirm: either a full token pair (the TokenPair fields are present) or a 2FA challenge (two_fa_required=true with a pending_token). The two cases are mutually exclusive.",
+        "description": "Result of /auth/login/confirm, /auth/sso/exchange, /auth/google and /auth/apple: a full token pair (the TokenPair fields are present), a 2FA challenge (two_fa_required=true with a pending_token), or, for a provider sign-in whose address already belongs to an account with a password, a link challenge (link_required=true with a pending_token for /auth/sso/link). The cases are mutually exclusive.",
         "properties": {
           "access_token": {
             "type": "string",
@@ -19959,11 +20817,29 @@
           },
           "pending_token": {
             "type": "string",
-            "description": "Single-use pending token to pass to /auth/2fa/verify. Present only when two_fa_required is true."
+            "description": "Single-use pending token. Pass it to /auth/2fa/verify when two_fa_required is true, or to /auth/sso/link when link_required is true."
           },
           "expires_in": {
             "type": "integer",
-            "description": "Seconds until the pending token expires. Present only when two_fa_required is true."
+            "description": "Seconds until the pending token expires. Present only with a challenge."
+          },
+          "link_required": {
+            "type": "boolean",
+            "description": "True when the provider's address already belongs to an account with a password. Nothing is linked and no session exists until that password is posted to /auth/sso/link."
+          },
+          "link_email": {
+            "type": "string",
+            "format": "email",
+            "description": "The address the provider asserted, for the password form. Present only when link_required is true."
+          },
+          "link_provider": {
+            "type": "string",
+            "enum": [
+              "google",
+              "apple",
+              "oidc"
+            ],
+            "description": "Which provider is being linked. Present only when link_required is true."
           }
         }
       },
@@ -20043,13 +20919,21 @@
       },
       "UpdateProfileRequest": {
         "type": "object",
-        "description": "Editable profile fields for the authenticated user.",
+        "description": "Editable profile fields for the authenticated user. Both names are plain text: no links, web addresses, email addresses or invisible formatting characters. A refused name answers 400 with code `invalid_name`.",
+        "required": [
+          "first_name",
+          "last_name"
+        ],
         "properties": {
           "first_name": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50
           },
           "last_name": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50
           }
         }
       },
@@ -20071,6 +20955,25 @@
           }
         }
       },
+      "SSOLinkRequest": {
+        "type": "object",
+        "description": "Request body for /auth/sso/link.",
+        "required": [
+          "pending_token",
+          "password"
+        ],
+        "properties": {
+          "pending_token": {
+            "type": "string",
+            "description": "The pending_token from a link_required login result."
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "description": "The password of the existing account the provider's address belongs to."
+          }
+        }
+      },
       "TwoFACodeRequest": {
         "type": "object",
         "description": "A single TOTP or recovery code. Used to confirm enrollment or disable 2FA.",
@@ -20083,22 +20986,42 @@
       },
       "TwoFAStatus": {
         "type": "object",
-        "description": "Whether 2FA is enabled for the user.",
+        "description": "Whether 2FA is enabled for the user, when it was confirmed, and how many recovery codes remain.",
         "required": [
-          "enabled"
+          "enabled",
+          "recovery_codes_remaining",
+          "recovery_codes_total"
         ],
         "properties": {
           "enabled": {
             "type": "boolean"
+          },
+          "confirmed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the authenticator was confirmed. Omitted while 2FA is off."
+          },
+          "recovery_codes_remaining": {
+            "type": "integer",
+            "description": "Unused recovery codes in the current set. 0 while 2FA is off."
+          },
+          "recovery_codes_total": {
+            "type": "integer",
+            "description": "Recovery codes issued with the current set. 0 while 2FA is off."
           }
         }
       },
       "TwoFAEnrollStart": {
         "type": "object",
-        "description": "The TOTP secret and otpauth provisioning URI, returned once at enrollment start.",
+        "description": "The TOTP secret and otpauth provisioning URI, returned once at enrollment start, with the parameters spelled out for manual entry.",
         "required": [
           "secret",
-          "otpauth_uri"
+          "otpauth_uri",
+          "issuer",
+          "account",
+          "algorithm",
+          "digits",
+          "period"
         ],
         "properties": {
           "secret": {
@@ -20108,6 +21031,26 @@
           "otpauth_uri": {
             "type": "string",
             "description": "otpauth://totp/... provisioning URI for authenticator apps."
+          },
+          "issuer": {
+            "type": "string",
+            "description": "Issuer shown in the authenticator (\"Warmbly\")."
+          },
+          "account": {
+            "type": "string",
+            "description": "Account label shown in the authenticator (the user's email)."
+          },
+          "algorithm": {
+            "type": "string",
+            "description": "HMAC algorithm (\"SHA1\")."
+          },
+          "digits": {
+            "type": "integer",
+            "description": "Code length (6)."
+          },
+          "period": {
+            "type": "integer",
+            "description": "Code interval in seconds (30)."
           }
         }
       },
@@ -20477,6 +21420,10 @@
           "signature_code": {
             "type": "boolean"
           },
+          "send_as_email": {
+            "type": "string",
+            "description": "A verified provider alias this mailbox sends from. Empty, the default, means the mailbox's own address. Gmail only."
+          },
           "provider": {
             "type": "string",
             "enum": [
@@ -20580,6 +21527,32 @@
           "warmup_days": {
             "type": "integer"
           },
+          "warmup_placement": {
+            "type": "string",
+            "enum": [
+              "folder",
+              "inbox",
+              "archive"
+            ],
+            "description": "Where warmup mail is filed in the mailbox itself: its own folder, left in the inbox, or the provider's archive."
+          },
+          "warmup_folder": {
+            "type": "string",
+            "description": "Folder (Gmail label) warmup mail is filed into when warmup_placement is \"folder\". Empty means the instance default, \"Warmbly\"."
+          },
+          "warmup_retention_days": {
+            "type": "integer",
+            "anyOf": [
+              {
+                "const": 0
+              },
+              {
+                "minimum": 3,
+                "maximum": 3650
+              }
+            ],
+            "description": "How many days warmup mail stays in this mailbox before Warmbly deletes it, wherever warmup_placement keeps it. 0 means the instance setting (30 days by default)."
+          },
           "timezone": {
             "type": "string"
           },
@@ -20649,6 +21622,10 @@
             "type": "boolean",
             "description": "Treat the HTML signature as raw code."
           },
+          "send_as_email": {
+            "type": "string",
+            "description": "A verified provider alias this mailbox sends from. Must be an address the provider reported as verified (see the sending identity endpoints) or the mailbox's own; anything else is refused with mailbox_send_as_unknown. Send an empty string to go back to the mailbox address. Gmail only."
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -20705,6 +21682,32 @@
           },
           "warmup_days": {
             "type": "integer"
+          },
+          "warmup_placement": {
+            "type": "string",
+            "enum": [
+              "folder",
+              "inbox",
+              "archive"
+            ],
+            "description": "Where warmup mail is filed in the mailbox itself: its own folder, left in the inbox, or the provider's archive."
+          },
+          "warmup_folder": {
+            "type": "string",
+            "description": "Folder (Gmail label) warmup mail is filed into when warmup_placement is \"folder\". Send an empty string to fall back to the instance default. No folder separators or control characters; 64 characters max."
+          },
+          "warmup_retention_days": {
+            "type": "integer",
+            "anyOf": [
+              {
+                "const": 0
+              },
+              {
+                "minimum": 3,
+                "maximum": 3650
+              }
+            ],
+            "description": "How many days warmup mail stays in this mailbox before Warmbly deletes it, wherever warmup_placement keeps it: 3 to 3650, or 0 to follow the instance setting."
           },
           "tags": {
             "type": "array",
@@ -21770,6 +22773,10 @@
             "type": "integer",
             "description": "Days to wait before this step, counted from the contact's previous step."
           },
+          "thread_reply": {
+            "type": "boolean",
+            "description": "Send this step as a reply on the conversation the contact is already in. Default true; a threading step carries the conversation's subject."
+          },
           "position": {
             "type": "integer"
           },
@@ -21820,6 +22827,10 @@
           "wait_after": {
             "type": "integer"
           },
+          "thread_reply": {
+            "type": "boolean",
+            "description": "Reply in the contact's existing conversation rather than starting a new one. Defaults to true for a step with no subject or the conversation's own, false for a step carrying a subject of its own."
+          },
           "kind": {
             "type": "string",
             "enum": [
@@ -21855,6 +22866,10 @@
           "wait_after": {
             "type": "integer",
             "description": "Days to wait before this step, counted from the contact's previous step (0 to 60). Spacing belongs to the target step; there is no standalone wait node for email steps."
+          },
+          "thread_reply": {
+            "type": "boolean",
+            "description": "Send this step as a reply on the conversation the contact is already in, rather than as a new email. Default true. A threading step carries the conversation's subject, so its own subject is only used once this is turned off."
           },
           "conditions": {
             "type": "object",
@@ -22207,6 +23222,362 @@
           }
         }
       },
+      "CampaignSendLimit": {
+        "type": "object",
+        "description": "One clamp in the waterfall and what it took off the ceiling.",
+        "required": [
+          "kind",
+          "emails"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "The clamp.",
+            "enum": [
+              "campaign_daily_limit",
+              "campaign_ramp",
+              "warmup_graduation",
+              "workspace_risk",
+              "domain_auth",
+              "resting",
+              "warmup_health_hold",
+              "other_campaigns",
+              "warmup_health_pace",
+              "mailbox_hours",
+              "sending_behavior",
+              "spacing",
+              "sending_window",
+              "not_running",
+              "org_daily_limit",
+              "new_lead_cap",
+              "leads"
+            ]
+          },
+          "emails": {
+            "type": "integer",
+            "description": "How many of today's sends this clamp removed."
+          },
+          "mailboxes": {
+            "type": "integer",
+            "description": "How many mailboxes it touched; absent for a campaign-level clamp."
+          }
+        }
+      },
+      "CampaignSendWindow": {
+        "type": "object",
+        "required": [
+          "sending_day",
+          "open_now",
+          "minutes_left"
+        ],
+        "properties": {
+          "sending_day": {
+            "type": "boolean",
+            "description": "False when the schedule has no window today."
+          },
+          "open_now": {
+            "type": "boolean"
+          },
+          "opens_at": {
+            "type": "string",
+            "description": "The next opening when closed now; may be on a later day.",
+            "format": "date-time"
+          },
+          "closes_at": {
+            "type": "string",
+            "description": "The end of the last window today.",
+            "format": "date-time"
+          },
+          "minutes_left": {
+            "type": "integer",
+            "description": "Sending time still ahead today."
+          },
+          "starts_at": {
+            "type": "string",
+            "description": "The campaign start date when still ahead.",
+            "format": "date-time"
+          },
+          "ends_at": {
+            "type": "string",
+            "description": "The campaign end date, when set.",
+            "format": "date-time"
+          }
+        }
+      },
+      "CampaignLeadSupply": {
+        "type": "object",
+        "required": [
+          "due_now",
+          "due_later_today",
+          "new_leads_due_today",
+          "waiting_on_step",
+          "waiting_on_condition",
+          "held",
+          "waiting_on_sender",
+          "new_leads_started_today",
+          "max_new_leads_per_day"
+        ],
+        "properties": {
+          "due_now": {
+            "type": "integer",
+            "description": "Email steps that could go this minute."
+          },
+          "due_later_today": {
+            "type": "integer",
+            "description": "Email steps whose wait elapses before the day ends."
+          },
+          "new_leads_due_today": {
+            "type": "integer",
+            "description": "How many of due_now plus due_later_today are first emails."
+          },
+          "waiting_on_step": {
+            "type": "integer",
+            "description": "Leads whose next step is due after today."
+          },
+          "waiting_on_condition": {
+            "type": "integer",
+            "description": "Leads inside an undecided branch window."
+          },
+          "held": {
+            "type": "integer",
+            "description": "Leads paused with no end."
+          },
+          "waiting_on_sender": {
+            "type": "integer",
+            "description": "Due steps whose own mailbox has nothing left today; each contact keeps the address they first heard from."
+          },
+          "new_leads_started_today": {
+            "type": "integer"
+          },
+          "max_new_leads_per_day": {
+            "type": "integer",
+            "description": "0 when unlimited."
+          },
+          "next_due_at": {
+            "type": "string",
+            "description": "The soonest a waiting lead becomes due.",
+            "format": "date-time"
+          }
+        }
+      },
+      "CampaignMailboxPlan": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "provider",
+          "configured_cap",
+          "cap_today",
+          "limited_by",
+          "sent_today",
+          "sent_by_other_campaigns",
+          "expected_remaining",
+          "state",
+          "min_gap_seconds"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "configured_cap": {
+            "type": "integer",
+            "description": "The mailbox's own daily cold cap."
+          },
+          "cap_today": {
+            "type": "integer",
+            "description": "The cap this campaign gives it today, after the cap clamps."
+          },
+          "limited_by": {
+            "type": "string",
+            "description": "The clamp that set cap_today.",
+            "enum": [
+              "mailbox_daily_cap",
+              "campaign_daily_limit",
+              "campaign_ramp",
+              "warmup_graduation",
+              "workspace_risk"
+            ]
+          },
+          "sent_today": {
+            "type": "integer",
+            "description": "This campaign's sends from the mailbox today."
+          },
+          "sent_by_other_campaigns": {
+            "type": "integer",
+            "description": "What other campaigns took from the same cap today."
+          },
+          "expected_remaining": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "sending",
+              "budget_spent",
+              "hours_closed",
+              "no_working_day",
+              "domain_auth",
+              "resting",
+              "health_hold",
+              "window_closed"
+            ]
+          },
+          "reopens_at": {
+            "type": "string",
+            "description": "When a mailbox outside its own hours is next open.",
+            "format": "date-time"
+          },
+          "health": {
+            "type": "string",
+            "description": "The warmup health band when not healthy."
+          },
+          "min_gap_seconds": {
+            "type": "integer"
+          },
+          "graduation": {
+            "$ref": "#/components/schemas/ColdRampInfo"
+          }
+        }
+      },
+      "CampaignOrgAllowance": {
+        "type": "object",
+        "description": "The workspace's plan-level daily campaign limit.",
+        "required": [
+          "daily_limit",
+          "sent_today",
+          "remaining"
+        ],
+        "properties": {
+          "daily_limit": {
+            "type": "integer"
+          },
+          "sent_today": {
+            "type": "integer"
+          },
+          "remaining": {
+            "type": "integer"
+          }
+        }
+      },
+      "CampaignSendPlan": {
+        "type": "object",
+        "description": "Today's sending plan for a campaign, derived through the scheduler's gates on every read.",
+        "required": [
+          "campaign_id",
+          "status",
+          "day",
+          "timezone",
+          "computed_at",
+          "configured_ceiling",
+          "projected_today",
+          "sent_today",
+          "expected_remaining",
+          "bottleneck",
+          "limits",
+          "window",
+          "leads",
+          "mailboxes"
+        ],
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string"
+          },
+          "day": {
+            "type": "string",
+            "description": "The budget day, YYYY-MM-DD in UTC: every daily counter resets at midnight UTC whatever the campaign's timezone. The window's times are in the campaign's timezone."
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "computed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "configured_ceiling": {
+            "type": "integer",
+            "description": "The attached mailboxes' own daily caps added up."
+          },
+          "projected_today": {
+            "type": "integer",
+            "description": "sent_today plus expected_remaining."
+          },
+          "sent_today": {
+            "type": "integer"
+          },
+          "expected_remaining": {
+            "type": "integer"
+          },
+          "bottleneck": {
+            "type": "string",
+            "description": "The limit that decides projected_today: a limits[].kind, budget_spent, or empty when nothing binds."
+          },
+          "limits": {
+            "type": "array",
+            "description": "Only the clamps that removed something, in the order the scheduler applies them. configured_ceiling minus their emails minus sent_today is expected_remaining.",
+            "items": {
+              "$ref": "#/components/schemas/CampaignSendLimit"
+            }
+          },
+          "window": {
+            "$ref": "#/components/schemas/CampaignSendWindow"
+          },
+          "leads": {
+            "$ref": "#/components/schemas/CampaignLeadSupply"
+          },
+          "mailboxes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CampaignMailboxPlan"
+            }
+          },
+          "organization": {
+            "$ref": "#/components/schemas/CampaignOrgAllowance"
+          },
+          "next_wake_at": {
+            "type": "string",
+            "description": "When the campaign's chain next runs.",
+            "format": "date-time"
+          }
+        }
+      },
+      "ColdRampInfo": {
+        "type": "object",
+        "required": [
+          "ceiling",
+          "mailbox_cap",
+          "days_to_full_cap",
+          "held"
+        ],
+        "properties": {
+          "ceiling": {
+            "type": "integer",
+            "description": "Today's allowance."
+          },
+          "mailbox_cap": {
+            "type": "integer",
+            "description": "What the owner configured."
+          },
+          "days_to_full_cap": {
+            "type": "integer",
+            "description": "Clean days until the ceiling reaches the cap."
+          },
+          "held": {
+            "type": "boolean",
+            "description": "A recent spam placement is pausing the climb."
+          }
+        }
+      },
       "CampaignAdvancedSettings": {
         "type": "object",
         "required": [
@@ -22333,13 +23704,60 @@
                 }
               },
               "auto_create_crm_task": {
-                "type": "boolean"
+                "type": "boolean",
+                "description": "Open a CRM follow-up task when a classified reply lands."
+              },
+              "crm_task_intents": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "description": "Which intents are worth a follow-up task. Omit or send null for the default set (positive, question, neutral, negative: every human intent and no automated one). An empty array opens nothing, the same as turning the switch off.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "positive",
+                    "negative",
+                    "question",
+                    "neutral",
+                    "out_of_office",
+                    "automated"
+                  ]
+                }
               },
               "auto_pause_on_negative": {
                 "type": "boolean"
               },
               "auto_suppress_on_unsubscribe_keyword": {
                 "type": "boolean"
+              }
+            }
+          },
+          "inbox_tagging": {
+            "type": "object",
+            "description": "What a reply classified by automatic inbox tagging may do. The hold, the stop and the task default on; the suppression defaults off. Only a confident human reply acts.",
+            "properties": {
+              "hold_on_not_now": {
+                "type": "boolean",
+                "description": "Park the contact's sequences, in every campaign, when the reply is read as not now."
+              },
+              "not_now_hold_days": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 90,
+                "default": 30
+              },
+              "stop_on_declined": {
+                "type": "boolean",
+                "description": "Park the contact's sequences for a year when the reply declines or names the wrong person."
+              },
+              "task_on_call_request": {
+                "type": "boolean",
+                "description": "Open a CRM task for the mailbox owner when the reply asks for a call or proposes a time."
+              },
+              "suppress_on_removal_request": {
+                "type": "boolean",
+                "description": "Add the sender to the suppression list when the classifier is at least 80% sure the reply asks to be removed."
               }
             }
           },
@@ -22792,9 +24210,11 @@
               "replied",
               "bounced",
               "failed",
-              "unsubscribed"
+              "unsubscribed",
+              "paused",
+              "undeliverable"
             ],
-            "description": "Derived, highest priority first: unsubscribed, bounced, replied, failed (a step could not be sent after every retry), completed (every email step sent), active (some steps sent), pending (nothing sent yet)."
+            "description": "The lead's derived state in this campaign, highest priority first: unsubscribed, bounced, replied, failed, completed, paused (the flow is held by an out-of-office auto-reply or by hand; see the hold object), active, undeliverable (address verification refused the address, so the campaign never sends to it), pending."
           },
           "sent": {
             "type": "integer"
@@ -22825,6 +24245,15 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "hold": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CampaignLeadHold"
+              }
+            ],
+            "nullable": true,
+            "description": "The live per-lead hold: an out-of-office auto-reply parked the contact, or a member paused them. Absent when the lead is not held."
           }
         }
       },
@@ -23146,7 +24575,7 @@
           },
           "sort_by": {
             "type": "string",
-            "description": "Sort column: created_at (the default), updated_at, first_name, last_name, email, or campaign_count. Any other value falls back to created_at."
+            "description": "Sort column: created_at (the default), updated_at, first_name, last_name, email, company, phone, or campaign_count. custom:<key> sorts on a custom field as text, with contacts lacking the field grouped last when ascending and first when descending; a custom-field name that could never exist is rejected with 400 invalid_sort_by. Any other unknown value falls back to created_at."
           },
           "reverse": {
             "type": "boolean",
@@ -23236,6 +24665,10 @@
           },
           "last_name": {
             "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "description": "New email address. Stored lowercased and stripped of any display name. Must be free: an address another contact holds returns 409 contact_email_taken. Changing it resets the contact's verification verdict to unknown."
           },
           "company": {
             "type": "string"
@@ -24601,6 +26034,23 @@
           "uid": {
             "type": "integer"
           },
+          "email_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The connected mailbox the message belongs to."
+          },
+          "folder": {
+            "type": "string",
+            "enum": [
+              "inbox",
+              "sent",
+              "drafts",
+              "archive",
+              "spam",
+              "trash"
+            ],
+            "description": "Canonical folder the message sits in."
+          },
           "parent_id": {
             "type": "string"
           },
@@ -24892,7 +26342,7 @@
       },
       "UniboxMarkSeenRequest": {
         "type": "object",
-        "description": "Also the echoed response body. Send one of `email_ids` or `folder`, not both.",
+        "description": "Also the echoed response body. Name the messages with `email_ids`, whole conversations with `thread_ids`, or both. `folder` sweeps one folder instead and cannot be combined with either.",
         "properties": {
           "email_ids": {
             "type": "array",
@@ -24902,6 +26352,14 @@
             },
             "maxItems": 500,
             "description": "Message UUIDs to update (max 500)."
+          },
+          "thread_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "description": "Thread ids whose every message to update (max 500). Use the `thread_id` of a list row, or its `id` for mail that has none."
           },
           "folder": {
             "type": "string",
@@ -24923,9 +26381,8 @@
       },
       "UniboxMoveFolderRequest": {
         "type": "object",
-        "description": "Also the echoed response body.",
+        "description": "Also the echoed response body. Name the messages with `email_ids`, whole conversations with `thread_ids`, or both. Prefer `thread_ids`: filing part of a conversation leaves it listed, because a thread shows wherever any message of it still sits.",
         "required": [
-          "email_ids",
           "folder"
         ],
         "properties": {
@@ -24937,6 +26394,14 @@
             },
             "maxItems": 500,
             "description": "Message UUIDs to move (max 500)."
+          },
+          "thread_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "description": "Thread ids whose every message to re-file (max 500). Use the `thread_id` of a list row, or its `id` for mail that has none."
           },
           "folder": {
             "type": "string",
@@ -25048,7 +26513,6 @@
       "UniboxSnoozeRequest": {
         "type": "object",
         "required": [
-          "thread_id",
           "snoozed_until"
         ],
         "properties": {
@@ -25056,12 +26520,21 @@
             "type": "string",
             "description": "The thread to snooze."
           },
+          "thread_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "description": "Threads to snooze (max 500), for filing a whole selection in one call."
+          },
           "snoozed_until": {
             "type": "string",
             "format": "date-time",
             "description": "RFC 3339 timestamp to un-hide the thread."
           }
-        }
+        },
+        "description": "Name one conversation with `thread_id` or up to 500 with `thread_ids`. The single form answers with the snooze row; the bulk form answers with `data`."
       },
       "UniboxSnooze": {
         "type": "object",
@@ -27288,6 +28761,10 @@
           "intent_neutral": {
             "type": "integer"
           },
+          "intent_automated": {
+            "type": "integer",
+            "description": "Machine replies that are not vacation notices: autoresponders, ticket acknowledgements, bounces, delivery reports."
+          },
           "emails_sent": {
             "type": "integer"
           },
@@ -27478,6 +28955,10 @@
           "total_replied": {
             "type": "integer"
           },
+          "total_received": {
+            "type": "integer",
+            "description": "Verified warmup mail that arrived from pool partners in the range."
+          },
           "average_daily": {
             "type": "number"
           },
@@ -27504,6 +28985,10 @@
           },
           "emails_replied": {
             "type": "integer"
+          },
+          "emails_received": {
+            "type": "integer",
+            "description": "Verified warmup arrivals on this UTC day. A day with arrivals and no plan lists with zero sends."
           },
           "target_volume": {
             "type": "integer"
@@ -27969,12 +29454,34 @@
           "score": {
             "type": "integer"
           },
-          "spam_score": {
-            "type": "integer"
-          },
           "evaluated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "spam_score": {
+            "type": "integer",
+            "deprecated": true,
+            "description": "Always 0. The accumulating warmup spam score was retired; read score and reason. Removed at the next API version."
+          },
+          "partner_mailboxes_7d": {
+            "type": "integer",
+            "description": "Distinct warmup partner mailboxes reached by confirmed sends over the last seven days. Failed and pending attempts do not count."
+          },
+          "partner_domains_7d": {
+            "type": "integer",
+            "description": "Distinct recipient domains among those partners."
+          },
+          "partner_organizations_7d": {
+            "type": "integer",
+            "description": "Distinct workspaces behind those partners. 1 over a full week means the mailbox is only warming inside one workspace."
+          },
+          "received_7d": {
+            "type": "integer",
+            "description": "Verified warmup arrivals over the last seven days. Only mail the mailbox's own sync verified counts."
+          },
+          "senders_7d": {
+            "type": "integer",
+            "description": "Distinct partners those arrivals came from."
           }
         }
       },
@@ -29944,7 +31451,7 @@
           },
           "weight": {
             "type": "number",
-            "description": "Selection weight, >= 0."
+            "description": "Selection weight, >= 0. Exactly 0 excludes the pairing outright."
           },
           "enabled": {
             "type": "boolean"
@@ -30017,7 +31524,7 @@
           "weight": {
             "type": "number",
             "minimum": 0,
-            "description": "Selection weight, must be >= 0."
+            "description": "Selection weight, must be >= 0. Above 1 prefers the pairing, below 1 avoids it, and exactly 0 excludes it even when no other partner is available."
           },
           "enabled": {
             "type": "boolean",
@@ -30830,6 +32337,281 @@
             "type": "integer"
           }
         }
+      },
+      "CampaignLeadHold": {
+        "type": "object",
+        "description": "One contact's flow parked inside one campaign.",
+        "properties": {
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the hold was written."
+          },
+          "until": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When it lifts. Absent for a hold with no end, which only a resume lifts."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Free-text note shown next to the hold."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "out_of_office"
+            ],
+            "description": "What wrote it."
+          }
+        },
+        "required": [
+          "since",
+          "source"
+        ]
+      },
+      "CampaignLeadHoldResult": {
+        "type": "object",
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "contact_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "hold": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CampaignLeadHold"
+              }
+            ],
+            "nullable": true,
+            "description": "Absent when the lead is not held, including a dated hold that has expired."
+          }
+        },
+        "required": [
+          "campaign_id",
+          "contact_id"
+        ]
+      },
+      "CampaignLeadPauseRequest": {
+        "type": "object",
+        "properties": {
+          "until": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the hold lifts. Must be in the future and within a year. Omit or null for a hold with no end."
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Optional note shown next to the hold."
+          }
+        }
+      },
+      "MailboxSendAsIdentity": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "name": {
+            "type": "string"
+          },
+          "is_primary": {
+            "type": "boolean",
+            "description": "The mailbox's own address."
+          },
+          "is_default": {
+            "type": "boolean",
+            "description": "The identity the provider composes from by default. Reported, not followed: which alias Warmbly sends from is the workspace's own choice."
+          },
+          "verified": {
+            "type": "boolean",
+            "description": "The provider finished verifying the address. An unverified one is listed but cannot be selected."
+          }
+        }
+      },
+      "MailboxSendIdentity": {
+        "type": "object",
+        "properties": {
+          "supported": {
+            "type": "boolean",
+            "description": "False for Outlook and SMTP/IMAP mailboxes, which publish no send-as list."
+          },
+          "provider": {
+            "type": "string"
+          },
+          "mailbox_email": {
+            "type": "string",
+            "format": "email",
+            "description": "The address the mailbox authenticates as, which is always a legal sender."
+          },
+          "send_as_email": {
+            "type": "string",
+            "description": "The alias in use. Empty means the mailbox address."
+          },
+          "identities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MailboxSendAsIdentity"
+            }
+          },
+          "synced_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the list was last read from the provider."
+          },
+          "signature_source": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "provider"
+            ],
+            "description": "Where the mailbox's stored signature came from."
+          },
+          "signature_imported_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "MailboxSendIdentityRefreshRequest": {
+        "type": "object",
+        "properties": {
+          "import_signature": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also replace the mailbox's stored signature with the one configured at the provider, for whichever identity the mailbox sends as. An empty signature at the provider changes nothing."
+          }
+        }
+      },
+      "TaskSelection": {
+        "type": "object",
+        "description": "Names the tasks a bulk action applies to: either an explicit id list, or every task matching a search (all + filters) minus the ids in exclude. The filter form lets one call cover far more tasks than a page, and is refused with selection_too_large past 50000 matches.",
+        "oneOf": [
+          {
+            "required": [
+              "tasks"
+            ],
+            "properties": {
+              "all": {
+                "enum": [
+                  false
+                ]
+              }
+            }
+          },
+          {
+            "required": [
+              "all",
+              "filters"
+            ],
+            "properties": {
+              "all": {
+                "enum": [
+                  true
+                ]
+              }
+            }
+          }
+        ],
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1000,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Task ids (1 to 1000). Required unless all is set."
+          },
+          "all": {
+            "type": "boolean",
+            "description": "Resolve the selection from filters instead of tasks."
+          },
+          "filters": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SearchTasks"
+              }
+            ],
+            "description": "The search whose matches the action applies to. Required when all is true."
+          },
+          "exclude": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 50000,
+            "description": "Task ids to drop from the resolved set. Ignored unless all is set."
+          }
+        }
+      },
+      "BulkUpdateTasks": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TaskSelection"
+          }
+        ],
+        "description": "A task selection plus the fields to write on every task in it. At least one of status or priority is required.",
+        "anyOf": [
+          {
+            "required": [
+              "status"
+            ]
+          },
+          {
+            "required": [
+              "priority"
+            ]
+          }
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "in_progress",
+              "completed",
+              "cancelled"
+            ],
+            "description": "Status to set. completed stamps completed_at and records the completion on each linked contact's timeline."
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "urgent"
+            ],
+            "description": "Priority to set."
+          }
+        }
+      },
+      "BulkTasksResponse": {
+        "type": "object",
+        "description": "How many tasks the bulk action touched. The count is returned rather than the rows: a select-all can cover tens of thousands.",
+        "properties": {
+          "affected": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Tasks written or deleted."
+          }
+        },
+        "required": [
+          "affected"
+        ]
       }
     }
   }

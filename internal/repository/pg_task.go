@@ -54,6 +54,9 @@ type EmailTask struct {
 	ThreadID  *string
 	SendMode  string
 	Encrypted bool
+	// Tracked records that this send carries an open pixel and click tickets,
+	// which only happens when the sending mailbox opted in.
+	Tracked bool
 }
 
 // TaskFailure represents a task failure record
@@ -97,12 +100,20 @@ type TaskRepository interface {
 	GetTask(ctx context.Context, taskID uuid.UUID) (*Task, error)
 	GetTaskByMessageID(ctx context.Context, messageID string) (*Task, error)
 	GetCampaignTask(ctx context.Context, taskID uuid.UUID) (*CampaignTask, error)
+	// Direct-mail engagement. Both are no-ops for a task that is not a tracked
+	// direct send, so the tracking consumer can call them without first working
+	// out which kind of send it is looking at.
+	MarkDirectOpened(ctx context.Context, taskID uuid.UUID, at time.Time, machine bool) (bool, error)
+	MarkDirectClicked(ctx context.Context, taskID uuid.UUID, at time.Time) (bool, error)
 	GetWarmupTask(ctx context.Context, taskID uuid.UUID) (*WarmupTask, error)
 	GetEmailTask(ctx context.Context, taskID uuid.UUID) (*EmailTask, error)
 
 	// Scheduling queries (CRITICAL for "next best time" calculation)
 	CountEmailsSentToday(ctx context.Context, accountID uuid.UUID) (int, error)
 	GetLastEmailTime(ctx context.Context, accountID uuid.UUID) (*time.Time, error)
+	// GetLastEmailTimes is GetLastEmailTime for a pool in one read (every
+	// dispatched task type, as the min-gap clock counts them).
+	GetLastEmailTimes(ctx context.Context, accountIDs []uuid.UUID) (map[uuid.UUID]time.Time, error)
 	// GetLastSendTimes is the batch form, for rotation across a campaign's
 	// whole sender pool. Accounts that have never sent are absent from the map.
 	GetLastSendTimes(ctx context.Context, accountIDs []uuid.UUID, taskType string) (map[uuid.UUID]time.Time, error)
@@ -127,6 +138,13 @@ type TaskRepository interface {
 
 	// Count only campaign tasks completed today (excludes warmup)
 	CountCampaignEmailsSentToday(ctx context.Context, accountID uuid.UUID) (int, error)
+	// CountCampaignSendsTodayBySender is one campaign's sends today, by the
+	// mailbox they went out from. A mailbox's daily budget is shared by every
+	// campaign it is on, so a plan has to know which campaign spent it.
+	CountCampaignSendsTodayBySender(ctx context.Context, campaignID uuid.UUID) (map[uuid.UUID]int, error)
+	// CountCampaignEmailsSentTodayByAccounts is CountCampaignEmailsSentToday
+	// for a whole pool in one read; an id with no sends is absent.
+	CountCampaignEmailsSentTodayByAccounts(ctx context.Context, accountIDs []uuid.UUID) (map[uuid.UUID]int, error)
 	CountWarmupEmailsSentToday(ctx context.Context, accountID uuid.UUID) (int, error)
 
 	// Create user-initiated email task (transactional)
@@ -145,6 +163,7 @@ type TaskRepository interface {
 	DirectPendingWarmupTask(ctx context.Context, accountID, targetAccountID uuid.UUID, at time.Time) (bool, error)
 	UpdateTaskStatusWithLock(ctx context.Context, taskID uuid.UUID, status string) error
 	UpdateTaskMessageID(ctx context.Context, taskID uuid.UUID, messageID string) error
+	UpdateTaskThreadID(ctx context.Context, taskID uuid.UUID, threadID string) error
 	// UpdateTaskEmailAccount repoints a task at the mailbox it is actually
 	// sending from. A campaign task is created before its mailbox is known, so
 	// the send path stamps the rotation's real pick before dispatching.
@@ -241,8 +260,8 @@ func (r *taskRepository) CreateWarmupTask(ctx context.Context, warmupTask *Warmu
 // CreateEmailTask creates email-specific task data
 func (r *taskRepository) CreateEmailTask(ctx context.Context, emailTask *EmailTask) error {
 	query := `
-		INSERT INTO email_tasks (task_id, to_addrs, cc, bcc, in_reply_to, subject, body, body_html, body_plain, thread_id, send_mode, encrypted)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		INSERT INTO email_tasks (task_id, to_addrs, cc, bcc, in_reply_to, subject, body, body_html, body_plain, thread_id, send_mode, encrypted, tracked)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	`
 
 	sendMode := emailTask.SendMode
@@ -263,6 +282,7 @@ func (r *taskRepository) CreateEmailTask(ctx context.Context, emailTask *EmailTa
 		emailTask.ThreadID,
 		sendMode,
 		emailTask.Encrypted,
+		emailTask.Tracked,
 	)
 
 	return err
@@ -436,6 +456,102 @@ func (r *taskRepository) CountCampaignEmailsSentToday(ctx context.Context, accou
 	return count, err
 }
 
+// GetLastEmailTimes is the min-gap clock for a whole pool in one query.
+func (r *taskRepository) GetLastEmailTimes(ctx context.Context, accountIDs []uuid.UUID) (map[uuid.UUID]time.Time, error) {
+	out := make(map[uuid.UUID]time.Time, len(accountIDs))
+	if len(accountIDs) == 0 {
+		return out, nil
+	}
+	query := `
+		SELECT t.email_account_id, MAX(t.completed_at)
+		FROM tasks t
+		WHERE t.email_account_id = ANY($1)
+		  AND t.status = 'completed'
+		  AND t.completed_at IS NOT NULL
+		  AND ` + taskDispatchedEmail + `
+		GROUP BY t.email_account_id
+	`
+	rows, err := r.db.Query(ctx, query, accountIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var at time.Time
+		if err := rows.Scan(&id, &at); err != nil {
+			return nil, err
+		}
+		out[id] = at
+	}
+	return out, rows.Err()
+}
+
+// CountCampaignEmailsSentTodayByAccounts is the per-mailbox ledger for a pool
+// in one query, so a plan over a large workspace does not ask once per mailbox.
+func (r *taskRepository) CountCampaignEmailsSentTodayByAccounts(ctx context.Context, accountIDs []uuid.UUID) (map[uuid.UUID]int, error) {
+	out := make(map[uuid.UUID]int, len(accountIDs))
+	if len(accountIDs) == 0 {
+		return out, nil
+	}
+	query := `
+		SELECT t.email_account_id, COUNT(*)
+		FROM tasks t
+		WHERE t.email_account_id = ANY($1)
+		  AND t.status = 'completed'
+		  AND t.task_type = 'campaign'
+		  AND DATE(t.completed_at) = CURRENT_DATE
+		  AND ` + taskDispatchedEmail + `
+		GROUP BY t.email_account_id
+	`
+	rows, err := r.db.Query(ctx, query, accountIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
+// CountCampaignSendsTodayBySender is CountCampaignEmailsSentToday for one
+// campaign, split by mailbox. Same ledger and the same day boundary, so the
+// two agree on what a mailbox has spent.
+func (r *taskRepository) CountCampaignSendsTodayBySender(ctx context.Context, campaignID uuid.UUID) (map[uuid.UUID]int, error) {
+	query := `
+		SELECT t.email_account_id, COUNT(*)
+		FROM tasks t
+		JOIN campaign_tasks ct ON ct.task_id = t.id
+		WHERE ct.campaign_id = $1
+		  AND t.status = 'completed'
+		  AND t.task_type = 'campaign'
+		  AND DATE(t.completed_at) = CURRENT_DATE
+		  AND ` + taskDispatchedEmail + `
+		GROUP BY t.email_account_id
+	`
+	rows, err := r.db.Query(ctx, query, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[uuid.UUID]int{}
+	for rows.Next() {
+		var id uuid.UUID
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
 // CreateEmailTaskFull creates a task and email task entry in a single transaction
 func (r *taskRepository) CreateEmailTaskFull(ctx context.Context, task *Task, emailTask *EmailTask) error {
 	tx, err := r.db.Begin(ctx)
@@ -461,8 +577,8 @@ func (r *taskRepository) CreateEmailTaskFull(ctx context.Context, task *Task, em
 	}
 
 	etQuery := `
-		INSERT INTO email_tasks (task_id, to_addrs, cc, bcc, in_reply_to, subject, body, body_html, body_plain, thread_id, send_mode, encrypted)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		INSERT INTO email_tasks (task_id, to_addrs, cc, bcc, in_reply_to, subject, body, body_html, body_plain, thread_id, send_mode, encrypted, tracked)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	`
 	_, err = tx.Exec(ctx, etQuery,
 		emailTask.TaskID,
@@ -477,6 +593,7 @@ func (r *taskRepository) CreateEmailTaskFull(ctx context.Context, task *Task, em
 		emailTask.ThreadID,
 		sendMode,
 		emailTask.Encrypted,
+		emailTask.Tracked,
 	)
 	if err != nil {
 		return err
@@ -922,6 +1039,18 @@ func (r *taskRepository) UpdateTaskMessageID(ctx context.Context, taskID uuid.UU
 	return err
 }
 
+// UpdateTaskThreadID persists the provider-side conversation handle the worker
+// reported for a send. Only Gmail has one, and it is the only thing that makes
+// a follow-up land in the same thread in the SENDER's mailbox: a matching
+// Subject and In-Reply-To are not enough (issue #472). Guarded on a change so
+// the common "already recorded" case writes nothing.
+func (r *taskRepository) UpdateTaskThreadID(ctx context.Context, taskID uuid.UUID, threadID string) error {
+	_, err := r.db.Exec(ctx,
+		`UPDATE tasks SET thread_id = $1, updated_at = NOW() WHERE id = $2 AND thread_id <> $1`,
+		threadID, taskID)
+	return err
+}
+
 // UpdateTaskEmailAccount records the mailbox a task is sending from. A campaign
 // chain creates its successor before rotation has chosen a mailbox for it, so
 // the row is seeded with the previous tick's pick and corrected here. Everything
@@ -1132,4 +1261,40 @@ func (r *taskRepository) CancelScheduledByUser(ctx context.Context, taskID, user
 		return nil, false, err
 	}
 	return cloudTaskName, true, nil
+}
+
+// MarkDirectOpened records the first open and lets a later human open replace a machine open.
+func (r *taskRepository) MarkDirectOpened(ctx context.Context, taskID uuid.UUID, at time.Time, machine bool) (bool, error) {
+	const query = `
+		UPDATE email_tasks
+		SET opened_at = $2,
+		    opened_machine = $3
+		WHERE task_id = $1
+		  AND tracked
+		  AND (opened_at IS NULL OR (opened_machine AND NOT $3))
+	`
+	tag, err := r.db.Exec(ctx, query, taskID, at, machine)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// MarkDirectClicked counts a click and keeps the latest event time.
+func (r *taskRepository) MarkDirectClicked(ctx context.Context, taskID uuid.UUID, at time.Time) (bool, error) {
+	const query = `
+		UPDATE email_tasks
+		SET clicked_at = GREATEST(COALESCE(clicked_at, $2), $2),
+		    click_count = click_count + 1
+		WHERE task_id = $1 AND tracked
+		RETURNING click_count
+	`
+	var count int
+	if err := r.db.QueryRow(ctx, query, taskID, at).Scan(&count); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return count == 1, nil
 }

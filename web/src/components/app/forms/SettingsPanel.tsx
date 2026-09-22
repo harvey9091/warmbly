@@ -23,15 +23,18 @@ export interface FormSettingsDraft {
     category_ids: string[];
     allowed_domains: string[];
     captcha_enabled: boolean;
+    triage_enabled: boolean;
 }
 
 export default function SettingsPanel({
     draft,
     captchaAvailable,
+    triageAvailable,
     onChange,
 }: {
     draft: FormSettingsDraft;
     captchaAvailable: boolean;
+    triageAvailable: boolean;
     onChange: (patch: Partial<FormSettingsDraft>) => void;
 }) {
     const campaigns = useCampaigns({ query: "", folder: "" });
@@ -130,6 +133,20 @@ export default function SettingsPanel({
                     <p className="col-span-full text-[11.5px] text-slate-500 rounded-md bg-slate-50 border border-slate-200 px-3 py-2 max-w-3xl">
                         A captcha challenge becomes available once the operator configures Cloudflare Turnstile
                         (TURNSTILE_SECRET and TURNSTILE_SITE_KEY).
+                    </p>
+                )}
+                {triageAvailable ? (
+                    <div className="col-span-full">
+                        <SettingRow
+                            title="Triage submissions"
+                            description="Classify each submission as a buyer, vendor, job seeker or junk. Junk stays in the list but creates no contact and joins no campaign. The submitted answers are sent to TypeSafe."
+                        >
+                            <Toggle value={draft.triage_enabled} onChange={(v) => onChange({ triage_enabled: v })} />
+                        </SettingRow>
+                    </div>
+                ) : (
+                    <p className="col-span-full text-[11.5px] text-slate-500 rounded-md bg-slate-50 border border-slate-200 px-3 py-2 max-w-3xl">
+                        Submission triage becomes available once the operator configures TypeSafe (TYPESAFE_API_KEY).
                     </p>
                 )}
             </Section>

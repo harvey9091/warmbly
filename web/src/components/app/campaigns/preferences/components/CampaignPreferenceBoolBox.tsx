@@ -74,11 +74,13 @@ export function Toggle({
     onChange,
     disabled,
     id,
+    ariaLabel,
 }: {
     value: boolean;
     onChange: (v: boolean) => void;
     disabled?: boolean;
     id?: string;
+    ariaLabel?: string;
 }) {
     return (
         <button
@@ -86,6 +88,7 @@ export function Toggle({
             id={id}
             role="switch"
             aria-checked={value}
+            aria-label={ariaLabel}
             disabled={disabled}
             onClick={() => onChange(!value)}
             className={`relative inline-flex h-[18px] w-8 shrink-0 items-center rounded-full transition-colors outline-none focus-visible:ring-2 focus-visible:ring-sky-100 disabled:opacity-50 ${

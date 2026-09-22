@@ -43,9 +43,9 @@ export default async function searchIncoming(
   p: UniboxSearchParams = {},
 ): Promise<UniboxListResponse> {
   const usp = new URLSearchParams();
-  // The server's free-text matcher is subject. If the frontend wants
-  // body matching too, that's a server change — surfacing the param
-  // here in case the user passed something.
+  // The free-text param is still named `subject` for compatibility, but the
+  // server matches it against the subject, the preview, the message body and
+  // the people on the message.
   if (p.query) usp.set("subject", p.query);
   if (p.from) usp.set("from", p.from);
   if (p.address) usp.set("address", p.address);
@@ -56,6 +56,7 @@ export default async function searchIncoming(
     usp.set("email_ids", p.accountIds.join(","));
   }
   if (p.folder) usp.set("folder", p.folder);
+  if (p.includeArchived) usp.set("include_archived", "true");
   if (p.unseen) usp.set("unseen", "true");
   if (p.snoozed === true) usp.set("snoozed", "true");
   else if (p.snoozed === "any") usp.set("snoozed", "any");
