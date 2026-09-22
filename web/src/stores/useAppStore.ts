@@ -132,17 +132,6 @@ export const useOrganizations = () =>
     current: state.currentOrganization,
     switch: state.switchOrganization,
   })))
-export const useKeyboardNavigation = () =>
-  useAppStore(useShallow((state) => ({
-    keySequence: state.keySequence,
-    addToSequence: state.addToSequence,
-    clearSequence: state.clearSequence,
-    selectedIndex: state.selectedIndex,
-    setSelectedIndex: state.setSelectedIndex,
-    listLength: state.listLength,
-    setListLength: state.setListLength,
-    moveSelection: state.moveSelection,
-  })))
 export const useCachedData = () =>
   useAppStore(useShallow((state) => ({
     campaigns: state.campaigns,
