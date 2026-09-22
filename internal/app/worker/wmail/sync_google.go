@@ -22,6 +22,9 @@ func (w *WMail) SyncGoogle(ctx context.Context) *errx.MailError {
 	w.beginTick()
 	stats := &tickStats{}
 	w.googleTick = stats
+	if !w.retryUnmap(ctx) {
+		return nil
+	}
 
 	newHistoryID, err := w.GoogleData.Client.FetchHistory(ctx, w.GoogleData.LastHistoryID)
 	if newHistoryID != 0 && newHistoryID != w.GoogleData.LastHistoryID {

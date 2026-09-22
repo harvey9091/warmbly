@@ -98,6 +98,9 @@ type WMail struct {
 	// flagScan is the previous flag snapshot per folder name, used only on
 	// IMAP servers without CONDSTORE, which cannot say what changed.
 	flagScan map[string]*folderFlagScan
+	// unmapPending holds map entries for unpublished arrivals whose removal
+	// failed, keyed by map key; every pass retries them before it looks.
+	unmapPending map[string]uuid.UUID
 	// transportFailures counts consecutive passes that could not reach the
 	// mail server, which paces the retry and keeps one outage to one warning.
 	transportFailures int
