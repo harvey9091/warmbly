@@ -102,6 +102,9 @@ type WMail struct {
 	// synced folder and were looked for in the skipped folders without being
 	// found, so they are not searched for again on every pass.
 	skipChecked map[string]struct{}
+	// unmapPending holds map entries for unpublished arrivals whose removal
+	// failed, keyed by map key; every pass retries them before it looks.
+	unmapPending map[string]uuid.UUID
 	// transportFailures counts consecutive passes that could not reach the
 	// mail server, which paces the retry and keeps one outage to one warning.
 	transportFailures int

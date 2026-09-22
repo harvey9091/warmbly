@@ -194,7 +194,7 @@ export default async function Request<T>(config: AuthRequestConfig): Promise<T> 
             if (method !== "GET" && method !== "HEAD") {
                 window.dispatchEvent(
                     new CustomEvent("permission-denied", {
-                        detail: { message: appErr.message },
+                        detail: { message: appErr.message, code: appErr.code },
                     }),
                 );
             }

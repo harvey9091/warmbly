@@ -334,6 +334,34 @@ func (c *Client) SelectForSyncGen(mailbox string) (uint32, uint32, *errx.MailErr
 	return data.NumMessages, data.UIDValidity, nil
 }
 
+// Selected is the view a SELECT opened: the count and the cursors every
+// SEARCH on it answers against.
+type Selected struct {
+	Count         uint32
+	UIDValidity   uint32
+	UIDNext       uint32
+	HighestModSeq uint64
+}
+
+// SelectForSyncState selects exactly as SelectForSync does and reports the
+// cursors of the selected view, which is what a folder's stored cursor must
+// advance to: a STATUS taken earlier can be ahead of the view the SEARCH ran on.
+func (c *Client) SelectForSyncState(mailbox string) (Selected, *errx.MailError) {
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	defer c.begin()()
+	data, err := c.selectMailbox(mailbox, &imap.SelectOptions{ReadOnly: true, CondStore: c.condStore.Load()})
+	if err != nil {
+		return Selected{}, c.handleError(err)
+	}
+	return Selected{
+		Count:         data.NumMessages,
+		UIDValidity:   data.UIDValidity,
+		UIDNext:       uint32(data.UIDNext),
+		HighestModSeq: data.HighestModSeq,
+	}, nil
+}
+
 // ReleaseMailbox drops the selected mailbox. Dovecot answers LIST-STATUS for
 // the selected mailbox with the values it held at SELECT, so a loop that keeps
 // INBOX selected never sees another change land. Servers without UNSELECT keep

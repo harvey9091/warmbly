@@ -31,6 +31,9 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 	}
 	w.beginTick()
 	stats := &tickStats{}
+	if !w.retryUnmap(ctx) {
+		return nil
+	}
 
 	client := w.SmtpImapData.ImapClient
 	// A mailbox left selected by the previous pass freezes LIST-STATUS on this
@@ -114,13 +117,15 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 		movedOut := len(skipped) > 0 && imapMovedOut(befBox, box)
 		fullyProcessed := true
 		var touched map[string]struct{}
+		var view imap.Selected
 		if changed && !stats.aborted {
 			w.setWalking(box)
-			done, ids, err := w.imapIncremental(ctx, box, befBox, condStore, stats)
+			done, sel, ids, err := w.imapIncremental(ctx, box, befBox, condStore, stats)
 			if err != nil {
 				return err
 			}
 			fullyProcessed = done
+			view = sel
 			touched = ids
 		} else if changed {
 			// The pass was aborted before this folder; hold its cursor too.
@@ -134,6 +139,8 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 			if !fullyProcessed {
 				next.HighestModSeq = befBox.HighestModSeq
 				next.UIDNext = befBox.UIDNext
+			} else if changed {
+				advanceToView(&next, view)
 			}
 			if err := w.mboxEvent(&next); err != nil {
 				return nil
@@ -355,16 +362,22 @@ func imapFolderChanged(before, now *models.Mailbox, condStore bool) bool {
 // imapIncremental stores what changed in one folder since the held cursor.
 // Known messages relay their flags unbudgeted; new ones are admitted newest
 // first. It reports whether every change was stored, which is what lets the
-// folder's cursor advance, plus the Message-IDs it fetched so the drafts
+// folder's cursor advance, the selected view the search ran against, which is
+// where it advances to, and the Message-IDs it fetched so the drafts
 // reconciliation can tell a re-appended draft from an expunged one.
-func (w *WMail) imapIncremental(ctx context.Context, box, before *models.Mailbox, condStore bool, stats *tickStats) (bool, map[string]struct{}, *errx.MailError) {
+func (w *WMail) imapIncremental(ctx context.Context, box, before *models.Mailbox, condStore bool, stats *tickStats) (bool, imap.Selected, map[string]struct{}, *errx.MailError) {
 	client := w.SmtpImapData.ImapClient
-	count, err := client.SelectForSync(box.Name)
+	view, err := client.SelectForSyncState(box.Name)
 	if err != nil {
-		return false, nil, err
+		return false, view, nil, err
 	}
-	if count == 0 {
-		return true, nil, nil
+	// The listing and this view name different generations, so the search
+	// would answer about UIDs the cursor does not; the next pass re-baselines.
+	if view.UIDValidity != 0 && view.UIDValidity != box.UIDValidity {
+		return false, view, nil, nil
+	}
+	if view.Count == 0 {
+		return true, view, nil, nil
 	}
 	var uids []goimap.UID
 	if condStore {
@@ -373,10 +386,10 @@ func (w *WMail) imapIncremental(ctx context.Context, box, before *models.Mailbox
 		uids, err = client.SearchNewSince(before.UIDNext)
 	}
 	if err != nil {
-		return false, nil, err
+		return false, view, nil, err
 	}
 	if len(uids) == 0 {
-		return true, nil, nil
+		return true, view, nil, nil
 	}
 	// Newest first: when budget is short, the freshest mail lands first.
 	sort.Slice(uids, func(i, j int) bool { return uids[i] > uids[j] })
@@ -392,11 +405,11 @@ func (w *WMail) imapIncremental(ctx context.Context, box, before *models.Mailbox
 		hi := min(lo+config.ImapFetchBatchSize, len(uids))
 		fetched, err := client.FetchEnvelopes(ctx, uids[lo:hi])
 		if err != nil {
-			return false, touched, err
+			return false, view, touched, err
 		}
 		done, err := w.imapApply(ctx, fetched, false, stats)
 		if err != nil {
-			return false, touched, err
+			return false, view, touched, err
 		}
 		for _, f := range fetched {
 			if touched != nil {
@@ -408,10 +421,25 @@ func (w *WMail) imapIncremental(ctx context.Context, box, before *models.Mailbox
 		// unfrozen on a long backlog would deactivate itself walking mail it
 		// cannot keep. Stop here; the held mod-sequence re-offers the rest.
 		if !done || stats.aborted || ctx.Err() != nil {
-			return false, touched, nil
+			return false, view, touched, nil
 		}
 	}
-	return true, touched, nil
+	return true, view, touched, nil
+}
+
+// advanceToView moves a fully walked folder's cursor to the view its search
+// ran against. The listing's STATUS is taken before the SELECT, and a server
+// whose selected view lags it (a session snapshot, an APPEND from the send
+// path in between) would otherwise record a cursor past mail the search never
+// returned, and that mail would never be synced. A view that reports no
+// cursor keeps the listing's.
+func advanceToView(next *models.Mailbox, view imap.Selected) {
+	if view.UIDNext != 0 {
+		next.UIDNext = view.UIDNext
+	}
+	if view.HighestModSeq != 0 {
+		next.HighestModSeq = view.HighestModSeq
+	}
 }
 
 // imapReconcileDrafts removes the platform's rows for drafts the server no
