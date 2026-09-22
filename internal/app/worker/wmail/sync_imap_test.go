@@ -904,3 +904,36 @@ func TestStoreNewDropsTheMapEntryWhenThePublishFails(t *testing.T) {
 		t.Errorf("mod-sequence = %d, want the held 100", got)
 	}
 }
+
+// A bounce is applied once: its report goes out only after the arrival is
+// published, so a message re-offered after a failed publish does not
+// suppress and count against its campaign twice.
+func TestStoreNewEmitsReportsOnlyAfterTheArrivalIsPublished(t *testing.T) {
+	msg := &models.EmailMessageData{
+		MessageID: "<ndr-1@mail.example.com>",
+		From:      []string{"Mail Delivery System (MAILER-DAEMON@mail.example.com)"},
+		Subject:   "Undelivered Mail Returned to Sender",
+		BodyPlain: "Final-Recipient: rfc822; nobody@invalid.example.com\nAction: failed\nStatus: 5.1.1\n\nMessage-ID: <camp-abc-123@yourdomain.com>\n",
+	}
+	for _, publishFails := range []bool{true, false} {
+		w, _ := newIMAPTestMail(&fakeImapConn{}, &fixedBudget{}, &models.Mailbox{})
+		var kinds []models.JobEventType
+		w.onEvent = func(kind models.JobEventType, _ any) error {
+			kinds = append(kinds, kind)
+			if kind == models.JobEventTypeNewEmail && publishFails {
+				return fmt.Errorf("bus unavailable")
+			}
+			return nil
+		}
+		data := &models.EmailMessageStoreData{ID: uuid.New(), MessageID: msg.MessageID}
+		_ = w.storeNew(t.Context(), msg, data, msg.MessageID)
+
+		want := []models.JobEventType{models.JobEventTypeNewEmail}
+		if !publishFails {
+			want = append(want, models.JobEventTypeInboundBounce)
+		}
+		if fmt.Sprint(kinds) != fmt.Sprint(want) {
+			t.Errorf("publishFails=%v: events %v, want %v", publishFails, kinds, want)
+		}
+	}
+}

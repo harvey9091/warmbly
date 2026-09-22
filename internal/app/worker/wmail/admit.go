@@ -173,11 +173,14 @@ func (w *WMail) storeNew(ctx context.Context, msg *models.EmailMessageData, data
 	// Both still run on every message: a report is one or the other in
 	// practice, and deciding that here by skipping the second would be this
 	// function guessing at a MIME question the parsers already answer.
-	bounceAbout := w.maybeEmitBounce(msg)
-	complaintAbout := w.maybeEmitComplaint(msg)
-	reportAbout := bounceAbout
-	if reportAbout == "" {
-		reportAbout = complaintAbout
+	bounce := w.bounceReport(msg)
+	complaint := w.complaintReport(msg)
+	var reportAbout string
+	switch {
+	case bounce != nil:
+		reportAbout = bounce.OriginalMessageID
+	case complaint != nil:
+		reportAbout = complaint.OriginalMessageID
 	}
 
 	// The consumer decodes NEW_EMAIL as JobEventNewEmail{user_id, message}.
@@ -192,8 +195,18 @@ func (w *WMail) storeNew(ctx context.Context, msg *models.EmailMessageData, data
 		if derr := w.EmailMessageMapRepository.Del(ctx, w.UserID, w.ID, mapKey, data.ID); derr != nil {
 			log.Warn().Err(derr).Str("email_id", w.ID.String()).Msg("sync: map entry for an unpublished message not removed")
 		}
+		return err
 	}
-	return err
+
+	// Reports go out only once the arrival is published, so a message
+	// re-offered after a failed publish does not apply its report twice.
+	if bounce != nil {
+		_ = w.onEvent(models.JobEventTypeInboundBounce, bounce)
+	}
+	if complaint != nil {
+		_ = w.onEvent(models.JobEventTypeInboundComplaint, complaint)
+	}
+	return nil
 }
 
 // capBody bounds a stored body part at MaxEmailBodySize. IMAP already reads
