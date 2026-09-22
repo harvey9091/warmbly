@@ -34,6 +34,7 @@ Every member of a self-hosted workspace sees the same version pill in the **dash
 Who can act on it follows platform admin access, not workspace roles:
 
 - **Members** see a badge. Its tooltip names the version and says to ask a platform admin.
+- **Platform admins whose session has no second factor** get the same badge, and clicking it explains that administrative access needs two-factor authentication, with a link to Settings > Security. Turn on 2FA or add a passkey there and sign in again; the same rule gates the admin panel.
 - **Platform admins** click it and get the update dialog: the running and available versions with the release notes, the checkout and updater state, a "Check now" button, and **Update and restart**. That button leads to a confirmation pane that spells out what the update does (pull, rebuild and restart, sending pauses and resumes, migrations apply, the tab reconnects) before anything runs.
 
 While the update runs the dialog shows a progress bar, the step list with the live step highlighted, and the log behind a toggle. When the backend goes away for the restart the dialog says it is reconnecting and keeps polling; the pill in the header turns into a spinner so the job stays visible with the dialog closed, and a reload picks it back up. When the new backend answers, the dialog shows the result and reloads the dashboard after a short countdown, or, if the dialog was closed, a toast reports the new version and every list refreshes.
