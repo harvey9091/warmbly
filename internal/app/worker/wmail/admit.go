@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
@@ -193,7 +194,11 @@ func (w *WMail) storeNew(ctx context.Context, msg *models.EmailMessageData, data
 		// The entry would mark a message that never reached the unibox as
 		// known, and every later pass would skip it; drop it so it is re-offered.
 		if derr := w.EmailMessageMapRepository.Del(ctx, w.UserID, w.ID, mapKey, data.ID); derr != nil {
-			log.Warn().Err(derr).Str("email_id", w.ID.String()).Msg("sync: map entry for an unpublished message not removed")
+			log.Warn().Err(derr).Str("email_id", w.ID.String()).Msg("sync: map entry for an unpublished message not removed; retried next pass")
+			if w.unmapPending == nil {
+				w.unmapPending = map[string]uuid.UUID{}
+			}
+			w.unmapPending[mapKey] = data.ID
 		}
 		return err
 	}
@@ -207,6 +212,20 @@ func (w *WMail) storeNew(ctx context.Context, msg *models.EmailMessageData, data
 		_ = w.onEvent(models.JobEventTypeInboundComplaint, complaint)
 	}
 	return nil
+}
+
+// retryUnmap removes the map entries a failed publish could not, and reports
+// whether none is left. A pass must not run while one is: it would read that
+// message as known and move its cursor past it.
+func (w *WMail) retryUnmap(ctx context.Context) bool {
+	for key, id := range w.unmapPending {
+		if err := w.EmailMessageMapRepository.Del(ctx, w.UserID, w.ID, key, id); err != nil {
+			log.Warn().Err(err).Str("email_id", w.ID.String()).Msg("sync: map entry for an unpublished message still not removed; pass skipped")
+			return false
+		}
+		delete(w.unmapPending, key)
+	}
+	return true
 }
 
 // capBody bounds a stored body part at MaxEmailBodySize. IMAP already reads

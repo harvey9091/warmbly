@@ -864,6 +864,8 @@ func TestImapSyncAdvancesUIDNextToTheSelectedView(t *testing.T) {
 type recordingMessageMap struct {
 	fakeMessageMap
 	added, removed []string
+	// failDel is how many removals fail before they start succeeding.
+	failDel int
 }
 
 func (m *recordingMessageMap) Add(_ context.Context, d repository.EmailMessageData) error {
@@ -872,6 +874,10 @@ func (m *recordingMessageMap) Add(_ context.Context, d repository.EmailMessageDa
 }
 
 func (m *recordingMessageMap) Del(_ context.Context, _, _ uuid.UUID, messageID string, _ uuid.UUID) error {
+	if m.failDel > 0 {
+		m.failDel--
+		return fmt.Errorf("backend unavailable")
+	}
 	m.removed = append(m.removed, messageID)
 	return nil
 }
@@ -935,5 +941,51 @@ func TestStoreNewEmitsReportsOnlyAfterTheArrivalIsPublished(t *testing.T) {
 		if fmt.Sprint(kinds) != fmt.Sprint(want) {
 			t.Errorf("publishFails=%v: events %v, want %v", publishFails, kinds, want)
 		}
+	}
+}
+
+// A removal that fails too is retried before the next pass looks at anything,
+// and the pass waits for it, so the message is never read as known.
+func TestAFailedUnmapIsRetriedBeforeThePassRuns(t *testing.T) {
+	conn := &fakeImapConn{
+		folders: []models.Mailbox{{Name: "Sent", Attrs: []string{"\\Sent"}, UIDValidity: 7, HighestModSeq: 300}},
+		changed: []goimap.UID{1},
+	}
+	w, _ := newIMAPTestMail(conn, &fixedBudget{allow: 10},
+		&models.Mailbox{Name: "Sent", Attrs: []string{"\\Sent"}, UIDValidity: 7, HighestModSeq: 100})
+	m := &recordingMessageMap{failDel: 2}
+	w.EmailMessageMapRepository = m
+	publishFails := true
+	arrivals := 0
+	w.onEvent = func(kind models.JobEventType, _ any) error {
+		if kind == models.JobEventTypeNewEmail {
+			arrivals++
+			if publishFails {
+				return fmt.Errorf("bus unavailable")
+			}
+		}
+		return nil
+	}
+
+	// Publish fails and so does the rollback; the next pass cannot remove it
+	// either, so it runs nothing.
+	for range 2 {
+		if err := w.Sync(t.Context()); err != nil {
+			t.Fatalf("Sync: %v", err)
+		}
+	}
+	if arrivals != 1 || conn.fetches != 1 {
+		t.Fatalf("arrivals %d, fetches %d: a pass ran with the entry still mapped", arrivals, conn.fetches)
+	}
+
+	publishFails = false
+	if err := w.Sync(t.Context()); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if len(m.removed) != 1 || arrivals != 2 {
+		t.Errorf("removed %v, arrivals %d: the message was not re-offered once the entry was gone", m.removed, arrivals)
+	}
+	if got := w.SmtpImapData.Mailboxes[0].HighestModSeq; got != 300 {
+		t.Errorf("mod-sequence = %d, want 300", got)
 	}
 }

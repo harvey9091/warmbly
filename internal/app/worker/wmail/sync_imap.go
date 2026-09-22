@@ -31,6 +31,9 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 	}
 	w.beginTick()
 	stats := &tickStats{}
+	if !w.retryUnmap(ctx) {
+		return nil
+	}
 
 	client := w.SmtpImapData.ImapClient
 	// A mailbox left selected by the previous pass freezes LIST-STATUS on this
