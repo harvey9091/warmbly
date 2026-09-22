@@ -183,6 +183,16 @@ Nested folders are followed as well, so mail in a subfolder of the inbox or unde
 
 On IMAP, folders are identified by the standard attributes a server publishes, and by name when it publishes none. The common names are recognized in a dozen languages, so a mailbox whose Sent folder is called "Gesendete Elemente" or "Éléments envoyés" still files sent mail as sent rather than as inbox.
 
+### Folders you do not want synced
+
+A folder the sync does not recognize files as inbox, so its mail shows up in the [unified inbox](/guides/unibox/). That is right for a folder you sort real mail into and wrong for one another tool fills: a second warmup service running out of its own folder, for example, puts machine mail in your inbox, spends the mailbox's sync budget on it, and has it classified like a reply.
+
+On an IMAP mailbox, the drawer's **Sync** card lists the folders the worker has seen under **Folders not synced**. Tick one and the sync stops opening it on its next pass, within a minute; mail already imported from it is removed from Warmbly, and mail that later moves into it from a synced folder is removed too. The mail itself is never touched at the provider. A folder that is not listed yet, because the mailbox has not synced or the folder was just created, can be typed in by name, exactly as your mail server lists it (`Warmer`, or `INBOX/Warmer` on a server that nests everything under the inbox). Case does not matter, and a skipped folder covers its subfolders.
+
+The inbox, sent, drafts, spam, trash and archive folders cannot be skipped: a sync without them is a broken mailbox, not a quieter one. Un-ticking a folder brings it back the way a new folder arrives, syncing what lands in it from then on; the mail that accumulated while it was skipped is not imported. Up to `50` folders can be skipped per mailbox. Gmail and Outlook mailboxes have no such list.
+
+The same setting is `PUT /emails/:id/sync` in the [API](/api/endpoints/) and `warmbly mailbox skip-folders` in the CLI.
+
 <Callout type="info" title="Read state on older IMAP servers">
   Some IMAP servers, including Outlook.com, Microsoft 365 over IMAP and Yahoo, cannot tell a client what changed since it last looked. New mail from those servers still arrives within a minute. Reading or flagging a message in another mail client shows up in Warmbly within about ten minutes rather than immediately. Nothing is lost either way, and Gmail, Outlook over OAuth, Fastmail and most self-hosted servers are immediate.
 </Callout>

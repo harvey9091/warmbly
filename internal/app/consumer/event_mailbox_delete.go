@@ -22,6 +22,20 @@ func (s *JobsService) HandleMailboxDelete(ctx context.Context, e *models.JobEven
 			CaptureError(e.UserID, e.EmailID, err)
 			return err
 		}
+		// A folder the owner excluded from sync is retired with the mail
+		// already stored from it; the mail itself stays at the provider.
+		if e.Skipped && s.UniboxRepository != nil {
+			n, err := s.UniboxRepository.DeleteByFolderPaths(ctx, e.EmailID, []string{e.Mailbox})
+			if err != nil {
+				CaptureError(e.UserID, e.EmailID, err)
+				return err
+			}
+			log.Info().
+				Str("email_id", e.EmailID.String()).
+				Str("folder", e.Mailbox).
+				Int64("messages", n).
+				Msg("folder excluded from sync: stored mail dropped")
+		}
 		return nil
 	}
 

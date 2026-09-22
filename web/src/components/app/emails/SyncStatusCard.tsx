@@ -1,7 +1,14 @@
+import { useState } from "react";
 import { motion } from "framer-motion";
-import { CheckCircle2Icon, DownloadIcon, HourglassIcon, RefreshCwIcon } from "lucide-react";
+import { CheckCircle2Icon, DownloadIcon, HourglassIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
+import toast from "react-hot-toast";
+import { CheckSquare } from "@/components/ui/check-square";
+import { TextInput } from "@/components/ui/field";
+import type { AppError } from "@/lib/api/client/normalizeError";
 import useSync from "@/lib/api/hooks/app/emails/useSync";
-import type { SyncThrottleReason } from "@/lib/api/models/app/emails/SyncState";
+import useUpdateSyncSkipFolders from "@/lib/api/hooks/app/emails/useUpdateSyncSkipFolders";
+import type { SyncFolder, SyncThrottleReason } from "@/lib/api/models/app/emails/SyncState";
+import buildError from "@/lib/helper/buildError";
 import { cn } from "@/lib/utils";
 
 // Sync card in the mailbox drawer: what the initial import has done, whether
@@ -35,7 +42,98 @@ function until(iso: string): string {
         : d.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
 }
 
-export default function SyncStatusCard({ mailboxId }: { mailboxId: string }) {
+// The folders a client may offer to skip: everything the worker listed
+// except INBOX and the special folders, which the sync always follows.
+function skippable(folders: SyncFolder[]): string[] {
+    return folders.filter((f) => f.folder === "inbox" && f.name.toUpperCase() !== "INBOX").map((f) => f.name);
+}
+
+// Folders the owner excluded from sync, with the ones the server lists as
+// the choices. A skipped folder leaves the listing once the worker stops
+// following it, so the rows are the union of both, and a name the listing
+// does not have yet (a folder not yet seen, or one on a mailbox that has not
+// synced) can be typed in.
+function SkipFoldersSection({ mailboxId, listed, skipped }: { mailboxId: string; listed: string[]; skipped: string[] }) {
+    const mutation = useUpdateSyncSkipFolders(mailboxId);
+    const [draft, setDraft] = useState("");
+
+    const isSkipped = (name: string) => skipped.some((s) => s.toLowerCase() === name.toLowerCase());
+    const rows = [...listed, ...skipped.filter((s) => !listed.some((l) => l.toLowerCase() === s.toLowerCase()))];
+
+    const save = async (next: string[]) => {
+        try {
+            await mutation.mutateAsync(next);
+        } catch (e) {
+            toast.error(buildError(e as AppError));
+        }
+    };
+    const toggle = (name: string) =>
+        save(isSkipped(name) ? skipped.filter((s) => s.toLowerCase() !== name.toLowerCase()) : [...skipped, name]);
+    const add = () => {
+        const name = draft.trim();
+        if (!name) return;
+        setDraft("");
+        if (isSkipped(name)) return;
+        void save([...skipped, name]);
+    };
+
+    return (
+        <div className="mt-4">
+            <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400 font-medium">Folders not synced</div>
+            <p className="mt-1 text-[11.5px] leading-relaxed text-slate-500">
+                Mail in a folder ticked here never reaches Warmbly, and what was already imported from it is removed. Use it
+                for a folder another tool fills, such as a second warmup service. Inbox, sent, drafts, spam, trash and archive
+                always sync.
+            </p>
+            {rows.length > 0 && (
+                <ul className="mt-2 -mx-2.5">
+                    {rows.map((name) => (
+                        <li key={name}>
+                            <button
+                                type="button"
+                                disabled={mutation.isPending}
+                                onClick={() => void toggle(name)}
+                                className="w-full px-2.5 h-7 flex items-center gap-2 text-[12px] text-slate-700 hover:bg-slate-100 transition-colors disabled:opacity-60 rounded-md"
+                            >
+                                <CheckSquare checked={isSkipped(name)} />
+                                <span className="truncate">{name}</span>
+                                {!listed.some((l) => l.toLowerCase() === name.toLowerCase()) && (
+                                    <span className="ml-auto text-[10.5px] text-slate-400 shrink-0">skipped</span>
+                                )}
+                            </button>
+                        </li>
+                    ))}
+                </ul>
+            )}
+            <div className="mt-2 flex items-center gap-1.5">
+                <TextInput
+                    value={draft}
+                    onChange={setDraft}
+                    placeholder="Folder name as your mail server lists it"
+                    disabled={mutation.isPending}
+                    maxLength={255}
+                    onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                            e.preventDefault();
+                            add();
+                        }
+                    }}
+                    className="flex-1"
+                />
+                <button
+                    type="button"
+                    onClick={add}
+                    disabled={mutation.isPending || !draft.trim()}
+                    className="h-7 px-2.5 inline-flex items-center gap-1 rounded-md border border-slate-200 text-[12px] text-slate-700 hover:bg-slate-50 disabled:opacity-50 shrink-0"
+                >
+                    <PlusIcon className="w-3 h-3" /> Skip
+                </button>
+            </div>
+        </div>
+    );
+}
+
+export default function SyncStatusCard({ mailboxId, provider }: { mailboxId: string; provider?: string }) {
     const sync = useSync(mailboxId);
     const state = sync.data?.state ?? null;
     const policy = sync.data?.policy;
@@ -128,6 +226,14 @@ export default function SyncStatusCard({ mailboxId }: { mailboxId: string }) {
                     {state!.folders_skipped_conflict === 1 ? " name" : " names"} more than once, so only the first of each is
                     synced. Renaming one of them on your mail server clears this.
                 </p>
+            )}
+
+            {provider === "smtp_imap" && (
+                <SkipFoldersSection
+                    mailboxId={mailboxId}
+                    listed={skippable(sync.data.folders ?? [])}
+                    skipped={sync.data.skip_folders ?? []}
+                />
             )}
         </div>
     );

@@ -69,6 +69,10 @@ type UniboxRepository interface {
 	// are left out: there is nothing to relay through.
 	SeenRelayTargets(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) ([]models.SeenRelayTarget, error)
 	Delete(ctx context.Context, userID, id uuid.UUID) error
+	// DeleteByFolderPaths drops every stored message one mailbox synced from
+	// the named source folders, for folders the owner has excluded from sync.
+	// Exact names only; the worker names each subfolder it retires itself.
+	DeleteByFolderPaths(ctx context.Context, emailID uuid.UUID, folderPaths []string) (int64, error)
 	ListWarmupReviewCandidates(ctx context.Context, afterID uuid.UUID, limit int) ([]models.JobEventNewEmail, error)
 	// ListUnprocessedCampaignReplies pages inbound messages that reply
 	// processing never claimed and that look like campaign replies: they
@@ -916,6 +920,19 @@ func (r *uniboxRepository) Delete(ctx context.Context, userID, id uuid.UUID) err
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// DeleteByFolderPaths removes the mirror rows for whole source folders. The
+// mail stays where it is at the provider; only the platform's copy goes.
+func (r *uniboxRepository) DeleteByFolderPaths(ctx context.Context, emailID uuid.UUID, folderPaths []string) (int64, error) {
+	if len(folderPaths) == 0 {
+		return 0, nil
+	}
+	tag, err := r.db.Exec(ctx, `DELETE FROM unibox_emails WHERE email_id = $1 AND folder_path = ANY($2)`, emailID, folderPaths)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // queryPreviewList executes a query returning preview rows with limit+1 pagination.

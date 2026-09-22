@@ -59,6 +59,11 @@ func (s *stubRemovalRepo) Update(ctx context.Context, orgID, emailAccountID stri
 	return &models.Email{ID: id, Status: status}, nil
 }
 
+// GetSyncSkipFolders answers the loader's skip-list read with an empty list.
+func (s *stubRemovalRepo) GetSyncSkipFolders(context.Context, uuid.UUID) ([]string, *errx.Error) {
+	return nil, nil
+}
+
 func (s *stubRemovalRepo) GetByID(ctx context.Context, emailAccountID uuid.UUID) (*models.Email, *errx.Error) {
 	if s.getErr != nil {
 		return nil, s.getErr

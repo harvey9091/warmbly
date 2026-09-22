@@ -115,6 +115,13 @@ type EmailRepository interface {
 	SetWarmupLifecycle(ctx context.Context, orgID, emailAccountID, action string) (*models.Email, *errx.Error)
 	UpdateTrackingDomain(ctx context.Context, orgID, emailAccountID, domain string, verified bool, verifiedAt *time.Time) *errx.Error
 	UpdateTrackDirectMail(ctx context.Context, orgID, emailAccountID string, enabled bool) *errx.Error
+	// GetSyncSkipFolders is the folders this mailbox's sync leaves alone.
+	// Read without a tenant predicate by the loader, which ships it to the
+	// worker inside the mailbox's sync policy.
+	GetSyncSkipFolders(ctx context.Context, emailAccountID uuid.UUID) ([]string, *errx.Error)
+	// SetSyncSkipFolders replaces that list, scoped by organization like every
+	// other mailbox setting a workspace admin may change.
+	SetSyncSkipFolders(ctx context.Context, orgID, emailAccountID string, folders []string) *errx.Error
 	// ListOrganizationIDs names every workspace with a mailbox, for sweeps that
 	// run per workspace rather than per event.
 	ListOrganizationIDs(ctx context.Context) ([]uuid.UUID, error)
@@ -2109,6 +2116,46 @@ func (r *emailRepository) UpdateTrackDirectMail(ctx context.Context, orgID, emai
 		WHERE organization_id = $2 AND id = $3
 	`
 	params := []any{enabled, orgID, emailAccountID}
+
+	cmd, err := r.DB.Exec(ctx, query, params...)
+	if err != nil {
+		db.CaptureError(err, query, params, "exec")
+		return errx.InternalError()
+	}
+	if cmd.RowsAffected() == 0 {
+		return errx.ErrNotFound
+	}
+	return nil
+}
+
+// GetSyncSkipFolders reads the mailbox's skip list; an empty list for a
+// mailbox that never set one.
+func (r *emailRepository) GetSyncSkipFolders(ctx context.Context, emailAccountID uuid.UUID) ([]string, *errx.Error) {
+	query := `SELECT sync_skip_folders FROM email_accounts WHERE id = $1`
+	var folders []string
+	if err := r.DB.QueryRow(ctx, query, emailAccountID).Scan(&folders); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errx.ErrNotFound
+		}
+		db.CaptureError(err, query, []any{emailAccountID}, "query")
+		return nil, errx.InternalError()
+	}
+	return folders, nil
+}
+
+// SetSyncSkipFolders stores the skip list as given; the caller has already
+// normalized it. A nil slice would bind as SQL NULL against a NOT NULL
+// column, so an empty list is written as an empty array.
+func (r *emailRepository) SetSyncSkipFolders(ctx context.Context, orgID, emailAccountID string, folders []string) *errx.Error {
+	if folders == nil {
+		folders = []string{}
+	}
+	query := `
+		UPDATE email_accounts
+		SET sync_skip_folders = $1, updated_at = NOW()
+		WHERE organization_id = $2 AND id = $3
+	`
+	params := []any{folders, orgID, emailAccountID}
 
 	cmd, err := r.DB.Exec(ctx, query, params...)
 	if err != nil {

@@ -23,7 +23,9 @@ import (
 //
 // It also drops the local unibox entry for the removed message (best-effort).
 func (s *JobsService) HandleRemoveEmail(ctx context.Context, e *models.JobEventRemoveEmail) error {
-	if s.WarmupRepo != nil {
+	// A message the sync found in a folder the owner excluded is filed, not
+	// deleted: it is still in the mailbox, so nothing is held against anyone.
+	if s.WarmupRepo != nil && e.SkippedFolder == "" {
 		if rec, _ := s.WarmupRepo.GetWarmupReceived(ctx, e.EmailID, e.ID); rec != nil {
 			switch {
 			case s.consumeSelfMove(ctx, e.EmailID, rec.MessageID):

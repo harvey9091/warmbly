@@ -36,6 +36,10 @@ type fakeImapConn struct {
 	// selectGen, when non-zero, is the UIDVALIDITY SELECT reports, which the
 	// reconciliation compares against the one the listing gave it.
 	selectGen uint32
+	// inSkipped is what FindUIDByMessageID answers per folder name, and
+	// finds counts how often it was asked.
+	inSkipped map[string]map[string]uint32
+	finds     int
 }
 
 func (c *fakeImapConn) Folders() ([]models.Mailbox, *errx.MailError) { return c.folders, nil }

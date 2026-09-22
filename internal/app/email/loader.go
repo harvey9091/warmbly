@@ -368,6 +368,11 @@ func (s *emailService) syncDataFor(ctx context.Context, emailID uuid.UUID) *mode
 			OrgDailyMessages: budget.DailyMessagesPerOrg,
 		},
 	}
+	if skip, xerr := s.emailRepository.GetSyncSkipFolders(ctx, emailID); xerr == nil {
+		data.Policy.SkipFolders = skip
+	} else {
+		log.Warn().Str("email_id", emailID.String()).Msg("sync skip folders lookup failed; worker syncs every folder until the next republish")
+	}
 	// A pool-linked mailbox is a warmup-only mirror: no history import.
 	if s.poolLink != nil {
 		if linked, err := s.poolLink.GetMailboxByAccount(ctx, emailID); err == nil && linked != nil {

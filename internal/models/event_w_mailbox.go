@@ -18,6 +18,9 @@ type JobEventMailboxDelete struct {
 	Mailbox string `json:"mailbox,omitempty" avro:"mailbox"`
 	// UIDValidity is that legacy fallback and nothing else.
 	UIDValidity uint32 `json:"uid_validity" avro:"uid_validity"`
+	// Skipped means the folder is still on the server but the owner excluded
+	// it from sync, so the mail already stored from it is retired as well.
+	Skipped bool `json:"skipped,omitempty" avro:"skipped"`
 }
 
 // JobEventMailboxRename is a folder that kept its UIDVALIDITY under a new
