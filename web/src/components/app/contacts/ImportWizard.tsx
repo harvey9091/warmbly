@@ -800,8 +800,14 @@ export function TargetPicker({
         onChange({ index: value.index, target: "custom", custom_key: name });
     }
 
+    // Enter takes an exact name first, then the first match; with nothing
+    // typed it does nothing, so it can never remap a column by accident.
     function pickFirst() {
-        if (standard.length > 0) pickStandard(standard[0].id);
+        if (q === "") return;
+        const exactStd = standard.find((t) => t.label.toLowerCase() === q.toLowerCase());
+        if (exactStd) pickStandard(exactStd.id);
+        else if (existingKeys.includes(q)) pickExisting(q);
+        else if (standard.length > 0) pickStandard(standard[0].id);
         else if (custom.length > 0) pickExisting(custom[0]);
         else if (canCreate) pickNew(q);
         else return;

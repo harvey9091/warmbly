@@ -83,11 +83,12 @@ func (s *contactService) ImportPreview(ctx context.Context, orgID uuid.UUID, r i
 // placed, so the mapper can ask for a second look at those.
 func (s *contactService) SuggestImportMapping(ctx context.Context, orgID uuid.UUID, headers []string, sample [][]string) ([]models.ContactImportColumnMapping, []int) {
 	keys := s.existingCustomFieldKeys(ctx, orgID)
-	suggested := SuggestMapping(headers, sample, keys)
+	shapes := importmap.Shapes(len(headers), sample)
+	suggested := suggestMapping(headers, sample, shapes, keys)
 	if s.columnJudge == nil {
 		return suggested, nil
 	}
-	return importmap.Infer(ctx, s.columnJudge, suggested, headers, importmap.Shapes(len(headers), sample), keys)
+	return importmap.Infer(ctx, s.columnJudge, suggested, headers, shapes, keys)
 }
 
 // existingCustomFieldKeys is the workspace's custom-field keys for the
@@ -907,6 +908,10 @@ func padRow(row []string, n int) []string {
 // better than inventing a custom-field key the user didn't ask for. Every
 // importer that shows a column mapper calls this, so they suggest alike.
 func SuggestMapping(headers []string, sample [][]string, existingKeys []string) []models.ContactImportColumnMapping {
+	return suggestMapping(headers, sample, importmap.Shapes(len(headers), sample), existingKeys)
+}
+
+func suggestMapping(headers []string, sample [][]string, shapes []importmap.Shape, existingKeys []string) []models.ContactImportColumnMapping {
 	out := make([]models.ContactImportColumnMapping, len(headers))
 	for i, h := range headers {
 		out[i] = guessTarget(i, h)
@@ -940,22 +945,21 @@ func SuggestMapping(headers []string, sample [][]string, existingKeys []string) 
 		out[i] = models.ContactImportColumnMapping{Index: i, Target: models.ContactImportTargetVerificationStatus, VerificationProvider: provider}
 	}
 	matchExistingCustomFields(out, headers, existingKeys)
-	matchEmailByValues(out, headers, sample)
+	matchEmailByValues(out, shapes)
 	return out
 }
 
 // matchEmailByValues maps the first column of addresses to Email when no
 // header named it, so a file with "Work contact" or no header row at all
 // still has the one column an import cannot go without.
-func matchEmailByValues(out []models.ContactImportColumnMapping, headers []string, sample [][]string) {
+func matchEmailByValues(out []models.ContactImportColumnMapping, shapes []importmap.Shape) {
 	for _, m := range out {
 		if m.Target == models.ContactImportTargetEmail {
 			return
 		}
 	}
-	shapes := importmap.Shapes(len(headers), sample)
 	for i := range out {
-		if out[i].Target == models.ContactImportTargetIgnore && shapes[i] == importmap.ShapeEmail {
+		if i < len(shapes) && out[i].Target == models.ContactImportTargetIgnore && shapes[i] == importmap.ShapeEmail {
 			out[i] = models.ContactImportColumnMapping{Index: i, Target: models.ContactImportTargetEmail}
 			return
 		}
@@ -963,15 +967,18 @@ func matchEmailByValues(out []models.ContactImportColumnMapping, headers []strin
 }
 
 // matchExistingCustomFields maps each still-ignored column whose header names
-// an existing custom field, ignoring case and separators, onto that field's
-// stored spelling, so "industry" in a file lands on "Industry" instead of
-// starting a second field. Each field is claimed by one column at most.
+// an existing custom field onto that field's stored spelling: the exact name
+// first, then one differing only in case or separators, so "industry" in a
+// file lands on "Industry" instead of starting a second field. Each field is
+// claimed by one column at most. Mirrored by matchExistingKey in the web app.
 func matchExistingCustomFields(out []models.ContactImportColumnMapping, headers, existingKeys []string) {
 	if len(existingKeys) == 0 {
 		return
 	}
+	exact := make(map[string]bool, len(existingKeys))
 	byFold := make(map[string]string, len(existingKeys))
 	for _, k := range existingKeys {
+		exact[k] = true
 		f := FoldCustomFieldKey(k)
 		if _, taken := byFold[f]; f != "" && !taken {
 			byFold[f] = k
@@ -982,12 +989,17 @@ func matchExistingCustomFields(out []models.ContactImportColumnMapping, headers,
 		if out[i].Target != models.ContactImportTargetIgnore {
 			continue
 		}
-		f := FoldCustomFieldKey(h)
-		key, ok := byFold[f]
-		if !ok || claimed[f] {
+		key := utils.NormalizeJSONKey(h)
+		if !exact[key] {
+			var ok bool
+			if key, ok = byFold[FoldCustomFieldKey(h)]; !ok {
+				continue
+			}
+		}
+		if claimed[key] {
 			continue
 		}
-		claimed[f] = true
+		claimed[key] = true
 		out[i] = models.ContactImportColumnMapping{Index: i, Target: models.ContactImportTargetCustom, CustomKey: key}
 	}
 }
@@ -998,7 +1010,7 @@ func matchExistingCustomFields(out []models.ContactImportColumnMapping, headers,
 func FoldCustomFieldKey(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
 			b.WriteRune(r)
 		}
 	}

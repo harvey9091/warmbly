@@ -1,26 +1,15 @@
-// Package importmap asks TypeSafe which field an import column holds when its
-// header matched nothing, so "Job Title", "Firmenname" or "Sector" lands on the
-// right field before anyone opens a dropdown.
-//
-// THIS FILE IS THE POLICY: every question, option and threshold is here. It
-// follows the rules the inbox tagger learned the hard way:
-//
-//  1. One call per file. Every unmatched column is its own question over one
-//     state, so the headers are ingested once.
-//  2. The model answers, code decides. Resolve applies the confidence floor
-//     and gives each field to one column at most.
-//  3. Never ask what is already known. Columns the header aliases, the
-//     verification vocabulary, an existing custom field or the values
-//     themselves already decided are facts, and are never sent as questions.
-//
-// No cell value leaves the instance. The state is the headers, the workspace's
-// custom field names, and the kind of value each column holds (Shape).
+// Package importmap asks TypeSafe which field an import column holds when no
+// header rule placed it. The model answers, resolve decides, and the state
+// carries headers, value kinds and field names, never a cell.
 package importmap
 
 import (
 	"context"
+	"regexp"
+	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -53,21 +42,24 @@ const (
 // optionNone is the answer for a column that holds none of the fields offered.
 const optionNone = "none"
 
-// standardOptions are the fields the model may pick, with what each holds.
-// Verification status is never offered: it is recognised from the values'
-// vocabulary, which the model is not shown.
+// standardOptions are the standard fields the model may pick, and the value
+// kinds each is offered for. Email is found by its values, and Subscribed and
+// Categories stay the user's call: a wrong guess there unsubscribes people or
+// mints categories from cell values.
 var standardOptions = []struct {
 	target models.ContactImportColumnTarget
 	desc   string
+	holds  []Shape
 }{
-	{models.ContactImportTargetEmail, "The contact's email address"},
-	{models.ContactImportTargetFirstName, "The contact's first name, or given name"},
-	{models.ContactImportTargetLastName, "The contact's last name, surname, or family name"},
-	{models.ContactImportTargetCompany, "The name of the company or organization the contact works for"},
-	{models.ContactImportTargetPhone, "The contact's phone or mobile number"},
-	{models.ContactImportTargetSubscribed, "Whether the contact agreed to receive email, as yes or no"},
-	{models.ContactImportTargetCategories, "Tags, labels, lists, or segments the contact belongs to"},
+	{models.ContactImportTargetFirstName, "The contact's first name, or given name", []Shape{ShapeText}},
+	{models.ContactImportTargetLastName, "The contact's last name, surname, or family name", []Shape{ShapeText}},
+	{models.ContactImportTargetCompany, "The name of the company or organization the contact works for", []Shape{ShapeText}},
+	{models.ContactImportTargetPhone, "The contact's phone or mobile number", []Shape{ShapePhone, ShapeNumber, ShapeMixed}},
 }
+
+// placeholderRe is the name a column gets when its header cell is blank or
+// the file has no header row; it says nothing about the column.
+var placeholderRe = regexp.MustCompile(`^Column [0-9]+$`)
 
 // Column is one column as the model sees it.
 type Column struct {
@@ -98,23 +90,35 @@ func Infer(
 	shapes []Shape,
 	existingKeys []string,
 ) ([]models.ContactImportColumnMapping, []int) {
-	if asker == nil {
+	// A header row holding an address, a date or a number is a data row, so
+	// sending it would send a contact.
+	if asker == nil || headerRowIsData(headers) {
 		return mapping, nil
 	}
 	taken := takenTargets(mapping)
-	options, criteria := buildOptions(taken, existingKeys)
+	options := buildOptions(taken, existingKeys)
 
 	st := state{Columns: make([]Column, len(headers)), CustomFields: capKeys(existingKeys)}
 	questions := map[string]typesafe.Question{}
-	for i := range headers {
-		col := Column{Header: safeHeader(i, headers[i]), Holds: shapeAt(shapes, i)}
+	offered := map[int]map[string]bool{}
+	for i, h := range headers {
+		col := Column{Header: capRunes(strings.TrimSpace(h), headerRunes), Holds: shapeAt(shapes, i)}
 		st.Columns[i] = col
-		if len(questions) >= MaxQuestions || i >= len(mapping) || mapping[i].Target != models.ContactImportTargetIgnore || col.Holds == ShapeEmpty {
+		if len(questions) >= MaxQuestions || i >= len(mapping) || mapping[i].Target != models.ContactImportTargetIgnore ||
+			col.Holds == ShapeEmpty || col.Header == "" || placeholderRe.MatchString(col.Header) {
 			continue
+		}
+		criteria := columnCriteria(options, col.Holds)
+		if len(criteria) <= 1 {
+			continue
+		}
+		offered[i] = make(map[string]bool, len(criteria))
+		for id := range criteria {
+			offered[i][id] = true
 		}
 		questions[questionID(i)] = typesafe.Choice(
 			"Which contact field does the column headed \""+col.Header+"\" hold? Its values are "+string(col.Holds)+".",
-			columnCriteria(criteria, col.Holds),
+			criteria,
 		)
 	}
 	if len(questions) == 0 {
@@ -127,16 +131,18 @@ func Infer(
 	if err != nil || resp == nil {
 		return mapping, nil
 	}
-	return Resolve(mapping, resp.Answers, options, taken)
+	return resolve(mapping, resp.Answers, options, offered, taken)
 }
 
-// Resolve applies the answers: a confident choice of a field nobody fills yet
-// maps its column, and when two columns want one field the more confident
-// wins. It never touches a column the suggester already mapped.
-func Resolve(
+// resolve applies the answers: a confident choice, among the options that
+// column was offered, of a field nobody fills yet maps its column, and when
+// two columns want one field the more confident wins. It never touches a
+// column the suggester already mapped.
+func resolve(
 	mapping []models.ContactImportColumnMapping,
 	answers map[string]typesafe.Answer,
-	options map[string]option,
+	options map[string]offer,
+	offered map[int]map[string]bool,
 	taken map[string]bool,
 ) ([]models.ContactImportColumnMapping, []int) {
 	type candidate struct {
@@ -146,19 +152,19 @@ func Resolve(
 		conf float64
 	}
 	var cands []candidate
-	for id, a := range answers {
-		col, ok := columnOf(id)
+	for qid, a := range answers {
+		col, ok := columnOf(qid)
 		if !ok || col >= len(mapping) || mapping[col].Target != models.ContactImportTargetIgnore {
 			continue
 		}
-		if a.Confidence < ConfFloor || a.Choice == optionNone {
+		if a.Confidence < ConfFloor || a.Choice == optionNone || !offered[col][a.Choice] {
 			continue
 		}
-		opt, ok := options[a.Choice]
+		o, ok := options[a.Choice]
 		if !ok {
 			continue
 		}
-		cands = append(cands, candidate{col: col, opt: opt, id: identity(opt), conf: a.Confidence})
+		cands = append(cands, candidate{col: col, opt: o.option, id: identity(o.option), conf: a.Confidence})
 	}
 	sort.Slice(cands, func(i, j int) bool {
 		if cands[i].conf != cands[j].conf {
@@ -174,12 +180,10 @@ func Resolve(
 	}
 	var inferred []int
 	for _, c := range cands {
-		if c.id != "" && claimed[c.id] {
+		if claimed[c.id] {
 			continue
 		}
-		if c.id != "" {
-			claimed[c.id] = true
-		}
+		claimed[c.id] = true
 		out[c.col] = models.ContactImportColumnMapping{Index: c.col, Target: c.opt.target, CustomKey: c.opt.customKey}
 		inferred = append(inferred, c.col)
 	}
@@ -187,47 +191,56 @@ func Resolve(
 	return out, inferred
 }
 
+// offer is one option with what it says to the model and which value kinds
+// it is offered for (nil: every kind).
+type offer struct {
+	option
+	desc  string
+	holds []Shape
+}
+
 // buildOptions lists the fields still free, under short ids so no field name
-// has to survive as an option key. criteria holds each id's description.
-func buildOptions(taken map[string]bool, existingKeys []string) (map[string]option, map[string]string) {
-	options := map[string]option{}
-	criteria := map[string]string{}
+// has to survive as an option key.
+func buildOptions(taken map[string]bool, existingKeys []string) map[string]offer {
+	options := map[string]offer{}
 	for _, s := range standardOptions {
 		o := option{target: s.target}
-		if taken[identity(o)] {
-			continue
+		if !taken[identity(o)] {
+			options[string(s.target)] = offer{option: o, desc: s.desc, holds: s.holds}
 		}
-		id := string(s.target)
-		options[id] = o
-		criteria[id] = s.desc
 	}
 	for i, k := range capKeys(existingKeys) {
 		o := option{target: models.ContactImportTargetCustom, customKey: k}
-		if taken[identity(o)] {
-			continue
+		if !taken[identity(o)] {
+			options["field_"+strconv.Itoa(i+1)] = offer{option: o, desc: "The workspace's existing custom field named \"" + k + "\""}
 		}
-		id := "field_" + strconv.Itoa(i+1)
-		options[id] = o
-		criteria[id] = "The workspace's existing custom field named \"" + k + "\""
 	}
-	criteria[optionNone] = "None of these: the column holds something else"
-	return options, criteria
+	return options
 }
 
-// columnCriteria drops the options a column's values rule out, so a column of
-// URLs is never offered Subscribed.
-func columnCriteria(all map[string]string, holds Shape) map[string]string {
-	out := make(map[string]string, len(all))
-	for id, desc := range all {
-		if id == string(models.ContactImportTargetSubscribed) && holds != ShapeYesNo {
-			continue
+// columnCriteria is what one column is asked to choose from: the options its
+// value kind allows, and none.
+func columnCriteria(options map[string]offer, holds Shape) map[string]string {
+	out := map[string]string{optionNone: "None of these: the column holds something else"}
+	for id, o := range options {
+		if o.holds == nil || slices.Contains(o.holds, holds) {
+			out[id] = o.desc
 		}
-		if id == string(models.ContactImportTargetEmail) && holds != ShapeEmail {
-			continue
-		}
-		out[id] = desc
 	}
 	return out
+}
+
+// headerRowIsData reports whether any header cell is shaped like a value
+// rather than a name.
+func headerRowIsData(headers []string) bool {
+	for _, h := range headers {
+		switch ShapeOf([]string{h}) {
+		case ShapeText, ShapeLongText, ShapeEmpty:
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 // takenTargets is every destination the suggestion already fills.
@@ -242,11 +255,11 @@ func takenTargets(mapping []models.ContactImportColumnMapping) map[string]bool {
 	return taken
 }
 
-// identity names where an option writes; "" for targets that take any number
-// of columns (categories) or none (ignore).
+// identity names where an option writes. Every target Infer can pick holds
+// one column's value.
 func identity(o option) string {
 	switch o.target {
-	case models.ContactImportTargetIgnore, models.ContactImportTargetCategories, "":
+	case models.ContactImportTargetIgnore, "":
 		return ""
 	case models.ContactImportTargetCustom:
 		return "custom:" + o.customKey
@@ -264,16 +277,11 @@ func capKeys(keys []string) []string {
 	return keys
 }
 
-// safeHeader is the header as sent. A header row that is really a data row
-// ("dana@acme.com") is never sent: the column goes by its number instead.
-func safeHeader(i int, h string) string {
-	if ShapeOf([]string{h}) != ShapeText {
-		return "Column " + strconv.Itoa(i+1)
+func capRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
 	}
-	if utf8.RuneCountInString(h) > headerRunes {
-		h = string([]rune(h)[:headerRunes])
-	}
-	return h
+	return string([]rune(s)[:n])
 }
 
 func shapeAt(shapes []Shape, i int) Shape {

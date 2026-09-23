@@ -14,15 +14,15 @@ func TestSuggestMappingMatchesExistingCustomFields(t *testing.T) {
 
 	want := []models.ContactImportColumnMapping{
 		{Index: 0, Target: models.ContactImportTargetEmail},
-		// The stored spelling wins, and the most used of two spellings.
-		{Index: 1, Target: models.ContactImportTargetCustom, CustomKey: "Industry"},
+		// An exact name wins over a more used spelling of it.
+		{Index: 1, Target: models.ContactImportTargetCustom, CustomKey: "industry"},
+		// Otherwise the stored spelling, the most used of several.
 		{Index: 2, Target: models.ContactImportTargetCustom, CustomKey: "company_url"},
 		// No field by that name: left for the user, never invented.
 		{Index: 3, Target: models.ContactImportTargetIgnore},
 		// A standard field outranks a custom field of the same name.
 		{Index: 4, Target: models.ContactImportTargetCompany},
-		// One column per field; a second spelling of it stays ignored.
-		{Index: 5, Target: models.ContactImportTargetIgnore},
+		{Index: 5, Target: models.ContactImportTargetCustom, CustomKey: "Industry"},
 		{Index: 6, Target: models.ContactImportTargetIgnore},
 	}
 	if len(got) != len(want) {
@@ -32,6 +32,13 @@ func TestSuggestMappingMatchesExistingCustomFields(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("column %d (%q): got %+v, want %+v", i, headers[i], got[i], want[i])
 		}
+	}
+}
+
+func TestSuggestMappingGivesEachFieldOneColumn(t *testing.T) {
+	got := SuggestMapping([]string{"Email", "Industry", "INDUSTRY"}, nil, []string{"Industry"})
+	if got[1].CustomKey != "Industry" || got[2].Target != models.ContactImportTargetIgnore {
+		t.Fatalf("got %+v, want the second spelling left ignored", got)
 	}
 }
 
@@ -59,6 +66,7 @@ func TestFoldCustomFieldKey(t *testing.T) {
 		"Revenue ($)":    "revenue",
 		"###":            "",
 		"Straße Nummer2": "straßenummer2",
+		"Area m²":        "aream²",
 	} {
 		if got := FoldCustomFieldKey(in); got != want {
 			t.Errorf("FoldCustomFieldKey(%q) = %q, want %q", in, got, want)

@@ -96,6 +96,7 @@ describe("existing custom fields", () => {
     it("folds the way the server does", () => {
         expect(foldCustomKey(" Company.URL ")).toBe("companyurl");
         expect(foldCustomKey("Revenue ($)")).toBe("revenue");
+        expect(foldCustomKey("Area m²")).toBe("aream²");
     });
 
     it("reads both spellings of a custom mapping", () => {
