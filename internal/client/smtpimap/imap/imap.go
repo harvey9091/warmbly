@@ -24,6 +24,7 @@ var (
 		"skräppost", "uønsket e-post", "roskaposti", // Swedish, Norwegian, Finnish
 		"spam-mappe", "levélszemét", // Danish-ish, Hungarian
 		"niechciane", "spam-post", // Polish
+		"nevyžádaná pošta", // Czech
 	}
 	ImapSent = []string{
 		"sent", "sent mail", "sent items", "sent messages",
@@ -36,13 +37,13 @@ var (
 		"skickat", "skickade objekt", "sendt", "lähetetyt", // Nordic
 		"elküldött elemek", "elküldött üzenetek", // Hungarian
 		"elementy wysłane", "wysłane", // Polish
-		"odeslaná pošta", "trimise", // Czech, Romanian
+		"odeslaná pošta", "odeslané", "trimise", // Czech, Romanian
 	}
 	ImapDrafts = []string{
 		"draft", "drafts",
 		"borradores", "brouillons", "entwürfe", "concepten",
 		"rascunhos", "bozze", "utkast", "luonnokset",
-		"piszkozatok", "kopie robocze", "koncepty", "ciorne",
+		"piszkozatok", "kopie robocze", "koncepty", "rozepsané", "ciorne",
 	}
 	ImapTrash = []string{
 		"trash", "bin", "deleted", "deleted items", "deleted messages",
