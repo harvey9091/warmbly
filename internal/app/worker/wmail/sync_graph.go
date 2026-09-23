@@ -25,6 +25,9 @@ func (w *WMail) SyncGraph(ctx context.Context) *errx.MailError {
 	w.beginTick()
 	stats := &tickStats{}
 	w.graphTick = stats
+	if !w.retryUnmap(ctx) {
+		return nil
+	}
 
 	if err := w.GraphData.Client.Sync(ctx); err != nil {
 		var mailErr *errx.MailError

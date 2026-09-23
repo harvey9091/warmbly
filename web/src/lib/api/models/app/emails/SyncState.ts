@@ -32,9 +32,21 @@ export interface SyncPolicy {
     backfill_messages: number;
     daily_messages: number;
     org_daily_messages: number;
+    /** Folders the sync leaves alone, as the server lists them. IMAP only. */
+    skip_folders?: string[];
+}
+
+/** One folder the sync has seen on the server, with the canonical folder it files under. */
+export interface SyncFolder {
+    name: string;
+    folder: "inbox" | "sent" | "drafts" | "spam" | "trash" | "archive" | string;
 }
 
 export default interface EmailSync {
     state: SyncState | null;
     policy: SyncPolicy;
+    /** The stored skip list; PUT /emails/:id/sync replaces it. */
+    skip_folders: string[];
+    /** What the worker last listed, INBOX first. Empty for Gmail and Outlook. */
+    folders: SyncFolder[];
 }

@@ -2,8 +2,10 @@ package imap
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/rs/zerolog/log"
@@ -41,6 +43,7 @@ func (c *Client) foldersCapped(limit int) ([]models.Mailbox, *errx.MailError) {
 	status := &imap.StatusOptions{
 		UIDValidity: true,
 		UIDNext:     true,
+		NumMessages: true,
 		// Asking a server without CONDSTORE for HIGHESTMODSEQ is a BAD.
 		HighestModSeq: caps.Has(imap.CapCondStore),
 	}
@@ -101,6 +104,9 @@ func (c *Client) foldersCapped(limit int) ([]models.Mailbox, *errx.MailError) {
 		box.UIDValidity = st.UIDValidity
 		box.UIDNext = uint32(st.UIDNext)
 		box.HighestModSeq = st.HighestModSeq
+		if st.NumMessages != nil {
+			box.Messages = *st.NumMessages
+		}
 		resp = append(resp, box)
 	}
 
@@ -260,6 +266,86 @@ func BackfillEligible(box models.Mailbox) bool {
 		return false
 	}
 	return true
+}
+
+// SkipsFolder reports whether box is one the mailbox owner asked the sync to
+// leave alone. A name in skip matches the folder listed under it and every
+// folder below it, compared the way servers compare names: case does not
+// count. INBOX and the special folders (by attribute or by name) never match,
+// whatever the list says, because a sync without them is a broken mailbox
+// rather than a quieter one.
+func SkipsFolder(box models.Mailbox, skip []string) bool {
+	if len(skip) == 0 || !skippableFolder(box) {
+		return false
+	}
+	for _, s := range skip {
+		s = strings.TrimSpace(s)
+		if s == "" || strings.EqualFold(s, "INBOX") {
+			continue
+		}
+		if strings.EqualFold(box.Name, s) {
+			return true
+		}
+		if box.Delim != "" && hasPrefixFold(box.Name, s+box.Delim) {
+			return true
+		}
+	}
+	return false
+}
+
+// skippableFolder is false for INBOX and for any folder the mailbox needs
+// whole: a special-use attribute or a recognised special name.
+func skippableFolder(box models.Mailbox) bool {
+	if strings.EqualFold(strings.TrimSpace(box.Name), "INBOX") {
+		return false
+	}
+	for _, a := range box.Attrs {
+		switch strings.ToLower(a) {
+		case "\\inbox", "\\sent", "\\drafts", "\\junk", "\\trash", "\\archive", "\\all", "\\flagged", "\\important":
+			return false
+		}
+	}
+	return CanonicalFolder(box) == models.FolderInbox
+}
+
+// NormalizeSkipFolders is the write-side check on a skip list: trimmed,
+// deduplicated without regard to case, bounded in count and length, no
+// control characters, and none of the names the sync must keep. The result
+// is what gets stored; the error names the first entry refused.
+func NormalizeSkipFolders(names []string) ([]string, *errx.Error) {
+	out := make([]string, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, raw := range names {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		if utf8.RuneCountInString(name) > config.SyncSkipFolderNameMax {
+			return nil, skipFolderError(name, "is longer than the folder name limit")
+		}
+		for _, r := range name {
+			if r < 0x20 || r == 0x7f {
+				return nil, skipFolderError(name, "contains a control character")
+			}
+		}
+		if !skippableFolder(models.Mailbox{Name: name}) {
+			return nil, skipFolderError(name, "is a folder the sync always follows")
+		}
+		key := strings.ToLower(name)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, name)
+	}
+	if len(out) > config.SyncSkipFoldersMax {
+		return nil, errx.NewWithIdentifier(errx.BadRequest, "invalid_sync_folder", fmt.Sprintf("at most %d folders can be skipped", config.SyncSkipFoldersMax))
+	}
+	return out, nil
+}
+
+func skipFolderError(name, why string) *errx.Error {
+	return errx.NewWithIdentifier(errx.BadRequest, "invalid_sync_folder", fmt.Sprintf("folder %q %s", name, why))
 }
 
 // CanonicalFolder maps an IMAP folder to the canonical unibox folder.

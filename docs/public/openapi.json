@@ -2810,7 +2810,7 @@
       "get": {
         "operationId": "mailboxes_sync_state",
         "summary": "Get sync state",
-        "description": "Where the mailbox's initial import stands, whether fair use is holding new mail, and the budget the mailbox syncs under. `state` is null until the worker has reported once.",
+        "description": "Where the mailbox's initial import stands, whether fair use is holding new mail, the budget the mailbox syncs under, the folders its sync leaves alone, and the folders the worker has seen on the server. `state` is null until the worker has reported once.",
         "tags": [
           "mailboxes"
         ],
@@ -2889,6 +2889,103 @@
                 "schema": {
                   "$ref": "#/components/schemas/Error"
                 }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "mailboxes_sync_update",
+        "summary": "Set skipped folders",
+        "description": "Replaces the folders an IMAP mailbox's sync leaves alone. Names are matched as the mail server lists them, without regard to case, and each covers its subfolders. Mail already stored from a newly skipped folder is removed from Warmbly (never from the mailbox), and the mailbox is re-shipped to its worker so the change applies on the next pass. The body is the desired state, so the call is naturally idempotent. INBOX and the sent, drafts, spam, trash and archive folders cannot be skipped.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The mailbox id.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The skip list as stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxSyncSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid id or body, or `invalid_sync_folder`: a folder the sync always follows, a malformed or over-long name, more than 50 names, or a mailbox that is not IMAP.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, permission, or mailbox not allowed for this key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Mailbox not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MailboxSyncSettings"
               }
             }
           }
@@ -21808,6 +21905,13 @@
           "org_daily_messages": {
             "type": "integer",
             "description": "New plus imported messages stored across the organization per UTC day."
+          },
+          "skip_folders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The same skip list the mailbox carries to its worker; present when non-empty."
           }
         },
         "required": [
@@ -21894,11 +21998,71 @@
           },
           "policy": {
             "$ref": "#/components/schemas/MailboxSyncPolicy"
+          },
+          "skip_folders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The folders the mailbox's sync leaves alone, as the server lists them. Replaced with `PUT /emails/{id}/sync`."
+          },
+          "folders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MailboxSyncFolder"
+            },
+            "description": "What the worker last listed on the server, INBOX first. Empty for Gmail and Outlook mailboxes."
           }
         },
         "required": [
           "state",
-          "policy"
+          "policy",
+          "skip_folders",
+          "folders"
+        ]
+      },
+      "MailboxSyncFolder": {
+        "type": "object",
+        "description": "One folder the sync has seen on the server.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The folder's name as the server lists it: the value to use in `skip_folders`."
+          },
+          "folder": {
+            "type": "string",
+            "enum": [
+              "inbox",
+              "sent",
+              "drafts",
+              "spam",
+              "trash",
+              "archive"
+            ],
+            "description": "The canonical folder it files under. Only `inbox` folders other than INBOX itself can be skipped."
+          }
+        },
+        "required": [
+          "name",
+          "folder"
+        ]
+      },
+      "MailboxSyncSettings": {
+        "type": "object",
+        "description": "The folders an IMAP mailbox's sync leaves alone.",
+        "properties": {
+          "skip_folders": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "maxItems": 50,
+            "description": "Folder names as the server lists them. Case does not matter; each covers its subfolders. An empty list syncs every folder."
+          }
+        },
+        "required": [
+          "skip_folders"
         ]
       },
       "MailboxVerifyRequest": {
