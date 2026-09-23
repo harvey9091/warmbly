@@ -144,6 +144,7 @@ type Notification struct {
 	// clients. GroupKey ties the same org event across users so the flush
 	// loop can coalesce it into one email with every recipient in To.
 	GroupKey      string     `json:"-"`
+	UniboxEmailID *uuid.UUID `json:"-"`
 	EmailState    string     `json:"-"`
 	EmailDueAt    *time.Time `json:"-"`
 	EmailAttempts int        `json:"-"`

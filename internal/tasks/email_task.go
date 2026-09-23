@@ -350,7 +350,6 @@ func (s *tasksService) HandleEmailTask(task *proto.ProcessTask) *errx.Error {
 	}
 
 	// STEP 9.5: Generate warmup verification token
-	var warmupTokenStr string
 	warmupToken := uuid.New()
 	tokenRecord := &models.WarmupToken{
 		Token:              warmupToken,
@@ -367,10 +366,21 @@ func (s *tasksService) HandleEmailTask(task *proto.ProcessTask) *errx.Error {
 		ExpiresAt: time.Now().Add(7 * 24 * time.Hour),
 	}
 	if err := s.warmupRepo.CreateWarmupToken(ctx, tokenRecord); err != nil {
-		log.Warn().Err(err).Str("task_id", taskID.String()).Str("email_account_id", account.ID.String()).Msg("Failed to create warmup token")
-	} else {
-		warmupTokenStr = warmupToken.String()
+		// Without a token the partner cannot tell this is warmup, so it would
+		// land in their unibox as ordinary mail. Skip the send, keep the chain.
+		log.Warn().Err(err).Str("task_id", taskID.String()).Str("email_account_id", account.ID.String()).Msg("Failed to create warmup token; send skipped")
+		_ = s.taskRepo.RecordTaskFailure(ctx, taskID, "Warmup token not created", err.Error())
+		nextTime, scheduleErr := s.scheduler.CalculateNextWarmupTime(ctx, account.ID)
+		if scheduleErr != nil {
+			nextTime = warmupPartnerRecheckTime()
+		}
+		if createErr := s.createWarmupTask(ctx, account.ID, nextTime); createErr != nil {
+			log.Warn().Err(createErr).Str("task_id", taskID.String()).Str("email_account_id", account.ID.String()).Msg("Failed to reschedule warmup task after token failure")
+		}
+		executionStatus = "completed"
+		return nil
 	}
+	warmupTokenStr := warmupToken.String()
 
 	// STEP 10: Send warmup email to worker via Kafka
 	emailMsg := EmailMessage{

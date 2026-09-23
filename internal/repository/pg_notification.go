@@ -105,11 +105,11 @@ func (r *notificationRepository) Create(ctx context.Context, n *models.Notificat
 	}
 	err := r.db.QueryRow(ctx, `
 		INSERT INTO notifications (id, user_id, organization_id, category, title, body, link, metadata,
-			group_key, email_state, email_due_at, read_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CASE WHEN $12 THEN now() END)
+			group_key, email_state, email_due_at, read_at, unibox_email_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CASE WHEN $12 THEN now() END, $13)
 		RETURNING created_at`,
 		n.ID, n.UserID, n.OrganizationID, n.Category, n.Title, n.Body, n.Link, meta,
-		groupKey, n.EmailState, n.EmailDueAt, n.PreRead).Scan(&n.CreatedAt)
+		groupKey, n.EmailState, n.EmailDueAt, n.PreRead, n.UniboxEmailID).Scan(&n.CreatedAt)
 	if err != nil {
 		return nil, err
 	}

@@ -2,6 +2,7 @@ package advanced
 
 import (
 	"context"
+	"net/url"
 	"time"
 
 	"github.com/google/uuid"
@@ -76,6 +77,7 @@ func (s *service) WireRealtime(p ReplyRealtimePublisher) {
 // wired post-construction in the consumer (where reply/bounce/complaint run).
 type Notifier interface {
 	Notify(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any)
+	NotifyAboutMessage(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, uniboxEmailID uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any)
 }
 
 // WireNotifier attaches the notification service after construction.
@@ -168,4 +170,25 @@ func (s *service) notify(userID uuid.UUID, orgID *uuid.UUID, category models.Not
 		defer cancel()
 		s.notifier.Notify(ctx, userID, orgID, category, title, body, link, meta)
 	}()
+}
+
+// notifyAboutMessage is notify for one unibox message, so the notification
+// leaves with the message and is read with it.
+func (s *service) notifyAboutMessage(userID uuid.UUID, orgID *uuid.UUID, uniboxEmailID uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any) {
+	if s.notifier == nil || userID == uuid.Nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		s.notifier.NotifyAboutMessage(ctx, userID, orgID, uniboxEmailID, category, title, body, link, meta)
+	}()
+}
+
+// uniboxThreadLink opens the conversation itself rather than the inbox.
+func uniboxThreadLink(threadID string) string {
+	if threadID == "" {
+		return "/app/unibox"
+	}
+	return "/app/unibox/all/" + url.PathEscape(threadID)
 }

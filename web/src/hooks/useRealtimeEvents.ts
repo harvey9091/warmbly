@@ -19,7 +19,6 @@ export function useRealtimeEvents() {
 
   const updateCampaign = useAppStore((s) => s.updateCampaign)
   const addUniboxEmail = useAppStore((s) => s.addUniboxEmail)
-  const incrementUnseenCount = useAppStore((s) => s.incrementUnseenCount)
   const updateDeal = useAppStore((s) => s.updateDeal)
   const setSubscription = useAppStore((s) => s.setSubscription)
 
@@ -76,9 +75,24 @@ export function useRealtimeEvents() {
         return
       }
 
+      // Inbox events ride the user channel as well as the org one, so the
+      // owner gets each twice and a member of two workspaces gets the other
+      // one's mail too. The unread badge is refetched rather than counted up
+      // here: the server knows whether the message is unread, in the Inbox
+      // and in this workspace, and an increment knew none of that.
+      const inboxEvent = includes(
+        'EMAIL_RECEIVED',
+        'NEW_EMAIL',
+        'INBOX_NEW',
+        'EMAIL_UPDATED',
+        'EMAIL_DELETED',
+        'INBOX_UPDATE',
+      )
+      const eventOrg = getString('org_id')
+      if (inboxEvent && eventOrg && currentOrg?.id && eventOrg !== currentOrg.id) return
+
       if (includes('EMAIL_RECEIVED', 'NEW_EMAIL', 'INBOX_NEW')) {
         addUniboxEmail(payload as any)
-        incrementUnseenCount()
         invalidate([
           ['unibox'],
           ['analytics'],
@@ -89,8 +103,10 @@ export function useRealtimeEvents() {
         return
       }
 
+      // A message read or removed takes its reply notification with it
+      // (server side), so the bell refreshes along with the inbox.
       if (includes('EMAIL_UPDATED', 'EMAIL_DELETED', 'INBOX_UPDATE')) {
-        invalidate([['unibox'], ['analytics'], ['inbox-tagging']])
+        invalidate([['unibox'], ['analytics'], ['inbox-tagging'], ['notifications', 'feed']])
         if (threadId) invalidate([['unibox', 'thread', threadId]])
         if (emailId) invalidate([['unibox', 'email', emailId]])
         return
@@ -462,7 +478,7 @@ export function useRealtimeEvents() {
     },
     [
       addUniboxEmail,
-      incrementUnseenCount,
+      currentOrg?.id,
       invalidate,
       myId,
       queryClient,

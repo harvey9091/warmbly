@@ -719,29 +719,27 @@ func (r *uniboxRepository) Search(ctx context.Context, orgID uuid.UUID, params *
 }
 
 func (r *uniboxRepository) GetUnseenCount(ctx context.Context, orgID uuid.UUID, emailAccountID *uuid.UUID) (int64, error) {
-	var count int64
-
-	// Count unread THREADS (distinct, empty-thread-safe), not messages,
-	// so the badge agrees with the collapsed list + Overview.Unread.
+	// Unread threads exactly as the Inbox view (where the badge links) lists
+	// them: inbox folder only, snoozed left out.
+	query := `SELECT COUNT(DISTINCT COALESCE(NULLIF(ue.thread_id, ''), ue.id::text))
+		FROM unibox_emails ue
+		WHERE ue.email_id IN (SELECT id FROM email_accounts WHERE organization_id = $1)
+		  AND ue.seen = FALSE
+		  AND ue.folder = '` + models.FolderInbox + `'
+		  AND NOT EXISTS (
+			SELECT 1 FROM unibox_snoozes s
+			WHERE s.user_id = ue.user_id
+			  AND s.thread_id = ue.thread_id
+			  AND s.snoozed_until > NOW()
+		  )`
+	args := []any{orgID}
 	if emailAccountID != nil {
-		err := r.db.QueryRow(ctx,
-			`SELECT COUNT(DISTINCT COALESCE(NULLIF(thread_id, ''), id::text))
-			 FROM unibox_emails
-			 WHERE email_id IN (SELECT id FROM email_accounts WHERE organization_id = $1)
-			   AND email_id = $2 AND seen = FALSE
-			   AND folder NOT IN `+foldersOutsideWorkingViews,
-			orgID, *emailAccountID,
-		).Scan(&count)
-		return count, err
+		query += ` AND ue.email_id = $2`
+		args = append(args, *emailAccountID)
 	}
 
-	err := r.db.QueryRow(ctx,
-		`SELECT COUNT(DISTINCT COALESCE(NULLIF(thread_id, ''), id::text))
-		 FROM unibox_emails
-		 WHERE email_id IN (SELECT id FROM email_accounts WHERE organization_id = $1) AND seen = FALSE
-		   AND folder NOT IN `+foldersOutsideWorkingViews,
-		orgID,
-	).Scan(&count)
+	var count int64
+	err := r.db.QueryRow(ctx, query, args...).Scan(&count)
 	return count, err
 }
 
