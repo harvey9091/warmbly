@@ -25,7 +25,10 @@ export default interface Campaign {
 
     start_date?: Date | null;
     end_date?: Date | null;
+    /** The schedule's own IANA zone, or "" when the campaign follows the workspace timezone. */
     timezone: string;
+    /** The zone actually in use: timezone when set, else the workspace's, else UTC. Read-only. */
+    effective_timezone?: string;
     days: number;
     start_time: string;
     end_time: string;

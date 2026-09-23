@@ -133,12 +133,12 @@ func NewOrganizationRepository(db *pgxpool.Pool) OrganizationRepository {
 // Create creates a new organization
 func (r *organizationRepository) Create(ctx context.Context, org *models.Organization) error {
 	query := `
-		INSERT INTO organizations (id, name, slug, owner_user_id, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO organizations (id, name, slug, owner_user_id, created_at, updated_at, timezone)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`
 	now := time.Now()
 	if _, err := r.db.Exec(ctx, query,
-		org.ID, org.Name, org.Slug, org.OwnerUserID, now, now,
+		org.ID, org.Name, org.Slug, org.OwnerUserID, now, now, org.Timezone,
 	); err != nil {
 		return err
 	}
@@ -158,7 +158,7 @@ func (r *organizationRepository) GetByID(ctx context.Context, id uuid.UUID) (*mo
 		       deletion_scheduled_at, deletion_scheduled_for,
 		       presence_show_online, presence_show_activity,
 		       product_description, icp_notes, voice_profile, inbox_agent_enabled,
-		       assistant_shared_history
+		       assistant_shared_history, timezone
 		FROM organizations WHERE id = $1
 	`
 	return r.scanOrganization(ctx, query, id)
@@ -171,7 +171,7 @@ func (r *organizationRepository) GetBySlug(ctx context.Context, slug string) (*m
 		       deletion_scheduled_at, deletion_scheduled_for,
 		       presence_show_online, presence_show_activity,
 		       product_description, icp_notes, voice_profile, inbox_agent_enabled,
-		       assistant_shared_history
+		       assistant_shared_history, timezone
 		FROM organizations WHERE slug = $1
 	`
 	return r.scanOrganization(ctx, query, slug)
@@ -180,7 +180,7 @@ func (r *organizationRepository) GetBySlug(ctx context.Context, slug string) (*m
 func (r *organizationRepository) scanOrganization(ctx context.Context, query string, args ...interface{}) (*models.Organization, error) {
 	row := r.db.QueryRow(ctx, query, args...)
 	var org models.Organization
-	err := row.Scan(&org.ID, &org.Name, &org.Slug, &org.AvatarURL, &org.OwnerUserID, &org.CreatedAt, &org.UpdatedAt, &org.DeletionScheduledAt, &org.DeletionScheduledFor, &org.PresenceShowOnline, &org.PresenceShowActivity, &org.ProductDescription, &org.ICPNotes, &org.VoiceProfile, &org.InboxAgentEnabled, &org.AssistantSharedHistory)
+	err := row.Scan(&org.ID, &org.Name, &org.Slug, &org.AvatarURL, &org.OwnerUserID, &org.CreatedAt, &org.UpdatedAt, &org.DeletionScheduledAt, &org.DeletionScheduledFor, &org.PresenceShowOnline, &org.PresenceShowActivity, &org.ProductDescription, &org.ICPNotes, &org.VoiceProfile, &org.InboxAgentEnabled, &org.AssistantSharedHistory, &org.Timezone)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -199,10 +199,11 @@ func (r *organizationRepository) Update(ctx context.Context, org *models.Organiz
 		    product_description = $7, icp_notes = $8, voice_profile = $9,
 		    inbox_agent_enabled = $10,
 		    assistant_shared_history = $11,
+		    timezone = $12,
 		    updated_at = $6
 		WHERE id = $1
 	`
-	_, err := r.db.Exec(ctx, query, org.ID, org.Name, org.Slug, org.PresenceShowOnline, org.PresenceShowActivity, time.Now(), org.ProductDescription, org.ICPNotes, org.VoiceProfile, org.InboxAgentEnabled, org.AssistantSharedHistory)
+	_, err := r.db.Exec(ctx, query, org.ID, org.Name, org.Slug, org.PresenceShowOnline, org.PresenceShowActivity, time.Now(), org.ProductDescription, org.ICPNotes, org.VoiceProfile, org.InboxAgentEnabled, org.AssistantSharedHistory, org.Timezone)
 	return err
 }
 
@@ -264,7 +265,7 @@ func (r *organizationRepository) GetUserDefaultOrganization(ctx context.Context,
 		       deletion_scheduled_at, deletion_scheduled_for,
 		       presence_show_online, presence_show_activity,
 		       product_description, icp_notes, voice_profile, inbox_agent_enabled,
-		       assistant_shared_history
+		       assistant_shared_history, timezone
 		FROM organizations WHERE owner_user_id = $1
 		ORDER BY created_at ASC LIMIT 1
 	`

@@ -22229,7 +22229,12 @@
           },
           "timezone": {
             "type": "string",
-            "description": "IANA timezone."
+            "description": "IANA timezone the schedule is read in. Empty when the campaign follows the workspace timezone."
+          },
+          "effective_timezone": {
+            "type": "string",
+            "readOnly": true,
+            "description": "The zone in use: timezone when set, else the workspace timezone, else UTC."
           },
           "days": {
             "type": "integer",

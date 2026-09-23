@@ -104,7 +104,7 @@ func (s *authService) createAccount(ctx context.Context, address, passwordHash s
 	if s.organizationService != nil {
 		orgName := displayname.DefaultWorkspace(u.FirstName)
 		var orgErr *errx.Error
-		org, orgErr = s.organizationService.Create(ctx, u.ID, orgName)
+		org, orgErr = s.organizationService.Create(ctx, u.ID, orgName, "")
 		if orgErr != nil {
 			errs.CaptureException(orgErr)
 			// Don't fail registration if org creation fails

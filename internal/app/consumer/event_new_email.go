@@ -490,7 +490,7 @@ func (s *JobsService) performWarmupActions(ctx context.Context, e *models.JobEve
 	if s.EmailRepository != nil {
 		if account, xerr := s.EmailRepository.GetByID(ctx, e.Message.EmailID); xerr == nil && account != nil {
 			workerID = account.WorkerID
-			recipientTZ = account.Timezone
+			recipientTZ = account.ClockTimezone()
 			base.Placement, base.TargetFolder = account.WarmupFiling()
 		}
 	}

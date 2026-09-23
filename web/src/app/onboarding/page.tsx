@@ -14,6 +14,8 @@ import AuthButton from "@/components/auth/button";
 import useCompleteOnboarding from "@/lib/api/hooks/auth/useCompleteOnboarding";
 import useUpdateOrganization from "@/lib/api/hooks/app/organizations/useUpdateOrganization";
 import useCurrentOrganization from "@/lib/api/hooks/app/organizations/useCurrentOrganization";
+import type Organization from "@/lib/api/models/app/organizations/Organization";
+import { browserTimezone } from "@/lib/timezone";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
 import { PERSON_NAME_MAX, WORKSPACE_NAME_MAX, nameError, normalizeName, type NameKind } from "@/lib/displayName";
@@ -191,12 +193,18 @@ export default function OnboardingPage() {
     const finish = async () => {
         const data = getValues();
         try {
-            // Rename the auto-created workspace if the user changed it. Best
-            // effort: a rename hiccup must never block completing onboarding.
+            // Rename the auto-created workspace if the user changed it, and give
+            // it this browser's timezone when it has none, so campaigns and
+            // warmup windows start in the user's own day. Best effort: a hiccup
+            // here must never block completing onboarding.
             const workspace = normalizeName(data.workspace);
-            if (org?.name && org.name !== workspace) {
+            const patch: Partial<Organization> = {};
+            if (org?.name && org.name !== workspace) patch.name = workspace;
+            const zone = browserTimezone();
+            if (org && !org.timezone && zone) patch.timezone = zone;
+            if (Object.keys(patch).length > 0) {
                 try {
-                    await updateOrganization.mutateAsync({ name: workspace });
+                    await updateOrganization.mutateAsync(patch);
                 } catch {
                     /* keep going — onboarding completion matters more */
                 }
