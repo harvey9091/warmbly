@@ -141,7 +141,7 @@ func (r *emailAccountErrorRepository) CreateOnce(ctx context.Context, data *Crea
 	// incident: every one of these events names an id a worker held minutes
 	// ago, so a deleted mailbox with a busy sync loop reported one of these a
 	// minute.
-	if isForeignKeyViolation(err) {
+	if IsForeignKeyViolation(err) {
 		return nil, nil
 	}
 	if err != nil {
