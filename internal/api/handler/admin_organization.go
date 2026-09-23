@@ -119,7 +119,7 @@ func (h *Handler) AdminUpdateOrgOverrides(c *gin.Context) {
 
 	var req models.UpdateOrgOverridesRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	if !anyOverrideFieldSet(&req) {

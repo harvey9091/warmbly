@@ -63,7 +63,7 @@ func (h *Handler) PauseCampaignLead(c *gin.Context) {
 	var req pauseLeadRequest
 	if c.Request.ContentLength != 0 {
 		if err := c.ShouldBindJSON(&req); err != nil {
-			errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+			errx.JSON(c, errx.InvalidBody(err))
 			return
 		}
 	}

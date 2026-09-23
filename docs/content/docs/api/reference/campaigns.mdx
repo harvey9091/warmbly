@@ -1162,13 +1162,23 @@ A bare array of `Sequence` objects (no envelope).
 
 `POST /campaigns/:id/steps`
 
-Append a new empty sequence step to the campaign. The step is created with defaults, then edited with PATCH. **Scope** `WRITE_CAMPAIGNS` · **Org permission** `manage_campaigns`.
+Append a new sequence step to the campaign. **Scope** `WRITE_CAMPAIGNS` · **Org permission** `manage_campaigns`.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
 | `id` | path | uuid | Campaign id. |
 
-This endpoint takes no request body.
+### Request body
+
+Optional. It takes the same fields as [update a sequence](#update-a-sequence), applied to the new step, so a step can be created with its copy in one request. Without a body, or with `{}`, the step is created with defaults. A body the update refuses creates nothing and answers the update's error.
+
+```json
+{
+  "subject": "Quick question",
+  "body_plain": "Hi {{first_name}}, ...",
+  "wait_after": 3
+}
+```
 
 ### Response
 

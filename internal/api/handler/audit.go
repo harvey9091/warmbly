@@ -180,7 +180,7 @@ func (h *Handler) UpdateUserRateLimits(c *gin.Context) {
 
 	var data models.UpdateUserRateLimits
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.New(errx.BadRequest, "Invalid request body"))
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 

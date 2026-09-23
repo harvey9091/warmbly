@@ -75,7 +75,7 @@ func (h *Handler) CreateOrgExport(c *gin.Context) {
 
 	var req models.CreateOrgExportRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 

@@ -46,7 +46,7 @@ func (h *Handler) Reauth(c *gin.Context) {
 
 	var req reauthRequest
 	if berr := c.ShouldBindJSON(&req); berr != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(berr))
 		return
 	}
 

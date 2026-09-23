@@ -57,7 +57,7 @@ func (h *Handler) RefreshEmailSendIdentity(c *gin.Context) {
 	var req refreshSendIdentityRequest
 	if c.Request.ContentLength != 0 {
 		if err := c.ShouldBindJSON(&req); err != nil {
-			errx.Handle(c, errx.ErrInvalid)
+			errx.Handle(c, errx.InvalidBody(err))
 			return
 		}
 	}

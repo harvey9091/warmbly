@@ -45,7 +45,7 @@ func (h *Handler) CreateTeam(c *gin.Context) {
 
 	var data models.CreateTeam
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -95,7 +95,7 @@ func (h *Handler) UpdateTeam(c *gin.Context) {
 
 	var data models.UpdateTeam
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -151,7 +151,7 @@ func (h *Handler) AddTeamMember(c *gin.Context) {
 
 	var data addTeamMemberRequest
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 

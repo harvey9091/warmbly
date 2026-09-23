@@ -68,7 +68,7 @@ func (h *Handler) AddSuppressions(c *gin.Context) {
 	actorID, _ := middleware.GetUserUUID(c)
 	var req models.AddSuppressionsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	res, xerr := h.AdvancedService.AddSuppressions(c.Request.Context(), *orgID, actorID, &req)

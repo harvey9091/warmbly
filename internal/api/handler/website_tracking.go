@@ -41,7 +41,7 @@ func (h *Handler) UpdateWebsiteTrackingSettings(c *gin.Context) {
 	}
 	var req models.UpdateWebsiteTrackingSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	settings, xerr := h.WebsiteTrackingService.UpdateSettings(c.Request.Context(), *orgID, userID, &req)

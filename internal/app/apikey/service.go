@@ -28,11 +28,6 @@ const (
 	// string, so a full key is "wmbly_" + 43 = 49 chars.
 	KeyLength = 32
 
-	// CacheKeyTTL is how long a (key_hash → key_id) lookup is cached.
-	// We still hit the DB on every request to pick up revocations, so the
-	// cache only saves a single index seek.
-	CacheKeyTTL = 300
-
 	// Display prefix shown in lists: "wmbly_" + first 2 random chars.
 	displayPrefixLen = 8
 	// Display suffix shown in lists: last 4 random chars.
@@ -233,16 +228,8 @@ func (s *apiKeyService) Update(ctx context.Context, orgID, keyID uuid.UUID, data
 }
 
 func (s *apiKeyService) Revoke(ctx context.Context, orgID, keyID uuid.UUID, reason string) *errx.Error {
-	xerr := s.repo.Revoke(ctx, orgID, keyID, reason)
-	if xerr != nil {
-		return xerr
-	}
-	// Best-effort cache invalidation so a revoked key stops authenticating
-	// even within the CacheKeyTTL window. The cache key is the hash, which
-	// we don't have on hand, so we drop the by-id mapping if we cache it
-	// later. For now the GetByHash query filters status='active', so the
-	// revoke takes effect on the next request regardless of cache state.
-	return nil
+	// Keys are looked up in the database on every request, so a revoke takes effect on the next one.
+	return s.repo.Revoke(ctx, orgID, keyID, reason)
 }
 
 // Delete removes a revoked or expired key from the workspace for good, along
@@ -265,29 +252,7 @@ func (s *apiKeyService) ValidateKey(ctx context.Context, rawKey string) (*models
 		return nil, errx.ErrAuth
 	}
 
-	hash := hashKey(rawKey)
-
-	cacheKey := fmt.Sprintf("apikey:%s", hash)
-	if s.cache != nil {
-		if cached, err := s.cache.Get(ctx, cacheKey).Result(); err == nil && cached != "" {
-			if _, err := uuid.Parse(cached); err == nil {
-				if key, xerr := s.repo.GetByHash(ctx, hash); xerr == nil {
-					return key, nil
-				}
-			}
-		}
-	}
-
-	key, xerr := s.repo.GetByHash(ctx, hash)
-	if xerr != nil {
-		return nil, xerr
-	}
-
-	if s.cache != nil {
-		s.cache.Set(ctx, cacheKey, key.ID.String(), CacheKeyTTL)
-	}
-
-	return key, nil
+	return s.repo.GetByHash(ctx, hashKey(rawKey))
 }
 
 // ValidateKeyIP returns true when the request IP is allowed by the key's

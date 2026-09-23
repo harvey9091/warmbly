@@ -59,7 +59,7 @@ func (h *Handler) CreateOAuthApplication(c *gin.Context) {
 	}
 	var w models.OAuthApplicationWrite
 	if err := c.ShouldBindJSON(&w); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	app, err := h.OAuthService.RegisterApplication(c.Request.Context(), *orgID, userID, w)
@@ -106,7 +106,7 @@ func (h *Handler) UpdateOAuthApplication(c *gin.Context) {
 	}
 	var w models.OAuthApplicationWrite
 	if err := c.ShouldBindJSON(&w); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	app, uerr := h.OAuthService.UpdateApplication(c.Request.Context(), *orgID, id, w)
@@ -348,7 +348,7 @@ func (h *Handler) OAuthAuthorize(c *gin.Context) {
 		CodeChallengeMethod string `json:"code_challenge_method"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	req := oauth.AuthorizeRequest{

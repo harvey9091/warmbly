@@ -65,7 +65,7 @@ func (h *Handler) UpdateEmailSync(c *gin.Context) {
 
 	var body models.UpdateSyncSettings
 	if err := c.ShouldBindJSON(&body); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
