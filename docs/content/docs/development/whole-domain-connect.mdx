@@ -1,0 +1,198 @@
+---
+title: Whole-domain mailbox connects
+description: "Set up the Google service account and the Microsoft app that let a workspace connect every mailbox on a Google Workspace domain or Microsoft 365 organization with one administrator's approval."
+---
+
+A workspace can connect every mailbox on a Google Workspace domain or a Microsoft 365 organization through one administrator's approval, with no password and no sign-in per mailbox. In the dashboard these are **Add account > Google > Whole Workspace domain** and **Add account > Microsoft > Whole organization**, and both are the recommended way to connect those mailboxes. The customer side is in [connect a whole Google Workspace domain](/guides/mailbox-import/#connect-a-whole-google-workspace-domain) and [connect a whole Microsoft 365 organization](/guides/mailbox-import/#connect-a-whole-microsoft-365-organization).
+
+This page is the operator side: what the instance needs before either option works. Both are off until you set them up, and a self-hosted instance shows them switched off in the dashboard, naming the settings still unset. `GET /emails/grants/config` reports the same as `google_missing` and `microsoft_missing`.
+
+Everything here is read by the backend only. It mints every token for these mailboxes itself and hands a short-lived one to a worker each time it needs one, so workers and consumers need nothing from this page.
+
+## Google Workspace
+
+A Google Workspace domain is connected through domain-wide delegation to a Google Cloud service account that belongs to your instance. You create the service account once and load its key into the backend. Each customer's Workspace super admin then authorizes that service account in their own Admin console, and nothing on your side changes per customer.
+
+<Callout type="warn" title="Create it once, then keep it">
+Every customer's authorization names the service account's **Client ID**. A deleted and recreated service account gets a new Client ID, even with the same name, and every domain authorized against the old one stops working until its administrator authorizes the new one. The project ID and the service account ID can never be changed either. Pick them before the first customer authorizes, and from then on rotate keys, never the account.
+</Callout>
+
+### Set up the service account
+
+<Steps>
+
+<Step>
+**Choose the project.** In the [Google Cloud console](https://console.cloud.google.com/), create a project for this or pick an existing one, such as the one holding your `BOX_GOOGLE_*` or `GOOGLE_CLIENT_ID` app. The project ID is permanent, so choose the project you intend to keep.
+</Step>
+
+<Step>
+**Enable the APIs.** Under **APIs & Services > Library**, enable the **Gmail API** and the **Admin SDK API** on that project. Calls made with the service account's tokens are counted against this project, and Google refuses them while either API is off.
+</Step>
+
+<Step>
+**Create the service account.** Under **IAM & Admin > Service accounts**, choose **Create service account**:
+
+- **Service account name**: `Warmbly Workspace` is a good choice
+- **Service account ID**: `warmbly-workspace`, filled in from the name. It is permanent
+- **Description**: optional, and only you see it
+
+On **Permissions**, grant no role and continue: the service account needs no access to your project, only the access each customer authorizes. Skip **Principals with access** (grant users access to this service account) as well, then choose **Done**.
+</Step>
+
+<Step>
+**Create a JSON key.** Open the service account, go to its **Keys** tab and choose **Add key > Create new key > JSON > Create**. The browser downloads the key file. Google keeps no copy, so store it as you would `CREDENTIALS_ENCRYPTION_KEY`.
+
+If Google answers that service account key creation is disabled, an organization policy is blocking it. Google Cloud organizations created since May 2024 have **Disable service account key creation** (`iam.disableServiceAccountKeyCreation`, or its managed form `iam.managed.disableServiceAccountKeyCreation`) enforced by default. Someone with the Organization Policy Administrator role on the organization can override it for this one project under **IAM & Admin > Organization policies**: open the policy, choose **Manage policy**, override the parent's policy and set enforcement off. Create the key, then put the policy back if you want it enforced again; an existing key keeps working.
+</Step>
+
+<Step>
+**Find the Client ID.** It is the numeric `client_id` in the key file, and the same number the console shows as the service account's **Unique ID**. You do not need to copy it anywhere yourself: once the key is loaded, the dashboard shows it to customers in the **Whole Workspace domain** dialog, together with the scopes to authorize. It is not the `...apps.googleusercontent.com` ID of an OAuth client.
+</Step>
+
+<Step>
+**Load the key into the backend.** Either of these, on the backend only:
+
+- `GOOGLE_WORKSPACE_DELEGATION_KEY_FILE`: a path to the key file inside the backend's container. Recommended, since the key stays a file you can mount read only
+- `GOOGLE_WORKSPACE_DELEGATION_KEY`: the key's JSON itself. Wins over the file when both are set
+
+With the [one-command install](/development/install/), keep the file next to the install and mount it into the backend with a `docker-compose.override.yml`, which the installer never rewrites:
+
+```yaml
+services:
+  backend:
+    volumes:
+      - ./secrets/google-workspace-delegation.json:/run/secrets/google-workspace-delegation.json:ro
+```
+
+```bash
+# .env
+GOOGLE_WORKSPACE_DELEGATION_KEY_FILE=/run/secrets/google-workspace-delegation.json
+```
+
+The backend runs as uid `1000`, so the file has to be readable by that user (`chown 1000 secrets/google-workspace-delegation.json && chmod 400 secrets/google-workspace-delegation.json`). To use the inline form in `.env` instead, put the JSON on one line (`jq -c . key.json`) and wrap it in single quotes.
+</Step>
+
+<Step>
+**Restart the backend** and check the result. **Add account > Google > Whole Workspace domain** is now offered, and `GET /emails/grants/config` answers `google_enabled: true` with the service account's `google_client_id`. A value that is not a service account key logs one line at boot and leaves the option off. The admin panel shows both settings under **Instance > Configuration > Environment**, as set or unset with a short fingerprint, never the value.
+</Step>
+
+</Steps>
+
+### Proving the domain
+
+The Client ID belongs to your instance, not to any one workspace, so a customer's authorization says nothing about which workspace asked for it. A Google grant is therefore recorded only for the workspace that proves it controls the domain, and only when the domain's directory lists the administrator's address as a super administrator. The proof is one of:
+
+- **The administrator's Google sign-in.** It goes through the dashboard's own Google sign-in client (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`) and returns to its existing redirect URI (`GOOGLE_REDIRECT_URI`, or `API_PUBLIC_URL` plus `/v1/auth/google/callback`), asking only for `openid` and `email`. The callback recognizes an administrator's proof and hands it back to the dashboard window that opened it; it signs nobody in. No redirect URI needs registering beyond the one sign-in already uses. When that client is not configured, the `BOX_GOOGLE_*` mailbox client is used the same way, through its own redirect URI (`/addresses/google/callback`) and again with `openid` and `email` only.
+- **A DNS record.** A `TXT` record at `_warmbly.<domain>` holding a `warmbly-verify=` value unique to the workspace and domain, keyed by `AUTH_SECRET`. Always offered, and the only proof on an instance with neither Google client.
+
+Customer administrators sign in to that client from their own organizations, so its OAuth consent screen has to be **External**. An **Internal** consent screen admits only accounts in your own Google organization, and every other administrator is refused and has to use the DNS record.
+
+### Key custody and rotation
+
+The key can mint a token for any address on any domain that has authorized its Client ID. It is the one credential behind every such mailbox on the instance, so it lives on the backend and nowhere else: workers receive a short-lived access token per use and never the key, and no token for these mailboxes is stored.
+
+To rotate the key:
+
+1. On the service account's **Keys** tab, create a new JSON key.
+2. Replace the file (or the inline value) and restart the backend.
+3. Confirm the grants still pass, for example with **Check again** on one of them or `POST /emails/grants/:id/check`.
+4. Delete the old key on the **Keys** tab.
+
+Customers change nothing: the Client ID they authorized belongs to the service account, not the key.
+
+### Google app verification
+
+Google treats domain-wide delegation as authorized by the customer's administrator, in their own Admin console. There is no OAuth consent screen for Google to review on that path, so the service account needs no Google app verification and no CASA security assessment for the Gmail scopes. Google's rules change, so confirm against Google's current help page on exceptions to verification requirements before relying on this. The sign-in client used for the domain proof asks only for `openid` and `email`, which are not sensitive scopes.
+
+The per-mailbox **Sign in with Google** path is the one that needs Google's verification, and a security assessment, for its restricted Gmail scopes. It runs on the `BOX_GOOGLE_*` client, and it is being retired in favor of the whole-domain connect and app passwords. See [moving existing mailboxes](#moving-existing-mailboxes).
+
+### What the customer does
+
+1. A **super admin** of the Workspace opens [admin.google.com](https://admin.google.com) and goes to **Security > Access and data control > API controls > Manage domain-wide delegation**.
+2. Chooses **Add new**, pastes the Client ID the dashboard shows, and enters exactly these three scopes, comma separated:
+
+   ```text
+   https://www.googleapis.com/auth/gmail.modify,https://www.googleapis.com/auth/gmail.settings.basic,https://www.googleapis.com/auth/admin.directory.user.readonly
+   ```
+
+3. Chooses **Authorize**, and waits a few minutes: the Admin console takes a while to apply the change.
+4. In Warmbly, proves the domain (the administrator's sign-in or the DNS record), then picks the mailboxes to connect.
+
+The authorization comes before the proof, because Warmbly checks it straight away. The full walkthrough is in [connect a whole Google Workspace domain](/guides/mailbox-import/#connect-a-whole-google-workspace-domain).
+
+### When Google refuses
+
+`google_delegation_unauthorized` means Google did not accept the delegation, or accepted it and refused a call. In the order they come up:
+
+- **Not applied yet.** An Admin console change usually applies within minutes and occasionally takes longer. Wait, then try again or use **Check again**
+- **The wrong ID.** The entry holds an OAuth client ID (`...apps.googleusercontent.com`) instead of the service account's numeric Client ID
+- **The scopes differ.** The entry has to hold all three scopes above, exactly. A missing scope, a typo, or a different Gmail scope in its place is refused
+- **Not a super admin.** The address entered in Warmbly is not a super administrator of the domain, so the directory cannot be read with it
+- **APIs off.** The Gmail API or the Admin SDK API is not enabled on your service account's project (your side, not the customer's)
+
+A grant that worked and later fails its hourly check shows as invalid and its mailboxes stop; they restart on their own once a check passes again. See [`google_delegation_unauthorized`](/api/error-codes/#mailbox-source-refusals).
+
+## Microsoft 365
+
+A Microsoft 365 organization is connected through admin consent to the Outlook app the instance already uses for single-mailbox Microsoft sign-in (`BOX_OUTLOOK_CLIENT_ID`, `BOX_OUTLOOK_CLIENT_SECRET`). There is no second app and no new setting: the option is on whenever those two are set. The app registration needs three additions.
+
+### Set up the app registration
+
+<Steps>
+
+<Step>
+**Open the existing registration.** In the [Microsoft Entra admin center](https://entra.microsoft.com/), go to **App registrations** and open the app whose ID is in `BOX_OUTLOOK_CLIENT_ID`. If you have none yet, create it as in [Outlook and Microsoft 365](/development/deployment-guide/#outlook-and-microsoft-365) first.
+</Step>
+
+<Step>
+**Make it multitenant.** Under **Authentication**, set **Supported account types** to accounts in any organizational directory (multitenant), so another organization can consent to it. The option that also includes personal Microsoft accounts is multitenant too, and is the one Outlook.com mailboxes need for single-mailbox sign-in.
+</Step>
+
+<Step>
+**Keep the redirect URI.** The existing Web redirect URI, your API base plus `/addresses/outlook/callback`, is where admin consent returns as well. Nothing is added.
+</Step>
+
+<Step>
+**Add the application permissions.** Under **API permissions**, choose **Add a permission > Microsoft Graph > Application permissions** and add `Mail.ReadWrite`, `Mail.Send` and `User.Read.All`. They sit next to the delegated permissions single-mailbox sign-in already uses (`User.Read`, `Mail.Send`, `Mail.ReadWrite`, `offline_access`); keep those. The list then shows `Mail.ReadWrite` and `Mail.Send` twice, once of type **Delegated** and once of type **Application**, which is correct.
+</Step>
+
+<Step>
+**Do not grant admin consent for your own tenant**, unless you are testing with it. The **Grant admin consent** button on that page consents for your organization only. Each customer organization consents for itself, through the dashboard.
+</Step>
+
+<Step>
+**Publisher verification is optional.** Verifying the app's publisher with a Microsoft partner account adds a verified badge to the consent screen, which some administrators look for. Admin consent works without it.
+</Step>
+
+</Steps>
+
+Nothing needs a restart when only the app registration changes. `GET /emails/grants/config` answers `microsoft_enabled: true` whenever both `BOX_OUTLOOK_*` values are set.
+
+Application permissions reach every mailbox in a consenting organization. We recommend that each organization scope the app to the mailboxes Warmbly should use with an Exchange Online application access policy (or RBAC for Applications); a mailbox outside the policy is refused when it connects. The commands are in [connect a whole Microsoft 365 organization](/guides/mailbox-import/#connect-a-whole-microsoft-365-organization).
+
+### What the customer does
+
+A **Global Administrator** of the organization chooses **Add account > Microsoft > Whole organization**, signs in, and chooses **Accept** on Microsoft's consent screen once. The organization recorded is the one the administrator signed in to, as Microsoft reports it, never a value from the request, and the grant is recorded only when that sign-in holds the Global Administrator or Privileged Role Administrator role in it. Then a member picks the mailboxes to connect.
+
+### When Microsoft refuses
+
+`microsoft_consent_missing` means Microsoft did not issue a token for the organization, or issued one and refused the call:
+
+- **Not consented.** The organization has not approved the app, or the consent screen was closed before **Accept**. A Global Administrator connects it again
+- **Not an administrator.** Admin consent for application permissions needs a Global Administrator. An ordinary user's sign-in cannot give it
+- **Permissions missing.** The app registration lacks one of the three application permissions, or they were added after the organization consented. A consent covers only the permissions the app had at the time, so the administrator has to consent again after a change
+- **Single tenant.** The app registration is not multitenant, so other organizations cannot find it
+- **Unknown organization.** Microsoft does not know the tenant the consent named
+
+`mailbox_grant_proof_missing` from the Microsoft consent means the person who signed in does not hold the Global Administrator or Privileged Role Administrator role in the organization. Sign in with an account that does.
+
+See [`microsoft_consent_missing`](/api/error-codes/#mailbox-source-refusals).
+
+## Moving existing mailboxes
+
+Per-mailbox **Sign in with Google** is being retired. Mailboxes connected that way keep working and there is no cutoff date, but the dashboard marks them and offers to move each one without losing its history, campaigns or warmup:
+
+- **A Google Workspace mailbox** moves onto the domain's administrator grant. Connecting its address through the grant converts the mailbox in place
+- **A personal Gmail mailbox** (or any Google mailbox) moves to an app password, checked against Gmail before anything is stored
+
+Per-mailbox Microsoft sign-in is not being retired, but a mailbox on it can move onto an organization's grant the same way. The customer's side is in [moving off per-mailbox Google sign-in](/guides/mailboxes/#moving-off-per-mailbox-google-sign-in). Keep the `BOX_GOOGLE_*` client configured while any mailbox still uses it: it is what refreshes their tokens.

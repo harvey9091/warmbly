@@ -69,6 +69,14 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import reauthEmailOAuth from "@/lib/api/client/app/emails/reauthEmailOAuth";
 import onboardOAuthFinish from "@/lib/api/client/app/emails/onboardOAuthFinish";
 import { openEmailOAuthPopup } from "@/lib/emails/emailOAuthPopup";
+import { mailboxConnectionLabel, mailHostLogo } from "@/lib/mailHost";
+import { useGrants } from "@/lib/api/hooks/app/emails/useMailboxGrants";
+import { domainOf, grantFor, grantName, vendorLabel, type GrantProvider } from "@/lib/api/models/app/emails/MailboxSources";
+import MailboxGrantDialog from "./import/grants/MailboxGrantDialog";
+import SigninRetiringNotice from "./migration/SigninRetiringNotice";
+import ProviderLogo from "./ProviderLogo";
+import MailboxSourceChip from "./MailboxSourceChip";
+import { mailboxSource } from "@/lib/mailboxSource";
 import UpdateCredentialsDialog from "./UpdateCredentialsDialog";
 import EmailEditor from "../EmailEditor";
 import SendingBehaviorTab from "./SendingBehaviorTab";
@@ -428,12 +436,20 @@ function Detail({ mailbox, onClose, initialTab = "overview", canWarmup = true }:
         <>
             {/* Header */}
             <div className="shrink-0 px-5 h-14 flex items-center gap-3 border-b border-slate-200">
-                <div className="w-8 h-8 rounded-lg bg-sky-50 text-sky-700 flex items-center justify-center text-[11px] font-semibold shrink-0">
+                <div className="relative w-8 h-8 rounded-lg bg-sky-50 text-sky-700 flex items-center justify-center text-[11px] font-semibold shrink-0">
                     {initials}
+                    <ProviderLogo
+                        id={mailbox.mail_host || mailbox.provider}
+                        size="xs"
+                        className="absolute -right-1 -bottom-1 ring-2 ring-white"
+                    />
                 </div>
                 <div className="min-w-0 flex-1">
                     <div className="text-[13px] font-medium text-slate-900 truncate">{mailbox.email}</div>
-                    <div className="text-[10.5px] text-slate-400 capitalize">{mailbox.provider?.replace("_", "/")}</div>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-[10.5px] text-slate-400 truncate">{mailboxConnectionLabel(mailbox)}</span>
+                        {mailboxSource(mailbox).kind !== "host" && <MailboxSourceChip box={mailbox} labelClassName="inline" />}
+                    </div>
                 </div>
                 <span className={cn("h-5 px-2 rounded-full border text-[10px] font-semibold uppercase tracking-wide inline-flex items-center shrink-0", statusTone(mailbox.status))}>
                     {mailbox.status}
@@ -445,7 +461,7 @@ function Detail({ mailbox, onClose, initialTab = "overview", canWarmup = true }:
             </div>
 
             {/* Tabs */}
-            <div className="shrink-0 px-3 flex items-center gap-1 border-b border-slate-200 overflow-x-auto">
+            <div className="shrink-0 px-3 flex items-center gap-1 border-b border-slate-200 overflow-x-auto overflow-y-hidden no-scrollbar">
                 {TABS.map((t) => {
                     const active = tab === t.key;
                     return (
@@ -462,7 +478,7 @@ function Detail({ mailbox, onClose, initialTab = "overview", canWarmup = true }:
                             {active && (
                                 <motion.span
                                     layoutId="inbox-tab-underline"
-                                    className="absolute left-1.5 right-1.5 -bottom-px h-0.5 rounded-full bg-sky-600"
+                                    className="absolute left-1.5 right-1.5 bottom-0 h-0.5 rounded-full bg-sky-600"
                                     transition={{ type: "spring", duration: 0.3, bounce: 0.15 }}
                                 />
                             )}
@@ -578,6 +594,62 @@ function ReconnectAction({ mailbox }: { mailbox: Inbox }) {
     );
 }
 
+// A mailbox connected through an admin grant has no credential of its own to
+// re-authorize: the grant signs it in, so its drawer points at the grant instead.
+function DelegatedGrantNotice({ mailbox, inError = false }: { mailbox: Inbox; inError?: boolean }) {
+    const [open, setOpen] = useState(false);
+    const grants = useGrants(true);
+    const byId = mailbox.domain_grant_id ? grants.data?.data.find((g) => g.id === mailbox.domain_grant_id) : undefined;
+    const provider: GrantProvider =
+        byId?.provider ??
+        (mailbox.provider === "outlook" || mailHostLogo(mailbox.mail_host) === "microsoft" ? "microsoft" : "google");
+    // Matching by domain is only for a mailbox the server has not linked to its grant.
+    const grant =
+        byId ??
+        (mailbox.domain_grant_id
+            ? undefined
+            : grantFor(
+                  grants.data?.data.filter((g) => g.provider === provider),
+                  mailbox.email,
+              ));
+    const domain = grant ? grantName(grant) : domainOf(mailbox.email);
+    const openButton = (
+        <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className={cn(
+                "underline font-medium",
+                inError ? "text-rose-900 decoration-rose-300 hover:decoration-rose-600" : "text-sky-700 decoration-sky-300 hover:decoration-sky-600",
+            )}
+        >
+            {grant?.status === "invalid" ? "Check the grant" : "View the grant"}
+        </button>
+    );
+    return (
+        <>
+            {inError ? (
+                <p className="mt-2 text-[11px] text-rose-900 leading-relaxed">
+                    Connected through your administrator&apos;s grant for {domain}, so there is nothing to re-authorize here. {openButton}
+                </p>
+            ) : (
+                <div className="px-5 py-3 flex items-start gap-2.5 border-b border-slate-200/60">
+                    <ProviderLogo id={provider} size="sm" className="mt-px" />
+                    <div className="min-w-0 text-[12px] text-slate-600 leading-relaxed">
+                        Connected through your administrator&apos;s grant for <span className="text-slate-900 font-medium">{domain}</span>.{" "}
+                        {grant?.status === "invalid" && (
+                            <span className="text-rose-700">
+                                The grant failed its last check{grant.last_error ? `: ${grant.last_error}` : ""}, so this mailbox is stopped.{" "}
+                            </span>
+                        )}
+                        {openButton}
+                    </div>
+                </div>
+            )}
+            <MailboxGrantDialog open={open} provider={provider} grantId={grant?.id} onClose={() => setOpen(false)} />
+        </>
+    );
+}
+
 function OverviewTab({ status, loading, mailbox }: { status?: import("@/lib/api/models/app/analytics/AccountStatus").default; loading: boolean; mailbox: Inbox }) {
     const health = status?.health;
     const usage = status?.daily_usage;
@@ -605,6 +677,7 @@ function OverviewTab({ status, loading, mailbox }: { status?: import("@/lib/api/
 
     return (
         <div className="divide-y divide-slate-200/60">
+            {mailbox.provider === "gmail" && mailbox.auth_method !== "delegated" && <SigninRetiringNotice mailbox={mailbox} />}
             {/* Whatever the Advisor has on this mailbox, above the numbers that
                 produced it. This is where a row flag and a deep link both land. */}
             <AdvisorStrip
@@ -682,7 +755,12 @@ function OverviewTab({ status, loading, mailbox }: { status?: import("@/lib/api/
                                 <div className="text-[12px] font-medium text-rose-800">{e.title}</div>
                                 <div className="text-[11px] text-rose-700/90 mt-0.5 leading-relaxed">{e.message}</div>
                                 {e.action_required && <div className="text-[11px] text-rose-900 mt-1 font-medium">{e.action_required}</div>}
-                                {e.id === firstCredentialErrorId && <ReconnectAction mailbox={mailbox} />}
+                                {e.id === firstCredentialErrorId &&
+                                    (mailbox.auth_method === "delegated" ? (
+                                        <DelegatedGrantNotice mailbox={mailbox} inError />
+                                    ) : (
+                                        <ReconnectAction mailbox={mailbox} />
+                                    ))}
                             </div>
                         ))}
                     </div>
@@ -691,7 +769,21 @@ function OverviewTab({ status, loading, mailbox }: { status?: import("@/lib/api/
 
             {/* Identity */}
             <div>
-                <Row label="Provider"><span className="capitalize">{mailbox.provider?.replace("_", "/")}</span></Row>
+                <Row label="Provider">
+                    <span className="inline-flex items-center gap-1.5 min-w-0">
+                        <ProviderLogo id={mailbox.mail_host || mailbox.provider} size="sm" />
+                        <span className="truncate">{mailboxConnectionLabel(mailbox)}</span>
+                    </span>
+                </Row>
+                {mailbox.vendor && (
+                    <Row label="Imported from">
+                        <span className="inline-flex items-center gap-1.5 min-w-0">
+                            <ProviderLogo id={mailbox.vendor} size="sm" />
+                            <span className="truncate">{vendorLabel(mailbox.vendor)}</span>
+                        </span>
+                    </Row>
+                )}
+                {mailbox.auth_method === "delegated" && <DelegatedGrantNotice mailbox={mailbox} />}
                 <Row label="Tracking domain">{mailbox.tracking_domain || <span className="text-slate-400">Not set</span>}</Row>
                 <Row label="Daily cap">
                     {today?.is_working_day

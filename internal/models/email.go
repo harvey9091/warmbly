@@ -19,6 +19,14 @@ const (
 	InboxProviderSMTPIMAP InboxProvider = "smtp_imap"
 )
 
+// How a mailbox signs in, mirroring the email_accounts.auth_method CHECK.
+const (
+	MailAuthPassword    = "password"
+	MailAuthAppPassword = "app_password"
+	MailAuthOAuth       = "oauth"
+	MailAuthDelegated   = "delegated"
+)
+
 // Sending-domain authentication states, mirroring the email_accounts.auth_state
 // CHECK constraint. "unknown" is deliberately distinct from "failing": it means
 // not checked yet or the DNS lookup could not complete, and never gates.
@@ -49,6 +57,16 @@ type Email struct {
 
 	Provider string `json:"provider"`
 	Status   string `json:"status"`
+
+	// MailHost is who hosts the mailbox (google_workspace, microsoft365, ...)
+	// and AuthMethod how it signs in; both "" until known. See mailhost.Host.
+	MailHost   string `json:"mail_host"`
+	AuthMethod string `json:"auth_method"`
+	// DomainGrantID is the administrator's grant a delegated mailbox connects through.
+	DomainGrantID *uuid.UUID `json:"domain_grant_id,omitempty"`
+	// VendorConnectionID and Vendor name the inbox vendor account a mailbox was imported from.
+	VendorConnectionID *uuid.UUID `json:"vendor_connection_id,omitempty"`
+	Vendor             string     `json:"vendor,omitempty"`
 
 	LastSyncedAt time.Time `json:"last_synced_at"`
 	LastID       *int64    `json:"last_id"`
@@ -498,6 +516,54 @@ type NewOauthAccount struct {
 	AccessToken  string
 	RefreshToken string
 	ExpiresAt    time.Time
+	// MailHost is stored as given; "" when unknown.
+	MailHost string
+}
+
+// NewDelegatedAccount is a Gmail or Outlook mailbox reached through an
+// administrator's grant: no credential is stored, tokens are minted per use.
+type NewDelegatedAccount struct {
+	OrganizationID *uuid.UUID
+	Allowance      *MailboxAllowance
+	Provider       InboxProvider
+	Name           string
+	Email          string
+	MailHost       string
+	GrantID        uuid.UUID
+	// Subject is who tokens are minted for: the address (Google) or the Graph user id (Microsoft).
+	Subject string
+}
+
+// DelegatedMailbox is what minting a token for a delegated mailbox needs.
+type DelegatedMailbox struct {
+	AccountID      uuid.UUID
+	OrganizationID uuid.UUID
+	Provider       InboxProvider
+	Email          string
+	GrantID        uuid.UUID
+	Subject        string
+	Status         string
+}
+
+// EmailRef is the little of a mailbox a duplicate check needs.
+type EmailRef struct {
+	ID         uuid.UUID `json:"id"`
+	Provider   string    `json:"provider"`
+	Status     string    `json:"status"`
+	AuthMethod string    `json:"auth_method"`
+	// Managed is a mailbox whose tokens Warmbly Cloud holds.
+	Managed bool `json:"managed"`
+}
+
+// SigninRetiring is a mailbox connected with per-mailbox Google sign-in, the
+// method being retired; it moves to an administrator's grant or an app password.
+func (r EmailRef) SigninRetiring() bool {
+	return InboxProvider(r.Provider) == InboxProviderGoogle && r.AuthMethod == MailAuthOAuth && !r.Managed
+}
+
+// Movable is a per-mailbox sign-in an administrator's grant for provider can take over in place.
+func (r EmailRef) Movable(provider InboxProvider) bool {
+	return InboxProvider(r.Provider) == provider && r.AuthMethod == MailAuthOAuth && !r.Managed
 }
 
 type NewSMTPIMAPAccount struct {
@@ -508,6 +574,9 @@ type NewSMTPIMAPAccount struct {
 	Email     string
 	SMTP      *Service
 	IMAP      *Service
+	// MailHost and AuthMethod are stored as given; "" when the caller did not detect them.
+	MailHost   string
+	AuthMethod string
 }
 
 // EmailOnboardingState is stored in Redis for the lifetime of an OAuth round trip.

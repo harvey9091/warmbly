@@ -159,7 +159,7 @@ func TestLiveDisablingAMailboxRemovesItFromItsWorker(t *testing.T) {
 func TestLiveDeletingAMailboxRemovesItFromItsWorkerFirst(t *testing.T) {
 	f := newRemovalLiveFixture(t)
 
-	if xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String()); xerr != nil {
+	if xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String()); xerr != nil {
 		t.Fatalf("delete: %v", xerr)
 	}
 
@@ -221,7 +221,7 @@ func TestLiveDeleteKeepsEverythingWhenTheWorkerCannotBeTold(t *testing.T) {
 	f := newRemovalLiveFixture(t)
 	f.pub.removeErr = errBusDown
 
-	xerr := f.svc.Delete(context.Background(), f.user.String(), f.mailbox.String())
+	xerr := f.svc.Delete(context.Background(), f.org.String(), f.mailbox.String())
 	if xerr == nil || xerr.Code != errx.ServiceUnavailable {
 		t.Fatalf("error = %v, want a 503 so the client retries", xerr)
 	}
@@ -258,7 +258,7 @@ func TestLiveDeletingAMailboxWithScheduledWork(t *testing.T) {
 		t.Fatalf("fixture admin action: %v", err)
 	}
 
-	if xerr := f.svc.Delete(ctx, f.user.String(), f.mailbox.String()); xerr != nil {
+	if xerr := f.svc.Delete(ctx, f.org.String(), f.mailbox.String()); xerr != nil {
 		t.Fatalf("disconnecting a mailbox that has scheduled work failed: %v", xerr)
 	}
 	if f.mailboxExists(t) {

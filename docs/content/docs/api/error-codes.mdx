@@ -153,6 +153,77 @@ Names are shown to other people, including in invitation and notification emails
 
 A name from Google, Apple or a single sign-on provider that breaks these rules is dropped rather than refusing the sign-in, and you are asked for it during onboarding.
 
+#### Mailbox import refusals
+
+The [mailbox import](/guides/mailbox-import/) routes (`/emails/imports`) answer these. A row that fails to connect is not an HTTP error: the import carries it, with its reason in the row's `cause` (listed in [the guide](/guides/mailbox-import/#when-rows-fail)).
+
+| `code` | Status | Meaning |
+|--------|--------|---------|
+| `mailbox_import_empty` | 400 | No file and no pasted text, or an input with no rows, or a header row and nothing under it |
+| `mailbox_import_too_large` | 400 | More than 5,000 mailboxes, a file over 10 MB, a pasted list over 2 MB, or a body that is not multipart form data. Split the file and import the rest separately |
+| `mailbox_import_no_email_column` | 400 | `POST /emails/imports` with a mapping in which no column is `email` |
+| `mailbox_import_row_incomplete` | 400 | `PATCH /emails/imports/:id/rows/:line` left the row without an SMTP and IMAP server or without a password. The `message` says which |
+| `invalid_cursor` | 400 | `GET /emails/imports` or `GET /emails/imports/:id/rows` was given a `cursor` this API did not issue. Start again without one |
+| `mailbox_import_row_not_failed` | 409 | Only a row that did not connect can be fixed; this one is queued, running, connected, updated, skipped, cancelled or waiting for sign-in |
+| `mailbox_import_credentials_expired` | 409 | The row's credentials were deleted 7 days after the import finished, so it cannot be retried. Import it again |
+| `mailbox_import_nothing_to_retry` | 409 | `POST /emails/imports/:id/retry` matched no failed row that still holds its credentials |
+
+```json
+{
+  "error": "Conflict",
+  "message": "This row's credentials were removed after the retry window. Import it again.",
+  "code": "mailbox_import_credentials_expired",
+  "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
+}
+```
+
+#### Mailbox source refusals
+
+The [inbox vendor](/guides/mailbox-import/#import-from-an-inbox-vendor) routes (`/emails/vendors`), the [admin grant](/guides/mailbox-import/#connect-a-whole-google-workspace-domain) routes (`/emails/grants`) and the [sending domain](/guides/sending-domains/) routes (`/emails/domains`) answer these. Inside an import, the vendor and grant failures land on the row instead, as its `cause` (see [the guide](/guides/mailbox-import/#when-rows-fail)).
+
+| `code` | Status | Meaning |
+|--------|--------|---------|
+| `mailbox_vendor_unauthorized` | 400 | The vendor did not accept the API key, or it has no access to the workspace or organization entered. A saved connection is marked invalid until the key is updated |
+| `mailbox_vendor_invalid_fields` | 400 | A field the vendor requires is empty, or a field holds control characters. `GET /emails/vendors/catalog` lists each vendor's fields |
+| `mailbox_vendor_unknown` | 400 | `vendor` is not one of the supported vendors |
+| `mailbox_vendor_rate_limited` | 429 | The vendor is rate limiting Warmbly's requests. Try again in a minute |
+| `mailbox_vendor_unavailable` | 400 | The vendor answered with something unexpected, did not answer, or no longer has the mailbox. Try again shortly |
+| `mailbox_grant_not_configured` | 400 | This instance has no Google service account or no Microsoft app for admin grants. An operator sets them up; see [configuration](/development/configuration/#whole-domain-connects). `GET /emails/grants/config` names the settings still unset in `google_missing` and `microsoft_missing` |
+| `google_delegation_unauthorized` | 400 | Google refused the domain-wide delegation, or accepted it and refused the call: the client ID or a scope is missing from the Admin console entry, an OAuth client ID was entered instead of the service account's numeric one, or the admin address is not a super administrator. Admin console changes can take a few minutes to apply. See [when Google refuses](/development/whole-domain-connect/#when-google-refuses) |
+| `microsoft_consent_missing` | 400 | The Microsoft 365 organization has not granted admin consent, does not exist, or the consent lacks `Mail.ReadWrite`, `Mail.Send` or `User.Read.All`; or the consent sign-in did not complete or name the organization. A Global Administrator connects it again, and again after the app's permissions change. See [when Microsoft refuses](/development/whole-domain-connect/#when-microsoft-refuses) |
+| `mailbox_grant_state_invalid` | 400 | The Google sign-in or Microsoft consent `state` expired (15 minutes), was already used, or was started by another member or workspace, or Google did not accept the sign-in. Start again |
+| `mailbox_grant_proof_missing` | 400 | The workspace has not proved it controls the Google Workspace domain: the `_warmbly.<domain>` `TXT` record does not hold this workspace's `warmbly-verify=` value yet, or the Google sign-in was not the admin address entered on that domain. Also returned when the directory does not list the admin address as a super administrator, and for a Microsoft 365 consent signed in by someone without the Global Administrator or Privileged Role Administrator role. Publish the record (DNS can take a while to appear) or sign in as that administrator, then finish again |
+| `mailbox_grant_unavailable` | 503 | Google, Microsoft or the DNS lookup for the proof did not answer. Nothing was recorded or changed, and a grant's status is left as it was. Try again in a minute |
+| `mailbox_grant_domain_mismatch` | 400 | The admin address is not on the domain entered, or the mailbox is on a domain the grant does not cover |
+| `mailbox_grant_mailbox_unreachable` | 400 | Google or Microsoft has no mailbox for the account: it does not exist, is suspended or disabled, or has no Exchange Online license |
+| `mailbox_grant_inactive` | 400 | The grant failed its last check, so it connects nothing. Check the grant (`POST /emails/grants/:id/check`), then retry |
+| `mailbox_vendor_domain_not_found` | 404 | `PUT /emails/domains/:domain/vendor-forwarding` or `POST /emails/domains/:domain/vendor-tracking` on a domain none of the workspace's active vendor accounts holds |
+| `mailbox_vendor_domain_unsupported` | 400 | The vendor holding the domain cannot do this through its API: it has no forwarding removal, writes no DNS records for Warmbly, or the existing record is one the vendor manages itself. See [domains held by an inbox vendor](/guides/sending-domains/#domains-held-by-an-inbox-vendor) |
+| `mailbox_reauth_delegated` | 409 | `POST /emails/onboarding/oauth/reauth/:id` on a mailbox connected through an admin grant. It has no sign-in of its own to renew; check its grant instead, from **Add account > Google or Microsoft > Whole domain** or with `POST /emails/grants/:id/check` |
+| `sending_domain_not_in_workspace` | 404 | The workspace has no mailbox on this domain. Also `400` when no domain was given |
+| `sending_domain_shared_provider` | 400 | The domain belongs to a shared email provider, such as `gmail.com`, and cannot be redirected |
+| `domain_redirect_invalid_target` | 400 | `target_url` (or a vendor forwarding `url`) is not an `http` or `https` address on a host, carries credentials, is longer than 2,048 characters, or points back at the same domain or its `www`. An import's `redirects` option answers the same. Also returned by `vendor-tracking` when `host` is not a subdomain of the domain |
+| `domain_redirect_taken` | 409 | Another workspace on this instance already serves a verified redirect for this domain. The redirect is saved but does not verify |
+| `tracking_host_not_configured` | 400 | This instance has no tracking host (`TRACKING_DOMAIN`), so it cannot serve a tracking domain or a redirect |
+
+```json
+{
+  "error": "Bad Request",
+  "message": "This sign-in expired or belongs to someone else. Start again.",
+  "code": "mailbox_grant_state_invalid",
+  "request_id": "4bbbd1b2-8f86-47dd-8a7f-9476501ad20e"
+}
+```
+
+#### App password switch refusals
+
+`POST /emails/onboarding/app-password/:id` [moves a mailbox off per-mailbox Google sign-in](/guides/mailboxes/#moving-off-per-mailbox-google-sign-in) onto an app password. Besides these, a password Gmail refuses answers with the same codes as an SMTP/IMAP connect, such as [`mailbox_auth_refused`](#mailbox_auth_refused). Nothing is changed on any refusal.
+
+| `code` | Status | Meaning |
+|--------|--------|---------|
+| `app_password_invalid` | 400 | `app_password` is not 16 letters once spaces are removed. Create one at myaccount.google.com/apppasswords and send it as Google shows it |
+| `mailbox_not_google_signin` | 409 | The mailbox is not connected with per-mailbox Google sign-in: it is already on an app password or an admin grant, is an Outlook or SMTP/IMAP mailbox, or its sign-in is held by Warmbly Cloud. A repeat of a switch that succeeded answers this |
+
 ### 401 Unauthorized
 
 Returned when authentication fails.
@@ -276,7 +347,7 @@ Signup and invitation refusals carry their own `code`, so a client can branch on
 | `two_fa_invalid_code` | 400 | The authenticator or recovery code did not match. Wait for a fresh code and try again; the login challenge allows five attempts per pending session |
 | `password_changed_sign_in_again` | 409 | `POST /auth/me/password` stored the new password but could not issue the calling device a new session. Every earlier token is invalid; discard them and sign in again with the new password |
 
-`reauth_required` guards the changes that hand out a durable credential or cannot be undone: creating an API key, adding or removing a passkey, transferring a workspace, and scheduling a workspace or account for deletion. Confirm with a password or a current two-factor code:
+`reauth_required` guards the changes that hand out a durable credential, cannot be undone, or reach a whole domain's mail: creating an API key, adding or removing a passkey, transferring a workspace, scheduling a workspace or account for deletion, and recording, using or removing an admin grant (`POST /emails/grants/google/finish`, `/microsoft/finish`, `/:id/connect`, `DELETE /emails/grants/:id`). Confirm with a password or a current two-factor code:
 
 ```bash
 curl -X POST "https://api.warmbly.com/v1/auth/reauth" \
@@ -352,11 +423,12 @@ Returned when the request conflicts with existing data.
 }
 ```
 
-One conflict carries its own `code`. A contact's email address has to be free, so changing one to an address another contact already holds is refused rather than merging the two:
+A few conflicts carry their own `code`. The mailbox import's are under [mailbox import refusals](#mailbox-import-refusals). A contact's email address has to be free, so changing one to an address another contact already holds is refused rather than merging the two:
 
 | `code` | Status | Meaning |
 |--------|--------|---------|
 | `contact_email_taken` | 409 | The address given to [update a contact](/api/reference/contacts/#update-a-contact) already belongs to another contact |
+| `mailbox_not_google_signin` | 409 | `POST /emails/onboarding/app-password/:id` on a mailbox that is not connected with per-mailbox Google sign-in. See [app password switch refusals](#app-password-switch-refusals) |
 | `mailbox_cloud_unenroll_failed` | 409 | The mailbox is linked to [Warmbly Cloud](/guides/warmbly-cloud/) and its link could not be released, so `DELETE /emails/{id}` would leave Warmbly Cloud holding its credential or its claim on it. The mailbox record remains, and restoration onto its worker is attempted |
 
 `mailbox_cloud_unenroll_failed` is a self-hosted instance losing contact with Warmbly Cloud mid-delete. Deleting an enrolled mailbox has to revoke its enrollment before the record goes, because the pool holds the mailbox's own SMTP/IMAP credentials and that record is the only thing that knows the enrollment exists. The same call releases a cloud-managed mirror before the record goes, so the mailbox returns to the cloud workspace and can be adopted again instead of staying claimed by an instance that no longer keeps it. The mailbox record remains. Warmbly attempts to restore it onto its worker immediately, and the worker reconciler may restore it later if that attempt fails. Retry the delete once the instance can reach the cloud again. Unenrolling under **Settings > Warmbly Cloud** first does not help: it makes the same call.
@@ -472,7 +544,7 @@ A `503` whose `code` is `ai_not_configured` is not transient and retrying will n
 
 #### `mailbox_allowance_reached`
 
-A `403` whose `code` is `mailbox_allowance_reached` comes from every path that connects a mailbox: `POST /emails/onboarding/oauth/start`, `POST /emails/onboarding/oauth/finish`, `POST /emails/onboarding/smtp-imap`, and per row inside `POST /emails/onboarding/smtp-imap/bulk`. It is not a permission problem: the workspace holds its whole [mailbox allowance](/guides/mailboxes/#mailbox-allowance), which on a paid plan is one mailbox for every send a day the plan includes, and `10` on a free workspace. Nothing was connected.
+A `403` whose `code` is `mailbox_allowance_reached` comes from every path that connects a mailbox: `POST /emails/onboarding/oauth/start`, `POST /emails/onboarding/oauth/finish`, `POST /emails/onboarding/smtp-imap`, and per row inside `POST /emails/onboarding/smtp-imap/bulk`. A [mailbox import](/guides/mailbox-import/) does not answer it over HTTP: the rows past the allowance fail with the `cause` `allowance_reached` and can be retried once it is raised. It is not a permission problem: the workspace holds its whole [mailbox allowance](/guides/mailboxes/#mailbox-allowance), which on a paid plan is one mailbox for every send a day the plan includes, and `10` on a free workspace. Nothing was connected.
 
 ```json
 {

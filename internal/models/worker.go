@@ -147,6 +147,8 @@ type AddWorkerEmailSmtpImapData struct {
 type AddWorkerEmailGraphData struct {
 	Token      *oauth2.Token     `json:"token" avro:"token"`
 	DeltaLinks map[string]string `json:"delta_links" avro:"delta_links"`
+	// User is the Graph user id an application token acts for; "" means the signed-in user (/me).
+	User string `json:"user,omitempty" avro:"user"`
 }
 
 type AddWorkerEmail struct {

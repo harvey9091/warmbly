@@ -42,6 +42,7 @@ const ROUTE_TITLES: Record<string, string> = {
 
   // App
   "/app/emails": "Mailboxes",
+  "/app/emails/domains": "Sending domains",
   "/app/contacts": "Contacts",
   "/app/contacts/segments": "Segments",
   "/app/contacts/categories": "Categories",

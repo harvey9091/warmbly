@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -24,8 +25,7 @@ import (
 )
 
 const (
-	// graphBase is the Microsoft Graph v1.0 root. All mail calls are made
-	// against the signed-in user (/me) using the delegated token.
+	// graphBase is the Microsoft Graph v1.0 root. Mail calls go through root().
 	graphBase = "https://graph.microsoft.com/v1.0"
 
 	// Well-known mail folder ids Graph accepts directly in a path or as a
@@ -42,6 +42,10 @@ type Client struct {
 	Email     string
 	FirstName string
 	LastName  string
+
+	// User is the Graph user id an application token acts for; "" is the
+	// signed-in user of a delegated token (/me).
+	User string
 
 	hc    *http.Client
 	Cache *cache.Cache
@@ -91,6 +95,14 @@ func (c *Client) InitWithSource(ctx context.Context, ts oauth2.TokenSource) *err
 	}
 	c.folderIDs = map[string]string{}
 	return nil
+}
+
+// root is the mailbox's Graph path: /me for a delegated token, /users/{id} for an application one.
+func (c *Client) root() string {
+	if c.User == "" {
+		return graphBase + "/me"
+	}
+	return graphBase + "/users/" + url.PathEscape(c.User)
 }
 
 // do issues a single authenticated request. body may be nil.

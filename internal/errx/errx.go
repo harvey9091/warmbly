@@ -23,6 +23,11 @@ type Error struct {
 	// error. The exceptions are the few that tell an operator something they
 	// can act on, like a mail transport that cannot deliver.
 	Public bool `json:"-"`
+	// Cause is a finer machine key than Identifier for callers that group
+	// failures (a mailbox import), and Detail the scrubbed server reply behind
+	// it. Neither is ever written to a response by Handle.
+	Cause  string `json:"-"`
+	Detail string `json:"-"`
 }
 
 // Error implements error interface.

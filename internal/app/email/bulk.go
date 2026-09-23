@@ -71,10 +71,10 @@ func (s *emailService) OnboardSMTPIMAPBulk(ctx context.Context, userID string, o
 			continue
 		}
 		seen[key] = true
-		if exists, xerr := s.emailRepository.ExistsForUser(ctx, userID, strings.TrimSpace(rows[i].Email)); xerr != nil {
+		if existing, xerr := s.findExisting(ctx, userID, orgID, rows[i].Email); xerr != nil {
 			fail(i, xerr)
 			continue
-		} else if exists {
+		} else if existing != nil {
 			res.Data[i] = models.MailboxBulkRow{
 				Row: i, Email: rows[i].Email, Status: models.MailboxBulkSkipped,
 				Code: "already_connected", Message: errx.ErrEmailOnboardAlreadyExists.Message,

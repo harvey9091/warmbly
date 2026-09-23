@@ -1,6 +1,9 @@
 package email
 
 import (
+	"net/mail"
+	"strings"
+
 	"github.com/warmbly/warmbly/internal/models"
 	"golang.org/x/oauth2"
 )
@@ -32,4 +35,17 @@ func authCodeOptions(provider models.InboxProvider, loginHint string) []oauth2.A
 		opts = append(opts, oauth2.SetAuthURLParam("login_hint", loginHint))
 	}
 	return opts
+}
+
+// loginHintOrEmpty passes on a hint only when it is a plausible address, so
+// nothing else reaches the provider's authorize URL.
+func loginHintOrEmpty(hint string) string {
+	hint = strings.TrimSpace(hint)
+	if len(hint) > 254 {
+		return ""
+	}
+	if _, err := mail.ParseAddress(hint); err != nil || strings.ContainsAny(hint, " <>") {
+		return ""
+	}
+	return hint
 }

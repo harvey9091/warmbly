@@ -490,8 +490,9 @@ defmodule RealtimeWeb.OrgChannel do
       String.contains?(event_type, "RESEARCH") ->
         has.(:view_contacts)
 
-      # Mailbox account + warmup health transitions
-      String.contains?(event_type, "ACCOUNT") or String.contains?(event_type, "WARMUP") ->
+      # Mailbox account + warmup health transitions, and mailbox import progress
+      String.contains?(event_type, "ACCOUNT") or String.contains?(event_type, "WARMUP") or
+          String.contains?(event_type, "MAILBOX_IMPORT") ->
         has.(:manage_emails)
 
       # Developer "fire event" custom events: the org's own automation/campaign

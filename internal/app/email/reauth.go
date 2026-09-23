@@ -39,6 +39,9 @@ func (s *emailService) OAuthReauth(ctx context.Context, userID string, orgID *uu
 	if provider == models.InboxProviderSMTPIMAP {
 		return nil, errx.ErrEmailReauthProvider
 	}
+	if account.AuthMethod == models.MailAuthDelegated {
+		return nil, errx.ErrEmailReauthDelegated
+	}
 	// A cloud-managed mailbox has no local token row to renew; its sign-in
 	// lives on Warmbly Cloud.
 	if s.cloudLink != nil {

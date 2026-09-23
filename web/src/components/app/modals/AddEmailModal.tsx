@@ -6,31 +6,33 @@
 // triptych.
 //
 // Flow:
-//   provider picker ──► gmail app-password walkthrough ─► /emails/onboarding/smtp-imap
-//                  ──► gmail OAuth popup  ─┐   (only when gmail_oauth_connect is on)
-//                  ──► outlook OAuth popup ─┼─► /emails/onboarding/oauth/finish
-//                  ──► smtp/imap form ──────────► /emails/onboarding/smtp-imap
-//                  ──► CSV bulk import ─────────► /emails/onboarding/smtp-imap/bulk
+//   provider picker ─► Google ─► whole Workspace domain ─► /emails/grants (GrantImportWizard)
+//                    │         ├► app password walkthrough ─► /emails/onboarding/smtp-imap
+//                    │         └► Sign in with Google ────────┐ (retiring; only when gmail_oauth_connect is on)
+//                    ├► Microsoft ─► whole organization ─► /emails/grants (GrantImportWizard)
+//                    │            └► sign in one mailbox ──────┴► /emails/onboarding/oauth/finish
+//                    ├► smtp/imap form ──────────► /emails/onboarding/smtp-imap
+//                    ├► mailbox import ──────────► /emails/imports (MailboxImportWizard)
+//                    └► inbox vendor ────────────► /emails/vendors (VendorImportWizard)
 //
-// Gmail defaults to the app-password walkthrough: the deployment says whether
-// a NEW Gmail mailbox may use Google sign-in (gmail_oauth_connect on
-// /auth/config), and off is the default. Mailboxes already connected with
-// Google sign-in are untouched and still re-authorize from their drawer.
+// Google and Microsoft each open a method chooser. The admin grant is the
+// recommended method wherever the instance has it set up, and is left out
+// where it is not. Per-mailbox Google sign-in is being retired: it is offered
+// only when the deployment allows it (gmail_oauth_connect on /auth/config),
+// marked as retiring, and mailboxes already on it are asked to move.
 //
 // Every path can run into the workspace's mailbox allowance; that answer
 // (code mailbox_allowance_reached) opens MailboxAllowanceDialog instead of a
 // toast, and the picker shows the allowance up front so it is never a surprise.
 //
-// OAuth popup posts {type:"email_oauth_callback", code, state} back here
-// via window.postMessage; we then call OAuth-finish with the user's bearer.
-//
-// Linked to Warmbly Cloud: the consent runs on the cloud's app, the popup
-// returns to /cloud-oauth/done, and we redeem its session via /cloud-link/oauth/finish.
+// The OAuth popup (direct or through Warmbly Cloud) lives in useMailboxOAuth,
+// shared with the import wizard's per-row "Sign in".
 
 import React from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
     ArrowLeftIcon,
+    Building2Icon,
     CheckIcon,
     ChevronRightIcon,
     CloudIcon,
@@ -38,6 +40,7 @@ import {
     InboxIcon,
     KeyRoundIcon,
     Loader2Icon,
+    LogInIcon,
     MailIcon,
     ExternalLinkIcon,
     SendIcon,
@@ -51,7 +54,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Logo } from "@/components/svg";
 import { TextInput } from "@/components/ui/field";
 import { useUserProfile } from "@/hooks/context/user";
-import { API_URL, APP_URL } from "@/lib/information";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
 import addEmail from "@/lib/api/client/app/emails/addEmail";
@@ -64,13 +66,9 @@ import {
 } from "@/lib/api/models/app/emails/Service";
 import SecuritySelect from "@/components/app/emails/SecuritySelect";
 import useAuthConfig from "@/lib/api/hooks/auth/useAuthConfig";
-import onboardOAuthStart from "@/lib/api/client/app/emails/onboardOAuthStart";
-import onboardOAuthFinish from "@/lib/api/client/app/emails/onboardOAuthFinish";
-import { capture } from "@/lib/productAnalytics";
-import { finishCloudOAuth, startCloudOAuth } from "@/lib/api/client/app/cloudlink/cloudLink";
 import { useAdoptCloudMailbox, useCloudWorkspaceMailboxes } from "@/lib/api/hooks/app/cloudlink/useCloudLink";
-import useCloudPool from "@/hooks/useCloudPool";
-import type { CloudOAuthDoneMessage } from "@/app/cloud-oauth/done/page";
+import useMailboxOAuth, { isAllowanceError, type MailboxOAuthProvider } from "@/hooks/useMailboxOAuth";
+import { useConfirm } from "@/hooks/context/confirm";
 import { Google, Outlook } from "@/components/svg";
 import { cn } from "@/lib/utils";
 import useFeatureAccess from "@/hooks/useFeatureAccess";
@@ -79,86 +77,77 @@ import { allowanceFull } from "@/lib/api/models/app/emails/MailboxAllowance";
 import type MailboxAllowance from "@/lib/api/models/app/emails/MailboxAllowance";
 import MailboxAllowanceDialog from "@/components/app/emails/MailboxAllowanceDialog";
 import GmailAppPasswordPanel from "@/components/app/emails/GmailAppPasswordPanel";
-import BulkConnectPanel from "@/components/app/emails/BulkConnectPanel";
+import MailboxImportWizard from "@/components/app/emails/import/MailboxImportWizard";
+import VendorImportWizard from "@/components/app/emails/import/vendors/VendorImportWizard";
+import GrantImportWizard from "@/components/app/emails/import/grants/GrantImportWizard";
+import ProviderLogo, { LogoStack } from "@/components/app/emails/ProviderLogo";
+import { useGrantConfig } from "@/lib/api/hooks/app/emails/useMailboxGrants";
+import { useMailboxSourceBusy } from "@/lib/api/hooks/app/emails/mailboxSourceBusy";
+import { useVendorCatalog } from "@/lib/api/hooks/app/emails/useMailboxVendors";
 import { DitherMeter, type DitherTone } from "@/components/ui/dither";
+import { SkeletonCards } from "@/components/app/emails/import/Discovering";
 
-type View = "pick" | "gmail" | "gmail_app_password" | "outlook" | "smtp_imap" | "bulk";
+type View =
+    | "pick"
+    | "google"
+    | "microsoft"
+    | "gmail"
+    | "gmail_app_password"
+    | "outlook"
+    | "smtp_imap"
+    | "bulk"
+    | "vendor"
+    | "grant_google"
+    | "grant_microsoft";
 
-/** The one answer every connect path shares: open the allowance dialog. */
-function isAllowanceError(e: unknown): boolean {
-    return (e as AppError | undefined)?.code === "mailbox_allowance_reached";
-}
-type OAuthProvider = "gmail" | "outlook";
+// The multi-step import views: wider, and guarded while they hold a draft.
+const WIZARD_VIEWS: View[] = ["bulk", "vendor", "grant_google", "grant_microsoft"];
 
-interface OAuthCallbackMessage {
-    type: "email_oauth_callback";
-    provider: OAuthProvider;
-    code: string;
-    state: string;
-    error: string;
-}
+// Where Back goes: a method returns to its provider's chooser.
+const PARENT: Record<View, View> = {
+    pick: "pick",
+    google: "pick",
+    microsoft: "pick",
+    gmail: "google",
+    gmail_app_password: "google",
+    grant_google: "google",
+    outlook: "microsoft",
+    grant_microsoft: "microsoft",
+    smtp_imap: "pick",
+    bulk: "pick",
+    vendor: "pick",
+};
 
-// originOf normalises a configured base URL to a bare origin. APP_URL and
-// API_URL may carry a trailing slash or a path; event.origin never does.
-function originOf(value: string | undefined): string | null {
-    if (!value) return null;
-    try {
-        return new URL(value, window.location.href).origin;
-    } catch {
-        return null;
-    }
-}
-
-// The origins we accept an OAuth callback message from.
-//
-// The bridge page is served by the API, not the dashboard, so that the
-// redirect_uri registered with Google and Microsoft stays stable across
-// front-end changes. On a split-domain deployment (dashboard on one host, API
-// on another, which is what the self-hosting guide sets up) event.origin is
-// therefore API_URL's origin and never APP_URL's. Accepting only APP_URL
-// silently dropped every callback and left the modal waiting forever.
-//
-// This is a coarse gate: the real replay protection is the single-use state
-// match below, which the message still has to satisfy.
-function allowedCallbackOrigins(): string[] {
-    return [originOf(APP_URL), originOf(API_URL), window.location.origin].filter(
-        (o): o is string => Boolean(o),
-    );
+function depth(v: View): number {
+    return v === "pick" ? 0 : PARENT[v] === "pick" ? 1 : 2;
 }
 
-function openCentered(url: string, name: string): Window | null {
-    const w = 520;
-    const h = 640;
-    const sx = window.screenLeft ?? window.screenX;
-    const sy = window.screenTop ?? window.screenY;
-    const sw = window.innerWidth ?? document.documentElement.clientWidth ?? screen.width;
-    const sh = window.innerHeight ?? document.documentElement.clientHeight ?? screen.height;
-    const left = sx + (sw - w) / 2;
-    const top = sy + (sh - h) / 2;
-    const popup = window.open(
-        url,
-        name,
-        `width=${w},height=${h},left=${left},top=${top}`,
-    );
-    popup?.focus();
-    return popup;
-}
+type OAuthProvider = MailboxOAuthProvider;
 
 export default function AddEmailModal() {
     const user = useUserProfile();
     const qc = useQueryClient();
 
     const [view, setView] = React.useState<View>("pick");
-    const [oauthBusy, setOauthBusy] = React.useState<OAuthProvider | null>(null);
+    // The CSV import is reached from the picker and from the Google chooser; Back returns to whichever opened it.
+    const [bulkFrom, setBulkFrom] = React.useState<View>("pick");
+    // Deeper views slide in from the right, shallower ones from the left.
+    const [dir, setDir] = React.useState<1 | -1>(1);
+    const navigate = React.useCallback(
+        (v: View) => {
+            if (v === "bulk" && view !== "bulk") setBulkFrom(view);
+            setDir(view === "bulk" && v === bulkFrom ? -1 : depth(v) >= depth(view) ? 1 : -1);
+            setView(v);
+        },
+        [view, bulkFrom],
+    );
     // Set when the deployment has no OAuth client for the provider the user
     // picked. Rendered inline rather than as a toast: it is a setup instruction
     // with a link, not a transient failure.
     const [notConfigured, setNotConfigured] = React.useState<OAuthProvider | null>(null);
-    const pendingState = React.useRef<{ provider: OAuthProvider; state: string } | null>(null);
-    // A consent running on Warmbly Cloud's app; redeemed by session, not code.
-    const pendingCloud = React.useRef<{ provider: OAuthProvider; session: string } | null>(null);
-    const pool = useCloudPool();
-    const viaCloud = pool.connected;
+    // An import wizard holds a file, a list or a pick nobody has imported yet.
+    const [wizardDirty, setWizardDirty] = React.useState(false);
+    const confirm = useConfirm();
 
     // The allowance is read while the modal is open so the picker can show it
     // and a refused connect can explain itself. Fetched from the same query
@@ -183,147 +172,74 @@ export default function AddEmailModal() {
         [openAllowance],
     );
 
+    const oauth = useMailboxOAuth({
+        onConnected: () => user.setAddEmail(false),
+        onAllowance: () => openAllowance(true),
+        onNotConfigured: setNotConfigured,
+    });
+    const oauthBusy = oauth.busy;
+    const viaCloud = oauth.viaCloud;
+    const resetOAuth = oauth.reset;
+
     // Reset when the modal closes.
     React.useEffect(() => {
         if (!user.addEmail) {
             setView("pick");
-            setOauthBusy(null);
+            setDir(1);
             setNotConfigured(null);
             setAllowanceOpen(false);
-            pendingState.current = null;
-            pendingCloud.current = null;
+            setWizardDirty(false);
+            resetOAuth();
         }
-    }, [user.addEmail]);
+    }, [user.addEmail, resetOAuth]);
 
-    // The cloud-brokered popup lands on our own origin (/cloud-oauth/done).
-    React.useEffect(() => {
-        function onMessage(event: MessageEvent) {
-            if (event.origin !== window.location.origin) return;
-            const data = event.data as CloudOAuthDoneMessage | undefined;
-            if (!data || data.type !== "cloud_oauth_callback") return;
-            const expected = pendingCloud.current;
-            if (!expected || expected.session !== data.session) return;
-            pendingCloud.current = null;
-            if (data.status !== "ok") {
-                setOauthBusy(null);
-                if (data.error !== "access_denied") {
-                    toast.error(data.message || (data.error ? `Provider error: ${data.error}` : "Connection was cancelled."));
-                }
-                return;
-            }
-            void toast.promise(
-                finishCloudOAuth(data.session).then((inbox) => {
-                    qc.invalidateQueries({ queryKey: ["emails", "list"] });
-                    qc.invalidateQueries({ queryKey: ["cloud-link"] });
-                    capture("mailbox_connected", { provider: expected.provider, method: "cloud" });
-                    user.setAddEmail(false);
-                    return inbox;
-                }),
-                {
-                    loading: "Adding the mailbox…",
-                    success: "Mailbox connected. Warmbly Cloud warms it from now on.",
-                    error: (e: AppError) => buildError(e),
-                },
-            )
-                .catch(onConnectError)
-                .finally(() => setOauthBusy(null));
-        }
-        window.addEventListener("message", onMessage);
-        return () => window.removeEventListener("message", onMessage);
-    }, [qc, user, onConnectError]);
+    const finishWizard = () => {
+        qc.invalidateQueries({ queryKey: ["emails", "list"] });
+        setWizardDirty(false);
+        user.setAddEmail(false);
+    };
 
-    // Listen for the OAuth popup's postMessage. We only honour messages from an
-    // origin we own and whose state matches the one we issued, which is what
-    // protects against replay and stray posts.
-    React.useEffect(() => {
-        function onMessage(event: MessageEvent) {
-            if (event.origin && !allowedCallbackOrigins().includes(event.origin)) {
-                return;
-            }
-            const data = event.data as OAuthCallbackMessage | undefined;
-            if (!data || data.type !== "email_oauth_callback") return;
-
-            const expected = pendingState.current;
-            if (!expected || expected.state !== data.state) return;
-            pendingState.current = null;
-
-            if (data.error || !data.code) {
-                setOauthBusy(null);
-                if (data.error !== "access_denied") {
-                    toast.error(data.error ? `Provider error: ${data.error}` : "Connection was cancelled.");
-                }
-                return;
-            }
-
-            void toast.promise(
-                onboardOAuthFinish(data.code, data.state).then((inbox) => {
-                    qc.invalidateQueries({ queryKey: ["emails", "list"] });
-                    capture("mailbox_connected", { provider: expected.provider, method: "oauth" });
-                    user.setAddEmail(false);
-                    return inbox;
-                }),
-                {
-                    loading: "Connecting…",
-                    success: "Mailbox connected",
-                    error: (e: AppError) => buildError(e),
-                },
-            )
-                .catch(onConnectError)
-                .finally(() => setOauthBusy(null));
-        }
-        window.addEventListener("message", onMessage);
-        return () => window.removeEventListener("message", onMessage);
-    }, [qc, user, onConnectError]);
-
-    async function startOAuth(provider: OAuthProvider) {
-        if (oauthBusy) return;
-        setOauthBusy(provider);
+    function startOAuth(provider: OAuthProvider) {
         setNotConfigured(null);
-        if (viaCloud) {
-            try {
-                const { url, session } = await startCloudOAuth(provider);
-                pendingCloud.current = { provider, session };
-                const popup = openCentered(url, `connect-${provider}`);
-                if (!popup) {
-                    pendingCloud.current = null;
-                    setOauthBusy(null);
-                    toast.error("Could not open the authorization window. Please allow popups and try again.");
-                }
-            } catch (err) {
-                pendingCloud.current = null;
-                setOauthBusy(null);
-                if (isAllowanceError(err)) {
-                    openAllowance(true);
-                    return;
-                }
-                toast.error(buildError(err as AppError));
-            }
-            return;
-        }
-        try {
-            const { url, state } = await onboardOAuthStart(provider);
-            pendingState.current = { provider, state };
-            const popup = openCentered(url, `connect-${provider}`);
-            if (!popup) {
-                pendingState.current = null;
-                setOauthBusy(null);
-                toast.error("Could not open the authorization window. Please allow popups and try again.");
-            }
-        } catch (err) {
-            pendingState.current = null;
-            setOauthBusy(null);
-            const e = err as AppError;
-            if (e.code === "mailbox_provider_not_configured") {
-                setNotConfigured(provider);
-                return;
-            }
-            if (isAllowanceError(e)) {
-                openAllowance(true);
-                return;
-            }
-            toast.error(buildError(e));
-        }
+        void oauth.start(provider);
     }
+
+    // Every way out of the modal (close, backdrop, Escape, back to the picker)
+    // asks first while the import wizard holds work nobody has imported yet.
+    // An import or grant request in flight finishes before the modal can be left.
+    const sourceBusy = useMailboxSourceBusy() && user.addEmail && WIZARD_VIEWS.includes(view);
+    const guard = React.useCallback(
+        (leave: () => void) => {
+            if (sourceBusy) return;
+            if (WIZARD_VIEWS.includes(view) && wizardDirty) {
+                const text =
+                    view === "bulk"
+                        ? "Discard this import? The file and the choices made for it are lost."
+                        : "Discard this import? What you picked and entered here is lost.";
+                confirm.show(text, async () => {
+                    setWizardDirty(false);
+                    leave();
+                });
+                return;
+            }
+            leave();
+        },
+        [view, wizardDirty, confirm, sourceBusy],
+    );
+    const requestClose = React.useCallback(() => guard(() => user.setAddEmail(false)), [guard, user]);
+
+    React.useEffect(() => {
+        if (!user.addEmail) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key !== "Escape") return;
+            // An open dropdown, the allowance dialog or the discard confirm owns this Escape.
+            if (document.querySelector("[data-floating], [role='alertdialog']") || allowanceOpen) return;
+            e.preventDefault();
+            requestClose();
+        };
+        document.addEventListener("keydown", onKey);
+        return () => document.removeEventListener("keydown", onKey);
+    }, [user.addEmail, requestClose, allowanceOpen]);
 
     return (
         <AnimatePresence>
@@ -334,7 +250,7 @@ export default function AddEmailModal() {
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     transition={{ duration: 0.15 }}
-                    onClick={() => user.setAddEmail(false)}
+                    onClick={requestClose}
                     className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/30 backdrop-blur-[2px] px-4"
                 >
                     <motion.div
@@ -346,24 +262,30 @@ export default function AddEmailModal() {
                         onClick={(e) => e.stopPropagation()}
                         className={cn(
                             "w-full rounded-lg bg-white border border-slate-200 shadow-[0_24px_48px_-12px_rgba(15,23,42,0.18),0_8px_16px_-8px_rgba(15,23,42,0.1)] overflow-hidden flex flex-col max-h-[88dvh] transition-[max-width] duration-200",
-                            view === "bulk" ? "max-w-[760px]" : "max-w-[560px]",
+                            WIZARD_VIEWS.includes(view) ? "max-w-[760px]" : "max-w-[560px]",
                         )}
                     >
                         <Header
                             view={view}
-                            onBack={() => {
-                                setNotConfigured(null);
-                                setView("pick");
-                            }}
-                            onClose={() => user.setAddEmail(false)}
+                            onBack={() =>
+                                guard(() => {
+                                    setNotConfigured(null);
+                                    setWizardDirty(false);
+                                    navigate(view === "bulk" ? bulkFrom : PARENT[view]);
+                                })
+                            }
+                            onClose={requestClose}
+                            busy={sourceBusy}
                         />
                         <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden relative">
-                            <AnimatePresence mode="wait" initial={false}>
+                            <AnimatePresence mode="wait" initial={false} custom={dir}>
                                 <motion.div
                                     key={view}
-                                    initial={{ opacity: 0, x: view === "pick" ? -12 : 12 }}
-                                    animate={{ opacity: 1, x: 0 }}
-                                    exit={{ opacity: 0, x: view === "pick" ? 12 : -12 }}
+                                    custom={dir}
+                                    variants={SLIDE}
+                                    initial="enter"
+                                    animate="center"
+                                    exit="exit"
                                     transition={{ duration: 0.18, ease: [0.32, 0.72, 0, 1] }}
                                 >
                                     {view === "pick" && (
@@ -373,9 +295,9 @@ export default function AddEmailModal() {
                                                 onOpen={() => openAllowance(allowanceFull(allowance.data))}
                                             />
                                             <PickProvider
-                                                onPick={setView}
+                                                onPick={navigate}
                                                 viaCloud={viaCloud}
-                                                gmailOAuth={gmailOAuth}
+                                                open={user.addEmail}
                                                 onAdopted={() => {
                                                     qc.invalidateQueries({ queryKey: ["emails", "list"] });
                                                     user.setAddEmail(false);
@@ -383,16 +305,25 @@ export default function AddEmailModal() {
                                             />
                                         </>
                                     )}
+                                    {(view === "google" || view === "microsoft") && (
+                                        <MethodChooser
+                                            provider={view}
+                                            onPick={navigate}
+                                            viaCloud={viaCloud}
+                                            gmailOAuth={gmailOAuth}
+                                            open={user.addEmail}
+                                        />
+                                    )}
                                     {view === "gmail" && (
                                         notConfigured === "gmail" ? (
-                                            <ProviderNotConfigured provider="gmail" selfHosted={pool.selfHosted} />
+                                            <ProviderNotConfigured provider="gmail" selfHosted={oauth.selfHosted} />
                                         ) : (
                                             <OAuthPanel
                                                 provider="gmail"
                                                 busy={oauthBusy === "gmail"}
                                                 viaCloud={viaCloud}
                                                 onConnect={() => startOAuth("gmail")}
-                                                onUseAppPassword={() => setView("gmail_app_password")}
+                                                onUseAppPassword={() => navigate("gmail_app_password")}
                                             />
                                         )
                                     )}
@@ -407,7 +338,7 @@ export default function AddEmailModal() {
                                     )}
                                     {view === "outlook" && (
                                         notConfigured === "outlook" ? (
-                                            <ProviderNotConfigured provider="outlook" selfHosted={pool.selfHosted} />
+                                            <ProviderNotConfigured provider="outlook" selfHosted={oauth.selfHosted} />
                                         ) : (
                                             <OAuthPanel
                                                 provider="outlook"
@@ -427,12 +358,26 @@ export default function AddEmailModal() {
                                         />
                                     )}
                                     {view === "bulk" && (
-                                        <BulkConnectPanel
-                                            onDone={() => {
-                                                qc.invalidateQueries({ queryKey: ["emails", "list"] });
-                                                user.setAddEmail(false);
-                                            }}
+                                        <MailboxImportWizard
+                                            onDone={finishWizard}
                                             onAllowance={() => openAllowance(allowanceFull(allowance.data))}
+                                            onDirtyChange={setWizardDirty}
+                                        />
+                                    )}
+                                    {view === "vendor" && (
+                                        <VendorImportWizard
+                                            onDone={finishWizard}
+                                            onAllowance={() => openAllowance(allowanceFull(allowance.data))}
+                                            onDirtyChange={setWizardDirty}
+                                        />
+                                    )}
+                                    {(view === "grant_google" || view === "grant_microsoft") && (
+                                        <GrantImportWizard
+                                            key={view}
+                                            provider={view === "grant_google" ? "google" : "microsoft"}
+                                            onDone={finishWizard}
+                                            onAllowance={() => openAllowance(allowanceFull(allowance.data))}
+                                            onDirtyChange={setWizardDirty}
                                         />
                                     )}
                                 </motion.div>
@@ -518,18 +463,26 @@ function Header({
     view,
     onBack,
     onClose,
+    busy = false,
 }: {
     view: View;
     onBack: () => void;
     onClose: () => void;
+    /** A request is in flight: back and close wait for it. */
+    busy?: boolean;
 }) {
     const sub: Record<View, string> = {
         pick: "Connect a sending account",
-        gmail: "Gmail or Google Workspace",
-        gmail_app_password: "Gmail or Google Workspace",
-        outlook: "Outlook or Microsoft 365",
+        google: "Gmail and Google Workspace",
+        microsoft: "Outlook and Microsoft 365",
+        gmail: "Sign in with Google",
+        gmail_app_password: "Gmail app password",
+        outlook: "Sign in one Microsoft mailbox",
         smtp_imap: "Any provider via SMTP / IMAP",
-        bulk: "Many mailboxes from one CSV",
+        bulk: "Import mailboxes",
+        vendor: "Import from an inbox vendor",
+        grant_google: "Whole Workspace domain",
+        grant_microsoft: "Whole Microsoft 365 organization",
     };
     return (
         <div className="h-12 px-3 border-b border-slate-200 flex items-center gap-2.5 shrink-0">
@@ -537,8 +490,9 @@ function Header({
                 <button
                     type="button"
                     onClick={onBack}
+                    disabled={busy}
                     aria-label="Back"
-                    className="size-7 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100 inline-flex items-center justify-center transition-colors"
+                    className="size-7 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100 inline-flex items-center justify-center transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed"
                 >
                     <ArrowLeftIcon className="w-3.5 h-3.5" />
                 </button>
@@ -551,8 +505,10 @@ function Header({
             <button
                 type="button"
                 onClick={onClose}
+                disabled={busy}
                 aria-label="Close"
-                className="ml-auto size-7 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100 inline-flex items-center justify-center transition-colors"
+                title={busy ? "Wait for this to finish" : undefined}
+                className="ml-auto size-7 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100 inline-flex items-center justify-center transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed"
             >
                 <XIcon className="w-3.5 h-3.5" />
             </button>
@@ -636,60 +592,55 @@ function ProviderNotConfigured({ provider, selfHosted }: { provider: OAuthProvid
     );
 }
 
+const SLIDE = {
+    enter: (d: 1 | -1) => ({ opacity: 0, x: d * 16 }),
+    center: { opacity: 1, x: 0 },
+    exit: (d: 1 | -1) => ({ opacity: 0, x: d * -16 }),
+};
+
 function PickProvider({
     onPick,
     viaCloud,
-    gmailOAuth,
+    open,
     onAdopted,
 }: {
     onPick: (v: View) => void;
     viaCloud: boolean;
-    /** Google sign-in is open to new mailboxes; otherwise the app-password walkthrough. */
-    gmailOAuth: boolean;
+    /** The modal is open, so the import sources may be asked what they offer. */
+    open: boolean;
     onAdopted: () => void;
 }) {
-    const rows: Array<{
-        key: View;
-        icon: React.ReactNode;
-        title: string;
-        sub: string;
-        tone: "primary" | "neutral";
-        /** A quiet badge after the title. */
-        badge?: string;
-    }> = [
-        {
-            key: gmailOAuth ? "gmail" : "gmail_app_password",
-            icon: <Google className="w-5 h-5" />,
-            title: "Gmail / Google Workspace",
-            sub: gmailOAuth
-                ? viaCloud
-                    ? "Sign in through Warmbly Cloud. Warmup included, no OAuth app needed."
-                    : "OAuth via Google. Native sync for Gmail accounts."
-                : "With an app password, over IMAP and SMTP. About two minutes; we walk you through it.",
-            tone: "primary",
-            badge: gmailOAuth ? undefined : "Google sign-in coming soon",
-        },
-        {
-            key: "outlook",
-            icon: <Outlook className="w-5 h-5" />,
-            title: "Outlook / Microsoft 365",
-            sub: viaCloud ? "Sign in through Warmbly Cloud. Warmup included, no OAuth app needed." : "OAuth via Microsoft. Native sync for Outlook accounts.",
-            tone: "primary",
-        },
+    // Asked now so the Google and Microsoft choosers open with their methods known.
+    useGrantConfig(open);
+    const vendorCatalog = useVendorCatalog(open);
+    // A backend without the vendor service answers 404; anything else still offers the route.
+    const vendorsOff = (vendorCatalog.error as AppError | null)?.status === 404;
+
+    const rows: Array<{ key: View; icon: React.ReactNode; title: string; sub: string }> = [
+        { key: "google", icon: <Google className="w-5 h-5" />, title: "Google", sub: "Gmail and Google Workspace" },
+        { key: "microsoft", icon: <Outlook className="w-5 h-5" />, title: "Microsoft", sub: "Outlook and Microsoft 365" },
         {
             key: "smtp_imap",
             icon: <Logo className="w-4 h-5 text-slate-700" />,
             title: "Other (SMTP / IMAP)",
             sub: "Any provider with manual host, port, and app password.",
-            tone: "neutral",
         },
         {
             key: "bulk",
             icon: <FileSpreadsheetIcon className="w-4 h-4 text-slate-700" />,
-            title: "Bulk import from CSV",
-            sub: "Hundreds or thousands of SMTP / IMAP mailboxes in one go, with a report of anything that failed.",
-            tone: "neutral",
+            title: "Import mailboxes",
+            sub: "CSV, spreadsheet or pasted list. Server settings are detected for you.",
         },
+        ...(vendorsOff
+            ? []
+            : [
+                  {
+                      key: "vendor" as View,
+                      icon: <LogoStack ids={["inboxkit", "zapmail"]} size="xs" />,
+                      title: "Inbox vendor",
+                      sub: "InboxKit, Zapmail, Mailforge and more. Paste an API key, pick mailboxes.",
+                  },
+              ]),
     ];
     return (
         <div className="divide-y divide-slate-200/60">
@@ -707,20 +658,162 @@ function PickProvider({
                         {r.icon}
                     </div>
                     <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="text-[13px] font-medium text-slate-900 truncate">{r.title}</span>
-                            {r.badge && (
-                                <span className="shrink-0 h-[18px] px-1.5 rounded-full bg-sky-50 border border-sky-200 text-sky-700 text-[10px] font-medium inline-flex items-center">
-                                    {r.badge}
-                                </span>
-                            )}
-                        </div>
+                        <div className="text-[13px] font-medium text-slate-900 truncate">{r.title}</div>
                         <div className="text-[11.5px] text-slate-500 truncate">{r.sub}</div>
                     </div>
                     <ChevronRightIcon className="w-4 h-4 text-slate-300 shrink-0 group-hover:text-slate-500 group-hover:translate-x-0.5 transition-all" />
                 </motion.button>
             ))}
             {viaCloud && <WorkspaceMailboxes onAdopted={onAdopted} />}
+        </div>
+    );
+}
+
+interface Method {
+    view: View;
+    icon: React.ReactNode;
+    title: string;
+    sub: string;
+    pill?: { label: string; tone: "sky" | "amber" };
+    /** Offered, but steered away from. */
+    retiring?: string;
+}
+
+// The ways to connect a Google or Microsoft mailbox. The admin grant leads
+// wherever the instance has it set up and is left out where it is not.
+function MethodChooser({
+    provider,
+    onPick,
+    viaCloud,
+    gmailOAuth,
+    open,
+}: {
+    provider: "google" | "microsoft";
+    onPick: (v: View) => void;
+    viaCloud: boolean;
+    /** Per-mailbox Google sign-in is still allowed on this deployment. */
+    gmailOAuth: boolean;
+    open: boolean;
+}) {
+    const grantConfig = useGrantConfig(open);
+    const methods: Method[] = [];
+    if (provider === "google") {
+        if (grantConfig.data?.google_enabled) {
+            methods.push({
+                view: "grant_google",
+                icon: <Building2Icon className="w-4 h-4 text-slate-700" />,
+                title: "Whole Workspace domain",
+                sub: "A super admin authorizes Warmbly once, then you pick the mailboxes. No app passwords.",
+                pill: { label: "Recommended", tone: "sky" },
+            });
+        }
+        methods.push({
+            view: "gmail_app_password",
+            icon: <KeyRoundIcon className="w-4 h-4 text-slate-700" />,
+            title: "App password",
+            sub: "One mailbox over IMAP and SMTP, in about two minutes. Works for any Gmail or Workspace account.",
+        });
+        if (gmailOAuth) {
+            methods.push({
+                view: "gmail",
+                icon: <ProviderLogo id="google" size="md" framed={false} />,
+                title: "Sign in with Google",
+                sub: viaCloud ? "One mailbox at a time, through Warmbly Cloud." : "One mailbox at a time, through Google's consent screen.",
+                pill: { label: "Being retired", tone: "amber" },
+                retiring: "Still works for now. It will be discontinued, so prefer the whole domain or an app password.",
+            });
+        }
+    } else {
+        if (grantConfig.data?.microsoft_enabled) {
+            methods.push({
+                view: "grant_microsoft",
+                icon: <Building2Icon className="w-4 h-4 text-slate-700" />,
+                title: "Whole organization",
+                sub: "A Global Administrator approves Warmbly once, then you pick the mailboxes. No passwords.",
+                pill: { label: "Recommended", tone: "sky" },
+            });
+        }
+        methods.push({
+            view: "outlook",
+            icon: <LogInIcon className="w-4 h-4 text-slate-700" />,
+            title: "Sign in one mailbox",
+            sub: viaCloud
+                ? "Through Warmbly Cloud. Warmup included, no OAuth app needed."
+                : "Sign in with Microsoft, one mailbox at a time.",
+        });
+    }
+
+    return (
+        <div className="p-4 space-y-2">
+            <div className="flex items-center gap-2.5 pb-1">
+                <ProviderLogo id={provider} size="lg" />
+                <div className="min-w-0">
+                    <p className="text-[13px] font-medium text-slate-900">How should Warmbly connect?</p>
+                    <p className="text-[11.5px] text-slate-500">
+                        {provider === "google" ? "Personal @gmail.com? Use an app password." : "Personal @outlook.com or @hotmail.com? Sign in one mailbox."}
+                    </p>
+                </div>
+            </div>
+            {grantConfig.isLoading && (
+                <div role="status" aria-label="Checking what this instance supports">
+                    <SkeletonCards count={1} />
+                </div>
+            )}
+            {methods.map((m, i) => (
+                <motion.button
+                    key={m.view}
+                    type="button"
+                    onClick={() => onPick(m.view)}
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.04 + i * 0.05, duration: 0.18, ease: "easeOut" }}
+                    className={cn(
+                        "w-full rounded-md border px-3 py-3 flex items-start gap-3 text-left group transition-colors",
+                        m.retiring
+                            ? "border-dashed border-slate-200 bg-slate-50/40 hover:bg-slate-50"
+                            : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50",
+                    )}
+                >
+                    <div
+                        className={cn(
+                            "size-8 rounded-md border border-slate-200 bg-white flex items-center justify-center shrink-0",
+                            m.retiring && "opacity-70",
+                        )}
+                    >
+                        {m.icon}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+                            <span className={cn("text-[13px] font-medium", m.retiring ? "text-slate-600" : "text-slate-900")}>{m.title}</span>
+                            {m.pill && (
+                                <span
+                                    className={cn(
+                                        "shrink-0 h-[18px] px-1.5 rounded-full border text-[10px] font-medium inline-flex items-center",
+                                        m.pill.tone === "sky" ? "bg-sky-50 border-sky-200 text-sky-700" : "bg-amber-50 border-amber-200 text-amber-700",
+                                    )}
+                                >
+                                    {m.pill.label}
+                                </span>
+                            )}
+                        </div>
+                        <p className="text-[11.5px] text-slate-500 leading-relaxed">{m.sub}</p>
+                        {m.retiring && <p className="text-[11.5px] text-amber-700 leading-relaxed mt-0.5">{m.retiring}</p>}
+                    </div>
+                    <ChevronRightIcon className="w-4 h-4 text-slate-300 shrink-0 self-center group-hover:text-slate-500 group-hover:translate-x-0.5 transition-all" />
+                </motion.button>
+            ))}
+            {provider === "google" && (
+                <p className="pt-1 text-[11.5px] text-slate-500">
+                    Have a list of app passwords?{" "}
+                    <button
+                        type="button"
+                        onClick={() => onPick("bulk")}
+                        className="text-sky-700 underline decoration-sky-300 hover:decoration-sky-600 transition-colors"
+                    >
+                        Import them from a CSV
+                    </button>
+                </p>
+            )}
         </div>
     );
 }
@@ -797,6 +890,19 @@ function OAuthPanel({
     const Icon = provider === "gmail" ? Google : Outlook;
     return (
         <div className="px-5 py-6 space-y-5">
+            {provider === "gmail" && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5">
+                    <div className="flex items-center gap-1.5">
+                        <span className="h-[18px] px-1.5 rounded-full border border-amber-200 bg-white text-amber-700 text-[10px] font-medium inline-flex items-center">
+                            Being retired
+                        </span>
+                        <span className="text-[12px] font-medium text-amber-900">Google sign-in for single mailboxes</span>
+                    </div>
+                    <p className="mt-1 text-[11.5px] text-amber-800 leading-relaxed">
+                        Still works for now. It will be discontinued, so prefer the whole domain or an app password.
+                    </p>
+                </div>
+            )}
             <div className="flex items-center gap-3">
                 <div className="size-11 rounded-md border border-slate-200 bg-white flex items-center justify-center shrink-0">
                     <Icon className="w-6 h-6" />

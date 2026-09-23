@@ -402,6 +402,19 @@ const (
 	MailboxBulkBatchMax    = 50
 	MailboxBulkConcurrency = 8
 
+	// Mailbox import (background job): rows per file, upload size, how many
+	// rows connect at once overall and per mail host (a burst of sign-ins to
+	// one provider from one address earns an auth throttle), how long a row
+	// may run before another pass takes it back, how long failed rows keep
+	// their sealed credentials for a retry, and when a finished import goes.
+	MailboxImportMaxRows            = 5000
+	MailboxImportMaxBytes           = 10 << 20
+	MailboxImportConcurrency        = 8
+	MailboxImportPerHostConcurrency = 3
+	MailboxImportLeaseSeconds       = 120
+	MailboxImportCredentialDays     = 7
+	MailboxImportRetentionDays      = 30
+
 	// Daily creation throttles. The total caps above stop "you have
 	// 5000 campaigns on this org" — the throttles below stop "you
 	// created 1000 campaigns today on a fresh unlimited account."

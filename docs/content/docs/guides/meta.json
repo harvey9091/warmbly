@@ -5,6 +5,8 @@
   "pages": [
     "---Sending---",
     "mailboxes",
+    "mailbox-import",
+    "sending-domains",
     "sending-behavior",
     "warmup",
     "warmbly-cloud",

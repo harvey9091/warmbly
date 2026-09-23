@@ -55,7 +55,7 @@ Five values protect the whole instance. Compose ships a working default for each
 
 | Variable | Format | What it protects | Restart needed |
 |---|---|---|---|
-| `AUTH_SECRET` | 32 characters or more, enforced at boot | JWT and session signing. The realtime service reads the same value as `JWT_SECRET` and applies the same floor. Both refuse to start below it: a shorter HS256 key can be recovered offline from any token the service has issued | yes |
+| `AUTH_SECRET` | 32 characters or more, enforced at boot | JWT and session signing. The realtime service reads the same value as `JWT_SECRET` and applies the same floor. Both refuse to start below it: a shorter HS256 key can be recovered offline from any token the service has issued. It also keys the `warmbly-verify=` values workspaces publish in `_warmbly` `TXT` records to prove a domain, so changing it changes every one of them: [root redirects](/guides/sending-domains/#root-redirects) stop at their next check until the new value is published | yes |
 | `INTERNAL_API_TOKEN` | any random string | The backend's `/api/v1/internal/` routes, which workers and the tracking service authenticate against | yes |
 | `NODE_BROKER_TOKEN` | any random string | The routes that perform a privileged operation for the caller: opening a sealed data key, signing a blob operation, and minting a provider access token for a mailbox Warmbly Cloud manages. Optional, and falls back to `INTERNAL_API_TOKEN`. The same value has to be set on the control plane and on every node that calls those routes, or they answer 401. Worth setting in a split deployment, where the tracking and forms services are internet-facing and hold the shared token | yes |
 | `SECRET_KEY_BASE` | 64 characters or more | Phoenix session signing in the realtime service | yes |
@@ -153,8 +153,8 @@ TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12
 | `WEBAUTHN_RP_ID` | Passkey relying party id. Derived from `APP_URL` when unset. Changing it invalidates every enrolled passkey | derived | yes |
 | `WEBAUTHN_RP_ORIGINS` | Origins accepted for passkey ceremonies | derived from `APP_URL` | yes |
 | `WEBAUTHN_RP_DISPLAY_NAME` | The name the passkey prompt shows | `Warmbly` | yes |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Sign in with Google in the browser. Both are required; unrelated to the `BOX_GOOGLE_*` mailbox client | unset | yes |
-| `GOOGLE_REDIRECT_URI` | Redirect URI registered at Google. Served by the API, not the dashboard | `API_PUBLIC_URL` plus `/v1/auth/google/callback` | yes |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Sign in with Google in the browser. Both are required; unrelated to the `BOX_GOOGLE_*` mailbox client. The same client carries a Google Workspace administrator's sign-in that [proves a domain](/development/whole-domain-connect/#proving-the-domain) for a whole-domain connect, asking only for `openid` and `email`; that sign-in signs nobody in | unset | yes |
+| `GOOGLE_REDIRECT_URI` | Redirect URI registered at Google. Served by the API, not the dashboard. An administrator's domain proof returns here too and is handed back to the dashboard window that opened it, so no second URI is registered | `API_PUBLIC_URL` plus `/v1/auth/google/callback` | yes |
 | `GOOGLE_IOS_CLIENT_ID` | Additional Google client id accepted from the iOS app. Native only: it does not enable the browser button | unset | yes |
 | `APPLE_APP_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_KEY_SECRET` | Sign in with Apple. `APPLE_APP_ID` is the Services ID | unset | yes |
 | `APPLE_REDIRECT_URI` | Return URL registered at Apple. Must be HTTPS | `API_PUBLIC_URL` plus `/v1/auth/apple/callback` | yes |
@@ -308,7 +308,7 @@ On `filesystem`, a remote worker writes blobs to its own disk rather than a volu
 | `GCP_PROJECT_ID` | Project when `PUBSUB_ENABLED=true` | unset | yes |
 
 <Callout title="Topics are created by the bus, not by hand">
-A worker's command topic is named after the node id issued when it joined, so the set of topics is not knowable in advance. The Kafka backend creates what it uses, once per topic per process, rather than depending on the broker's `auto.create.topics.enable` — which is off by default on Confluent Cloud and configurable only on Dedicated clusters, not on Basic, Standard, Enterprise or Freight. The credential therefore needs `CREATE` on topics as well as read and write.
+A worker's command topic is named after the node id issued when it joined, so the set of topics is not knowable in advance. The Kafka backend creates what it uses, once per topic per process, rather than depending on the broker's `auto.create.topics.enable`, which is off by default on Confluent Cloud and configurable only on Dedicated clusters, not on Basic, Standard, Enterprise or Freight. The credential therefore needs `CREATE` on topics as well as read and write.
 </Callout>
 
 
@@ -460,11 +460,47 @@ Needed on the backend **and** every worker: the backend starts the OAuth flow, a
 
 | Variable | What it does | Default |
 |---|---|---|
-| `BOX_GOOGLE_CLIENT_ID`, `BOX_GOOGLE_CLIENT_SECRET` | The Google app used by Gmail mailboxes connected with Google sign-in: the ones already connected that way, and new ones once `BOX_GOOGLE_OAUTH_CONNECT` is on. Redirect URI is your API base plus `/addresses/google/callback` | unset |
+| `BOX_GOOGLE_CLIENT_ID`, `BOX_GOOGLE_CLIENT_SECRET` | The Google app used by Gmail mailboxes connected with per-mailbox Google sign-in: the ones already connected that way, and new ones once `BOX_GOOGLE_OAUTH_CONNECT` is on. That method is [being retired](/guides/mailboxes/#moving-off-per-mailbox-google-sign-in), so keep these set while any mailbox still uses it. Also carries a Workspace administrator's domain proof when `GOOGLE_CLIENT_ID` is not set. Redirect URI is your API base plus `/addresses/google/callback` | unset |
 | `BOX_GOOGLE_OAUTH_CONNECT` | `true` lets a new Gmail mailbox connect with Google sign-in. Off, the connect dialog walks through an app password over IMAP and SMTP instead, which needs no Google app; mailboxes already on Google sign-in keep working and can be re-authorized either way. Announced to clients as `gmail_oauth_connect` on `GET /auth/config` | `false` |
 | `BOX_OUTLOOK_CLIENT_ID`, `BOX_OUTLOOK_CLIENT_SECRET` | Connect Outlook and Microsoft 365 mailboxes. Redirect URI is your API base plus `/addresses/outlook/callback` | unset |
 
 Plain SMTP and IMAP mailboxes need none of this. If a worker is missing these values, the mailbox connects fine and then silently stops about an hour later, when its first access token expires.
+
+### Whole-domain connects
+
+A workspace can connect every mailbox on a [Google Workspace domain or Microsoft 365 organization](/guides/mailbox-import/#connect-a-whole-google-workspace-domain) through one administrator's grant (**Add account > Google > Whole Workspace domain**, **Add account > Microsoft > Whole organization**). These are read by the backend only: it mints every token for those mailboxes itself and hands them to workers per use, so workers need nothing here. The complete setup, step by step, is in [whole-domain mailbox connects](/development/whole-domain-connect/).
+
+| Variable | What it does | Default |
+|---|---|---|
+| `GOOGLE_WORKSPACE_DELEGATION_KEY` | The JSON key of a Google Cloud service account with domain-wide delegation. Its `client_id` is what a Workspace super admin authorizes. Unset, Google Workspace grants are off. A value that is not a service account key logs one line at boot and leaves them off | unset |
+| `GOOGLE_WORKSPACE_DELEGATION_KEY_FILE` | A path to the same key as a file, for a mounted secret. Read when `GOOGLE_WORKSPACE_DELEGATION_KEY` is empty | unset |
+
+Google, once per instance:
+
+1. In the [Google Cloud console](https://console.cloud.google.com/), create a project or pick the one you will keep. Its project ID is permanent.
+2. Under **APIs & Services > Library**, enable the **Gmail API** and the **Admin SDK API**.
+3. Under **IAM & Admin > Service accounts**, create a service account (for example `warmbly-workspace`). Grant it no roles on the project.
+4. On its **Keys** tab, choose **Add key > Create new key > JSON**. A new Google Cloud organization blocks this by default with the **Disable service account key creation** policy, which an Organization Policy Administrator can lift for this project.
+5. Put the key's path in `GOOGLE_WORKSPACE_DELEGATION_KEY_FILE` (mounted read only) or its JSON in `GOOGLE_WORKSPACE_DELEGATION_KEY`, and restart the backend.
+
+Each customer's authorization is tied to the service account's Client ID, so create the service account once and rotate its keys, never the account: a recreated one has a new Client ID and every domain would have to authorize it again. The key can mint a token for any address on any domain that has authorized it, so treat it like `CREDENTIALS_ENCRYPTION_KEY`: it is the one credential behind every such mailbox.
+
+A Google grant is recorded only for the workspace that proves it controls the domain, and only when the directory lists the admin address as a super administrator. The proof is one of:
+
+- **The administrator's Google sign-in**, through the dashboard's own sign-in client (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`) and its existing redirect URI (`GOOGLE_REDIRECT_URI`, or `API_PUBLIC_URL` plus `/v1/auth/google/callback`), with the `openid` and `email` scopes only. The callback recognizes the proof and hands it back to the dashboard window rather than signing anyone in, so no new redirect URI needs registering. When that client is not configured, the `BOX_GOOGLE_*` mailbox client is used instead, the same way. Neither depends on `BOX_GOOGLE_OAUTH_CONNECT`.
+- **A `TXT` record** at `_warmbly.<domain>` holding a `warmbly-verify=` value unique to the workspace and domain, always available and the only proof when neither client is set. The value is keyed by `AUTH_SECRET`.
+
+Microsoft 365 organizations reuse the Outlook app, `BOX_OUTLOOK_CLIENT_ID` and `BOX_OUTLOOK_CLIENT_SECRET`, and are on whenever those are set. The app registration needs three additions for them:
+
+- **Supported account types**: accounts in any organizational directory (multitenant), so another organization can consent to it.
+- **Redirect URI**: the existing one, your API base plus `/addresses/outlook/callback`. Admin consent returns there too.
+- **API permissions**: the Microsoft Graph **application** permissions `Mail.ReadWrite`, `Mail.Send` and `User.Read.All`, next to the delegated ones single-mailbox sign-in already uses.
+
+Do not grant admin consent for those in your own tenant unless you are testing with it. Consent is given per customer organization, by that organization's Global Administrator, through the dashboard. The organization a grant names is the one the administrator signed in to, read from the consent sign-in itself, never from the request. Publisher verification is optional.
+
+Application permissions reach every mailbox in a consenting organization. We recommend that each organization scope the app to the mailboxes Warmbly should reach with an Exchange Online `ApplicationAccessPolicy` (or RBAC for Applications); a mailbox outside the policy is refused when it connects. The customer steps are in [connect a whole Microsoft 365 organization](/guides/mailbox-import/#connect-a-whole-microsoft-365-organization).
+
+`GET /emails/grants/config` reports what is still missing, as `google_missing` and `microsoft_missing`: the names of the settings above that are unset, and an empty list once a provider is ready.
 
 ## Integrations
 
@@ -483,6 +519,8 @@ Plain SMTP and IMAP mailboxes need none of this. If a worker is missing these va
 | `AI_BASE_URL` | Required for `custom`. Any OpenAI compatible endpoint | unset |
 | `AI_FREE` | Treats AI usage as uncharged | derived |
 | `SEARCH_PROVIDER`, `SEARCH_API_URL`, `SEARCH_API_KEY` | Web search for the assistant (`serper` or `searxng`) | unset |
+| `MAILHOST_ISPDB` | `true` lets mailbox server detection ask Mozilla's Thunderbird ISPDB (`autoconfig.thunderbird.net`) about a domain whose MX records and own autoconfig file name no known provider. Only the domain name is sent. See [data control](/development/data-control/#outbound-calls) | `false` on a self-host, `true` on Warmbly Cloud |
+| `MAILVENDOR_SANDBOX_URL` | Development only. Points every inbox vendor client at the [sandbox's mock vendor API](/development/sandbox/#mock-inbox-vendors) (`<url>/inboxkit`, `<url>/mailforge`) instead of the real vendors. Ignored unless `APP_ENV` is `dev` | unset |
 | `TYPESAFE_API_KEY` | TypeSafe API key. Turns on the typed judgments: reply classification, the copy judgment in the Advisor and the editor, warmup content lint, bounce classification, import column mapping and per-form triage. Inbox tagging needs the switch below as well. See [data control](/development/data-control/#typesafe-judgments) for what each one sends | unset |
 | `INBOX_TAGGING_ENABLED` | `true` enables automatic inbox tagging when `TYPESAFE_API_KEY` is also set. Message subject, current body, and the previous outbound body are sent to TypeSafe | `false` |
 
