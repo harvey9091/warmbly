@@ -110,7 +110,11 @@ type AdvisorCampaign struct {
 	// what this campaign can send, since the per-mailbox cap always wins.
 	SenderCount    int
 	SenderCapacity int
-	StepCount      int
+	// PickedSenders and SenderTags are how the campaign selects its pool: the
+	// enabled campaign_senders rows and its tags. Both zero means "all".
+	PickedSenders int
+	SenderTags    int
+	StepCount     int
 	// EmailStepCount excludes wait/action nodes.
 	EmailStepCount int
 	VariantCount   int
