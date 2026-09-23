@@ -25236,8 +25236,16 @@
           },
           "suggested_mapping": {
             "type": "array",
+            "description": "A default the client may override. A header naming an existing custom field, ignoring case, spaces, underscores, dashes and dots, is suggested as target custom with the field's stored spelling in custom_key; one column per field, standard fields matched first.",
             "items": {
               "$ref": "#/components/schemas/ContactImportColumnMapping"
+            }
+          },
+          "inferred_columns": {
+            "type": "array",
+            "description": "Indexes whose suggestion came from the TypeSafe judgment of what the header means, rather than the header or the values. Omitted when none did.",
+            "items": {
+              "type": "integer"
             }
           }
         }

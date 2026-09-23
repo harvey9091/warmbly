@@ -10,8 +10,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/app/importmap"
 	"github.com/warmbly/warmbly/internal/app/orgrisk"
 	"github.com/warmbly/warmbly/internal/email"
 	"github.com/warmbly/warmbly/internal/errx"
@@ -35,7 +37,7 @@ const (
 	xlsxUnzipXMLLimitBytes = 64 << 20  // 64 MiB for any single XML part
 )
 
-func (s *contactService) ImportPreview(ctx context.Context, r io.Reader, filename string) (*models.ContactImportPreview, *errx.Error) {
+func (s *contactService) ImportPreview(ctx context.Context, orgID uuid.UUID, r io.Reader, filename string) (*models.ContactImportPreview, *errx.Error) {
 	rows, format, xerr := parseSpreadsheet(r, filename)
 	if xerr != nil {
 		return nil, xerr
@@ -61,6 +63,7 @@ func (s *contactService) ImportPreview(ctx context.Context, r io.Reader, filenam
 	}
 
 	totalRows := len(rows) - dataStart
+	suggested, inferred := s.SuggestImportMapping(ctx, orgID, headers, sample)
 
 	return &models.ContactImportPreview{
 		Filename:         filename,
@@ -69,8 +72,34 @@ func (s *contactService) ImportPreview(ctx context.Context, r io.Reader, filenam
 		Columns:          headers,
 		HasHeader:        hasHeader,
 		SampleRows:       sample,
-		SuggestedMapping: suggestMapping(headers, sample),
+		SuggestedMapping: suggested,
+		InferredColumns:  inferred,
 	}, nil
+}
+
+// SuggestImportMapping is the mapping every importer's preview starts from:
+// the deterministic suggestion, then the TypeSafe judgment for the columns it
+// left unmapped when one is wired. inferred lists the columns the judgment
+// placed, so the mapper can ask for a second look at those.
+func (s *contactService) SuggestImportMapping(ctx context.Context, orgID uuid.UUID, headers []string, sample [][]string) ([]models.ContactImportColumnMapping, []int) {
+	keys := s.existingCustomFieldKeys(ctx, orgID)
+	shapes := importmap.Shapes(len(headers), sample)
+	suggested := suggestMapping(headers, sample, shapes, keys)
+	if s.columnJudge == nil {
+		return suggested, nil
+	}
+	return importmap.Infer(ctx, s.columnJudge, suggested, headers, shapes, keys)
+}
+
+// existingCustomFieldKeys is the workspace's custom-field keys for the
+// suggester. A failed read only costs the suggestion, never the preview.
+func (s *contactService) existingCustomFieldKeys(ctx context.Context, orgID uuid.UUID) []string {
+	keys, err := s.contactRepository.DistinctCustomFieldKeys(ctx, orgID)
+	if err != nil {
+		log.Warn().Str("organization_id", orgID.String()).Msg("could not read custom field keys for the import suggestion")
+		return nil
+	}
+	return keys
 }
 
 // importColumn is one validated mapping entry: exactly one destination
@@ -873,10 +902,16 @@ func padRow(row []string, n int) []string {
 	return out
 }
 
-// suggestMapping uses fuzzy header matches to pick a target for each
-// column. Anything we don't recognise becomes ignore — better than
-// inventing a custom-field key the user didn't ask for.
-func suggestMapping(headers []string, sample [][]string) []models.ContactImportColumnMapping {
+// SuggestMapping picks a target for each column from its header and sample:
+// a standard field, a verification verdict, or a custom field the workspace
+// already has (existingKeys, most used first). Anything else becomes ignore,
+// better than inventing a custom-field key the user didn't ask for. Every
+// importer that shows a column mapper calls this, so they suggest alike.
+func SuggestMapping(headers []string, sample [][]string, existingKeys []string) []models.ContactImportColumnMapping {
+	return suggestMapping(headers, sample, importmap.Shapes(len(headers), sample), existingKeys)
+}
+
+func suggestMapping(headers []string, sample [][]string, shapes []importmap.Shape, existingKeys []string) []models.ContactImportColumnMapping {
 	out := make([]models.ContactImportColumnMapping, len(headers))
 	for i, h := range headers {
 		out[i] = guessTarget(i, h)
@@ -909,7 +944,79 @@ func suggestMapping(headers []string, sample [][]string) []models.ContactImportC
 		}
 		out[i] = models.ContactImportColumnMapping{Index: i, Target: models.ContactImportTargetVerificationStatus, VerificationProvider: provider}
 	}
+	// Email first: a custom field must never take the one column an import
+	// cannot go without.
+	matchEmailByValues(out, shapes)
+	matchExistingCustomFields(out, headers, existingKeys)
 	return out
+}
+
+// matchEmailByValues maps the first column of addresses to Email when no
+// header named it, so a file with "Work contact" or no header row at all
+// still has the one column an import cannot go without.
+func matchEmailByValues(out []models.ContactImportColumnMapping, shapes []importmap.Shape) {
+	for _, m := range out {
+		if m.Target == models.ContactImportTargetEmail {
+			return
+		}
+	}
+	for i := range out {
+		if i < len(shapes) && out[i].Target == models.ContactImportTargetIgnore && shapes[i] == importmap.ShapeEmail {
+			out[i] = models.ContactImportColumnMapping{Index: i, Target: models.ContactImportTargetEmail}
+			return
+		}
+	}
+}
+
+// matchExistingCustomFields maps each still-ignored column whose header names
+// an existing custom field onto that field's stored spelling: the exact name
+// first, then one differing only in case or separators, so "industry" in a
+// file lands on "Industry" instead of starting a second field. Each field is
+// claimed by one column at most. Mirrored by matchExistingKey in the web app.
+func matchExistingCustomFields(out []models.ContactImportColumnMapping, headers, existingKeys []string) {
+	if len(existingKeys) == 0 {
+		return
+	}
+	exact := make(map[string]bool, len(existingKeys))
+	byFold := make(map[string]string, len(existingKeys))
+	for _, k := range existingKeys {
+		exact[k] = true
+		f := FoldCustomFieldKey(k)
+		if _, taken := byFold[f]; f != "" && !taken {
+			byFold[f] = k
+		}
+	}
+	claimed := make(map[string]bool, len(out))
+	for i, h := range headers {
+		if out[i].Target != models.ContactImportTargetIgnore {
+			continue
+		}
+		key := utils.NormalizeJSONKey(h)
+		if !exact[key] {
+			var ok bool
+			if key, ok = byFold[FoldCustomFieldKey(h)]; !ok {
+				continue
+			}
+		}
+		if claimed[key] {
+			continue
+		}
+		claimed[key] = true
+		out[i] = models.ContactImportColumnMapping{Index: i, Target: models.ContactImportTargetCustom, CustomKey: key}
+	}
+}
+
+// FoldCustomFieldKey reduces a header or field name to lowercase letters and
+// digits, the form two spellings of one field ("Company URL", "company_url")
+// share.
+func FoldCustomFieldKey(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // guessTarget runs against ~the set of header aliases we've seen in the

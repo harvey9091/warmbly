@@ -94,6 +94,10 @@ type ContactImportPreview struct {
 	// treat this as a default the user can override, not a binding
 	// decision.
 	SuggestedMapping []ContactImportColumnMapping `json:"suggested_mapping"`
+
+	// InferredColumns are the indexes whose suggestion came from the TypeSafe
+	// judgment rather than the header or the values, worth a second look.
+	InferredColumns []int `json:"inferred_columns,omitempty"`
 }
 
 // ContactImportCommit is the full configuration for committing an

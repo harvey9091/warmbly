@@ -1018,7 +1018,7 @@ Auth: **Scope** `WRITE_CONTACTS` · **Org permission** `manage_contacts`.
 
 `POST /lead-sync/google/preview`
 
-Returns an import-preview-shaped payload (columns, sample rows, total rows, header detection, suggested mapping) so the frontend reuses its contact-import column mapper verbatim.
+Returns an import-preview-shaped payload (columns, sample rows, total rows, header detection, suggested mapping) so the frontend reuses its contact-import column mapper verbatim. The mapping is suggested exactly as the [file import preview](/api/reference/contacts/#preview-an-import) suggests it, including headers matched to the workspace's existing custom fields.
 
 Auth: **Scope** `WRITE_CONTACTS` · **Org permission** `manage_contacts`.
 
