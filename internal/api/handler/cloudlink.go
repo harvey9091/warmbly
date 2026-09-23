@@ -189,7 +189,7 @@ func (h *Handler) CloudLinkOAuthStart(c *gin.Context) {
 		Provider models.InboxProvider `json:"provider"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	res, xerr := h.CloudLinkService.StartOAuth(c.Request.Context(), *orgID, userID, req.Provider)
@@ -214,7 +214,7 @@ func (h *Handler) CloudLinkOAuthFinish(c *gin.Context) {
 		Session string `json:"session"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	acc, xerr := h.CloudLinkService.FinishOAuth(c.Request.Context(), *orgID, userID, req.Session)

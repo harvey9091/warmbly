@@ -29,7 +29,7 @@ func (h *Handler) CLIAuthStart(c *gin.Context) {
 	}
 	var req models.CLIAuthStartRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	res, xerr := h.CLIAuthService.StartCode(c.Request.Context(), req)
@@ -87,7 +87,7 @@ func (h *Handler) CLIAuthApproveCode(c *gin.Context) {
 	}
 	var req models.CLIAuthApproveRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	orgID, perr := uuid.Parse(req.OrganizationID)

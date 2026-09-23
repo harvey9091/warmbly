@@ -41,7 +41,7 @@ func (h *Handler) StartEmailOAuth(c *gin.Context) {
 
 	var req OnboardingOAuthStartRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -59,7 +59,7 @@ func (h *Handler) FinishEmailOAuth(c *gin.Context) {
 
 	var req OnboardingOAuthFinishRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -132,7 +132,7 @@ func (h *Handler) UpdateEmailSMTPIMAP(c *gin.Context) {
 
 	var req OnboardingSMTPIMAPCredentials
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -163,7 +163,7 @@ func (h *Handler) ConnectEmailSMTPIMAP(c *gin.Context) {
 
 	var req OnboardingSMTPIMAPRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -205,7 +205,7 @@ func (h *Handler) ConnectEmailSMTPIMAPBulk(c *gin.Context) {
 
 	var req OnboardingSMTPIMAPBulkRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 	if len(req.Accounts) == 0 {

@@ -54,7 +54,7 @@ func (h *Handler) TwoFARegenerateRecoveryCodes(c *gin.Context) {
 		Code string `json:"code"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	var codes []string
@@ -94,7 +94,7 @@ func (h *Handler) TwoFAEnrollConfirm(c *gin.Context) {
 		Code string `json:"code"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	codes, xerr := h.TwoFAService.EnrollConfirm(c.Request.Context(), uid, body.Code)
@@ -132,7 +132,7 @@ func (h *Handler) TwoFAVerifyLogin(c *gin.Context) {
 		Code         string `json:"code"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	tok, xerr := h.TwoFAService.VerifyLogin(c.Request.Context(), body.PendingToken, body.Code, c.ClientIP(), c.Request.UserAgent())

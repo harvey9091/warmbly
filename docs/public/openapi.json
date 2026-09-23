@@ -6557,7 +6557,7 @@
         ],
         "operationId": "contacts_create",
         "summary": "Create contacts",
-        "description": "Creates one or more contacts. The body is a JSON array, so a single create is an array of length one. Scope `WRITE_CONTACTS`.",
+        "description": "Creates one or more contacts. The body is a JSON array of contacts, or a single contact object, which is read as an array of one. The response is an array either way. Scope `WRITE_CONTACTS`.",
         "security": [
           {
             "bearerAuth": []
@@ -6573,11 +6573,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "array",
-                "minItems": 1,
-                "items": {
-                  "$ref": "#/components/schemas/ContactCreate"
-                }
+                "oneOf": [
+                  {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "$ref": "#/components/schemas/ContactCreate"
+                    }
+                  },
+                  {
+                    "$ref": "#/components/schemas/ContactCreate"
+                  }
+                ]
               }
             }
           }
@@ -6597,7 +6604,7 @@
             }
           },
           "400": {
-            "description": "Empty array or too many contacts.",
+            "description": "Empty array, too many contacts, or a body that is not a contact or an array of contacts.",
             "content": {
               "application/json": {
                 "schema": {

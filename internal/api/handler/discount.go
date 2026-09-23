@@ -49,7 +49,7 @@ func (h *Handler) AdminCreateDiscount(c *gin.Context) {
 
 	var req models.CreateDiscountCodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -95,7 +95,7 @@ func (h *Handler) AdminUpdateDiscount(c *gin.Context) {
 
 	var req models.UpdateDiscountCodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -168,7 +168,7 @@ func (h *Handler) ValidateDiscountCode(c *gin.Context) {
 
 	var req models.ValidateDiscountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 

@@ -39,7 +39,7 @@ func (h *Handler) CreateOrganizationRole(c *gin.Context) {
 
 	var req models.CreateOrganizationRoleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -74,7 +74,7 @@ func (h *Handler) UpdateOrganizationRole(c *gin.Context) {
 
 	var req models.UpdateOrganizationRoleRequest
 	if berr := c.ShouldBindJSON(&req); berr != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(berr))
 		return
 	}
 

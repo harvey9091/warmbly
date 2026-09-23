@@ -81,7 +81,7 @@ func (h *Handler) CreateCheckoutSession(c *gin.Context) {
 		DiscountCode string `json:"discount_code"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -119,7 +119,7 @@ func (h *Handler) CreateBillingPortalSession(c *gin.Context) {
 		ReturnURL string `json:"return_url" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -151,7 +151,7 @@ func (h *Handler) CancelSubscription(c *gin.Context) {
 		CancelAtPeriodEnd bool `json:"cancel_at_period_end"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -287,7 +287,7 @@ func (h *Handler) ChangePlan(c *gin.Context) {
 		Interval          string    `json:"interval"` // "month" or "year"; defaults to monthly
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -354,7 +354,7 @@ const enterpriseNotesMaxLength = 2000
 func (h *Handler) SubmitEnterpriseInquiry(c *gin.Context) {
 	var req EnterpriseInquiryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 

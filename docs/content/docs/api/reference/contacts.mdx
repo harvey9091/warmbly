@@ -136,13 +136,13 @@ On the first page (no `cursor`), the response includes a `counts` object with or
 
 `POST /contacts`
 
-Creates one or more contacts. The body is a JSON array, so a single create is an array of length one.
+Creates one or more contacts. The body is a JSON array of contacts, or a single contact object, which is read as an array of one.
 
 Auth: **Scope** `WRITE_CONTACTS` · **Org permission** `manage_contacts`
 
 ### Request body
 
-A JSON array of contact objects (at least one, up to the per-request maximum; an empty array is a `400`).
+A JSON array of contact objects (at least one, up to the per-request maximum; an empty array is a `400`), or one contact object on its own. The response is an array either way.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |

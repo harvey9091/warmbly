@@ -33,7 +33,7 @@ func (h *Handler) SendEmailFromAccount(c *gin.Context) {
 
 	var req emailsend.SendEmailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 

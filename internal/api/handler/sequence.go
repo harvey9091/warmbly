@@ -61,7 +61,7 @@ func (h *Handler) UpdateSequence(c *gin.Context) {
 	var data models.UpdateSequence
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, err)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -93,7 +93,7 @@ func (h *Handler) PatchSequenceLayout(c *gin.Context) {
 
 	var data models.SequenceLayout
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, err)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 	if len(data.Positions) > 1000 {

@@ -115,7 +115,7 @@ func (h *Handler) BatchResearch(c *gin.Context) {
 		Objective  string      `json:"objective"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	sel := req.ContactSelection

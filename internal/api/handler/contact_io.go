@@ -36,7 +36,7 @@ func (h *Handler) ExportContacts(c *gin.Context) {
 
 	var req models.ContactExportRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 

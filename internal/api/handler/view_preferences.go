@@ -59,7 +59,7 @@ func (h *Handler) UpdateViewPreferences(c *gin.Context) {
 	}
 	var req updateViewPreferencesRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 	upd := models.ViewPreferencesUpdate{Columns: req.Columns, Sort: req.Sort}

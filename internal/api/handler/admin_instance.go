@@ -89,7 +89,7 @@ func (h *Handler) AdminPutInstanceSettings(c *gin.Context) {
 
 	var patch instancesettings.Patch
 	if err := c.ShouldBindJSON(&patch); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 

@@ -37,7 +37,7 @@ func (h *Handler) CreateContactNote(c *gin.Context) {
 
 	var data models.CreateContactNote
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -102,7 +102,7 @@ func (h *Handler) UpdateContactNote(c *gin.Context) {
 
 	var data models.UpdateContactNote
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -193,7 +193,7 @@ func (h *Handler) CreatePipeline(c *gin.Context) {
 
 	var data models.CreatePipeline
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -259,7 +259,7 @@ func (h *Handler) UpdatePipeline(c *gin.Context) {
 
 	var data models.UpdatePipeline
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -315,7 +315,7 @@ func (h *Handler) CreateStage(c *gin.Context) {
 
 	var data models.CreatePipelineStage
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -344,7 +344,7 @@ func (h *Handler) UpdateStage(c *gin.Context) {
 
 	var data models.UpdatePipelineStage
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -395,7 +395,7 @@ func (h *Handler) CreateDeal(c *gin.Context) {
 
 	var data models.CreateDeal
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -469,7 +469,7 @@ func (h *Handler) SearchDeals(c *gin.Context) {
 
 	var filters models.SearchDeals
 	if err := c.ShouldBindJSON(&filters); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -508,7 +508,7 @@ func (h *Handler) DealsSummary(c *gin.Context) {
 
 	var filters models.SearchDeals
 	if err := c.ShouldBindJSON(&filters); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -556,7 +556,7 @@ func (h *Handler) UpdateDeal(c *gin.Context) {
 
 	var data models.UpdateDeal
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -647,7 +647,7 @@ func (h *Handler) CreateTaskType(c *gin.Context) {
 	}
 	var data models.CreateCRMTaskType
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 	t, xerr := h.CRMService.CreateTaskType(c.Request.Context(), *orgID, &data)
@@ -671,7 +671,7 @@ func (h *Handler) UpdateTaskType(c *gin.Context) {
 	}
 	var data models.UpdateCRMTaskType
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 	t, xerr := h.CRMService.UpdateTaskType(c.Request.Context(), *orgID, typeID, &data)
@@ -718,7 +718,7 @@ func (h *Handler) CreateCRMTask(c *gin.Context) {
 
 	var data models.CreateCRMTask
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -797,7 +797,7 @@ func (h *Handler) SearchCRMTasks(c *gin.Context) {
 
 	var filters models.SearchTasks
 	if err := c.ShouldBindJSON(&filters); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -836,7 +836,7 @@ func (h *Handler) TasksSummary(c *gin.Context) {
 
 	var filters models.SearchTasks
 	if err := c.ShouldBindJSON(&filters); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -884,7 +884,7 @@ func (h *Handler) UpdateCRMTask(c *gin.Context) {
 
 	var data models.UpdateCRMTask
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -917,7 +917,7 @@ func (h *Handler) BulkUpdateCRMTasks(c *gin.Context) {
 
 	var data models.BulkUpdateTasks
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -955,13 +955,13 @@ func (h *Handler) BulkDeleteCRMTasks(c *gin.Context) {
 
 	var raw json.RawMessage
 	if err := c.ShouldBindJSON(&raw); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 	var sel models.TaskSelection
 	if err := json.Unmarshal(raw, &sel.Tasks); err != nil {
 		if err := json.Unmarshal(raw, &sel); err != nil {
-			errx.Handle(c, errx.ErrInvalid)
+			errx.Handle(c, errx.InvalidBody(err))
 			return
 		}
 	}

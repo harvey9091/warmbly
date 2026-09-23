@@ -81,7 +81,7 @@ func (h *Handler) PreviewCampaignTemplate(c *gin.Context) {
 	}
 	var req templatePreviewRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -165,7 +165,7 @@ func (h *Handler) CreateCampaign(c *gin.Context) {
 	var data models.CreateCampaign
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -235,7 +235,7 @@ func (h *Handler) EstimateCampaign(c *gin.Context) {
 
 	var data models.CampaignEstimate
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -278,7 +278,7 @@ func (h *Handler) UpdateCampaign(c *gin.Context) {
 	var data models.UpdateCampaign
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -351,7 +351,7 @@ func (h *Handler) DuplicateCampaign(c *gin.Context) {
 	// The body is optional; an empty one reads as io.EOF.
 	var req duplicateCampaignRequest
 	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -511,7 +511,7 @@ func (h *Handler) ReplaceCampaignSenders(c *gin.Context) {
 		Senders []models.CampaignSenderInput `json:"senders"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 

@@ -26,7 +26,7 @@ func (h *Handler) SubmitLimitIncreaseRequest(c *gin.Context) {
 	}
 	var req models.CreateLimitIncreaseRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	lr, xerr := h.OrganizationService.SubmitLimitIncreaseRequest(c.Request.Context(), orgID, session.UserID, &req)

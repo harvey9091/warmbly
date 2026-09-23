@@ -135,7 +135,7 @@ type ssoExchangeRequest struct {
 func (h *Handler) SSOExchange(c *gin.Context) {
 	var req ssoExchangeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -154,7 +154,7 @@ func (h *Handler) SSOExchange(c *gin.Context) {
 func (h *Handler) SSOLink(c *gin.Context) {
 	var data auth.SSOLinkData
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
