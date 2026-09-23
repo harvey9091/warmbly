@@ -1504,6 +1504,16 @@ func (r *emailRepository) deleteOnce(ctx context.Context, orgID, emailAccountID 
 		return errx.InternalError(), isDeadlock(err)
 	}
 
+	if accountID, err := uuid.Parse(emailAccountID); err == nil {
+		if err := ResolveAdvisorFindingsFor(ctx, tx, orgID, []uuid.UUID{accountID}); err != nil {
+			if isDeadlock(err) {
+				return errx.InternalError(), true
+			}
+			db.CaptureError(err, "", nil, "exec")
+			return errx.InternalError(), false
+		}
+	}
+
 	if workerID != nil {
 		refund := `
 			UPDATE workers

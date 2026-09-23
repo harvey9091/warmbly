@@ -11,6 +11,7 @@ import useAccountStatuses from "@/lib/api/hooks/app/analytics/useAccountStatuses
 import useFeatureStatus from "@/lib/api/hooks/app/subscription/useFeatureStatus";
 import warmupLifecycle from "@/lib/api/client/app/emails/warmupLifecycle";
 import removeEmail from "@/lib/api/client/app/emails/removeEmail";
+import invalidateAfterMailboxRemoval from "@/lib/api/hooks/app/emails/invalidateAfterMailboxRemoval";
 import useRemoveEmail from "@/lib/api/hooks/app/emails/useRemoveEmail";
 import { useUserProfile } from "@/hooks/context/user";
 import { useConfirm } from "@/hooks/context/confirm";
@@ -174,10 +175,7 @@ export default function AddressesPage() {
                 setRemoving(true);
                 const results = await Promise.allSettled(selected.map((id) => removeEmail(id)));
                 const failed = results.filter((r) => r.status === "rejected");
-                // The ["emails"] prefix covers the lists and the allowance
-                // counter, which a disconnect gives slots back to.
-                await queryClient.invalidateQueries({ queryKey: ["emails"] });
-                await queryClient.invalidateQueries({ queryKey: ["analytics", "accounts"] });
+                await invalidateAfterMailboxRemoval(queryClient);
                 setSelected([]);
                 setRemoving(false);
                 if (failed.length > 0) {

@@ -407,7 +407,14 @@ func (r *sequenceRepository) Delete(ctx context.Context, orgID, campaignID, sequ
 		sequenceID,
 	}
 
-	cmd, err := r.DB.Exec(
+	tx, err := r.DB.Begin(ctx)
+	if err != nil {
+		db.CaptureError(err, "", nil, "begin")
+		return errx.InternalError()
+	}
+	defer tx.Rollback(ctx)
+
+	cmd, err := tx.Exec(
 		ctx,
 		query,
 		params...,
@@ -418,6 +425,18 @@ func (r *sequenceRepository) Delete(ctx context.Context, orgID, campaignID, sequ
 	}
 	if cmd.RowsAffected() == 0 {
 		return errx.ErrNotFound
+	}
+
+	if stepID, err := uuid.Parse(sequenceID); err == nil {
+		if err := ResolveAdvisorFindingsFor(ctx, tx, orgID, []uuid.UUID{stepID}); err != nil {
+			db.CaptureError(err, "", nil, "exec")
+			return errx.InternalError()
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		db.CaptureError(err, "", nil, "commit")
+		return errx.InternalError()
 	}
 	return nil
 }
