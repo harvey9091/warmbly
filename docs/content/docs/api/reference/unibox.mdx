@@ -65,7 +65,7 @@ The response is a `data` plus `pagination` envelope. Each row summarises the who
 
 `GET /unibox/count`
 
-Returns the org-wide unread message count, optionally scoped to one mailbox. Backs the inbox badge. Auth: **Scope** `READ_UNIBOX` · **Org permission** `access_unibox`.
+Returns the number of unread conversations in the Inbox folder, optionally scoped to one mailbox. Snoozed conversations and mail in other folders (sent, drafts, archive, spam, trash) are not counted, so the number matches what the Inbox view lists as unread. Backs the inbox badge. Auth: **Scope** `READ_UNIBOX` · **Org permission** `access_unibox`.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |

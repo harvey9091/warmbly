@@ -8542,7 +8542,7 @@
       "get": {
         "operationId": "unibox_count",
         "summary": "Get unread count",
-        "description": "Org-wide unread message count, optionally scoped to one mailbox.",
+        "description": "Unread conversations in the Inbox folder, optionally scoped to one mailbox. Snoozed conversations and other folders are not counted.",
         "tags": [
           "unibox"
         ],

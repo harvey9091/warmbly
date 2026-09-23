@@ -85,7 +85,9 @@ export default function useMarkSeen() {
         onError: () => {
             queryClient.invalidateQueries({ queryKey: ["unibox"] });
         },
-        onSuccess: (_data, { folder }) => {
+        onSuccess: (_data, { folder, seen = true }) => {
+            // Reading a message reads its reply notification server side.
+            if (seen) queryClient.invalidateQueries({ queryKey: ["notifications", "feed"] });
             // A folder sweep touches rows we have no ids for, so that one still
             // has to re-read the list.
             if (folder) queryClient.invalidateQueries({ queryKey: ["unibox"] });

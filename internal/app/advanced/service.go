@@ -1546,7 +1546,11 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 				body = "Held until " + held.Format("2 Jan") + " · " + msg.Subject
 			}
 		}
-		s.notify(uid, account.OrganizationID, cat, title, body, "/app/unibox", map[string]any{"intent": string(intent)})
+		s.notifyAboutMessage(uid, account.OrganizationID, msg.ID, cat, title, body, uniboxThreadLink(msg.ThreadID), map[string]any{
+			"intent":           string(intent),
+			"email_account_id": emailAccountID.String(),
+			"thread_id":        msg.ThreadID,
+		})
 	}
 
 	return nil
