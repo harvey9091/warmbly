@@ -1228,8 +1228,11 @@ function detailsFor(e: ContactTimelineEvent): [string, React.ReactNode][] {
         if (kind === "open") add("Read in", readerLabel(o, "open"));
         add("Device", o.device_hidden ? hiddenReason(o) : deviceLabel(o));
         add("Operating system", o.os);
-        if (kind === "click" || o.client_type !== "app") {
-            add(kind === "click" ? "Opened in" : "Browser", [o.browser, o.browser_version].filter(Boolean).join(" "));
+        if (kind === "click") {
+            // A mail app that made the request itself names no browser.
+            add("Opened in", o.client || [o.browser, o.browser_version].filter(Boolean).join(" "));
+        } else if (o.client_type !== "app") {
+            add("Browser", [o.browser, o.browser_version].filter(Boolean).join(" "));
         }
         add("Location", [o.city, o.region, o.country_code].filter(Boolean).join(", "));
     }

@@ -6,13 +6,13 @@ import (
 	"strings"
 
 	"github.com/mileusna/useragent"
+	"github.com/warmbly/warmbly/internal/models"
 )
 
-// ClientType values, matching models.EngagementClientApp and
-// models.EngagementClientWebmail.
+// ClientType values, as the open and click logs store them.
 const (
-	App     = "app"
-	Webmail = "webmail"
+	App     = models.EngagementClientApp
+	Webmail = models.EngagementClientWebmail
 )
 
 // Locate is how far the request's network places the reader.
@@ -46,16 +46,20 @@ func Detect(userAgent string, click bool) Reading {
 	}
 	ua := strings.ToLower(raw)
 
-	// Proxies first: their user agents carry a fixed, fake browser.
+	// Proxies first: their user agents carry a fixed, fake browser. A proxy
+	// only loads images, so on a link the same string claims nothing.
 	for _, p := range proxies {
 		if p.match(ua) {
+			if click {
+				return Reading{}
+			}
 			return Reading{Client: p.client, DeviceHidden: true, Locate: p.locate}
 		}
 	}
 
 	parsed := useragent.Parse(raw)
 	r := Reading{
-		OS:             osName(parsed),
+		OS:             parsed.OS,
 		Browser:        parsed.Name,
 		BrowserVersion: parsed.Version,
 		DeviceType:     deviceType(parsed),
@@ -164,12 +168,16 @@ var apps = []app{
 	{client: "Outlook", tokens: []string{"outlook-ios"}, os: "iOS", device: "mobile"},
 	{client: "Outlook", tokens: []string{"macoutlook"}, os: "macOS", device: "desktop"},
 	{client: "Outlook", tokens: []string{"microsoft outlook", "ms-office", "msoffice"}, os: "Windows", device: "desktop"},
+	{client: "Outlook", tokens: []string{"outlook"}},
 	{client: "Thunderbird", tokens: []string{"thunderbird/"}, device: "desktop"},
 	{client: "eM Client", tokens: []string{"em client"}, device: "desktop"},
 	{client: "Mailbird", tokens: []string{"mailbird/"}, os: "Windows", device: "desktop"},
 	{client: "Mailspring", tokens: []string{"mailspring/"}, device: "desktop"},
 	{client: "BlueMail", tokens: []string{"bluemail/"}},
 	{client: "Superhuman", tokens: []string{"superhuman"}},
+	{client: "Proton Mail", tokens: []string{"protonmail", "proton mail"}},
+	{client: "Yahoo Mail", tokens: []string{"yahoo mail"}},
+	{client: "HEY", tokens: []string{"hey.com"}},
 }
 
 func namedApp(ua string) (app, bool) {
@@ -219,17 +227,6 @@ func isBrowser(ua string, parsed useragent.UserAgent) bool {
 		return strings.Contains(ua, "mozilla/5.0")
 	}
 	return false
-}
-
-// osName is the operating system as the dashboard names it.
-func osName(ua useragent.UserAgent) string {
-	switch ua.OS {
-	case useragent.CrOS:
-		return useragent.ChromeOS
-	case useragent.WindowsNT, useragent.WindowsPhoneOS:
-		return useragent.Windows
-	}
-	return ua.OS
 }
 
 // deviceType folds the parser's flags into desktop, mobile or tablet.

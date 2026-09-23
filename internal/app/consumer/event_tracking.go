@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"net/netip"
 	"strings"
 	"time"
@@ -156,6 +157,9 @@ func (tc *TrackingConsumer) Start(ctx context.Context) error {
 	}
 	if tc.linkClicks != nil {
 		go tc.sweepPendingClicks(ctx)
+	}
+	if tc.opens != nil {
+		go tc.backfillOrigins(ctx)
 	}
 	return tc.bus.Subscribe(ctx, []string{tc.topic}, tc.group, tc.receive)
 }
@@ -650,44 +654,79 @@ func (tc *TrackingConsumer) logOpen(ctx context.Context, task *repository.Campai
 // network, as far as a proxy in between leaves it meaningful. The network is
 // used here and dropped.
 func (tc *TrackingConsumer) originOf(event *events.TrackingEvent) models.EngagementOrigin {
-	var o models.EngagementOrigin
-	locate := mailclient.LocateFull
-	if event.UserAgent != nil {
-		r := mailclient.Detect(*event.UserAgent, event.EventType == events.EventTypeEmailClicked)
-		o.Client, o.ClientType, o.DeviceHidden = r.Client, r.ClientType, r.DeviceHidden
-		o.DeviceType, o.OS, o.Browser, o.BrowserVersion = r.DeviceType, r.OS, r.Browser, r.BrowserVersion
-		locate = r.Locate
-	}
-	if locate == mailclient.LocateNone || event.ClientIP == nil || tc.geo == nil {
-		return o
-	}
-	if addr, err := netip.ParseAddr(strings.TrimSpace(*event.ClientIP)); err == nil && !addr.IsPrivate() && !addr.IsLoopback() {
-		if info, err := tc.geo.Lookup(addr); err == nil && info != nil {
-			o.CountryCode = info.CountryCode
-			o.Region = info.Region
-			if info.City != "Unknown" && locate == mailclient.LocateFull {
-				o.City = info.City
+	var place models.EngagementOrigin
+	if event.ClientIP != nil && tc.geo != nil {
+		if addr, err := netip.ParseAddr(strings.TrimSpace(*event.ClientIP)); err == nil && !addr.IsPrivate() && !addr.IsLoopback() {
+			if info, err := tc.geo.Lookup(addr); err == nil && info != nil {
+				place.CountryCode, place.Region = info.CountryCode, info.Region
+				if info.City != "Unknown" {
+					place.City = info.City
+				}
 			}
 		}
+	}
+	ua := ""
+	if event.UserAgent != nil {
+		ua = *event.UserAgent
+	}
+	return deriveOrigin(ua, event.EventType == events.EventTypeEmailClicked, place)
+}
+
+// deriveOrigin is one open or click's origin from its user agent and the
+// place its network resolved to, keeping only as much of the place as a
+// proxy in between leaves meaningful. The backfill re-reads stored rows with it.
+func deriveOrigin(userAgent string, click bool, place models.EngagementOrigin) models.EngagementOrigin {
+	r := mailclient.Detect(userAgent, click)
+	o := models.EngagementOrigin{
+		Client: r.Client, ClientType: r.ClientType, DeviceHidden: r.DeviceHidden,
+		DeviceType: r.DeviceType, OS: r.OS, Browser: r.Browser, BrowserVersion: r.BrowserVersion,
+	}
+	switch r.Locate {
+	case mailclient.LocateFull:
+		o.CountryCode, o.Region, o.City = place.CountryCode, place.Region, place.City
+	case mailclient.LocateRegion:
+		o.CountryCode, o.Region = place.CountryCode, place.Region
 	}
 	return o
 }
 
-// originData is the origin as a plain map, the shape integration templates
-// and automations walk, with unknown fields left out as on the API.
-func originData(o models.EngagementOrigin) map[string]any {
-	out := map[string]any{}
-	for k, v := range map[string]string{
-		"client": o.Client, "client_type": o.ClientType, "device_type": o.DeviceType,
-		"os": o.OS, "browser": o.Browser, "browser_version": o.BrowserVersion,
-		"country_code": o.CountryCode, "region": o.Region, "city": o.City,
-	} {
-		if v != "" {
-			out[k] = v
+// backfillOrigins re-reads the opens and clicks logged before the current
+// origin rules, a batch at a time so it never holds the logs for long, and
+// stops for good once both are walked. Any consumer may run it; a batch
+// another holds is waited out.
+func (tc *TrackingConsumer) backfillOrigins(ctx context.Context) {
+	derive := func(ua string, click bool, stored models.EngagementOrigin) models.EngagementOrigin {
+		return deriveOrigin(ua, click, stored)
+	}
+	pause := 200 * time.Millisecond
+	for {
+		done, busy, err := tc.opens.BackfillOriginBatch(ctx, 500, derive)
+		switch {
+		case done:
+			log.Info().Msg("engagement origin backfill complete")
+			return
+		case err != nil:
+			log.Warn().Err(err).Msg("engagement origin backfill batch failed; retrying")
+			pause = time.Minute
+		case busy:
+			pause = 30 * time.Second
+		default:
+			pause = 200 * time.Millisecond
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(pause):
 		}
 	}
-	if o.DeviceHidden {
-		out["device_hidden"] = true
+}
+
+// originData is the origin as a plain map, the shape integration templates
+// and automations walk, with the same fields and omissions as the API.
+func originData(o models.EngagementOrigin) map[string]any {
+	out := map[string]any{}
+	if raw, err := json.Marshal(o); err == nil {
+		_ = json.Unmarshal(raw, &out)
 	}
 	return out
 }

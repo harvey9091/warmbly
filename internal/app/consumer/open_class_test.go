@@ -364,3 +364,22 @@ func TestAProbableLabelNeverTurnsAnAutomatedEventHuman(t *testing.T) {
 		}
 	}
 }
+
+// A proxy's network is the provider's, so its place is dropped; Apple's relay
+// keeps the region; a direct fetch keeps everything.
+func TestDeriveOriginKeepsOnlyTheMeaningfulPlace(t *testing.T) {
+	place := models.EngagementOrigin{CountryCode: "US", Region: "California", City: "Mountain View"}
+
+	if o := deriveOrigin("Mozilla/5.0 (Windows NT 5.1; rv:11.0) Gecko Firefox/11.0 (via ggpht.com GoogleImageProxy)", false, place); o.CountryCode != "" || o.City != "" || !o.DeviceHidden {
+		t.Fatalf("gmail proxy kept a place: %+v", o)
+	}
+	if o := deriveOrigin("Mozilla/5.0", false, place); o.CountryCode != "US" || o.Region != "California" || o.City != "" {
+		t.Fatalf("apple relay should keep the region only: %+v", o)
+	}
+	if o := deriveOrigin(chromeUA, false, place); o.City != "Mountain View" || o.ClientType != models.EngagementClientWebmail {
+		t.Fatalf("a direct fetch keeps its place: %+v", o)
+	}
+	if o := deriveOrigin("Mozilla/5.0", true, place); o.Client != "" || o.DeviceHidden || o.City != "Mountain View" {
+		t.Fatalf("a click is never read as a proxy: %+v", o)
+	}
+}

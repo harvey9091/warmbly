@@ -91,6 +91,11 @@ func TestDetectOpens(t *testing.T) {
 			want: Reading{ClientType: Webmail, DeviceType: "desktop", OS: "macOS", Browser: "Safari", BrowserVersion: "17.5"},
 		},
 		{
+			name: "any other outlook build still names outlook",
+			ua:   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) OutlookDesktop/1.2024",
+			want: Reading{Client: "Outlook", ClientType: App, DeviceType: "desktop", OS: "Windows"},
+		},
+		{
 			name: "empty says nothing",
 			ua:   "  ",
 			want: Reading{},
@@ -126,6 +131,14 @@ func TestDetectClicks(t *testing.T) {
 	chrome := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 	if got := Detect(chrome, true); got.Client != "" || got.ClientType != "" || got.Browser != "Chrome" {
 		t.Fatalf("browser click = %+v", got)
+	}
+
+	// A proxy only loads images: its string on a link, including Apple's bare
+	// product token from any HTTP library, claims nothing.
+	for _, ua := range []string{"Mozilla/5.0", "Mozilla/5.0 (Windows NT 5.1; rv:11.0) Gecko Firefox/11.0 (via ggpht.com GoogleImageProxy)"} {
+		if got := Detect(ua, true); got != (Reading{}) {
+			t.Fatalf("proxy string on a click %q = %+v", ua, got)
+		}
 	}
 
 	// The stripped signature on a link names no browser the parser could

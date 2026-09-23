@@ -89,13 +89,13 @@ What the request can tell depends on the mail client:
 | Gmail, on the web or in the Gmail apps | **Gmail · device hidden**, no location | Gmail loads every image through Google's servers, so the device and network belong to Google |
 | Yahoo Mail, HEY, Fastmail's web app, Seznam | The provider, device hidden, no location | The same: the provider fetches the image |
 | Apple Mail with Mail Privacy Protection | **Apple Mail · device hidden**, region only | Apple's relay hides the device and keeps only the rough region |
-| Apple Mail on an iPhone or iPad without it | **iPhone · Apple Mail app** | The request comes from the device |
+| Apple Mail on an iPhone or iPad without it | **iPhone · Apple Mail app** | The request comes from the device. Another iOS mail app that renders mail the same way and names nothing is counted here too; Spark, Edison and Canary block tracking images by default |
 | Classic Outlook for Windows, Outlook for Mac and mobile, Thunderbird, eM Client and other desktop apps | The device and **app** | The client names itself |
 | Mail on a Mac, or the new Outlook for Windows | **Apple Mail or Outlook app**, no device | Both send the same stripped header, which names neither the client nor the device |
 | An Android mail app | **Android phone · Mail app** | Android apps render mail in a web view that does not name the app |
 | Webmail in a browser that loads images directly | **Webmail in** the browser, with the device | A full browser loaded the image |
 
-A click names the browser the link opened in and the device it opened on, because the link leaves the mail client. Nothing is guessed: when the request cannot say something, the field is left empty rather than filled with the proxy's own details. Opens recorded before this was added were read again by the same rules when the instance upgraded, so older history reads the same way.
+A click names the browser the link opened in and the device it opened on, because the link leaves the mail client. Nothing is guessed: when the request cannot say something, the field is left empty rather than filled with the proxy's own details. Opens and clicks recorded before this was added are read again by the same rules in the background after the instance upgrades, a small batch at a time, so older history reads the same way once it finishes.
 
 These records back the engagement rows on a contact's [activity timeline](/guides/contacts-crm/#activity-timeline) and the per-campaign breakdown above.
 
