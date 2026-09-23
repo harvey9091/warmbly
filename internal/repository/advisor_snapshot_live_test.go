@@ -139,6 +139,9 @@ func TestLiveAdvisorSnapshotCountsTheAllMailboxesFallback(t *testing.T) {
 			t.Errorf("campaign %s (%s): senders=%d capacity=%d, want %d and %d",
 				c.ID, c.SenderStrategy, c.SenderCount, c.SenderCapacity, w[0], w[1])
 		}
+		if picked := map[bool]int{true: 1}[c.ID == picked]; c.PickedSenders != picked || c.SenderTags != 0 {
+			t.Errorf("campaign %s: picked=%d tags=%d, want %d and 0", c.ID, c.PickedSenders, c.SenderTags, picked)
+		}
 		delete(want, c.ID)
 	}
 	if len(want) > 0 {

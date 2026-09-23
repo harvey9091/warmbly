@@ -971,3 +971,41 @@ func TestJudgeCopyCapsFreshJudgmentsAndSurvivesErrors(t *testing.T) {
 		}
 	}
 }
+
+// The no-senders finding names the way the campaign actually picks mailboxes,
+// so a campaign on "every active mailbox" is never sent to check its tags (#661).
+func TestNoSendersNamesHowTheCampaignPicksMailboxes(t *testing.T) {
+	cases := []struct {
+		name       string
+		camp       repository.AdvisorCampaign
+		selection  string
+		mentionTag bool
+	}{
+		{"all", repository.AdvisorCampaign{SenderStrategy: "tags"}, "every active mailbox", false},
+		{"explicit empty", repository.AdvisorCampaign{SenderStrategy: "explicit"}, "picked by hand", false},
+		{"picked", repository.AdvisorCampaign{SenderStrategy: "tags", PickedSenders: 3}, "picked by hand", false},
+		{"tags", repository.AdvisorCampaign{SenderStrategy: "tags", SenderTags: 1}, "by tag", true},
+		{"both", repository.AdvisorCampaign{SenderStrategy: "tags", PickedSenders: 2, SenderTags: 1}, "picked by hand and by tag", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			camp := tc.camp
+			camp.ID, camp.Name, camp.Status, camp.LeadsRemaining = uuid.New(), "Q4", "active", 274
+			found := detectNoSenders(&repository.AdvisorSnapshot{Campaigns: []repository.AdvisorCampaign{camp}})
+			if len(found) != 1 {
+				t.Fatalf("got %d findings, want 1", len(found))
+			}
+			f := found[0]
+			if got := f.Evidence["sender_selection"]; got != tc.selection {
+				t.Fatalf("sender_selection = %v, want %q", got, tc.selection)
+			}
+			if _, ok := f.Evidence["sender_strategy"]; ok {
+				t.Fatal("evidence still carries sender_strategy, which reads 'tags' for a campaign that picks nothing")
+			}
+			copy := strings.ToLower(f.Detail + " " + f.Remedy + " " + strings.Join(f.Steps, " "))
+			if got := strings.Contains(copy, "tag"); got != tc.mentionTag {
+				t.Fatalf("copy mentions tags = %v, want %v: %s", got, tc.mentionTag, copy)
+			}
+		})
+	}
+}
