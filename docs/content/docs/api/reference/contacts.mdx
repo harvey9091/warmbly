@@ -92,7 +92,7 @@ Returns a `data` array of contacts plus a `pagination` envelope. Paginate by pas
 }
 ```
 
-Every contact carries its address verification: `verification_status` (`valid`, `risky`, `invalid`, or `unknown`), `verification_sub_status` (`catch_all`, `disposable`, `role`, `spamtrap`, `mailbox_full`, `no_mx`, `syntax`, `undisclosed`, or empty), `verification_source` (`probe` for the built-in check, `provider` for a connected verification service, `imported` for a verdict that came with the contact, `manual` for one a member set, empty when never checked), `verification_provider` (who produced it), `verification_reason`, `verification_checked_at`, and `verification_confidence` (0 to 100, scored from the check plus what real mail to the address showed; see [what real mail teaches the check](/guides/deliverability/#what-real-mail-teaches-the-check)). Campaigns never send to `invalid`, and send to `risky` only when their `risky_emails` setting is on.
+Every contact carries its address verification: `verification_status` (`valid`, `risky`, `invalid`, or `unknown`), `verification_sub_status` (`catch_all`, `disposable`, `role`, `spamtrap`, `mailbox_full`, `no_mx`, `syntax`, `undisclosed`, or empty), `verification_source` (`probe` for the built-in check, `provider` for a connected verification service, `imported` for a verdict that came with the contact, `manual` for one a member set, empty when never checked), `verification_provider` (who produced it), `verification_reason`, `verification_checked_at`, `verification_requested_at` (set while a re-check a member asked for is waiting to run; the verdict stands until it lands), and `verification_confidence` (0 to 100, scored from the check plus what real mail to the address showed; see [what real mail teaches the check](/guides/deliverability/#what-real-mail-teaches-the-check)). Campaigns never send to `invalid`, and send to `risky` only when their `risky_emails` setting is on.
 
 When the search filters by exactly one campaign, each contact additionally carries a `campaign_lead` object with its processing state inside that campaign (`status`, `sent`, `opened`, `machine_opened`, `clicked`, `replied`, `bounced`, `current_step`, `sender`, `last_activity_at`, `hold` when held, and `failure_reason` when failed). `sender` is the mailbox address the lead's whole sequence sends from, fixed when its first email went out and absent until then. `opened` counts steps opened by a person; steps fetched automatically by a mail client (Apple Mail Privacy Protection and similar) are in `machine_opened` instead, matching the machine opens the analytics summary reports. The `status` derivation, highest priority first, is `unsubscribed` (not subscribed), then `bounced`, `replied`, `failed` (a step could not be sent after every retry; `failure_reason` carries the sending worker's reason), `completed` (every email step sent, no reply), `paused` (the lead's flow is held, by an out-of-office auto-reply or by hand; the `hold` object carries `since`, `until`, `reason` and `source`), `active` (some steps sent, more to send), `undeliverable` (pre-send verification refused the address, so the campaign skips the lead and never sends to it), and `pending` (queued, nothing sent). A step counts as sent only once the sending worker has delivered it to the mailbox provider; a send the worker could not complete is retried on the campaign's next pass and never shows as sent. The `lead_status` filter narrows to one of these buckets.
 
@@ -469,7 +469,7 @@ Reports which verifier checks this workspace's addresses and the contacts by ver
 }
 ```
 
-`provider` is `builtin`, `millionverifier`, or `cleanmylist`. `credits` is the connected service's remaining balance when available (omitted for CleanMyList); `provider_error` is set instead when the service is connected but unusable (a rejected key, no credits), in which case the built-in check is in use. `builtin_ready` says whether the built-in mailbox probe can run on this instance. `pending` is the share of `unknown` nobody has checked yet.
+`provider` is `builtin`, `millionverifier`, or `cleanmylist`. `credits` is the connected service's remaining balance when available (omitted for CleanMyList); `provider_error` is set instead when the service is connected but unusable (a rejected key, no credits), in which case the built-in check is in use. `builtin_ready` says whether the built-in mailbox probe can run on this instance. `pending` counts contacts nobody has checked yet plus those with a re-check queued.
 
 ## Verify or override contacts
 
@@ -481,7 +481,7 @@ Queues a fresh check of the listed contacts, or records a manual verdict on them
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `action` | string | Yes | `verify` queues a re-check (each contact updates as its verdict lands); `mark_deliverable` records `valid`; `mark_undeliverable` records `invalid`. Manual verdicts are never re-checked automatically. Anything else is rejected with `invalid_action`. |
+| `action` | string | Yes | `verify` queues a re-check ahead of the background backlog, whatever the contact's current verdict, its age, or the evidence behind it; the verdict stays in force until the new one lands, and each contact updates as it does. `mark_deliverable` records `valid`; `mark_undeliverable` records `invalid`, and either answers a re-check still waiting. Manual verdicts are never re-checked unless asked. Anything else is rejected with `invalid_action`. |
 | `contacts` | string[] | No | Contact ids, up to the bulk maximum per request. |
 | `all`, `filters`, `exclude` | — | No | Select by filter instead; see [selecting contacts](#selecting-contacts-for-a-bulk-action). |
 | `campaign_id` | string | No | Instead of, or as well as, a selection: every lead of this campaign that verification refused. |
@@ -491,8 +491,16 @@ At least one contact must be selected (`no_contacts`). Marking leads deliverable
 ### Response
 
 ```json
-{ "affected": 512, "action": "verify", "queued": true }
+{
+  "affected": 512,
+  "action": "verify",
+  "queued": true,
+  "verifier": "millionverifier",
+  "verifier_label": "MillionVerifier"
+}
 ```
+
+For `verify`, `verifier` names who runs the checks (`builtin`, `millionverifier`, or `cleanmylist`) and `verifier_label` its display name. When a verifier is connected but cannot be used right now, `verifier` is `builtin` and `verifier_error` says why (the same sentence as the overview's `provider_error`).
 
 ## Look up a contact by email
 
@@ -531,7 +539,7 @@ Auth: **Scope** `READ_CONTACTS` · **Org permission** `view_contacts`
 
 `GET /contacts/:id`
 
-Returns the hydrated contact 360 payload: the contact plus an engagement summary, when present suppression state, and a `verification` object explaining the verdict: `status`, `confidence`, `reasons` (sentences, strongest first), `decisive` (true when real mail rather than a check decided the status), and `evidence`, the observations it was scored from, newest first, each `{ "kind", "detail", "observed_at" }` with `kind` one of `delivered`, `opened`, `clicked`, `replied`, `auto_replied`, `bounced_recipient`, `bounced_other`. Engagement and suppression counts are org-scoped; they are returned only when an organization is selected.
+Returns the hydrated contact 360 payload: the contact plus an engagement summary, when present suppression state, and a `verification` object explaining the verdict: `status`, `confidence`, `reasons` (sentences, strongest first), `decisive` (true when real mail rather than a check decided the status), `source` and `provider` (who produced the last verdict, as on the contact) with `provider_label` (the verifier's display name, such as `MillionVerifier`), `check_status` (what that check itself answered, which differs from `status` when real mail decided otherwise), `checked_at`, `requested_at` (set while a re-check is waiting), and `evidence`, the observations it was scored from, newest first, each `{ "kind", "detail", "observed_at" }` with `kind` one of `delivered`, `opened`, `clicked`, `replied`, `auto_replied`, `bounced_recipient`, `bounced_other`. Engagement and suppression counts are org-scoped; they are returned only when an organization is selected.
 
 Auth: **Scope** `READ_CONTACTS` · **Org permission** `view_contacts`
 

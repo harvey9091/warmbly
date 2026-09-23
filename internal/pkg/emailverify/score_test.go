@@ -53,6 +53,37 @@ func TestScoreNewerBounceWinsOverOlderEngagement(t *testing.T) {
 	}
 }
 
+func TestScoreFreshProviderVerdictOutranksStaleMail(t *testing.T) {
+	now := time.Now()
+	gone := Verdict{Status: StatusInvalid, Source: "provider", Provider: ProviderMillionVerifier, CheckedAt: now}
+	delivered := func(age time.Duration) []Evidence {
+		out := []Evidence{}
+		for i := 0; i < 4; i++ {
+			out = append(out, Evidence{Kind: EvidenceDelivered, Detail: string(rune('a' + i)), ObservedAt: now.Add(-age - time.Duration(i)*time.Hour)})
+		}
+		return out
+	}
+	// Four clean deliveries five months before the check: the mailbox has
+	// since closed, and the verifier's newer answer stands.
+	stale := Score(gone, delivered(150*24*time.Hour), now)
+	if stale.Status != StatusInvalid || stale.Decisive {
+		t.Fatalf("stale mail overrode a fresh verifier answer: %+v", stale)
+	}
+	if stale.Reasons[0] != "MillionVerifier reported the address undeliverable" {
+		t.Fatalf("the verifier is not named: %q", stale.Reasons[0])
+	}
+	// The same deliveries last week still outrank it.
+	recent := Score(gone, delivered(7*24*time.Hour), now)
+	if recent.Status != StatusValid || !recent.Decisive {
+		t.Fatalf("recent mail lost to the verifier: %+v", recent)
+	}
+	// The built-in probe never outranks real mail, however old.
+	probe := Score(Verdict{Status: StatusInvalid, Source: "probe", CheckedAt: now}, delivered(150*24*time.Hour), now)
+	if probe.Status != StatusValid {
+		t.Fatalf("the probe outranked real mail: %+v", probe)
+	}
+}
+
 func TestScoreManualWinsOutright(t *testing.T) {
 	now := time.Now()
 	got := Score(Verdict{Status: StatusValid, Source: "manual"}, []Evidence{{Kind: EvidenceBouncedRecipient, ObservedAt: now}}, now)

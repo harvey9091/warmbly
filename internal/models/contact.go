@@ -50,6 +50,9 @@ type Contact struct {
 	// 100, scored from the last check plus what real mail to the address
 	// showed (deliveries, opens, replies, bounces).
 	VerificationConfidence int `json:"verification_confidence"`
+	// VerificationRequestedAt is set while a member-requested re-check waits
+	// to run; the verdict above stands until it lands.
+	VerificationRequestedAt *time.Time `json:"verification_requested_at,omitempty"`
 
 	// Recipient ESP/provider, derived in the control plane from the recipient
 	// domain (never an MX dial on the send hot path). '' | 'gmail' | 'outlook'
@@ -263,6 +266,16 @@ type ContactVerificationDetail struct {
 	// Decisive is true when real mail, not a check, decided the status.
 	Decisive bool                          `json:"decisive"`
 	Evidence []ContactVerificationEvidence `json:"evidence"`
+	// Source and Provider name who produced the last check or verdict, and
+	// ProviderLabel is the verifier's display name ("MillionVerifier").
+	Source        string `json:"source"`
+	Provider      string `json:"provider"`
+	ProviderLabel string `json:"provider_label,omitempty"`
+	// CheckStatus is what that check said before real mail was weighed in.
+	CheckStatus string     `json:"check_status"`
+	CheckedAt   *time.Time `json:"checked_at,omitempty"`
+	// RequestedAt is set while a member-requested re-check waits to run.
+	RequestedAt *time.Time `json:"requested_at,omitempty"`
 }
 
 // ContactVerificationEvidence is one observed fact about the mailbox.
@@ -336,6 +349,12 @@ type ContactVerificationResponse struct {
 	// Queued is true for the verify action: the check runs in the background
 	// and each contact updates live as its verdict lands.
 	Queued bool `json:"queued"`
+	// Verifier and VerifierLabel name who runs a queued check ("builtin" or
+	// the connected provider). VerifierError says why a connected provider
+	// cannot be used right now, in which case the built-in check runs instead.
+	Verifier      string `json:"verifier,omitempty"`
+	VerifierLabel string `json:"verifier_label,omitempty"`
+	VerifierError string `json:"verifier_error,omitempty"`
 }
 
 // VerificationOverview is what Settings shows about address verification.
