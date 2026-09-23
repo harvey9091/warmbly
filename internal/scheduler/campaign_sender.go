@@ -73,6 +73,9 @@ type campaignPass struct {
 	// per mailbox per pass; lastSendsRead marks which were read.
 	lastSends     map[uuid.UUID]time.Time
 	lastSendsRead map[uuid.UUID]bool
+	// gapDraws is each mailbox's gap drawn by gapClearCandidates, reused by
+	// placement so the filter and the send enforce the same gap.
+	gapDraws map[uuid.UUID]int
 }
 
 // healthRead is one mailbox's warmup health, as the gate reads it.
@@ -363,15 +366,15 @@ func pickBound(candidates []AccountCandidate, acct *models.Email) *AccountCandid
 	return nil
 }
 
-// gapClearCandidates narrows a new lead's mailboxes to those whose min gap has
-// already elapsed, so one that just sent (warmup counts) does not defer the
-// whole campaign while others are free. With none clear it returns them all.
+// gapClearCandidates returns the candidates whose min gap has elapsed (warmup
+// sends count), so one mailbox that just sent does not defer the whole
+// campaign while another is free. Empty when none is clear.
 func (s *schedulerService) gapClearCandidates(ctx context.Context, pass *campaignPass, candidates []AccountCandidate) []AccountCandidate {
-	if len(candidates) < 2 {
-		return candidates
-	}
 	if pass.lastSendsRead == nil {
 		pass.lastSends, pass.lastSendsRead = map[uuid.UUID]time.Time{}, map[uuid.UUID]bool{}
+	}
+	if pass.gapDraws == nil {
+		pass.gapDraws = map[uuid.UUID]int{}
 	}
 	ids := make([]uuid.UUID, 0, len(candidates))
 	for i := range candidates {
@@ -382,7 +385,7 @@ func (s *schedulerService) gapClearCandidates(ctx context.Context, pass *campaig
 	if len(ids) > 0 {
 		sends, err := s.taskRepo.GetLastEmailTimes(ctx, ids)
 		if err != nil {
-			return candidates
+			return nil
 		}
 		for _, id := range ids {
 			pass.lastSendsRead[id] = true
@@ -397,14 +400,15 @@ func (s *schedulerService) gapClearCandidates(ctx context.Context, pass *campaig
 		if c.OpenAt != nil && c.OpenAt.After(now) {
 			continue
 		}
-		last, ok := pass.lastSends[c.Account.ID]
-		gap := time.Duration(s.behaviorGapFloor(c.Behavior, now, c.Account.MinWaitTime)) * time.Second
-		if !ok || !last.Add(gap).After(now) {
+		gap, ok := pass.gapDraws[c.Account.ID]
+		if !ok {
+			gap = s.behaviorGap(c.Behavior, now, c.Account.MinWaitTime)
+			pass.gapDraws[c.Account.ID] = gap
+		}
+		last, sent := pass.lastSends[c.Account.ID]
+		if !sent || !last.Add(time.Duration(gap)*time.Second).After(now) {
 			clear = append(clear, c)
 		}
-	}
-	if len(clear) == 0 {
-		return candidates
 	}
 	return clear
 }

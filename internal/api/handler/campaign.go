@@ -292,7 +292,7 @@ func (h *Handler) UpdateCampaign(c *gin.Context) {
 	if campaignID, err := uuid.Parse(id); err == nil {
 		h.auditOrg(c, models.AuditActionUpdate, models.AuditEntityCampaign, &campaignID, nil, nil)
 	}
-	if data.EmailTags != nil || data.SenderStrategy != nil {
+	if data.EmailTags != nil || data.SenderStrategy != nil || data.Status != nil {
 		h.refreshAdvisorNow(*orgID)
 	}
 
