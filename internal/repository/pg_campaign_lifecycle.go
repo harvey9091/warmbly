@@ -68,14 +68,22 @@ func (r *campaignRepository) Delete(ctx context.Context, campaignID uuid.UUID) e
 		return err
 	}
 
-	const del = `DELETE FROM campaigns WHERE id = $1`
-	cmd, err := tx.Exec(ctx, del, campaignID)
-	if err != nil {
-		db.CaptureError(err, del, []any{campaignID}, "exec")
+	const del = `DELETE FROM campaigns WHERE id = $1 RETURNING organization_id`
+	var orgID *uuid.UUID
+	if err := tx.QueryRow(ctx, del, campaignID).Scan(&orgID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errx.ErrResourceNotFound
+		}
+		db.CaptureError(err, del, []any{campaignID}, "queryrow")
 		return err
 	}
-	if cmd.RowsAffected() == 0 {
-		return errx.ErrResourceNotFound
+
+	// Parent matching also closes the findings on the campaign's own steps.
+	if orgID != nil {
+		if err := ResolveAdvisorFindingsFor(ctx, tx, *orgID, []uuid.UUID{campaignID}); err != nil {
+			db.CaptureError(err, "", nil, "exec")
+			return err
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

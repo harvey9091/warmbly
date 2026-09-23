@@ -139,11 +139,14 @@ export function RealtimeManager({ children }: { children: React.ReactNode }) {
   // and corrects the badge without a reload. Gated on a selected workspace so a
   // multi-org login (which redirects to /select-org before any sync) doesn't
   // fire a NULL-org read. Best-effort: a failure leaves the current count as-is.
+  // Keyed on every fetch, not on the value: a refetch that returns the same
+  // count as last time still has to overwrite a realtime increment since.
   const unseenQuery = useUnseenCount({ enabled: !!currentOrg })
+  const unseenFetched = unseenQuery.dataUpdatedAt
   useEffect(() => {
     const c = unseenQuery.data?.count
     if (typeof c === 'number') setUnseenCount(c)
-  }, [unseenQuery.data, setUnseenCount])
+  }, [unseenQuery.data, unseenFetched, setUnseenCount])
 
   // Set up event-to-store routing
   useRealtimeEvents()

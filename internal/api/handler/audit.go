@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/api/middleware"
+	"github.com/warmbly/warmbly/internal/app/advisor"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/utils/paging"
@@ -31,6 +32,21 @@ func (h *Handler) auditOrg(c *gin.Context, action models.AuditAction, entityType
 		return
 	}
 	h.AuditService.LogAction(c.Request.Context(), *orgID, actorID, action, entityType, entityID, c.ClientIP(), c.Request.UserAgent(), changes, metadata)
+	h.refreshAdvisorAfter(*orgID, action, entityType)
+}
+
+// refreshAdvisorAfter re-evaluates the advisor after a change it reads, so its
+// advice follows the change instead of the next scheduled pass. Campaign and
+// step edits are left to the schedule: they autosave, and each pass re-judges copy.
+func (h *Handler) refreshAdvisorAfter(orgID uuid.UUID, action models.AuditAction, entityType models.AuditEntityType) {
+	if h.AdvisorService == nil {
+		return
+	}
+	switch {
+	case entityType == models.AuditEntityEmailAccount,
+		action == models.AuditActionDelete && (entityType == models.AuditEntityCampaign || entityType == models.AuditEntitySequence):
+		advisor.RefreshNow(h.AdvisorService, orgID, "change")
+	}
 }
 
 // GetAuditLogs returns the organization-wide activity trail for the caller's

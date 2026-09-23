@@ -6,6 +6,7 @@ import { useAppStore } from '@/stores'
 import { useUserProfile } from './context/user'
 import { markSelfMutation } from '@/lib/realtime/selfActivity'
 import { announceCampaignDeleted } from '@/lib/realtime/campaignDeleted'
+import { MAILBOX_REMOVAL_KEYS } from '@/lib/api/hooks/app/emails/invalidateAfterMailboxRemoval'
 
 // Bridges realtime socket events into both the zustand store and react-query
 // cache so list pages, detail panes, counters, and workflow states stay live.
@@ -412,8 +413,8 @@ export function useRealtimeEvents() {
           crm_deal: [['crm', 'deals'], ['contacts']],
           crm_task: [['crm', 'tasks'], ['crm', 'deals']],
           warmup_routing_rule: [['analytics', 'warmup']],
-    cloud_link: [['cloud-link'], ['emails']],
-    pool_link: [['pool-link'], ['emails']],
+          cloud_link: [['cloud-link'], ['emails']],
+          pool_link: [['pool-link'], ['emails']],
           // Folders / tags / categories ride the user payload.
           folder: [['auth', 'me']],
           tag: [['auth', 'me']],
@@ -421,6 +422,12 @@ export function useRealtimeEvents() {
         }
         const keys = spine[entityType]
         if (keys) invalidate(keys)
+        // A deletion also takes the entity's inbox mail, unread badge and
+        // advice with it, which no update ever does.
+        if (getString('action') === 'delete') {
+          if (entityType === 'email_account') invalidate([...MAILBOX_REMOVAL_KEYS])
+          if (entityType === 'campaign' || entityType === 'step') invalidate([['advisor']])
+        }
         if (entityId && entityType === 'contact') invalidate([['contacts', entityId]])
         if (entityId && entityType === 'segment') invalidate([['segments', entityId]])
         if (entityId && entityType === 'form') invalidate([['forms', entityId]])
