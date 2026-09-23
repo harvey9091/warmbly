@@ -368,12 +368,12 @@ func detectNoSenders(s *repository.AdvisorSnapshot) []Finding {
 			Steps: append(sel.steps,
 				"Sending resumes on the next scheduling pass. Nothing queued was lost."),
 			Evidence: map[string]any{
-				"campaign":         camp.Name,
-				"sender_selection": sel.selection,
-				"picked_mailboxes": camp.PickedSenders,
-				"tags":             camp.SenderTags,
-				"sender_count":     0,
-				"leads_remaining":  camp.LeadsRemaining,
+				"campaign":             camp.Name,
+				"sender_selection":     sel.selection,
+				"picked_mailbox_count": camp.PickedSenders,
+				"tag_count":            camp.SenderTags,
+				"sender_count":         0,
+				"leads_remaining":      camp.LeadsRemaining,
 			},
 		})
 	}
