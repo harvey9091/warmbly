@@ -61,7 +61,7 @@ func (h *Handler) DraftCompose(c *gin.Context) {
 		Instruction string `json:"instruction"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	address := bareAddress(req.To)

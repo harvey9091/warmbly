@@ -7,6 +7,7 @@ package notification
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -52,6 +53,10 @@ type Service interface {
 
 	// Notify is the gated ingress — best-effort, never errors out the caller.
 	Notify(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any)
+
+	// NotifyAboutMessage is Notify for one unibox message: the row is removed
+	// with the message and read when the message is read.
+	NotifyAboutMessage(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, uniboxEmailID uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any)
 
 	// NotifyOrg raises the same notification for every accepted org member
 	// holding perm (never the whole org blindly), excluding exclude when set.
@@ -153,7 +158,14 @@ func (s *service) Notify(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID
 	if s == nil {
 		return
 	}
-	s.notifyOne(ctx, userID, orgID, category, title, body, link, meta, "", false)
+	s.notifyOne(ctx, userID, orgID, nil, category, title, body, link, meta, "", false)
+}
+
+func (s *service) NotifyAboutMessage(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, uniboxEmailID uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any) {
+	if s == nil || uniboxEmailID == uuid.Nil {
+		return
+	}
+	s.notifyOne(ctx, userID, orgID, &uniboxEmailID, category, title, body, link, meta, "", false)
 }
 
 // NotifyOrg resolves the permission-targeted audience and raises the
@@ -176,7 +188,7 @@ func (s *service) NotifyOrg(ctx context.Context, orgID uuid.UUID, perm models.Or
 		if perm != 0 && !m.Permissions.HasPermission(perm) {
 			continue
 		}
-		fired := s.notifyOne(ctx, m.UserID, &org, category, title, body, link, meta, groupKey, slackFired)
+		fired := s.notifyOne(ctx, m.UserID, &org, nil, category, title, body, link, meta, groupKey, slackFired)
 		slackFired = slackFired || fired
 	}
 }
@@ -186,7 +198,7 @@ func (s *service) NotifyOrg(ctx context.Context, orgID uuid.UUID, perm models.Or
 // rows queue as pending with a due time from the user's digest cadence, and
 // the flush loop bundles them later (see email.go). Returns whether the Slack
 // channel fired, so org fan-outs post to the shared workspace only once.
-func (s *service) notifyOne(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any, groupKey string, suppressSlack bool) bool {
+func (s *service) notifyOne(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, uniboxEmailID *uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any, groupKey string, suppressSlack bool) bool {
 	if userID == uuid.Nil {
 		return false
 	}
@@ -209,6 +221,7 @@ func (s *service) notifyOne(ctx context.Context, userID uuid.UUID, orgID *uuid.U
 			Body:           body,
 			Link:           link,
 			Metadata:       meta,
+			UniboxEmailID:  uniboxEmailID,
 			GroupKey:       groupKey,
 			// In-app off but email on: keep the row as the email record
 			// without ringing the bell.
@@ -220,6 +233,12 @@ func (s *service) notifyOne(ctx context.Context, userID uuid.UUID, orgID *uuid.U
 			n.EmailDueAt = &due
 		}
 		created, cerr := s.repo.Create(ctx, n)
+		if errors.Is(cerr, repository.ErrNotificationMessageGone) {
+			return false // the message left the unibox first; nothing to announce
+		}
+		if cerr == nil && created != nil && created.MessageSeen {
+			return false // already read where it arrived; the row is the record
+		}
 		if cerr == nil && created != nil && cat.Channels.InApp && s.publisher != nil {
 			s.publisher.PublishNotificationCreated(ctx, userID.String(), created.ID.String(), string(category), title, link)
 		}

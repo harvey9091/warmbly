@@ -435,10 +435,25 @@ function countryName(code: string): string {
     }
 }
 
+const SURFACE_LABELS: Record<string, string> = {
+    mobile_app: "Mobile app",
+    desktop_app: "Desktop app",
+    tablet_app: "Tablet app",
+    webmail: "Webmail",
+    mobile: "Mobile",
+    desktop: "Desktop",
+    tablet: "Tablet",
+    hidden: "Hidden by image proxy",
+};
+
+const SURFACE_HINTS: Record<string, string> = {
+    hidden: "Gmail, Yahoo Mail, Apple Mail Privacy Protection and a few other providers load images through their own servers, which hides the reader's device.",
+};
+
 function bucketLabel(kind: "countries" | "clients" | "devices", key: string): string {
     if (kind === "countries") return countryName(key);
     if (!key) return "Unknown";
-    if (kind === "devices") return key.charAt(0).toUpperCase() + key.slice(1);
+    if (kind === "devices") return SURFACE_LABELS[key] ?? key.charAt(0).toUpperCase() + key.slice(1);
     return key;
 }
 
@@ -455,7 +470,7 @@ function EngagementAudience({
     const columns: { kind: "countries" | "clients" | "devices"; label: string; rows: EngagementBucket[] }[] = [
         { kind: "countries", label: "Country", rows: breakdown?.countries ?? [] },
         { kind: "clients", label: "Mail client", rows: breakdown?.clients ?? [] },
-        { kind: "devices", label: "Device", rows: breakdown?.devices ?? [] },
+        { kind: "devices", label: "Device", rows: breakdown?.surfaces ?? breakdown?.devices ?? [] },
     ];
     const empty = columns.every((c) => c.rows.length === 0);
     return (
@@ -485,7 +500,10 @@ function EngagementAudience({
                                 <div className="divide-y divide-slate-200/60">
                                     {c.rows.map((r) => (
                                         <div key={r.key || "unknown"} className="h-9 px-5 flex items-center gap-3">
-                                            <span className="flex-1 min-w-0 text-[12px] text-slate-700 truncate" title={r.key || undefined}>
+                                            <span
+                                                className="flex-1 min-w-0 text-[12px] text-slate-700 truncate"
+                                                title={(c.kind === "devices" && SURFACE_HINTS[r.key]) || r.key || undefined}
+                                            >
                                                 {bucketLabel(c.kind, r.key)}
                                             </span>
                                             <span className="w-12 text-right font-mono text-[11.5px] text-emerald-600 tabular-nums">

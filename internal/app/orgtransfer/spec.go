@@ -120,6 +120,11 @@ var Tables = []Table{
 		Scope: scopeOrg,
 	},
 	{
+		Name: "mailbox_import_mappings", Group: models.OrgDataGroupCore,
+		Scope: scopeOrg,
+		Note:  "Column mappings the workspace confirmed for its mailbox imports, keyed by header set, so the same file maps itself on the destination too.",
+	},
+	{
 		Name: "organization_members", Group: models.OrgDataGroupCore,
 		Scope: scopeOrg,
 		Note:  "Members are matched to destination accounts by email; unknown emails become invitations.",
@@ -143,6 +148,30 @@ var Tables = []Table{
 	{
 		Name: "team_members", Group: models.OrgDataGroupCore,
 		Scope: `team_id IN ` + orgTeams,
+	},
+	{
+		Name: "mailbox_vendor_connections", Group: models.OrgDataGroupCore,
+		Scope: scopeOrg,
+		Secrets: []SecretColumn{
+			{Column: "credentials", Domain: KeyDomainOrgDEK},
+		},
+		Note: "Inbox vendor accounts (InboxKit, Zapmail, ...) the workspace imports from. Above email_accounts, whose vendor_connection_id names them.",
+	},
+	{
+		Name: "mailbox_domain_grants", Group: models.OrgDataGroupCore,
+		Scope: scopeOrg,
+		// A grant is recorded only after the workspace proves the domain or
+		// tenant on this instance; a row from an archive proves nothing.
+		ImportSkip: true,
+		Note:       "Google Workspace and Microsoft 365 administrator grants. Made again on the destination, where connecting the domain's users relinks the mailboxes that arrived.",
+	},
+	{
+		Name: "domain_redirects", Group: models.OrgDataGroupCore,
+		Scope: scopeOrg,
+		// DNS points at the source instance until the customer moves it, so the
+		// destination serves nothing until its own check sees the records.
+		ResetOnImport: []string{"verified", "verified_at", "last_checked_at", "last_error"},
+		Note:          "Sending domains whose root redirects to the workspace's website. The destination lists its own TXT value, derived from its secret and the new workspace, and verifies once it is published.",
 	},
 	{
 		Name: "email_accounts", Group: models.OrgDataGroupCore,
@@ -840,6 +869,8 @@ var ExcludedTables = map[string]string{
 	"sessions":                     "Live login sessions. They are bound to the source instance's signing key and must not survive a move.",
 	"mailbox_erasures":             "Erasure still owed for a mailbox this instance deleted: a grant to revoke at the provider, and message bodies to remove from this instance's blob store. Both name work on the instance that wrote the row, and the mailboxes are already gone.",
 	"login_history":                "Where people signed in from, kept only to compare a new sign-in against recent ones. It belongs to the person rather than the workspace, and a destination must build its own baseline before it can call anything anomalous.",
+	"mailbox_imports":              "Mailbox imports in progress or recently finished. They are work this instance is doing, and their rows hold credentials in flight, which live on only as the mailboxes they created.",
+	"mailbox_import_rows":          "The rows of a mailbox import, with credentials sealed until each row is connected. They follow mailbox_imports, which does not travel.",
 	"user_view_preferences":        "Each member's own column layout and sort for the dashboard's lists. It belongs to the person rather than the workspace: members are matched by account on import and a layout names custom fields the destination may not hold yet, so everyone starts from the default view and picks their columns again.",
 }
 

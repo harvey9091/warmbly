@@ -16,6 +16,7 @@ import (
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
 	"github.com/emersion/go-sasl"
+	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/client/netbind"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
@@ -93,6 +94,20 @@ type Client struct {
 	// cap, folderConflicts what it left out for a duplicate UIDVALIDITY.
 	folderOverflow  atomic.Int32
 	folderConflicts atomic.Int32
+
+	// selection is what the last successful SELECT opened, nil when nothing
+	// is selected. Each SELECT stores a fresh value, so a scan can tell that
+	// the selection moved under it.
+	selection atomic.Pointer[selection]
+
+	// sinceRefused is set once the server refuses a dated SEARCH; SearchSince
+	// reads INTERNALDATE instead from then on. It outlives a reconnect.
+	sinceRefused atomic.Bool
+
+	// dateScans is that read per folder, extended rather than repeated on the
+	// next pass. Guarded by scanMu.
+	scanMu    sync.Mutex
+	dateScans map[string]*dateScan
 }
 
 // begin starts the idle clock for one command; call the result on exit.
@@ -209,6 +224,7 @@ func (c *Client) connectLocked() *errx.MailError {
 	c.client = client
 	c.conn = conn
 	c.selected.Store(false)
+	c.selection.Store(nil)
 	c.condStore.Store(false)
 	done := conn.arm()
 	defer done()
@@ -296,8 +312,14 @@ func (c *Client) Mailbox(mailbox string, uidvali, opts *imap.SelectOptions) erro
 // one to release. A failed SELECT leaves the session with no mailbox
 // selected (RFC 3501 6.3.1). The caller holds the lifecycle read lock.
 func (c *Client) selectMailbox(mailbox string, opts *imap.SelectOptions) (*imap.SelectData, error) {
+	// Cleared before the command is written, so a command pipelined behind
+	// this SELECT can never be credited to the previous selection.
+	c.selection.Store(nil)
 	data, err := c.client.Select(mailbox, opts).Wait()
 	c.selected.Store(err == nil)
+	if err == nil {
+		c.selection.Store(&selection{name: mailbox, uidValidity: data.UIDValidity, count: data.NumMessages})
+	}
 	return data, err
 }
 
@@ -334,6 +356,34 @@ func (c *Client) SelectForSyncGen(mailbox string) (uint32, uint32, *errx.MailErr
 	return data.NumMessages, data.UIDValidity, nil
 }
 
+// Selected is the view a SELECT opened: the count and the cursors every
+// SEARCH on it answers against.
+type Selected struct {
+	Count         uint32
+	UIDValidity   uint32
+	UIDNext       uint32
+	HighestModSeq uint64
+}
+
+// SelectForSyncState selects exactly as SelectForSync does and reports the
+// cursors of the selected view, which is what a folder's stored cursor must
+// advance to: a STATUS taken earlier can be ahead of the view the SEARCH ran on.
+func (c *Client) SelectForSyncState(mailbox string) (Selected, *errx.MailError) {
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	defer c.begin()()
+	data, err := c.selectMailbox(mailbox, &imap.SelectOptions{ReadOnly: true, CondStore: c.condStore.Load()})
+	if err != nil {
+		return Selected{}, c.handleError(err)
+	}
+	return Selected{
+		Count:         data.NumMessages,
+		UIDValidity:   data.UIDValidity,
+		UIDNext:       uint32(data.UIDNext),
+		HighestModSeq: data.HighestModSeq,
+	}, nil
+}
+
 // ReleaseMailbox drops the selected mailbox. Dovecot answers LIST-STATUS for
 // the selected mailbox with the values it held at SELECT, so a loop that keeps
 // INBOX selected never sees another change land. Servers without UNSELECT keep
@@ -351,6 +401,7 @@ func (c *Client) ReleaseMailbox() {
 		return
 	}
 	defer c.begin()()
+	c.selection.Store(nil)
 	if err := c.client.Unselect().Wait(); err == nil {
 		c.selected.Store(false)
 	}
@@ -368,9 +419,38 @@ type Fetched struct {
 
 // SearchSince returns the UIDs in the selected mailbox whose internal date is
 // on or after since (IMAP SINCE has day granularity), ascending. It drives
-// the backfill: the caller walks the set newest first under its cap.
+// the backfill: the caller walks the set newest first under its cap. On a
+// server that refuses the dated SEARCH the set comes from INTERNALDATE (see
+// searchSinceByDate), and may then still hold UIDs expunged since.
 func (c *Client) SearchSince(since time.Time) ([]imap.UID, *errx.MailError) {
-	return c.uidSearch(&imap.SearchCriteria{Since: since})
+	if !c.sinceRefused.Load() {
+		sel := c.selection.Load()
+		uids, err := c.searchSince(since)
+		if err == nil {
+			return uids, nil
+		}
+		// Only a refusal against a folder that stayed selected is about the
+		// date: a concurrent SELECT of a missing folder leaves none, and the
+		// BAD that earns says nothing about SEARCH.
+		if sel == nil || c.selection.Load() != sel || !searchRefused(err) {
+			return nil, c.handleError(err)
+		}
+		c.sinceRefused.Store(true)
+		log.Warn().Str("host", c.host()).Str("reply", err.Error()).
+			Msg("imap: server refused a dated SEARCH; the backfill window is read from INTERNALDATE")
+	}
+	return c.searchSinceByDate(since)
+}
+
+func (c *Client) searchSince(since time.Time) ([]imap.UID, error) {
+	c.lifecycle.RLock()
+	defer c.lifecycle.RUnlock()
+	defer c.begin()()
+	data, err := c.client.UIDSearch(&imap.SearchCriteria{Since: since}, nil).Wait()
+	if err != nil {
+		return nil, err
+	}
+	return data.AllUIDs(), nil
 }
 
 // SearchChangedSince returns the UIDs whose mod-sequence is above modSeq: the

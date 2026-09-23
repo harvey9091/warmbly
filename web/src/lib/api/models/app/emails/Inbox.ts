@@ -12,6 +12,16 @@ export default interface Inbox {
     send_as_email: string;
     tags: string[];
     provider: string;
+    /** Detected mailbox host (google_workspace, microsoft365, zoho, ...); "" until known. */
+    mail_host?: string;
+    /** How the mailbox signs in: password, app_password, oauth or delegated; "" until known. */
+    auth_method?: string;
+    /** The administrator's grant a delegated mailbox connects through. */
+    domain_grant_id?: string | null;
+    /** The inbox vendor account this mailbox was imported from. */
+    vendor_connection_id?: string | null;
+    /** That vendor's id (inboxkit, zapmail, ...); absent when none. */
+    vendor?: string;
     status: string;
     last_synced_at: Date;
     last_id?: number | null;
@@ -53,6 +63,11 @@ export default interface Inbox {
     warmup_start_time?: string;
     warmup_end_time?: string;
     warmup_days?: number;
+    /**
+     * The mailbox's own IANA zone, "" when it follows the workspace timezone.
+     * Its warmup hours and sending-behaviour workday are read in this zone.
+     */
+    timezone?: string;
     /**
      * Where warmup mail is filed in the mail client itself: "folder" moves it
      * into warmup_folder, "inbox" leaves it where the provider put it,

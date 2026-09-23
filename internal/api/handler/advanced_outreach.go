@@ -40,7 +40,7 @@ func (h *Handler) UpdateOutreachSettings(c *gin.Context) {
 	}
 	var req models.UpsertOutreachSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	if xerr := h.AdvancedService.UpdateOrganizationSettings(c.Request.Context(), *orgID, userID, &req.Settings); xerr != nil {
@@ -96,7 +96,7 @@ func (h *Handler) UpdateCampaignAdvancedSettings(c *gin.Context) {
 	}
 	var req models.UpsertOutreachSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	if xerr := h.AdvancedService.UpdateCampaignSettings(c.Request.Context(), campaignID, &req.Settings); xerr != nil {
@@ -134,7 +134,7 @@ func (h *Handler) CreateCampaignABVariant(c *gin.Context) {
 	}
 	var req models.CreateCampaignABVariantRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	out, xerr := h.AdvancedService.CreateABVariant(c.Request.Context(), campaignID, &req)
@@ -166,7 +166,7 @@ func (h *Handler) UpdateCampaignABVariant(c *gin.Context) {
 	}
 	var req models.UpdateCampaignABVariantRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	out, xerr := h.AdvancedService.UpdateABVariant(c.Request.Context(), campaignID, variantID, &req)
@@ -283,7 +283,7 @@ func (h *Handler) IngestDeliverabilityEvent(c *gin.Context) {
 	}
 	var req models.IngestDeliverabilityEventRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	if xerr := h.AdvancedService.IngestDeliverabilityEvent(c.Request.Context(), *orgID, &req); xerr != nil {

@@ -14,6 +14,9 @@ func (s *JobsService) HandleGraphDeltaUpdate(ctx context.Context, e *models.JobE
 		return nil
 	}
 	if err := s.EmailGraphDeltaRepository.Put(ctx, e.UserID, e.EmailID, e.Folder, e.DeltaLink); err != nil {
+		if s.dropForDeletedMailbox(ctx, e.UserID, e.EmailID, err) {
+			return nil
+		}
 		CaptureError(e.UserID, e.EmailID, err)
 		return err
 	}

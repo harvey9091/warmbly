@@ -560,7 +560,7 @@ func (s *service) state(ctx context.Context, inst *models.PoolLinkInstance, m *m
 		AuthState:      acc.AuthState,
 		Settings: models.PoolLinkWarmupSettings{
 			Base: acc.WarmupBase, Max: acc.WarmupMax, Increase: acc.WarmupIncrease, ReplyRate: acc.WarmupReplyRate,
-			StartTime: acc.WarmupStartTime, EndTime: acc.WarmupEndTime, Days: acc.WarmupDays, Timezone: acc.Timezone,
+			StartTime: acc.WarmupStartTime, EndTime: acc.WarmupEndTime, Days: acc.WarmupDays, Timezone: acc.ClockTimezone(),
 		},
 	}
 	if s.analytics != nil {

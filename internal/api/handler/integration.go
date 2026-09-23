@@ -118,7 +118,7 @@ func (h *Handler) ConnectIntegration(c *gin.Context) {
 	}
 	var p integrationConnectPayload
 	if err := c.ShouldBindJSON(&p); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	provider := models.IntegrationProvider(strings.TrimSpace(p.Provider))
@@ -172,7 +172,7 @@ func (h *Handler) StartIntegrationOAuth(c *gin.Context) {
 	}
 	var p oauthStartPayload
 	if err := c.ShouldBindJSON(&p); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	provider := models.IntegrationProvider(strings.TrimSpace(p.Provider))
@@ -206,7 +206,7 @@ func (h *Handler) FinishIntegrationOAuth(c *gin.Context) {
 	}
 	var p oauthFinishPayload
 	if err := c.ShouldBindJSON(&p); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	conn, xerr := h.IntegrationService.OAuthFinish(c.Request.Context(), userID, p.Code, p.State)
@@ -322,7 +322,7 @@ func (h *Handler) CreateConnectionEventSubscription(c *gin.Context) {
 	}
 	var p eventSubscriptionPayload
 	if err := c.ShouldBindJSON(&p); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	enabled := true
@@ -416,7 +416,7 @@ func (h *Handler) PushContactsToIntegration(c *gin.Context) {
 	}
 	var p pushContactsPayload
 	if err := c.ShouldBindJSON(&p); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -549,7 +549,7 @@ func (h *Handler) ReplaceConnectionFieldMappings(c *gin.Context) {
 	}
 	var p replaceFieldMappingsPayload
 	if err := c.ShouldBindJSON(&p); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	mappings := make([]models.IntegrationFieldMapping, 0, len(p.Mappings))
@@ -613,7 +613,7 @@ func (h *Handler) UpdateConnectionConfig(c *gin.Context) {
 	}
 	var p updateConnectionConfigPayload
 	if err := c.ShouldBindJSON(&p); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	conn, err := h.IntegrationService.UpdateConnectionConfig(c.Request.Context(), orgID, connID, p.ConfigCapabilities, strings.TrimSpace(p.SyncDirection))
@@ -715,7 +715,7 @@ func (h *Handler) CreateAutomation(c *gin.Context) {
 	}
 	var w models.AutomationWrite
 	if err := c.ShouldBindJSON(&w); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	a, err := h.IntegrationService.CreateAutomation(c.Request.Context(), orgID, w)
@@ -740,7 +740,7 @@ func (h *Handler) UpdateAutomation(c *gin.Context) {
 	}
 	var w models.AutomationWrite
 	if err := c.ShouldBindJSON(&w); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	a, err := h.IntegrationService.UpdateAutomation(c.Request.Context(), orgID, id, w)
@@ -772,7 +772,7 @@ func (h *Handler) PatchAutomationLayout(c *gin.Context) {
 	}
 	var w models.AutomationLayout
 	if err := c.ShouldBindJSON(&w); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	if len(w.Positions) > 1000 {
@@ -1105,7 +1105,7 @@ func (h *Handler) CreateMeeting(c *gin.Context) {
 	}
 	var p createMeetingPayload
 	if err := c.ShouldBindJSON(&p); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	p.InviteeName = strings.TrimSpace(p.InviteeName)

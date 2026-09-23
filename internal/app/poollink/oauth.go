@@ -272,7 +272,9 @@ func (s *service) Adopt(ctx context.Context, inst *models.PoolLinkInstance, req 
 	if xerr != nil {
 		return nil, xerr
 	}
+	// A mailbox under an administrator's grant has no token of its own to broker.
 	if acc.OrganizationID == nil || *acc.OrganizationID != inst.OrganizationID || acc.Status != "active" ||
+		acc.AuthMethod == models.MailAuthDelegated ||
 		(acc.Provider != string(models.InboxProviderGoogle) && acc.Provider != string(models.InboxProviderOutlook)) {
 		return nil, ErrNotAdoptable
 	}

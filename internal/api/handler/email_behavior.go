@@ -110,7 +110,7 @@ func (h *Handler) UpdateEmailBehavior(c *gin.Context) {
 
 	var patch models.UpdateSendingBehavior
 	if err := c.ShouldBindJSON(&patch); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 

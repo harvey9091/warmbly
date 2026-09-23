@@ -13,6 +13,7 @@ import SaveStatus from "../_components/SaveStatus";
 import { useAutosave, type AutosaveStatus } from "@/hooks/useAutosave";
 import { useRegisterUnsaved } from "@/hooks/context/unsaved";
 import { PERSON_NAME_MAX, nameError, normalizeName } from "@/lib/displayName";
+import TimezonesSection from "./TimezonesSection";
 
 // Header indicator priority when two autosaves share one SaveStatus.
 function combineStatus(a: AutosaveStatus, b: AutosaveStatus): AutosaveStatus {
@@ -128,19 +129,9 @@ export default function ProfileSettingsPage() {
                         className="w-full max-w-[280px] h-7 px-2.5 rounded-md border border-slate-200 bg-slate-50 text-[12.5px] text-slate-500 font-mono"
                     />
                 </Row>
-                <Row
-                    label="Timezone"
-                    description="Detected from your browser. Used to render campaign schedules in local time."
-                    align="start"
-                >
-                    <input
-                        type="text"
-                        value={Intl.DateTimeFormat().resolvedOptions().timeZone}
-                        readOnly
-                        className="w-full max-w-[280px] h-7 px-2.5 rounded-md border border-slate-200 bg-slate-50 text-[12.5px] text-slate-500 font-mono"
-                    />
-                </Row>
             </Section>
+
+            <TimezonesSection />
 
             <Section
                 eyebrow="Undo send"

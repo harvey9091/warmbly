@@ -98,6 +98,19 @@ type WMail struct {
 	// flagScan is the previous flag snapshot per folder name, used only on
 	// IMAP servers without CONDSTORE, which cannot say what changed.
 	flagScan map[string]*folderFlagScan
+	// skipChecked remembers, for this session, the stored rows that left a
+	// synced folder and were looked for in the skipped folders without being
+	// found, so they are not searched for again on every pass.
+	skipChecked map[string]struct{}
+	// listed is the previous listing's count and UIDNEXT per folder name:
+	// session-local, since the stored cursor advances to the SELECT view.
+	listed map[string]imapListed
+	// skipPending marks folders whose skipped-folder reconciliation hit the
+	// per-pass search cap, so the next pass continues it.
+	skipPending map[string]bool
+	// unmapPending holds map entries for unpublished arrivals whose removal
+	// failed, keyed by map key; every pass retries them before it looks.
+	unmapPending map[string]uuid.UUID
 	// transportFailures counts consecutive passes that could not reach the
 	// mail server, which paces the retry and keeps one outage to one warning.
 	transportFailures int
@@ -227,6 +240,7 @@ func NewWMail(
 				FirstName: data.FirstName,
 				LastName:  data.LastName,
 
+				User:       data.Graph.User,
 				Cache:      mail.Cache,
 				DeltaLinks: cloneStringMap(deltaLinks),
 

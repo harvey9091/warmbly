@@ -11,6 +11,7 @@ import useAccountStatuses from "@/lib/api/hooks/app/analytics/useAccountStatuses
 import useFeatureStatus from "@/lib/api/hooks/app/subscription/useFeatureStatus";
 import warmupLifecycle from "@/lib/api/client/app/emails/warmupLifecycle";
 import removeEmail from "@/lib/api/client/app/emails/removeEmail";
+import invalidateAfterMailboxRemoval from "@/lib/api/hooks/app/emails/invalidateAfterMailboxRemoval";
 import useRemoveEmail from "@/lib/api/hooks/app/emails/useRemoveEmail";
 import { useUserProfile } from "@/hooks/context/user";
 import { useConfirm } from "@/hooks/context/confirm";
@@ -29,6 +30,13 @@ import buildError from "@/lib/helper/buildError";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import BulkWarmupDialog from "@/components/app/emails/BulkWarmupDialog";
 import BulkTagPopover from "@/components/app/emails/BulkTagPopover";
+import MailboxImportsMenu from "@/components/app/emails/import/MailboxImportsMenu";
+import MailboxSourceChip from "@/components/app/emails/MailboxSourceChip";
+import SigninMigrationBanner, { SigninRetiringChip } from "@/components/app/emails/migration/SigninMigrationBanner";
+import SigninMigrationDialog from "@/components/app/emails/migration/SigninMigrationDialog";
+import MailboxGrantDialog from "@/components/app/emails/import/grants/MailboxGrantDialog";
+import { useSigninMigration } from "@/lib/api/hooks/app/emails/useMailboxGrants";
+import { mailboxSource } from "@/lib/mailboxSource";
 import type Tag from "@/lib/api/models/app/Tag";
 import type Inbox from "@/lib/api/models/app/emails/Inbox";
 import mailboxDisplayStatus from "@/lib/mailboxStatus";
@@ -38,6 +46,7 @@ import {
     CheckIcon,
     FilterIcon,
     GaugeIcon,
+    GlobeIcon,
     PauseIcon,
     PlayIcon,
     PlusIcon,
@@ -108,6 +117,21 @@ export default function AddressesPage() {
     const [searchParams, setSearchParams] = useSearchParams();
     const queryClient = useQueryClient();
 
+    // Mailboxes on the retiring per-mailbox Google sign-in, and where each one's domain moves.
+    const migration = useSigninMigration(canView);
+    const retiringDomain = useMemo(() => {
+        const m = new Map<string, string>();
+        for (const g of migration.data?.data ?? []) for (const b of g.mailboxes) m.set(b.id, g.domain);
+        return m;
+    }, [migration.data]);
+    const [migrationOpen, setMigrationOpen] = React.useState(false);
+    const [migrationFocus, setMigrationFocus] = React.useState<string | null>(null);
+    const [setupDomain, setSetupDomain] = React.useState<string | null>(null);
+    const openMigration = (domain: string | null = null) => {
+        setMigrationFocus(domain);
+        setMigrationOpen(true);
+    };
+
     // Warmup is a paid/trial feature; gate the start controls when the org
     // isn't entitled. Treat unknown (still loading) as allowed — the backend
     // is the real enforcement point.
@@ -174,10 +198,7 @@ export default function AddressesPage() {
                 setRemoving(true);
                 const results = await Promise.allSettled(selected.map((id) => removeEmail(id)));
                 const failed = results.filter((r) => r.status === "rejected");
-                // The ["emails"] prefix covers the lists and the allowance
-                // counter, which a disconnect gives slots back to.
-                await queryClient.invalidateQueries({ queryKey: ["emails"] });
-                await queryClient.invalidateQueries({ queryKey: ["analytics", "accounts"] });
+                await invalidateAfterMailboxRemoval(queryClient);
                 setSelected([]);
                 setRemoving(false);
                 if (failed.length > 0) {
@@ -276,6 +297,10 @@ export default function AddressesPage() {
                         : "Loading…"
                 }
             >
+                <MailboxImportsMenu />
+                <TopbarAction variant="ghost" href="/app/emails/domains" icon={<GlobeIcon className="w-3 h-3" />}>
+                    Sending domains
+                </TopbarAction>
                 <TopbarAction
                     onClick={() => p?.setAddEmail(true)}
                     icon={<PlusIcon className="w-3 h-3" />}
@@ -339,6 +364,7 @@ export default function AddressesPage() {
                     sit evenly and the whole block collapses when all are empty. */}
                 <div className="px-5 py-3 flex flex-col gap-2 empty:hidden">
                     <AdvisorSummaryBar surface="emails" noun="mailbox" nounPlural="mailboxes" />
+                    <SigninMigrationBanner total={migration.data?.total ?? 0} onOpen={() => openMigration()} />
                     <CloudPoolBanner onConnect={() => setCloudDialog(true)} mailboxCount={stats.total} />
                     {!emailsData.isLoading && <CloudPathsPanel mailboxCount={stats.total} onAdd={() => p?.setAddEmail(true)} />}
                     {/* Hosted, the pool is thousands of mailboxes: the pool-size advice is self-host only. */}
@@ -422,6 +448,8 @@ export default function AddressesPage() {
                                     canWarmup={canWarmup}
                                     cloud={cloud.connected ? cloud.rowFor(box.id) : undefined}
                                     cloudConnected={cloud.connected}
+                                    retiring={retiringDomain.has(box.id)}
+                                    onRetiring={() => openMigration(retiringDomain.get(box.id) ?? null)}
                                     checked={selected.includes(box.id)}
                                     onToggleSelect={() =>
                                         selected.includes(box.id)
@@ -484,6 +512,22 @@ export default function AddressesPage() {
 
             <InboxDetails emails={emailsData.emails} view={view} setView={setView} initialTab={viewTab} canWarmup={canWarmup} />
 
+            <SigninMigrationDialog
+                open={migrationOpen}
+                focusDomain={migrationFocus}
+                onClose={() => setMigrationOpen(false)}
+                onSetUpDomain={(domain) => {
+                    setMigrationOpen(false);
+                    setSetupDomain(domain);
+                }}
+            />
+            <MailboxGrantDialog
+                open={!!setupDomain}
+                provider="google"
+                initialDomain={setupDomain ?? undefined}
+                onClose={() => setSetupDomain(null)}
+            />
+
             <BulkWarmupDialog
                 open={bulkStart}
                 ids={selected}
@@ -537,6 +581,8 @@ function MailboxRow({
     canWarmup,
     cloud,
     cloudConnected,
+    retiring,
+    onRetiring,
     checked,
     onToggleSelect,
     onOpen,
@@ -548,6 +594,9 @@ function MailboxRow({
     canWarmup: boolean;
     cloud?: CloudLinkMailboxRow;
     cloudConnected: boolean;
+    /** On the retiring per-mailbox Google sign-in. */
+    retiring: boolean;
+    onRetiring: () => void;
     checked: boolean;
     onToggleSelect: () => void;
     onOpen: (id: string, tab?: string) => void;
@@ -680,6 +729,7 @@ function MailboxRow({
                         </span>
                     </div>
                     <span className="text-[12.5px] font-medium text-slate-900 truncate">{box.email}</span>
+                    <MailboxSourceChip box={box} labelClassName={mailboxSource(box).kind === "host" ? "hidden lg:inline" : "hidden md:inline"} />
                     {inCloud && (
                         <span
                             title={cloud?.managed ? "Signed in through Warmbly Cloud, which warms it" : cloudPaused ? "Paused in Warmbly Cloud" : "Warmed by Warmbly Cloud"}
@@ -709,6 +759,7 @@ function MailboxRow({
                         </span>
                     )}
                 </button>
+                {retiring && <SigninRetiringChip onClick={onRetiring} />}
                 <AdvisorRowFlag findings={findings} subject={box.email} />
                 </div>
             </td>

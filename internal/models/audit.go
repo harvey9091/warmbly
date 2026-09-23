@@ -54,13 +54,17 @@ const (
 	// AuditEntityCampaignLead is ONE contact inside ONE campaign: the entity id
 	// is the contact and metadata carries the campaign. Written when a member
 	// pauses or resumes that lead's flow.
-	AuditEntityCampaignLead AuditEntityType = "campaign_lead"
-	AuditEntityContact      AuditEntityType = "contact"
-	AuditEntityEmailAccount AuditEntityType = "email_account"
-	AuditEntityAPIKey       AuditEntityType = "api_key"
-	AuditEntitySequence     AuditEntityType = "step"
-	AuditEntityUser         AuditEntityType = "user"
-	AuditEntityOrganization AuditEntityType = "organization"
+	AuditEntityCampaignLead   AuditEntityType = "campaign_lead"
+	AuditEntityContact        AuditEntityType = "contact"
+	AuditEntityEmailAccount   AuditEntityType = "email_account"
+	AuditEntityMailboxImport  AuditEntityType = "mailbox_import"
+	AuditEntityMailboxGrant   AuditEntityType = "mailbox_grant"
+	AuditEntityMailboxVendor  AuditEntityType = "mailbox_vendor"
+	AuditEntityDomainRedirect AuditEntityType = "domain_redirect"
+	AuditEntityAPIKey         AuditEntityType = "api_key"
+	AuditEntitySequence       AuditEntityType = "step"
+	AuditEntityUser           AuditEntityType = "user"
+	AuditEntityOrganization   AuditEntityType = "organization"
 	// AuditEntityOrgRisk carries a risk-posture transition. It rides the audit
 	// spine like every other entity, so a change reaches every teammate's
 	// dashboard without a bespoke emit site.

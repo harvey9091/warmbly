@@ -102,6 +102,21 @@ Personas are derived from a hash of the contact's address, so behavior is stable
 | `SANDBOX_SMTP_HOST` / `SANDBOX_SMTP_PORT` | `localhost` / `11025` | seeded as the mailboxes' outbound server (the worker dials it) |
 | `SANDBOX_IMAP_HOST` / `SANDBOX_IMAP_PORT` | `localhost` / `10993` | seeded as the mailboxes' inbound server (the worker dials it) |
 | `CREDENTIALS_ENCRYPTION_KEY` | set by the Makefile | must match the backend's key |
+| `SANDBOX_VENDOR_ADDR` | `127.0.0.1:18099` | where the mock inbox vendor API listens |
+| `SANDBOX_VENDOR_LATENCY_MS` | `1200` | how long the mock vendor takes to answer, like a real API; `0` answers at once |
+
+## Mock inbox vendors
+
+The simulator also plays two inbox vendors, so connecting a vendor account, importing its mailboxes and managing its domains work with no vendor account. `make sandbox` starts it and points the backend at it with `MAILVENDOR_SANDBOX_URL=http://127.0.0.1:18099`. To run only the mock next to your own backend, use `go run ./cmd/sandbox -vendors-only` and start the backend with the same variable. The backend ignores it unless `APP_ENV` is `dev`.
+
+Connect either vendor from **Add account > Inbox vendor** with any API key and workspace ID:
+
+| Vendor | Mailboxes | Domains |
+|--------|-----------|---------|
+| InboxKit | eight Google Workspace mailboxes on `sunrise-outbound.test` and `trysunrise.test`. Only a password comes back, as with the real API, and `.test` has no mail servers, so their rows ask for server settings; **Fix** on a row can point it at the sandbox's Mailpit (`localhost:11025`) and Dovecot (`localhost:10993`) | forwarding and DNS writes, so **Sending domains** can set the root forward and the tracking record in one click |
+| Mailforge | four mailboxes on `sunrisehq.test`, hosted on the sandbox's Mailpit and Dovecot, so they import and connect for real | forwarding only |
+
+The mock keeps its state in memory, so a restart puts every domain back the way it started.
 
 ## Demo script
 

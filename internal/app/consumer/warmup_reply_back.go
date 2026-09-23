@@ -74,8 +74,8 @@ func (s *JobsService) scheduleWarmupReplyBack(ctx context.Context, token *models
 // next day's opening when it falls past the close.
 func withinWarmupHours(t time.Time, account *models.Email) time.Time {
 	loc := time.UTC
-	if account.Timezone != "" {
-		if l, err := time.LoadLocation(account.Timezone); err == nil {
+	if zone := account.ClockTimezone(); zone != "" {
+		if l, err := time.LoadLocation(zone); err == nil {
 			loc = l
 		}
 	}

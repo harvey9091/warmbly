@@ -23,6 +23,9 @@ func (s *JobsService) HandleNewEmail(ctx context.Context, e *models.JobEventNewE
 	err := s.ingestNewEmail(ctx, e)
 	if errors.Is(err, errWarmupVerification) && s.UniboxRepository != nil {
 		if storeErr := s.UniboxRepository.DeferWarmupVerification(ctx, e); storeErr != nil {
+			if s.dropForDeletedMailbox(ctx, e.UserID, e.Message.EmailID, storeErr) {
+				return nil
+			}
 			return fmt.Errorf("defer inbox arrival: %w", storeErr)
 		}
 		log.Warn().Err(err).Str("email_id", e.Message.EmailID.String()).Msg("inbox arrival queued for warmup verification")
@@ -90,6 +93,9 @@ func (s *JobsService) ingestNewEmail(ctx context.Context, e *models.JobEventNewE
 
 	// Normal email processing
 	if err := s.UniboxRepository.CreateEntry(ctx, e.UserID, e.Message); err != nil {
+		if s.dropForDeletedMailbox(ctx, e.UserID, e.Message.EmailID, err) {
+			return nil
+		}
 		CaptureError(e.UserID, e.Message.EmailID, err)
 		return err
 	}
@@ -490,7 +496,7 @@ func (s *JobsService) performWarmupActions(ctx context.Context, e *models.JobEve
 	if s.EmailRepository != nil {
 		if account, xerr := s.EmailRepository.GetByID(ctx, e.Message.EmailID); xerr == nil && account != nil {
 			workerID = account.WorkerID
-			recipientTZ = account.Timezone
+			recipientTZ = account.ClockTimezone()
 			base.Placement, base.TargetFolder = account.WarmupFiling()
 		}
 	}

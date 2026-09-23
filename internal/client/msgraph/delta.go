@@ -85,7 +85,7 @@ func (c *Client) syncFolder(ctx context.Context, folder string) error {
 	// saved intermediate nextLink would make the next pass treat the rest of
 	// the priming walk as live mail.
 	if next == "" {
-		next = graphBase + "/me/mailFolders/" + folder + "/messages/delta?$select=" + url.QueryEscape(deltaSelect)
+		next = c.root() + "/mailFolders/" + folder + "/messages/delta?$select=" + url.QueryEscape(deltaSelect)
 		for {
 			var pg deltaPage
 			if err := c.doJSON(ctx, "GET", next, nil, &pg); err != nil {
@@ -176,7 +176,7 @@ func (c *Client) applyDelta(ctx context.Context, folder string, item *GraphMessa
 // returns nil, nil when Graph no longer has the message (deleted between the
 // delta item and now), which is a skip for the caller, not a mailbox error.
 func (c *Client) FetchMessage(ctx context.Context, folder, id string) (*GraphMessage, error) {
-	u := graphBase + "/me/messages/" + url.PathEscape(id) + "?$select=" + url.QueryEscape(msgSelect)
+	u := c.root() + "/messages/" + url.PathEscape(id) + "?$select=" + url.QueryEscape(msgSelect)
 	resp, err := c.do(ctx, "GET", u, "", nil)
 	if err != nil {
 		return nil, transportError(err)
@@ -206,7 +206,7 @@ func (c *Client) ListMessagesSince(ctx context.Context, folder string, since tim
 		q.Set("$orderby", "receivedDateTime desc")
 		q.Set("$top", itoa(top))
 		q.Set("$select", msgSelect)
-		next = graphBase + "/me/mailFolders/" + folder + "/messages?" + q.Encode()
+		next = c.root() + "/mailFolders/" + folder + "/messages?" + q.Encode()
 	}
 	var pg listPage
 	if err := c.doJSON(ctx, "GET", next, nil, &pg); err != nil {

@@ -56,7 +56,7 @@ func (h *Handler) GenerateAIVariable(c *gin.Context) {
 
 	var req generationAIVariableRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	req.Prompt = strings.TrimSpace(req.Prompt)

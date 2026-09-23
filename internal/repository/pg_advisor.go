@@ -110,7 +110,11 @@ type AdvisorCampaign struct {
 	// what this campaign can send, since the per-mailbox cap always wins.
 	SenderCount    int
 	SenderCapacity int
-	StepCount      int
+	// PickedSenders and SenderTags are how the campaign selects its pool: the
+	// enabled campaign_senders rows and its tags. Both zero means "all".
+	PickedSenders int
+	SenderTags    int
+	StepCount     int
 	// EmailStepCount excludes wait/action nodes.
 	EmailStepCount int
 	VariantCount   int
@@ -429,6 +433,21 @@ func (r *advisorRepository) ResolveMissing(ctx context.Context, orgID uuid.UUID,
 	return int(tag.RowsAffected()), nil
 }
 
+// ResolveAdvisorFindingsFor closes the findings about deleted entities (as
+// subject or parent), inside the delete's transaction so no stale advice outlives the row.
+func ResolveAdvisorFindingsFor(ctx context.Context, tx activityWriter, orgID any, ids []uuid.UUID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `
+		UPDATE advisor_findings
+		SET status = 'resolved', resolved_at = NOW()
+		WHERE organization_id = $1
+		  AND (entity_id = ANY($2) OR parent_id = ANY($2))
+		  AND status IN ('open', 'snoozed', 'applied', 'dismissed')`, orgID, ids)
+	return err
+}
+
 func (r *advisorRepository) ExpireSnoozes(ctx context.Context) (int, error) {
 	tag, err := r.db.Exec(ctx, `
 		UPDATE advisor_findings SET status = 'open', snoozed_until = NULL
@@ -680,20 +699,19 @@ func (r *advisorRepository) LastRunAt(ctx context.Context, orgID uuid.UUID) (*ti
 }
 
 func (r *advisorRepository) ListOrgsDue(ctx context.Context, staleness time.Duration, limit int) ([]uuid.UUID, error) {
-	// Only orgs with something to advise on: at least one connected mailbox.
-	// A brand-new org with nothing set up has no useful advice to receive and
-	// should not cost an evaluation pass.
+	// Only orgs with something to advise on: a connected mailbox, or open
+	// advice that a pass would have to close (the last mailbox just went).
 	query := `
 		SELECT o.id
 		FROM organizations o
-		JOIN LATERAL (
-			SELECT 1 FROM email_accounts ea WHERE ea.organization_id = o.id LIMIT 1
-		) has_mailbox ON true
 		LEFT JOIN LATERAL (
 			SELECT MAX(started_at) AS last_run FROM advisor_runs ar WHERE ar.organization_id = o.id
 		) r ON true
 		LEFT JOIN advisor_settings s ON s.organization_id = o.id
 		WHERE COALESCE(s.enabled, true)
+		  AND (EXISTS (SELECT 1 FROM email_accounts ea WHERE ea.organization_id = o.id)
+		       OR EXISTS (SELECT 1 FROM advisor_findings af
+		                  WHERE af.organization_id = o.id AND af.status IN ('open', 'snoozed')))
 		  AND (r.last_run IS NULL OR r.last_run < NOW() - make_interval(secs => $1))
 		ORDER BY r.last_run ASC NULLS FIRST
 		LIMIT $2`

@@ -1,8 +1,8 @@
 // GmailAppPasswordPanel — the Gmail path of the connect modal.
 //
-// New Gmail and Google Workspace mailboxes connect with an app password over
-// IMAP and SMTP, not with Google sign-in (the deployment decides, see
-// gmail_oauth_connect on /auth/config). The server settings never change, so
+// One Gmail or Google Workspace mailbox over IMAP and SMTP with an app
+// password; per-mailbox Google sign-in is being retired, and a whole Workspace
+// domain goes through an admin grant instead. The server settings never change, so
 // the only things a person has to produce are the app password and the
 // address, and the panel walks them to those in three steps: turn on 2-Step
 // Verification, create the app password, connect. Steps slide like the rest
@@ -27,7 +27,6 @@ import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
 import addEmail from "@/lib/api/client/app/emails/addEmail";
 import { capture } from "@/lib/productAnalytics";
-import useAuthConfig from "@/lib/api/hooks/auth/useAuthConfig";
 import { cn } from "@/lib/utils";
 
 const EASE = [0.32, 0.72, 0, 1] as const;
@@ -57,10 +56,6 @@ export default function GmailAppPasswordPanel({
 }) {
     const [step, setStep] = React.useState(0);
     const [dir, setDir] = React.useState<1 | -1>(1);
-    // Reached two ways: as the only Gmail route (sign-in is gated off), or by
-    // choice from the OAuth panel when it is not. Promising sign-in "soon"
-    // in the second case would be talking about something already on screen.
-    const gmailOAuth = useAuthConfig().config.gmail_oauth_connect === true;
     const go = (next: number) => {
         setDir(next > step ? 1 : -1);
         setStep(next);
@@ -71,9 +66,7 @@ export default function GmailAppPasswordPanel({
             <div className="px-4 py-2 border-b border-slate-200/60 bg-sky-50/60 flex items-center gap-2 text-[11.5px] text-sky-800">
                 <SparklesIcon className="w-3.5 h-3.5 text-sky-600 shrink-0" />
                 <span className="min-w-0 truncate">
-                    {gmailOAuth
-                        ? "An app password connects the same mailbox in about two minutes, with no Google consent screen."
-                        : "Google sign-in is coming soon. Until then, an app password connects the same mailbox in about two minutes."}
+                    An app password connects any Gmail or Workspace mailbox in about two minutes, with no Google consent screen.
                 </span>
             </div>
             <Progress step={step} />

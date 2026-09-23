@@ -81,7 +81,7 @@ func (h *Handler) PreviewCampaignTemplate(c *gin.Context) {
 	}
 	var req templatePreviewRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -165,7 +165,7 @@ func (h *Handler) CreateCampaign(c *gin.Context) {
 	var data models.CreateCampaign
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -235,7 +235,7 @@ func (h *Handler) EstimateCampaign(c *gin.Context) {
 
 	var data models.CampaignEstimate
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -278,7 +278,7 @@ func (h *Handler) UpdateCampaign(c *gin.Context) {
 	var data models.UpdateCampaign
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -291,6 +291,9 @@ func (h *Handler) UpdateCampaign(c *gin.Context) {
 	// Audit log
 	if campaignID, err := uuid.Parse(id); err == nil {
 		h.auditOrg(c, models.AuditActionUpdate, models.AuditEntityCampaign, &campaignID, nil, nil)
+	}
+	if data.EmailTags != nil || data.SenderStrategy != nil || data.Status != nil {
+		h.refreshAdvisorNow(*orgID)
 	}
 
 	c.JSON(http.StatusOK, resp)
@@ -351,7 +354,7 @@ func (h *Handler) DuplicateCampaign(c *gin.Context) {
 	// The body is optional; an empty one reads as io.EOF.
 	var req duplicateCampaignRequest
 	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -511,7 +514,7 @@ func (h *Handler) ReplaceCampaignSenders(c *gin.Context) {
 		Senders []models.CampaignSenderInput `json:"senders"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -524,6 +527,7 @@ func (h *Handler) ReplaceCampaignSenders(c *gin.Context) {
 	if campaignID, err := uuid.Parse(c.Param("id")); err == nil {
 		h.auditOrg(c, models.AuditActionUpdate, models.AuditEntityCampaign, &campaignID, nil, map[string]string{"scope": "senders"})
 	}
+	h.refreshAdvisorNow(*orgID)
 
 	c.JSON(http.StatusOK, gin.H{"data": senders})
 }

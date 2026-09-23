@@ -1140,11 +1140,14 @@ func (s *campaignService) Estimate(ctx context.Context, orgID uuid.UUID, in *mod
 	if in.Days != nil && *in.Days != 0 {
 		days = *in.Days
 	}
+	// No timezone, or an empty one, means the campaign will follow the workspace.
+	zone := s.campaignRepository.WorkspaceTimezone(ctx, orgID)
+	if in.Timezone != nil && *in.Timezone != "" && tz.Valid(*in.Timezone) {
+		zone = *in.Timezone
+	}
 	loc := time.UTC
-	if in.Timezone != nil && tz.Valid(*in.Timezone) {
-		if l, err := time.LoadLocation(*in.Timezone); err == nil {
-			loc = l
-		}
+	if l, err := time.LoadLocation(zone); err == nil {
+		loc = l
 	}
 	now := time.Now().In(loc)
 	start := now

@@ -22,7 +22,7 @@ type appleTokenLoginRequest struct {
 func (h *Handler) AppleTokenLogin(c *gin.Context) {
 	var data appleTokenLoginRequest
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -46,7 +46,7 @@ type googleTokenLoginRequest struct {
 func (h *Handler) GoogleTokenLogin(c *gin.Context) {
 	var data googleTokenLoginRequest
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 

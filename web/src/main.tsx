@@ -11,6 +11,7 @@ import "@fontsource/poppins/600.css";
 import "@fontsource/poppins/700.css";
 import RootAppLayout from './app/app/layout';
 import AddressesPage from './app/app/emails/page';
+import SendingDomainsPage from './app/app/emails/domains/page';
 import ContactsPage from './app/app/contacts/page';
 import FormsPage from './app/app/forms/page';
 import FormBuilderPage from './app/app/forms/[id]/page';
@@ -247,7 +248,10 @@ const router = createBrowserRouter([
           },
           {
             path: "emails",
-            element: <AddressesPage />,
+            children: [
+              { index: true, element: <AddressesPage /> },
+              { path: "domains", element: <SendingDomainsPage /> },
+            ],
           },
           {
             path: "contacts",

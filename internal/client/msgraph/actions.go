@@ -74,7 +74,7 @@ func (c *Client) wellKnownFolderID(ctx context.Context, name string) (string, er
 	var folder struct {
 		ID string `json:"id"`
 	}
-	if err := c.doJSON(ctx, "GET", graphBase+"/me/mailFolders/"+url.PathEscape(name)+"?$select=id", nil, &folder); err != nil {
+	if err := c.doJSON(ctx, "GET", c.root()+"/mailFolders/"+url.PathEscape(name)+"?$select=id", nil, &folder); err != nil {
 		return "", err
 	}
 	c.cacheFolder(name, folder.ID)
@@ -128,7 +128,7 @@ func (c *Client) move(ctx context.Context, messageID, destinationID string) (str
 // Returns an empty string (no error) when the message can't be found.
 func (c *Client) ResolveMessageID(ctx context.Context, internetMessageID string) (string, error) {
 	filter := "internetMessageId eq '" + strings.ReplaceAll(internetMessageID, "'", "''") + "'"
-	u := graphBase + "/me/messages?$select=id&$top=1&$filter=" + url.QueryEscape(filter)
+	u := c.root() + "/messages?$select=id&$top=1&$filter=" + url.QueryEscape(filter)
 	var resp struct {
 		Value []struct {
 			ID string `json:"id"`
@@ -144,7 +144,7 @@ func (c *Client) ResolveMessageID(ctx context.Context, internetMessageID string)
 }
 
 func (c *Client) messageURL(messageID string) string {
-	return graphBase + "/me/messages/" + url.PathEscape(messageID)
+	return c.root() + "/messages/" + url.PathEscape(messageID)
 }
 
 // ensureFolder resolves a top-level mail folder id by display name, creating the
@@ -158,7 +158,7 @@ func (c *Client) ensureFolder(ctx context.Context, name string) (string, error) 
 	c.mu.Unlock()
 
 	// Look for an existing folder with this display name.
-	listURL := graphBase + "/me/mailFolders?$select=id,displayName&$top=100"
+	listURL := c.root() + "/mailFolders?$select=id,displayName&$top=100"
 	var list struct {
 		Value []struct {
 			ID          string `json:"id"`
@@ -179,7 +179,7 @@ func (c *Client) ensureFolder(ctx context.Context, name string) (string, error) 
 	var created struct {
 		ID string `json:"id"`
 	}
-	if err := c.doJSON(ctx, "POST", graphBase+"/me/mailFolders", map[string]any{"displayName": name}, &created); err != nil {
+	if err := c.doJSON(ctx, "POST", c.root()+"/mailFolders", map[string]any{"displayName": name}, &created); err != nil {
 		return "", err
 	}
 	c.cacheFolder(name, created.ID)

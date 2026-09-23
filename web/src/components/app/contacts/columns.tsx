@@ -42,6 +42,7 @@ export interface ContactRow {
     verification_provider?: string;
     verification_checked_at?: string | null;
     verification_confidence?: number;
+    verification_requested_at?: string | null;
     created_at: Date;
     updated_at?: Date;
 }

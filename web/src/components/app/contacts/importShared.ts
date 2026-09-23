@@ -114,6 +114,57 @@ export function isCustomTarget(target: string): boolean {
     return target === "custom" || target.startsWith("custom:");
 }
 
+// customKeyOf is the field a custom mapping writes to, reading the legacy
+// "custom:<key>" spelling too. "" for a non-custom mapping.
+export function customKeyOf(m: ImportColumnMapping): string {
+    if (!isCustomTarget(m.target)) return "";
+    const explicit = normalizeCustomKey(m.custom_key ?? "");
+    return explicit || normalizeCustomKey(m.target.startsWith("custom:") ? m.target.slice(7) : "");
+}
+
+// Mirrors contact.FoldCustomFieldKey: the form two spellings of one field
+// ("Company URL", "company_url") share.
+export function foldCustomKey(key: string): string {
+    return key.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+// matchExistingKey finds the workspace field a header or typed name refers to:
+// the exact name first, then one that differs only in case or separators.
+// `existing` is most-used first, so of two such spellings the common one wins.
+export function matchExistingKey(name: string, existing: string[]): string | undefined {
+    const n = normalizeCustomKey(name);
+    if (n === "") return undefined;
+    if (existing.includes(n)) return n;
+    const f = foldCustomKey(n);
+    if (f === "") return undefined;
+    return existing.find((k) => foldCustomKey(k) === f);
+}
+
+export type CustomKeyStatus =
+    | { kind: "existing" }
+    | { kind: "similar"; existing: string }
+    | { kind: "new" };
+
+// customKeyStatus says whether a custom mapping writes into a field the
+// workspace already has, a near-duplicate of one, or a brand new field.
+export function customKeyStatus(key: string, existing: string[]): CustomKeyStatus {
+    const k = normalizeCustomKey(key);
+    if (existing.includes(k)) return { kind: "existing" };
+    const match = matchExistingKey(k, existing);
+    return match ? { kind: "similar", existing: match } : { kind: "new" };
+}
+
+// targetIdentity names where a mapping writes, so two columns writing to the
+// same place can be spotted. null for targets that take any number of columns.
+export function targetIdentity(m: ImportColumnMapping): string | null {
+    if (m.target === "ignore" || m.target === "categories") return null;
+    if (isCustomTarget(m.target)) {
+        const key = customKeyOf(m);
+        return key ? `custom:${key}` : null;
+    }
+    return m.target;
+}
+
 // mappingProblem returns the first reason the mapping cannot be committed, or
 // null when it is good to go. Same order of checks as the server so the two
 // never disagree about which column is at fault.

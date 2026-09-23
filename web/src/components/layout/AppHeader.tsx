@@ -35,6 +35,7 @@ import { cn } from "@/lib/utils";
 const labelMap: Record<string, string> = {
     app: "Home",
     emails: "Accounts",
+    domains: "Sending domains",
     unibox: "Inbox",
     contacts: "Contacts",
     segments: "Segments",

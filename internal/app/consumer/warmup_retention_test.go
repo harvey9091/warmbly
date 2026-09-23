@@ -126,6 +126,21 @@ func TestRemoveEmailNeverStrikesARetiredMessage(t *testing.T) {
 	}
 }
 
+// A fresh warmup message that the sync found in a folder the owner excluded
+// from sync was filed, not deleted: it is still in the mailbox, so it is not
+// a strike whatever its age.
+func TestRemoveEmailNeverStrikesAMessageFiledIntoASkippedFolder(t *testing.T) {
+	s, svc := retentionService(receivedAgo(time.Hour))
+	if err := s.HandleRemoveEmail(context.Background(), &models.JobEventRemoveEmail{
+		UserID: uuid.New(), EmailID: uuid.New(), ID: uuid.New(), SkippedFolder: "Warmer",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(svc.strikes) != 0 {
+		t.Fatalf("a move into a skipped folder was recorded as tampering: %v", svc.strikes)
+	}
+}
+
 // Gmail reports Delete as gaining the TRASH label. That is the owner's act
 // and is judged on the same freshness rule; a spam flag is still the graver
 // strike and is never subject to the window.

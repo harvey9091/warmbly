@@ -463,11 +463,11 @@ func (r *dangerZoneRepository) hardDelete(ctx context.Context, mailboxScope, del
 	return placements, nil
 }
 
-// isForeignKeyViolation detects Postgres SQLSTATE 23503 (foreign_key_violation),
+// IsForeignKeyViolation detects Postgres SQLSTATE 23503 (foreign_key_violation),
 // which for a write keyed on a mailbox or a user means the parent row was
 // deleted before the write landed. Matched through errors.As so a wrapped error
 // still reports.
-func isForeignKeyViolation(err error) bool {
+func IsForeignKeyViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		return pgErr.Code == "23503"

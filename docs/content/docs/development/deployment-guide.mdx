@@ -444,16 +444,17 @@ Every emailed link (password reset, invitation, the dashboard button in the welc
 
 This is the first thing you will actually want to do after installing, and the only part that needs credentials from outside Warmbly.
 
-There are three ways to attach a sending mailbox. Only the OAuth ones need setup.
+There are several ways to attach a sending mailbox. Only the OAuth and whole-domain ones need setup.
 
 | Mailbox type | Setup needed | Variables |
 |--------------|--------------|-----------|
 | Any SMTP + IMAP provider | None | none |
-| Gmail / Google Workspace | None with an app password (the default). A Google Cloud OAuth client to offer Google sign-in | `BOX_GOOGLE_OAUTH_CONNECT`, `BOX_GOOGLE_CLIENT_ID`, `BOX_GOOGLE_CLIENT_SECRET` |
+| Gmail / Google Workspace | None with an app password (the default). A Google Cloud OAuth client to offer per-mailbox Google sign-in, which is being retired | `BOX_GOOGLE_OAUTH_CONNECT`, `BOX_GOOGLE_CLIENT_ID`, `BOX_GOOGLE_CLIENT_SECRET` |
 | Outlook / Microsoft 365 | An Entra ID app registration | `BOX_OUTLOOK_CLIENT_ID`, `BOX_OUTLOOK_CLIENT_SECRET` |
+| A whole Google Workspace domain or Microsoft 365 organization | A Google Cloud service account for Google; the Outlook app above, with three application permissions, for Microsoft. See [whole-domain mailbox connects](/development/whole-domain-connect/) | `GOOGLE_WORKSPACE_DELEGATION_KEY_FILE` (or `GOOGLE_WORKSPACE_DELEGATION_KEY`), `BOX_OUTLOOK_CLIENT_ID`, `BOX_OUTLOOK_CLIENT_SECRET` |
 
 <Callout type="warn" title="These are not the sign-in variables">
-`BOX_GOOGLE_*` connects **mailboxes you send from**. `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (no `BOX_` prefix) are a different thing entirely: they enable "Sign in with Google" for logging into Warmbly. You can set either, both, or neither, and one never substitutes for the other.
+`BOX_GOOGLE_*` connects **mailboxes you send from**. `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (no `BOX_` prefix) are a different thing entirely: they enable "Sign in with Google" for logging into Warmbly. You can set either, both, or neither, and one never substitutes for the other. The one overlap: a Google Workspace administrator proving a domain for a [whole-domain connect](/development/whole-domain-connect/#proving-the-domain) signs in through the `GOOGLE_CLIENT_ID` client when it is set, and through the `BOX_GOOGLE_*` client otherwise.
 </Callout>
 
 ### SMTP and IMAP
@@ -462,7 +463,7 @@ Nothing to configure. Add the mailbox in the dashboard with its host, port, user
 
 ### Gmail and Google Workspace
 
-Nothing to configure by default: the connect dialog walks users through a Google app password over `smtp.gmail.com` and `imap.gmail.com`, see [the mailbox guide](/guides/mailboxes/#gmail-and-google-workspace). Set up a Google OAuth client only if you want to offer Google sign-in for new Gmail mailboxes, which also needs `BOX_GOOGLE_OAUTH_CONNECT=true`; without it the client still serves the mailboxes already connected that way, both refreshing their tokens and re-authorizing them when Google invalidates a grant.
+Nothing to configure by default: the connect dialog walks users through a Google app password over `smtp.gmail.com` and `imap.gmail.com`, see [the mailbox guide](/guides/mailboxes/#gmail-and-google-workspace). For Google Workspace, the recommended path is a [whole-domain connect](/development/whole-domain-connect/), which needs a service account rather than an OAuth client. Per-mailbox Google sign-in is [being retired](/guides/mailboxes/#moving-off-per-mailbox-google-sign-in). Set up a Google OAuth client only if you want to offer it for new Gmail mailboxes, which also needs `BOX_GOOGLE_OAUTH_CONNECT=true`; without it the client still serves the mailboxes already connected that way, both refreshing their tokens and re-authorizing them when Google invalidates a grant.
 
 <Steps>
 

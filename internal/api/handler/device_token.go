@@ -22,7 +22,7 @@ func (h *Handler) RegisterDeviceToken(c *gin.Context) {
 	}
 	var req models.RegisterDeviceTokenRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	if !deviceTokenPattern.MatchString(req.Token) {

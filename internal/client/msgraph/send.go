@@ -114,7 +114,7 @@ func sendHeaders(from string, to, cc, bcc []string, messageID, subject string, p
 // plus the internetMessageId Exchange assigned to it.
 func (c *Client) createDraft(ctx context.Context, raw []byte) (string, string, error) {
 	encoded := base64.StdEncoding.EncodeToString(raw)
-	resp, err := c.do(ctx, http.MethodPost, graphBase+"/me/messages", "text/plain", []byte(encoded))
+	resp, err := c.do(ctx, http.MethodPost, c.root()+"/messages", "text/plain", []byte(encoded))
 	if err != nil {
 		return "", "", transportError(err)
 	}
@@ -189,7 +189,7 @@ func (c *Client) discardDraft(ctx context.Context, draftID string) {
 // returns 202 with no id.
 func (c *Client) sendMIME(ctx context.Context, raw []byte) error {
 	encoded := base64.StdEncoding.EncodeToString(raw)
-	resp, err := c.do(ctx, http.MethodPost, graphBase+"/me/sendMail", "text/plain", []byte(encoded))
+	resp, err := c.do(ctx, http.MethodPost, c.root()+"/sendMail", "text/plain", []byte(encoded))
 	if err != nil {
 		return transportError(err)
 	}

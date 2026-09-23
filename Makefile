@@ -283,7 +283,7 @@ sandbox:
 	@echo "Login: sandbox@warmbly.test / password123 (org: Sunrise Labs). Ctrl-C stops the app; infra stays up."
 	@echo ""
 	@trap 'kill 0' INT TERM; \
-	$(MAKE) --no-print-directory backend & \
+	$(MAKE) --no-print-directory backend MAILVENDOR_SANDBOX_URL=http://127.0.0.1:18099 & \
 	$(MAKE) --no-print-directory consumer & \
 	$(MAKE) --no-print-directory worker & \
 	$(MAKE) --no-print-directory web & \
@@ -657,9 +657,12 @@ WORKER_DEV_ENV := \
 
 # API server on :8080. Applies the embedded migrations on boot against
 # the docker postgres.
+# The sandbox's mock inbox vendor API; empty keeps the real vendors.
+MAILVENDOR_SANDBOX_URL ?=
 backend:
 	$(GO_DEV_ENV) \
 	$(AI_DEV_ENV) \
+	MAILVENDOR_SANDBOX_URL=$(MAILVENDOR_SANDBOX_URL) \
 	API_HOST=0.0.0.0:8080 \
 	FORMS_DOMAIN=localhost:$(FORMS_PORT) \
 	GIN_MODE=debug \

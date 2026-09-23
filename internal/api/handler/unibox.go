@@ -344,7 +344,7 @@ func (h *Handler) SetUniboxThreadLabels(c *gin.Context) {
 
 	var req models.UniboxThreadLabels
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -374,7 +374,7 @@ func (h *Handler) UniboxMarkSeen(c *gin.Context) {
 
 	var data models.MarkSeen
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -404,7 +404,7 @@ func (h *Handler) UniboxMoveFolder(c *gin.Context) {
 
 	var data models.MoveFolder
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -483,7 +483,7 @@ func (h *Handler) UniboxReply(c *gin.Context) {
 
 	var req UniboxReplyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -601,7 +601,7 @@ func (h *Handler) CreateUniboxSnooze(c *gin.Context) {
 
 	var req UniboxSnoozeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 

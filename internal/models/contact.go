@@ -50,6 +50,9 @@ type Contact struct {
 	// 100, scored from the last check plus what real mail to the address
 	// showed (deliveries, opens, replies, bounces).
 	VerificationConfidence int `json:"verification_confidence"`
+	// VerificationRequestedAt is set while a member-requested re-check waits
+	// to run; the verdict above stands until it lands.
+	VerificationRequestedAt *time.Time `json:"verification_requested_at,omitempty"`
 
 	// Recipient ESP/provider, derived in the control plane from the recipient
 	// domain (never an MX dial on the send hot path). '' | 'gmail' | 'outlook'
@@ -246,7 +249,7 @@ type ContactsCounts struct {
 }
 
 // ContactVerificationCounts is the org's contacts by verification status.
-// Pending is the subset of Unknown nobody has checked yet.
+// Pending counts contacts never checked plus those with a re-check queued.
 type ContactVerificationCounts struct {
 	Valid   int `json:"valid"`
 	Risky   int `json:"risky"`
@@ -263,6 +266,16 @@ type ContactVerificationDetail struct {
 	// Decisive is true when real mail, not a check, decided the status.
 	Decisive bool                          `json:"decisive"`
 	Evidence []ContactVerificationEvidence `json:"evidence"`
+	// Source and Provider name who produced the last check or verdict, and
+	// ProviderLabel is the verifier's display name ("MillionVerifier").
+	Source        string `json:"source"`
+	Provider      string `json:"provider"`
+	ProviderLabel string `json:"provider_label,omitempty"`
+	// CheckStatus is what that check said before real mail was weighed in.
+	CheckStatus string     `json:"check_status"`
+	CheckedAt   *time.Time `json:"checked_at,omitempty"`
+	// RequestedAt is set while a member-requested re-check waits to run.
+	RequestedAt *time.Time `json:"requested_at,omitempty"`
 }
 
 // ContactVerificationEvidence is one observed fact about the mailbox.
@@ -336,6 +349,12 @@ type ContactVerificationResponse struct {
 	// Queued is true for the verify action: the check runs in the background
 	// and each contact updates live as its verdict lands.
 	Queued bool `json:"queued"`
+	// Verifier and VerifierLabel name who runs a queued check ("builtin" or
+	// the connected provider). VerifierError says why a connected provider
+	// cannot be used right now, in which case the built-in check runs instead.
+	Verifier      string `json:"verifier,omitempty"`
+	VerifierLabel string `json:"verifier_label,omitempty"`
+	VerifierError string `json:"verifier_error,omitempty"`
 }
 
 // VerificationOverview is what Settings shows about address verification.
@@ -379,6 +398,22 @@ type ContactEngagement struct {
 	LastClickedAt *time.Time `json:"last_clicked_at,omitempty"`
 	LastRepliedAt *time.Time `json:"last_replied_at,omitempty"`
 	LastBouncedAt *time.Time `json:"last_bounced_at,omitempty"`
+
+	// ReadsOn is how the contact reads your mail: each client and device a
+	// person's opens came from, most recent first, with how often.
+	ReadsOn []ContactReadingOrigin `json:"reads_on,omitempty"`
+}
+
+// ContactReadingOrigin is one client and device a contact opened mail on.
+type ContactReadingOrigin struct {
+	Client       string    `json:"client,omitempty"`
+	ClientType   string    `json:"client_type,omitempty"`
+	DeviceHidden bool      `json:"device_hidden,omitempty"`
+	DeviceType   string    `json:"device_type,omitempty"`
+	OS           string    `json:"os,omitempty"`
+	Browser      string    `json:"browser,omitempty"`
+	Opens        int       `json:"opens"`
+	LastOpenedAt time.Time `json:"last_opened_at"`
 }
 
 // ContactSuppression mirrors a row from suppressed_recipients for the
@@ -632,12 +667,16 @@ type ContactLinkClick struct {
 }
 
 // EngagementOrigin is what an open or click said about where it came from.
-// Client names the mail client or image proxy when the user agent does
-// (Gmail, Outlook, Image proxy); the browser fields describe the rest. The
+// Client names the mail client when the user agent does (Gmail, Apple Mail,
+// Outlook); ClientType says whether it was an installed app or webmail; the
+// browser fields describe the rest. DeviceHidden marks a fetch by a mailbox
+// provider's image proxy, which hides the reader's device and network. The
 // location is resolved from the source network and the address itself is
 // never stored. Every field is empty when unknown.
 type EngagementOrigin struct {
 	Client         string `json:"client,omitempty"`
+	ClientType     string `json:"client_type,omitempty"`
+	DeviceHidden   bool   `json:"device_hidden,omitempty"`
 	DeviceType     string `json:"device_type,omitempty"`
 	OS             string `json:"os,omitempty"`
 	Browser        string `json:"browser,omitempty"`
@@ -646,6 +685,13 @@ type EngagementOrigin struct {
 	Region         string `json:"region,omitempty"`
 	City           string `json:"city,omitempty"`
 }
+
+// EngagementOrigin.ClientType values, as the email_opens and
+// email_link_clicks checks allow them. Empty is unknown.
+const (
+	EngagementClientApp     = "app"
+	EngagementClientWebmail = "webmail"
+)
 
 // Empty reports whether nothing about the origin is known.
 func (o EngagementOrigin) Empty() bool {

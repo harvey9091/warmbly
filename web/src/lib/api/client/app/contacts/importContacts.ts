@@ -38,6 +38,9 @@ export interface ImportPreview {
     has_header: boolean;
     sample_rows: string[][];
     suggested_mapping: ImportColumnMapping[];
+    // Columns whose suggestion came from the TypeSafe judgment rather than
+    // the header or the values. Absent when none did.
+    inferred_columns?: number[];
 }
 
 export interface ImportCommitOptions {

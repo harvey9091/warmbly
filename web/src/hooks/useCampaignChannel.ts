@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useChannel, useChannelEvent } from './context/socket';
+import { originSummary, type EngagementKind } from '@/lib/engagementOrigin';
 
 // Task progress event payload
 export interface TaskProgressPayload {
@@ -51,7 +52,11 @@ interface TrackingPayload {
     occurred_at?: string;
     timestamp?: string;
     client?: string;
+    client_type?: string;
+    device_hidden?: boolean;
     device_type?: string;
+    os?: string;
+    browser?: string;
     country_code?: string;
     city?: string;
 }
@@ -63,9 +68,9 @@ function occurredAt(p: TrackingPayload): Date {
     return d && !Number.isNaN(d.getTime()) ? d : new Date();
 }
 
-// " (Gmail, Berlin DE)" or "" when the logs say nothing.
-function whereFrom(p: TrackingPayload): string {
-    const bits = [p.client, [p.city, p.country_code].filter(Boolean).join(' ')].filter(Boolean);
+// " (iPhone · Apple Mail app, Berlin DE)" or "" when the logs say nothing.
+function whereFrom(p: TrackingPayload, kind: EngagementKind): string {
+    const bits = [originSummary(p, kind), [p.city, p.country_code].filter(Boolean).join(' ')].filter(Boolean);
     return bits.length ? ` (${bits.join(', ')})` : '';
 }
 
@@ -163,14 +168,14 @@ export function useCampaignChannel(campaignId: string): CampaignChannelState {
                     id: nextId('open'),
                     type: 'opened',
                     contactEmail: data.contact_email || 'Unknown',
-                    message: `${data.machine ? 'Auto-opened' : 'Opened'} by ${data.contact_email || 'Unknown'}${whereFrom(data)}`,
+                    message: `${data.machine ? 'Auto-opened' : 'Opened'} by ${data.contact_email || 'Unknown'}${whereFrom(data, 'open')}`,
                     timestamp: occurredAt(data),
                 });
                 break;
             }
             case 'EMAIL_CLICKED': {
                 const data = payload as TrackingPayload;
-                const who = `${data.contact_email || 'Unknown'}${whereFrom(data)}`;
+                const who = `${data.contact_email || 'Unknown'}${whereFrom(data, 'click')}`;
                 const target = data.link_label || data.original_url;
                 addActivity({
                     id: nextId('click'),

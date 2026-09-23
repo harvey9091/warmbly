@@ -39,7 +39,7 @@ The whole flow takes about a minute. A code expires after 15 minutes if nobody a
 
 ## Google and Microsoft mailboxes: sign in through Warmbly Cloud
 
-On a linked instance, **Add account > Gmail / Google Workspace** and **Outlook / Microsoft 365** no longer need an OAuth client of your own. The sign-in window opens on Warmbly's verified Google and Microsoft apps, and when you approve:
+On a linked instance, signing in one mailbox under **Add account > Google** or **Add account > Microsoft** no longer needs an OAuth client of your own. The sign-in window opens on Warmbly's verified Google and Microsoft apps, and when you approve:
 
 - the mailbox is created in your Warmbly Cloud workspace, where its sign-in lives, and starts warming in the pool right away
 - your instance gets a mirror of the mailbox with no credential on it. Campaigns, replies and the unibox work from your server as before; to send and sync, the instance asks the cloud for a short-lived access token (about an hour, cached) using its link token

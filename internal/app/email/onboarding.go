@@ -23,7 +23,7 @@ import (
 
 // OAuthStart issues a fresh state nonce and returns the provider-specific authorization URL.
 // The caller is expected to redirect the user to the URL and post back to OAuthFinish on return.
-func (s *emailService) OAuthStart(ctx context.Context, userID string, orgID *uuid.UUID, provider models.InboxProvider) (*models.EmailOnboardingStartResponse, *errx.Error) {
+func (s *emailService) OAuthStart(ctx context.Context, userID string, orgID *uuid.UUID, provider models.InboxProvider, loginHint string) (*models.EmailOnboardingStartResponse, *errx.Error) {
 	// A new mailbox only; OAuthReauth renews an existing one and is not gated.
 	if provider == models.InboxProviderGoogle && !config.GoogleOAuthConnect() {
 		return nil, errx.ErrEmailOnboardGoogleOAuthDisabled
@@ -60,7 +60,7 @@ func (s *emailService) OAuthStart(ctx context.Context, userID string, orgID *uui
 		return nil, xerr
 	}
 
-	opts := append(authCodeOptions(provider, ""), oauth2.S256ChallengeOption(verifier))
+	opts := append(authCodeOptions(provider, loginHintOrEmpty(loginHint)), oauth2.S256ChallengeOption(verifier))
 	url := cfg.AuthCodeURL(state, opts...)
 	return &models.EmailOnboardingStartResponse{URL: url, State: state}, nil
 }
@@ -167,12 +167,17 @@ func (s *emailService) OAuthFinish(ctx context.Context, userID, code, state stri
 
 	if sess.EmailAccountID != nil {
 		acc, xerr := s.finishReauth(ctx, sess, provider, tok, owner)
+		if xerr == nil && acc != nil && sess.OrganizationID != nil {
+			s.resolveImportSignin(ctx, *sess.OrganizationID, acc)
+		}
 		return acc, true, xerr
 	}
 
-	if exists, xerr := s.emailRepository.ExistsForUser(ctx, userID, owner.Email); xerr != nil {
+	// Renewing a mailbox the workspace already has is the reauth route's job,
+	// which carries its own permission and provider checks.
+	if existing, xerr := s.findExisting(ctx, userID, sess.OrganizationID, owner.Email); xerr != nil {
 		return nil, false, xerr
-	} else if exists {
+	} else if existing != nil {
 		return nil, false, errx.ErrEmailOnboardAlreadyExists
 	}
 
@@ -206,12 +211,16 @@ func (s *emailService) OAuthFinish(ctx context.Context, userID, code, state stri
 		AccessToken:    tok.AccessToken,
 		RefreshToken:   tok.RefreshToken,
 		ExpiresAt:      tok.Expiry,
+		MailHost:       oauthMailHost(provider, owner.Email),
 	})
 	if xerr == nil && acc != nil {
 		s.captureSendIdentity(ctx, acc, tok)
 		s.syncWarmupPoolMembership(ctx, acc)
 		s.publishAccountEvent(ctx, pubsub.EventAccountConnected, acc)
 		s.dispatchAccountConnected(ctx, sess.OrganizationID, acc)
+		if sess.OrganizationID != nil {
+			s.resolveImportSignin(ctx, *sess.OrganizationID, acc)
+		}
 		// Assign a worker and load the mailbox so it starts sending/syncing
 		// immediately; the reconciler is the fallback if this fails.
 		s.loadAccountBestEffort(ctx, acc.ID)
@@ -231,9 +240,9 @@ func (s *emailService) OnboardSMTPIMAP(ctx context.Context, userID string, orgID
 		return nil, xerr
 	}
 
-	if exists, xerr := s.emailRepository.ExistsForUser(ctx, userID, data.Email); xerr != nil {
+	if existing, xerr := s.findExisting(ctx, userID, orgID, data.Email); xerr != nil {
 		return nil, xerr
-	} else if exists {
+	} else if existing != nil {
 		return nil, errx.ErrEmailOnboardAlreadyExists
 	}
 

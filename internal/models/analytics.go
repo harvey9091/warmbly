@@ -71,13 +71,23 @@ type EngagementBucket struct {
 
 // CampaignEngagementBreakdown is the "where from, on what" view of a
 // campaign's human opens and clicks. Buckets are ordered by activity, capped,
-// and keyed by ISO country code, client or browser name, and device type.
-// Unknown is the empty key.
+// and keyed by ISO country code, client or browser name, device type, and
+// surface (device and app or webmail together). Unknown is the empty key.
 type CampaignEngagementBreakdown struct {
 	Countries []EngagementBucket `json:"countries"`
 	Clients   []EngagementBucket `json:"clients"`
 	Devices   []EngagementBucket `json:"devices"`
+	Surfaces  []EngagementBucket `json:"surfaces"`
 }
+
+// Surface keys beyond the device types themselves and their `_app` forms
+// (`mobile_app`, `desktop_app`, `tablet_app`).
+const (
+	// EngagementSurfaceHidden is a fetch by a mailbox provider's image
+	// proxy, which hides the reader's device.
+	EngagementSurfaceHidden  = "hidden"
+	EngagementSurfaceWebmail = "webmail"
+)
 
 type CampaignSummary struct {
 	TotalContacts int `json:"total_contacts"`
@@ -338,6 +348,9 @@ type RecentActivityItem struct {
 	ContactID    uuid.UUID `json:"contact_id,omitempty"`
 	Timestamp    time.Time `json:"timestamp"`
 	Link         string    `json:"link,omitempty"` // For click events
+	// Origin is the client, device and location of a person's open or
+	// click, when it was logged per event.
+	Origin *EngagementOrigin `json:"origin,omitempty"`
 }
 
 // TopCampaignStats represents performance stats for a top campaign

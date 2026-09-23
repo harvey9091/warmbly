@@ -83,9 +83,12 @@ Mail over a daily budget is deferred, never dropped: the provider cursor is held
 | Copy judgment | The key alone | The subject and body of a campaign step, at Advisor evaluation and on the editor's re-check | `copy_judgments`, keyed by a hash of the copy and never exported |
 | Warmup content lint | The key alone | A generated warmup thread before it enters the bank | Rejected threads are counted on the generation job; nothing else is kept |
 | Bounce classification | The key alone | The bounce reason text, only when it does not name the recipient | `deliverability_events.metadata` |
+| Import column mapping | The key alone | For an import or Google Sheets preview with columns no header matched: every column header, the kind of value each column holds (email addresses, dates, short text and so on, worked out on the instance), and the workspace's custom field names. Never a cell value, and nothing at all unless the first row is clearly headers: none of its cells may be an address, a date or a number, and the Email column must have a header of its own. A contact's row fails that, since its Email cell is the address or blank | Nothing is stored; the answer only fills in the suggested mapping |
 | Form triage | A per-form switch | The submitted answers, labelled by field; never the visitor's address, agent or URL | `form_submissions.triage`, which travels with the Contacts group |
+| Mailbox import columns | The key alone | For a column of an import file that no header name or value pattern placed: the column's header text and a description of its values (such as "16 lowercase letters" or "hostnames"), never a value | Nowhere; the answer only sets that column's suggested field, which can be changed before importing |
+| Mailbox import failures | The key alone | For a connect refusal the import does not recognise: the server's reply with addresses, IP addresses, usernames and long tokens scrubbed out, and the mail host family (such as `google_workspace` or `other`) | `mailbox_import_rows.cause`, as the cause the row is grouped under |
 
-See [Automatic inbox tagging](/guides/inbox-tagging/), [Advisor](/guides/advisor/), [Warmup](/guides/warmup/), [Deliverability](/guides/deliverability/) and [Forms](/guides/forms/).
+See [Automatic inbox tagging](/guides/inbox-tagging/), [Advisor](/guides/advisor/), [Warmup](/guides/warmup/), [Deliverability](/guides/deliverability/), [Contacts](/guides/contacts-crm/#mapping-into-your-custom-fields), [Forms](/guides/forms/) and [Import mailboxes](/guides/mailbox-import/).
 
 ### Event history
 
@@ -118,6 +121,28 @@ Warmup keeps the standing of every penalised mailbox (score, state, and any bloc
 ### Pending inbox verification
 
 Mail whose warmup verification is temporarily unavailable waits in the `unibox_pending_emails` Postgres table. It holds the sync event, including message metadata and bounded searchable body text, until verification succeeds or the mailbox is deleted. The consumer retries it automatically after restarts. Full bodies remain in blob storage. This pending queue is included in instance backups but excluded from workspace exports, whose destination re-syncs provider mail.
+
+### Mailbox import files
+
+A [mailbox import](/guides/mailbox-import/) keeps each row's credentials in `mailbox_import_rows`, sealed with the workspace's own data key, until the row is connected. The credentials of rows that did not connect are kept for 7 days after the import finishes, so a failed row can be fixed and retried, and are then deleted. A finished import and its rows (address, status, cause, and the uploaded cells that are not passwords, which feed the failed-rows download) are deleted 30 days after it finished. Both windows are fixed rather than settings, and the sweep that applies them runs every minute. A connected mailbox's credentials are stored like any other mailbox's.
+
+The column mappings an import saves (`mailbox_import_mappings`: which field each header of a file means, no values) are kept until the workspace is deleted, and travel in a [workspace export](/guides/workspace-export-import/). Imports themselves do not.
+
+### Mailbox sources and redirects
+
+Three things a workspace can set up alongside its mailboxes, each kept until the workspace deletes it (or the workspace itself is deleted). None has a retention window.
+
+| Table | Holds | Secrets |
+|---|---|---|
+| `mailbox_vendor_connections` | An [inbox vendor](/guides/mailbox-import/#import-from-an-inbox-vendor) account: which vendor, a label, its status and last error | The API key and account IDs, sealed with the workspace's data key. No response returns them |
+| `mailbox_domain_grants` | A [Google Workspace or Microsoft 365 admin grant](/guides/mailbox-import/#connect-a-whole-google-workspace-domain): the provider, the Workspace domain or Microsoft tenant ID, the domains it covers, and for Google the admin address used to read the directory | None. No token is stored for a grant or for any mailbox it connected; the backend mints a short-lived one from the instance's own Google service account or Microsoft app each time a worker needs it |
+| `domain_redirects` | A [root redirect](/guides/sending-domains/#root-redirects): the domain, the website it sends visitors to, the ownership value for its `_warmbly` `TXT` record and the result of the last DNS check | None. The ownership value is derived from `AUTH_SECRET`, the workspace and the domain, so it stays the same for that workspace and differs for every other workspace and instance |
+
+A mailbox records which vendor account or grant it came from, and for a grant the address (Google) or Graph user ID (Microsoft) its tokens are minted for. Deleting a vendor connection keeps its mailboxes; deleting a grant stops the mailboxes it connected.
+
+Vendor connections and redirects travel in a [workspace export](/guides/workspace-export-import/). Grants do not: a grant is recorded only after the workspace proves the domain (Google) or completes the administrator's consent (Microsoft) on the instance that holds it, and a row from an archive proves neither. The mailboxes a grant connected travel without it. On the destination the workspace makes the grant again and connects the same users, which relinks those mailboxes instead of adding new ones.
+
+Forwarding a domain through an inbox vendor, and a tracking `CNAME` written through one, are stored at the vendor, not here. Warmbly keeps only the vendor's domain list, in memory for five minutes.
 
 ### Disconnecting a mailbox
 
@@ -242,11 +267,21 @@ The `rsync` alternative works too and is sometimes simpler, as long as the stack
 
 ## Outbound calls
 
-A self-hosted Warmbly makes no outbound call of its own except one, and it is off with a single setting.
+A self-hosted Warmbly makes no outbound call of its own except the one below, which is off with a single setting. The mail host lookup is listed too: it is off on a self-host unless you turn it on.
 
 | Call | When | Turn it off |
 |---|---|---|
 | GitHub releases API | Every 30 minutes, to tell the admin panel a newer version exists | `UPDATE_CHECK_ENABLED=false` |
+| Mail host lookup | When a [mailbox import](/guides/mailbox-import/) meets a domain whose MX records do not name a known provider, and once for each domain of a mailbox whose host is not recorded yet (one connected before hosts were recorded, or one connected by hand over SMTP and IMAP). Mozilla's Thunderbird ISPDB (`autoconfig.thunderbird.net`) is asked for the settings of that domain (or of its MX host's domain), after the domain's own autoconfig file. Only the domain name is sent, and the answer is cached for 6 hours. Without it, detection uses the domain's DNS and its own autoconfig file only | Off by default on a self-host; `MAILHOST_ISPDB=true` turns it on (it is on for Warmbly Cloud) |
+
+These are made only when a workspace uses the feature behind them, so an instance where nobody does makes none of them:
+
+| Call | When |
+|---|---|
+| Inbox vendor APIs (`api.inboxkit.com`, `api.zapmail.ai`, `api.mailforge.ai`, `api.infraforge.ai`, `api.maildoso.com`, `api.cheapinboxes.com`, `server.scaledmail.com`) | A workspace connects a vendor account, lists its mailboxes, imports them (each row's credentials are read as it connects), or has a vendor mailbox stopped on a connection error (checked every 15 minutes, at most once every 6 hours per mailbox). Also when the workspace opens its sending domains (the domain list of each active vendor account, at most once every five minutes per account), forwards a domain through its vendor, or has a tracking `CNAME` written there. Only that workspace's key is sent, to that vendor |
+| Google (`accounts.google.com`, `oauth2.googleapis.com`, `admin.googleapis.com`, `gmail.googleapis.com`) | A workspace creates, checks or uses a Google Workspace grant: the administrator's sign-in when that is how the domain is proved, token minting for the grant's addresses, the admin's directory entry and the domain's directory when picking mailboxes, and a Gmail profile read when a grant or mailbox is verified. Grants are re-checked hourly |
+| Microsoft (`login.microsoftonline.com`, `graph.microsoft.com`) | A workspace creates, checks or uses a Microsoft 365 grant: the administrator's consent sign-in, application token minting for the tenant, the organization's users, and a mailbox read when one connects. Grants are re-checked hourly |
+| DNS lookups | A workspace sets up a root redirect or a domain-wide tracking host, or proves a Google Workspace domain by DNS: `TXT`, address and `CNAME` lookups for that domain, through the host's resolver. Pending redirects are re-checked every 10 minutes, verified ones every 6 hours |
 
 Everything else is you: mail through the mailboxes you connect, DNS lookups for the domains you check, and whatever integrations you configure. There is no telemetry, no phone-home, and no license check.
 

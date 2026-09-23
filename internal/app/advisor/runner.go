@@ -88,10 +88,14 @@ func (r *Runner) sweep(ctx context.Context) {
 	}
 }
 
-// refreshInFlight dedupes concurrent read-triggered refreshes for one org, so
-// three open tabs (or a page that reads the summary and the list together) cost
-// one evaluation rather than three.
-var refreshInFlight sync.Map
+// refreshing dedupes concurrent refreshes for one org, so three open tabs (or a
+// page that reads the summary and the list together) cost one evaluation
+// rather than three. The value records that a forced refresh arrived mid-run,
+// whose change the running pass may have read too early to see.
+var (
+	refreshMu  sync.Mutex
+	refreshing = map[uuid.UUID]bool{}
+)
 
 // refreshTimeout bounds a detached refresh. An evaluation that has not finished
 // in this long is stuck on something, and holding the goroutine open does not
@@ -113,19 +117,46 @@ func RefreshIfStale(ctx context.Context, repo repository.AdvisorRepository, svc 
 	if last != nil && time.Since(*last) < maxAge {
 		return
 	}
-	if _, busy := refreshInFlight.LoadOrStore(orgID, struct{}{}); busy {
+	startRefresh(svc, orgID, "read", false)
+}
+
+// RefreshNow re-evaluates an org after a change the advisor reads (a mailbox
+// removed or reconfigured), whatever the age of its findings. It never blocks.
+func RefreshNow(svc Service, orgID uuid.UUID, trigger string) {
+	startRefresh(svc, orgID, trigger, true)
+}
+
+func startRefresh(svc Service, orgID uuid.UUID, trigger string, forced bool) {
+	refreshMu.Lock()
+	if _, busy := refreshing[orgID]; busy {
+		if forced {
+			refreshing[orgID] = true
+		}
+		refreshMu.Unlock()
 		return
 	}
+	refreshing[orgID] = false
+	refreshMu.Unlock()
 
 	// Detached from the request context on purpose: the user navigating away
 	// must not abort an evaluation that is already running and about to publish
 	// its result to their teammates.
 	go func() {
-		defer refreshInFlight.Delete(orgID)
-		bg, cancel := context.WithTimeout(context.Background(), refreshTimeout)
-		defer cancel()
-		if _, err := svc.Evaluate(bg, orgID, "read"); err != nil {
-			log.Printf("advisor: background refresh for org %s: %v", orgID, err)
+		for {
+			bg, cancel := context.WithTimeout(context.Background(), refreshTimeout)
+			if _, err := svc.Evaluate(bg, orgID, trigger); err != nil {
+				log.Printf("advisor: background refresh for org %s: %v", orgID, err)
+			}
+			cancel()
+
+			refreshMu.Lock()
+			if !refreshing[orgID] {
+				delete(refreshing, orgID)
+				refreshMu.Unlock()
+				return
+			}
+			refreshing[orgID] = false
+			refreshMu.Unlock()
 		}
 	}()
 }

@@ -72,7 +72,7 @@ func (h *Handler) FleetJoin(c *gin.Context) {
 	}
 	var req fleetJoinRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -446,7 +446,7 @@ func (h *Handler) AdminSetWorkerTags(c *gin.Context) {
 	}
 	var body setTagsBody
 	if err := c.ShouldBindJSON(&body); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	// Normalise: trim, lowercase, dedupe, drop empties. The DB constraint
@@ -499,7 +499,7 @@ func (h *Handler) AdminFleetReserveWorker(c *gin.Context) {
 	}
 	var body reserveWorkerBody
 	if err := c.ShouldBindJSON(&body); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	orgID, err := uuid.Parse(body.OrganizationID)
@@ -593,7 +593,7 @@ func (h *Handler) AdminFleetPatchNode(c *gin.Context) {
 	}
 	var body patchNodeBody
 	if err := c.ShouldBindJSON(&body); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -667,7 +667,7 @@ func (h *Handler) AdminFleetSetRelease(c *gin.Context) {
 	}
 	var body setReleaseBody
 	if err := c.ShouldBindJSON(&body); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 

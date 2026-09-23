@@ -81,12 +81,16 @@ export default function ReauthModal() {
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    className="fixed inset-0 z-[75] bg-slate-900/30 flex items-center justify-center p-4"
+                    // Above the z-[110] dialogs a gated action can start from; below the z-[200] confirm.
+                    className="fixed inset-0 z-[190] bg-slate-900/30 flex items-center justify-center p-4"
                     onMouseDown={(e) => {
                         if (e.target === e.currentTarget) cancel();
                     }}
                 >
                     <motion.form
+                        // alertdialog so a dialog underneath leaves Escape to this prompt.
+                        role="alertdialog"
+                        aria-modal="true"
                         initial={{ opacity: 0, scale: 0.97, y: 8 }}
                         animate={{ opacity: 1, scale: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.97, y: 8 }}

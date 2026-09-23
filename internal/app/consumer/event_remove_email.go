@@ -7,7 +7,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/warmbly/warmbly/internal/config"
-	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/repository"
 )
@@ -23,7 +22,9 @@ import (
 //
 // It also drops the local unibox entry for the removed message (best-effort).
 func (s *JobsService) HandleRemoveEmail(ctx context.Context, e *models.JobEventRemoveEmail) error {
-	if s.WarmupRepo != nil {
+	// A message the sync found in a folder the owner excluded is filed, not
+	// deleted: it is still in the mailbox, so nothing is held against anyone.
+	if s.WarmupRepo != nil && e.SkippedFolder == "" {
 		if rec, _ := s.WarmupRepo.GetWarmupReceived(ctx, e.EmailID, e.ID); rec != nil {
 			switch {
 			case s.consumeSelfMove(ctx, e.EmailID, rec.MessageID):
@@ -50,20 +51,7 @@ func (s *JobsService) HandleRemoveEmail(ctx context.Context, e *models.JobEventR
 		_ = s.UniboxRepository.Delete(ctx, e.UserID, e.ID)
 	}
 
-	// Tell open dashboards the row is gone (org-scoped so every teammate's
-	// unibox drops it live, not just the mailbox owner's).
-	if s.StreamingPublisher != nil {
-		var orgID string
-		if account, err := s.EmailRepository.GetByID(ctx, e.EmailID); err == nil && account != nil && account.OrganizationID != nil {
-			orgID = account.OrganizationID.String()
-		}
-		s.StreamingPublisher.PublishEmailDeleted(ctx, &pubsub.EmailInboxEvent{
-			BaseEvent:      pubsub.BaseEvent{UserID: e.UserID.String()},
-			OrgID:          orgID,
-			EmailAccountID: e.EmailID.String(),
-			MessageID:      e.ID.String(),
-		})
-	}
+	s.publishInboxDeleted(ctx, e.UserID, e.EmailID, e.ID.String())
 	return nil
 }
 

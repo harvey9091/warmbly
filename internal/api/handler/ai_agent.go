@@ -211,7 +211,7 @@ func (h *Handler) AgentMessage(c *gin.Context) {
 		Resource  string `json:"resource"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	if req.MessageID == "" {
@@ -244,7 +244,7 @@ func (h *Handler) AgentApprove(c *gin.Context) {
 		Decision string `json:"decision"` // approve | deny | always_allow
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	switch req.Decision {

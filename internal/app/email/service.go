@@ -2,9 +2,16 @@ package email
 
 import (
 	"context"
-	"github.com/warmbly/warmbly/internal/app/instancesettings"
-	"golang.org/x/oauth2"
+	"fmt"
+	"slices"
+	"sort"
+	"strings"
 	"time"
+
+	"github.com/rs/zerolog/log"
+	"github.com/warmbly/warmbly/internal/app/instancesettings"
+	"github.com/warmbly/warmbly/internal/client/smtpimap/imap"
+	"golang.org/x/oauth2"
 
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/app/cipher"
@@ -74,7 +81,8 @@ type EmailService interface {
 	// Onboarding flow. OAuthFinish's second return is true when the round
 	// trip renewed an existing mailbox (OAuthReauth) rather than connecting
 	// a new one, so the handler can audit and answer accordingly.
-	OAuthStart(ctx context.Context, userID string, orgID *uuid.UUID, provider models.InboxProvider) (*models.EmailOnboardingStartResponse, *errx.Error)
+	// loginHint preselects an address in the provider's picker; "" for none.
+	OAuthStart(ctx context.Context, userID string, orgID *uuid.UUID, provider models.InboxProvider, loginHint string) (*models.EmailOnboardingStartResponse, *errx.Error)
 	OAuthFinish(ctx context.Context, userID, code, state string) (*models.Email, bool, *errx.Error)
 	OnboardSMTPIMAP(ctx context.Context, userID string, orgID *uuid.UUID, data *models.NewSMTPIMAPAccount) (*models.Email, *errx.Error)
 	// OnboardSMTPIMAPBulk connects many SMTP/IMAP mailboxes in one call and
@@ -106,12 +114,23 @@ type EmailService interface {
 	// operator-editable budget the mailbox syncs under.
 	WireSyncState(repo repository.EmailSyncStateRepository)
 	WireMailboxes(repo repository.MailboxRepository)
+	WireUnibox(repo repository.UniboxRepository)
 	WireSyncBudget(src SyncBudgetSource)
 	WirePoolLink(repo repository.PoolLinkRepository)
 	// WireCloudLink marks managed mailboxes, which ship to the worker without a credential.
 	WireCloudLink(repo repository.CloudLinkRepository)
 	// WireCloudUnenroll attaches cloud credential revocation to mailbox deletion.
 	WireCloudUnenroll(u CloudUnenroller)
+	// ConnectDelegated stores a Gmail or Outlook mailbox reached through an
+	// administrator's grant and loads it; tokens are minted per use.
+	ConnectDelegated(ctx context.Context, userID string, orgID *uuid.UUID, data models.NewDelegatedAccount) (*models.Email, *errx.Error)
+	// SwitchToAppPassword moves a per-mailbox Google sign-in onto an app password in place.
+	SwitchToAppPassword(ctx context.Context, orgID *uuid.UUID, accountID uuid.UUID, appPassword string) (*models.Email, *errx.Error)
+	// ReactivateDelegated puts a delegated mailbox back to work after its grant recovered.
+	ReactivateDelegated(ctx context.Context, accountID uuid.UUID) (*models.Email, *errx.Error)
+	// WireImportSignin lets an OAuth connect close the import rows that were
+	// waiting for someone to sign in as that mailbox.
+	WireImportSignin(r ImportSigninResolver)
 	// WireAccountErrors lets a successful reconnect resolve the credential
 	// errors it just fixed, which is what clears the mailbox's error banner.
 	WireAccountErrors(repo repository.EmailAccountErrorRepository)
@@ -127,8 +146,14 @@ type EmailService interface {
 	// for a change outside the mailbox row (Warmbly Cloud enrollment).
 	SyncWarmupPool(ctx context.Context, accountID uuid.UUID)
 	// GetSyncState is the dashboard's view of a mailbox's sync: nil state when
-	// the worker has not reported yet.
-	GetSyncState(ctx context.Context, userID, emailID string) (*models.SyncState, models.SyncPolicy, *errx.Error)
+	// the worker has not reported yet, the policy in force, and the folders
+	// the sync has seen on the server so a client can name one to skip
+	// (empty for providers without folders).
+	GetSyncState(ctx context.Context, userID, emailID string) (*models.SyncState, models.SyncPolicy, []models.SyncFolder, *errx.Error)
+	// UpdateSyncSettings replaces the mailbox's skip list, drops the mail
+	// already stored from those folders, and re-ships the mailbox so the
+	// worker applies it on its next pass. Returns the list as stored.
+	UpdateSyncSettings(ctx context.Context, orgID, emailID string, body *models.UpdateSyncSettings) ([]string, *errx.Error)
 	// StartWorkerReconciler periodically ensures every active mailbox is
 	// assigned to a worker and loaded onto it (blocks until ctx is cancelled).
 	StartWorkerReconciler(ctx context.Context, interval time.Duration)
@@ -170,6 +195,17 @@ type emailService struct {
 	lifecycleRepo repository.SendLifecycleRepository
 	// accountErrors is resolved-on-reconnect error state. Optional/nil-safe.
 	accountErrors repository.EmailAccountErrorRepository
+	// unibox is where a skipped folder's already-stored mail is dropped from.
+	// Optional: without it the worker's retirement of the folder does it.
+	unibox repository.UniboxRepository
+	// importSignin closes import rows waiting on a sign-in. Optional.
+	importSignin ImportSigninResolver
+}
+
+// WireUnibox attaches the unified inbox store, for the purge that follows a
+// folder being excluded from sync.
+func (s *emailService) WireUnibox(repo repository.UniboxRepository) {
+	s.unibox = repo
 }
 
 // WireAccountErrors attaches the mailbox error log so reconnects can resolve it.
@@ -344,11 +380,104 @@ func (s *emailService) publishAccountEvent(ctx context.Context, eventType pubsub
 // GetSyncState returns the persisted sync state and the policy currently in
 // force. It goes through Get so ownership is checked the same way as every
 // other per-mailbox read.
-func (s *emailService) GetSyncState(ctx context.Context, orgID, emailID string) (*models.SyncState, models.SyncPolicy, *errx.Error) {
+func (s *emailService) GetSyncState(ctx context.Context, orgID, emailID string) (*models.SyncState, models.SyncPolicy, []models.SyncFolder, *errx.Error) {
 	acc, xerr := s.Get(ctx, orgID, emailID)
 	if xerr != nil {
-		return nil, models.SyncPolicy{}, xerr
+		return nil, models.SyncPolicy{}, nil, xerr
 	}
-	data := s.syncDataFor(ctx, acc.ID)
-	return data.State, data.Policy, nil
+	data, err := s.syncDataFor(ctx, acc.ID)
+	if err != nil {
+		log.Error().Err(err).Str("email_id", acc.ID.String()).Msg("sync state: policy lookup failed")
+		return nil, models.SyncPolicy{}, nil, errx.InternalError()
+	}
+	return data.State, data.Policy, s.syncFoldersFor(ctx, acc), nil
+}
+
+// syncFoldersFor lists the IMAP folders the worker has reported for this
+// mailbox, INBOX first and then by name, each with the canonical folder it
+// files under. Gmail and Outlook mailboxes have no folder list here.
+func (s *emailService) syncFoldersFor(ctx context.Context, acc *models.Email) []models.SyncFolder {
+	out := []models.SyncFolder{}
+	for _, box := range s.imapFoldersFor(ctx, acc) {
+		out = append(out, models.SyncFolder{Name: box.Name, Folder: imap.CanonicalFolder(box)})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		li, lj := strings.EqualFold(out[i].Name, "INBOX"), strings.EqualFold(out[j].Name, "INBOX")
+		if li != lj {
+			return li
+		}
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+	return out
+}
+
+// imapFoldersFor is the saved folder listing of an IMAP mailbox, and nothing
+// for any other provider.
+func (s *emailService) imapFoldersFor(ctx context.Context, acc *models.Email) []models.Mailbox {
+	userID, err := uuid.Parse(acc.UserID)
+	if acc.Provider != string(models.InboxProviderSMTPIMAP) || err != nil {
+		return nil
+	}
+	return s.mailboxesFor(ctx, userID, acc.ID)
+}
+
+// UpdateSyncSettings stores a normalized skip list for an IMAP mailbox and
+// drops the mail already stored from every saved folder the list covers,
+// decided by the same matcher the worker applies (case, subfolders), plus
+// the names themselves for a folder not listed yet. The re-ship makes the
+// worker's next pass apply the list within a minute rather than at the
+// reconciler's next republish; a folder it retires then is purged again by
+// name, which is idempotent.
+func (s *emailService) UpdateSyncSettings(ctx context.Context, orgID, emailID string, body *models.UpdateSyncSettings) ([]string, *errx.Error) {
+	acc, xerr := s.Get(ctx, orgID, emailID)
+	if xerr != nil {
+		return nil, xerr
+	}
+	if body == nil {
+		return nil, errx.ErrInvalid
+	}
+	if acc.Provider != string(models.InboxProviderSMTPIMAP) {
+		return nil, errx.NewWithIdentifier(errx.BadRequest, "invalid_sync_folder", "folders can only be skipped on an IMAP mailbox")
+	}
+	folders, xerr := imap.NormalizeSkipFolders(body.SkipFolders)
+	if xerr != nil {
+		return nil, xerr
+	}
+	// The purge reaches exactly what the worker will stop following: every
+	// saved folder the matcher skips, plus a name no saved folder answers to
+	// (a folder not listed yet). A name that IS a saved folder the matcher
+	// refuses, by attribute, is refused here too rather than purged.
+	saved := s.imapFoldersFor(ctx, acc)
+	var purge []string
+	for _, name := range folders {
+		listed := false
+		for _, box := range saved {
+			if strings.EqualFold(box.Name, name) {
+				listed = true
+				if !imap.SkipsFolder(box, folders) {
+					return nil, errx.NewWithIdentifier(errx.BadRequest, "invalid_sync_folder", fmt.Sprintf("folder %q is a folder the sync always follows", box.Name))
+				}
+			}
+		}
+		if !listed {
+			purge = append(purge, name)
+		}
+	}
+	for _, box := range saved {
+		if imap.SkipsFolder(box, folders) && !slices.Contains(purge, box.Name) {
+			purge = append(purge, box.Name)
+		}
+	}
+	if xerr := s.emailRepository.SetSyncSkipFolders(ctx, orgID, emailID, folders); xerr != nil {
+		return nil, xerr
+	}
+	if s.unibox != nil && len(purge) > 0 {
+		if n, err := s.unibox.DeleteByFolderPaths(ctx, acc.ID, purge); err != nil {
+			log.Warn().Err(err).Str("email_id", acc.ID.String()).Msg("sync skip folders: purge of stored mail failed; the worker retires the folders on its next pass")
+		} else if n > 0 {
+			log.Info().Str("email_id", acc.ID.String()).Int64("messages", n).Msg("sync skip folders: stored mail from skipped folders dropped")
+		}
+	}
+	s.loadAccountBestEffort(ctx, acc.ID)
+	return folders, nil
 }

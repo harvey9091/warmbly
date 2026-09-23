@@ -70,7 +70,7 @@ func (h *Handler) UpsertComposeDraft(c *gin.Context) {
 
 	var req composeDraftUpsertRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 	if len(req.Body) > maxDraftBody || len(req.Subject) > maxDraftSubject ||

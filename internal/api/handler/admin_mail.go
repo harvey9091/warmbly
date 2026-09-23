@@ -51,7 +51,7 @@ type platformTestEmailRequest struct {
 func (h *Handler) AdminSendTestEmail(c *gin.Context) {
 	var req platformTestEmailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 

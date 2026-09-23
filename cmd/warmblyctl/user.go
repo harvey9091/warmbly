@@ -143,7 +143,7 @@ func runUserCreate(ctx context.Context, args []string) error {
 		if name == "" {
 			name = displayname.DefaultWorkspace(created.FirstName)
 		}
-		org, oerr := c.orgService().Create(ctx, created.ID, name)
+		org, oerr := c.orgService().Create(ctx, created.ID, name, "")
 		if oerr != nil {
 			return fmt.Errorf("the account %s was created, but its organization was not: %w\nCreate one from the dashboard after signing in.", created.Email, oerr)
 		}

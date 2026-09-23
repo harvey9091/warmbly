@@ -24,11 +24,15 @@ import {
     AlertTriangleIcon,
     ArrowLeftIcon,
     ArrowRightIcon,
+    BracesIcon,
     CheckCircle2Icon,
+    CheckIcon,
     DownloadIcon,
     FileSpreadsheetIcon,
     Loader2Icon,
+    PlusIcon,
     ShieldCheckIcon,
+    SparklesIcon,
     UploadCloudIcon,
     XIcon,
 } from "lucide-react";
@@ -56,16 +60,23 @@ import CategoryPicker from "./CategoryPicker";
 import { CampaignMultiPicker, SegmentMultiPicker } from "@/components/app/segments/SegmentPickers";
 import { useSegments } from "@/lib/api/hooks/app/segments";
 import { downloadBlob } from "@/lib/api/client/app/contacts/exportContacts";
+import useCustomFieldKeys from "@/lib/api/hooks/app/contacts/useCustomFieldKeys";
 import {
     CUSTOM_KEY_RULES,
     DEDUP_OPTIONS,
     STANDARD_TARGETS,
     VERIFICATION_VOCABULARY_LABELS,
+    customKeyOf,
+    customKeyStatus,
     describeError,
+    foldCustomKey,
     isCustomTarget,
     isValidCustomKey,
     mappingProblem,
+    matchExistingKey,
+    normalizeCustomKey,
     suggestCustomKey,
+    targetIdentity,
 } from "./importShared";
 
 interface Props {
@@ -516,16 +527,50 @@ export function MapStep({
         return mapping.find((m) => m.index === idx) ?? { index: idx, target: "ignore" };
     }
 
+    const { data: existingKeys = [] } = useCustomFieldKeys();
+
+    // A column the judgment placed keeps its marker until the user changes it.
+    function isInferred(idx: number, m: ImportColumnMapping): boolean {
+        if (!preview.inferred_columns?.includes(idx)) return false;
+        const s = preview.suggested_mapping.find((x) => x.index === idx);
+        return !!s && s.target === m.target && (s.custom_key ?? "") === (m.custom_key ?? "");
+    }
+
+    // Which columns write to each destination, so a row can say when another
+    // column shares its field. Column numbers are 1-based, as on screen.
+    const writers = new Map<string, number[]>();
+    for (const m of mapping) {
+        const id = targetIdentity(m);
+        if (id === null || m.index >= preview.columns.length) continue;
+        writers.set(id, [...(writers.get(id) ?? []), m.index + 1]);
+    }
+    function takenKeysFor(idx: number): Map<string, number> {
+        const taken = new Map<string, number>();
+        for (const [id, cols] of writers) {
+            const other = cols.find((c) => c !== idx + 1);
+            if (id.startsWith("custom:") && other !== undefined) taken.set(id.slice(7), other);
+        }
+        return taken;
+    }
+
     // Columns we didn't recognise default to Ignore, which means a CRM export
     // with a dozen extra columns is a dozen dropdowns. Offer the obvious bulk
-    // action for the ones whose header is already a usable field name.
+    // action for the ones whose header is already a usable field name, landing
+    // on the workspace's own spelling when the field already exists.
     // Only with a real header row: without one the columns are synthesised
     // ("Column 4"), which is a legal field name but never the one you want.
-    const claimable = !hasHeader
-        ? []
-        : preview.columns
-              .map((header, idx) => ({ idx, key: suggestCustomKey(header) }))
-              .filter(({ idx, key }) => key !== "" && getMapping(idx).target === "ignore");
+    const claimable: { idx: number; key: string }[] = [];
+    if (hasHeader) {
+        const claimed = new Set([...writers.keys()]);
+        preview.columns.forEach((header, idx) => {
+            if (getMapping(idx).target !== "ignore") return;
+            const key = matchExistingKey(header, existingKeys) ?? suggestCustomKey(header);
+            // A field another column already fills is left for the user to decide.
+            if (key === "" || claimed.has(`custom:${key}`)) return;
+            claimed.add(`custom:${key}`);
+            claimable.push({ idx, key });
+        });
+    }
 
     function claimAllAsCustom() {
         setMapping((cur) => {
@@ -597,6 +642,10 @@ export function MapStep({
                                             value={m}
                                             header={col}
                                             onChange={(next) => updateMapping(idx, next)}
+                                            existingKeys={existingKeys}
+                                            takenKeys={takenKeysFor(idx)}
+                                            writers={writers.get(targetIdentity(m) ?? "") ?? []}
+                                            inferred={isInferred(idx, m)}
                                         />
                                         <AnimatePresence initial={false}>
                                             {m.target === "verification_status" && (
@@ -625,79 +674,256 @@ export function MapStep({
     );
 }
 
+// MappingNote says what a custom mapping will do to the workspace's fields
+// (fill an existing one, create one, or nearly duplicate one) and when another
+// column writes to the same place.
+function MappingNote({
+    mapping,
+    existingKeys,
+    writers,
+    column,
+    onUseExisting,
+}: {
+    mapping: ImportColumnMapping;
+    existingKeys: string[];
+    // Every column writing where this one does, in the order the importer
+    // applies them: the last non-empty cell is the one kept.
+    writers: number[];
+    column: number;
+    onUseExisting: (key: string) => void;
+}) {
+    const sharedWith = writers.filter((c) => c !== column);
+    const kept = writers[writers.length - 1];
+    const key = customKeyOf(mapping);
+    const status = isCustomTarget(mapping.target) && isValidCustomKey(key) ? customKeyStatus(key, existingKeys) : null;
+    if (!status && sharedWith.length === 0) return null;
+    return (
+        <div className="mt-1 space-y-0.5">
+            {status?.kind === "existing" && (
+                <p className="text-[10.5px] text-emerald-700 inline-flex items-center gap-1">
+                    <CheckIcon className="w-3 h-3 shrink-0" />
+                    Fills your existing field
+                </p>
+            )}
+            {status?.kind === "new" && (
+                <p className="text-[10.5px] text-sky-700 inline-flex items-center gap-1">
+                    <PlusIcon className="w-3 h-3 shrink-0" />
+                    Creates a new field
+                </p>
+            )}
+            {status?.kind === "similar" && (
+                <p className="text-[10.5px] text-amber-700 flex flex-wrap items-center gap-x-1">
+                    <AlertTriangleIcon className="w-3 h-3 shrink-0" />
+                    <span>
+                        You already have <span className="font-medium">{status.existing}</span>.
+                    </span>
+                    <button
+                        type="button"
+                        onClick={() => onUseExisting(status.existing)}
+                        className="font-medium text-amber-800 underline underline-offset-2 hover:text-amber-900"
+                    >
+                        Use it
+                    </button>
+                </p>
+            )}
+            {sharedWith.length > 0 && (
+                <p className="text-[10.5px] text-slate-500 leading-snug">
+                    Also filled by column {sharedWith.join(", ")}. {sharedWith.length === 1 ? "When both have a value" : "When several do"}, column {kept}'s is kept.
+                </p>
+            )}
+        </div>
+    );
+}
+
 export function TargetPicker({
     value,
     onChange,
     header,
+    existingKeys = [],
+    takenKeys,
+    writers = [],
+    inferred = false,
 }: {
     value: ImportColumnMapping;
     onChange: (next: ImportColumnMapping) => void;
     /** The column's header, used to pre-fill the custom-field name. */
     header?: string;
+    /** The workspace's custom fields, most used first. */
+    existingKeys?: string[];
+    /** Custom fields other columns already write to, with that column's number. */
+    takenKeys?: Map<string, number>;
+    /** Every column writing where this one does, in the order they are applied. */
+    writers?: number[];
+    /** The suggestion came from what the header means, not what it says. */
+    inferred?: boolean;
 }) {
-    // Custom-field rows are tagged with target="custom" (sentinel); the
-    // user-typed name lives in custom_key. We also accept the legacy
-    // "custom:<key>" form in case a saved mapping comes in that shape.
+    const [open, setOpen] = React.useState(false);
+    const [query, setQuery] = React.useState("");
+    // Set once the user names a new field, so the name box stays put when
+    // what they type happens to match an existing field.
+    const [naming, setNaming] = React.useState(false);
+
     const isCustom = isCustomTarget(value.target.toString());
+    const customKey = isCustom ? customKeyOf(value) : "";
+    const rawKey = value.custom_key ?? customKey;
+    const keyExists = isCustom && existingKeys.includes(customKey);
+    const isExisting = keyExists && !naming;
+    const keyInvalid = isCustom && rawKey.trim() !== "" && !isValidCustomKey(rawKey);
     const stdLabel = STANDARD_TARGETS.find((t) => t.id === value.target)?.label;
-    const customKey = value.custom_key ?? "";
-    const keyInvalid = isCustom && customKey.trim() !== "" && !isValidCustomKey(customKey);
-    const label = isCustom
-        ? customKey
-            ? `Custom: ${customKey}`
-            : "Custom field…"
-        : stdLabel ?? "Ignore";
+    const label = isExisting ? customKey : isCustom ? (keyExists ? "Existing field" : "New field") : stdLabel ?? "Ignore";
+
+    const q = normalizeCustomKey(query);
+    const fq = foldCustomKey(q);
+    const matches = (text: string) => fq === "" || foldCustomKey(text).includes(fq);
+    const standard = STANDARD_TARGETS.filter((t) => matches(t.label));
+    const custom = existingKeys.filter(matches);
+    // Typing a name nobody has yet offers to create it, the way a tag input does.
+    const canCreate = q !== "" && isValidCustomKey(q) && !existingKeys.includes(q);
+
+    function setMenuOpen(o: boolean) {
+        setOpen(o);
+        if (!o) setQuery("");
+    }
+
+    function pickStandard(id: string) {
+        setNaming(false);
+        onChange({ index: value.index, target: id });
+    }
+
+    function pickExisting(key: string) {
+        setNaming(false);
+        onChange({ index: value.index, target: "custom", custom_key: key });
+    }
+
+    function pickNew(name: string) {
+        setNaming(true);
+        onChange({ index: value.index, target: "custom", custom_key: name });
+    }
+
+    // Enter takes an exact name first, then the first match; with nothing
+    // typed it does nothing, so it can never remap a column by accident.
+    function pickFirst() {
+        if (q === "") return;
+        const exactStd = standard.find((t) => t.label.toLowerCase() === q.toLowerCase());
+        if (exactStd) pickStandard(exactStd.id);
+        else if (existingKeys.includes(q)) pickExisting(q);
+        else if (standard.length > 0) pickStandard(standard[0].id);
+        else if (custom.length > 0) pickExisting(custom[0]);
+        else if (canCreate) pickNew(q);
+        else return;
+        setMenuOpen(false);
+    }
 
     return (
-        <div className="flex items-center gap-1.5">
-            <PopoverMenu align="start">
-                <PopoverMenuTrigger asChild>
-                    <SelectButton label={label} className="flex-1" />
-                </PopoverMenuTrigger>
-                <PopoverMenuContent minWidth={200}>
-                    <PopoverMenuLabel>Standard</PopoverMenuLabel>
-                    {STANDARD_TARGETS.map((t) => (
-                        <PopoverMenuItem
-                            key={t.id}
-                            selected={value.target === t.id && !isCustom}
-                            onSelect={() =>
-                                onChange({ index: value.index, target: t.id })
-                            }
-                        >
-                            {t.label}
-                        </PopoverMenuItem>
-                    ))}
-                    <PopoverMenuLabel>Custom</PopoverMenuLabel>
-                    <PopoverMenuItem
-                        selected={isCustom}
-                        onSelect={() =>
-                            onChange({
-                                index: value.index,
-                                target: "custom",
-                                // Start from the column header: "Company Mobile"
-                                // is a valid field name, so there is nothing to
-                                // type in the common case.
-                                custom_key: customKey || suggestCustomKey(header ?? ""),
-                            })
-                        }
-                    >
-                        Use as custom field…
-                    </PopoverMenuItem>
-                </PopoverMenuContent>
-            </PopoverMenu>
-            {isCustom && (
-                <TextInput
-                    value={customKey}
-                    onChange={(v) =>
-                        onChange({ index: value.index, target: "custom", custom_key: v })
-                    }
-                    placeholder="field name"
-                    invalid={keyInvalid}
-                    title={keyInvalid ? CUSTOM_KEY_RULES : undefined}
-                    className="w-24 md:w-32"
-                />
+        <>
+            <div className="flex items-center gap-1.5">
+                <PopoverMenu align="start" open={open} onOpenChange={setMenuOpen}>
+                    <PopoverMenuTrigger asChild>
+                        <SelectButton
+                            icon={keyExists ? <BracesIcon className="w-3 h-3" /> : isCustom ? <PlusIcon className="w-3 h-3" /> : undefined}
+                            label={label}
+                            title={keyExists ? `Existing custom field: ${customKey}` : undefined}
+                            className="flex-1 min-w-0"
+                        />
+                    </PopoverMenuTrigger>
+                    <PopoverMenuContent minWidth={240} className="py-0 w-[260px]">
+                        <div className="px-2 py-1.5 border-b border-slate-200">
+                            <input
+                                value={query}
+                                onChange={(e) => setQuery(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                        e.preventDefault();
+                                        pickFirst();
+                                    }
+                                }}
+                                placeholder={existingKeys.length > 0 ? "Search or name a new field…" : "Search or name a field…"}
+                                autoFocus
+                                aria-label="Search fields"
+                                className="w-full h-5 bg-transparent text-[16px] md:text-[12px] text-slate-900 placeholder:text-slate-400 outline-none"
+                            />
+                        </div>
+                        <div className="max-h-[min(60vh,360px)] overflow-y-auto py-1">
+                            {standard.length > 0 && <PopoverMenuLabel>Standard</PopoverMenuLabel>}
+                            {standard.map((t) => (
+                                <PopoverMenuItem
+                                    key={t.id}
+                                    selected={value.target === t.id && !isCustom}
+                                    onSelect={() => pickStandard(t.id)}
+                                >
+                                    {t.label}
+                                </PopoverMenuItem>
+                            ))}
+                            {custom.length > 0 && <PopoverMenuLabel>Your custom fields</PopoverMenuLabel>}
+                            {custom.map((key) => {
+                                const takenBy = takenKeys?.get(key);
+                                return (
+                                    <PopoverMenuItem
+                                        key={key}
+                                        icon={<BracesIcon className="w-3 h-3" />}
+                                        selected={isCustom && customKey === key}
+                                        onSelect={() => pickExisting(key)}
+                                        trailing={
+                                            isCustom && customKey === key ? undefined : takenBy !== undefined ? (
+                                                <span className="text-[10.5px] text-slate-400">column {takenBy}</span>
+                                            ) : undefined
+                                        }
+                                    >
+                                        {key}
+                                    </PopoverMenuItem>
+                                );
+                            })}
+                            <PopoverMenuLabel>New</PopoverMenuLabel>
+                            {canCreate ? (
+                                <PopoverMenuItem icon={<PlusIcon className="w-3 h-3" />} onSelect={() => pickNew(q)}>
+                                    Create “{q}”
+                                </PopoverMenuItem>
+                            ) : (
+                                <PopoverMenuItem
+                                    icon={<PlusIcon className="w-3 h-3" />}
+                                    selected={isCustom && !isExisting}
+                                    // Start from the column header: "Company Mobile"
+                                    // is a valid field name, so there is nothing to
+                                    // type in the common case.
+                                    onSelect={() => pickNew(isCustom && !isExisting ? rawKey : suggestCustomKey(header ?? ""))}
+                                >
+                                    New custom field…
+                                </PopoverMenuItem>
+                            )}
+                            {q !== "" && !canCreate && standard.length === 0 && custom.length === 0 && (
+                                <p className="px-3 pb-1.5 text-[11px] text-slate-400 leading-snug">{CUSTOM_KEY_RULES}</p>
+                            )}
+                        </div>
+                    </PopoverMenuContent>
+                </PopoverMenu>
+                {isCustom && !isExisting && (
+                    <TextInput
+                        value={rawKey}
+                        onChange={(v) => {
+                            setNaming(true);
+                            onChange({ index: value.index, target: "custom", custom_key: v });
+                        }}
+                        placeholder="field name"
+                        invalid={keyInvalid}
+                        title={keyInvalid ? CUSTOM_KEY_RULES : undefined}
+                        className="w-24 md:w-32"
+                    />
+                )}
+            </div>
+            {inferred && (
+                <p className="mt-1 text-[10.5px] text-sky-700 inline-flex items-center gap-1">
+                    <SparklesIcon className="w-3 h-3 shrink-0" />
+                    Matched by meaning. Check it.
+                </p>
             )}
-        </div>
+            <MappingNote
+                mapping={value}
+                existingKeys={existingKeys}
+                writers={writers}
+                column={value.index + 1}
+                onUseExisting={pickExisting}
+            />
+        </>
     );
 }
 

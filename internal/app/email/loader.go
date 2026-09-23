@@ -2,6 +2,7 @@ package email
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -137,6 +138,15 @@ func (s *emailService) LoadAccountOntoWorker(ctx context.Context, accountID uuid
 	if acc.Status != "active" {
 		return nil
 	}
+	// A delegated mailbox without its grant (it arrived in an archive, or the grant
+	// went) has nothing to sign in with; it waits inactive until the domain is
+	// connected again, which relinks and reactivates it.
+	if acc.AuthMethod == models.MailAuthDelegated && acc.DomainGrantID == nil {
+		if xerr := s.emailRepository.SetStatus(ctx, acc.ID, "inactive"); xerr != nil {
+			return xerr
+		}
+		return nil
+	}
 
 	workerID, rerr := s.releaseDeadWorker(ctx, acc.ID, acc.WorkerID)
 	if rerr != nil {
@@ -260,6 +270,10 @@ func (s *emailService) buildAddWorkerEmail(ctx context.Context, acc *models.Emai
 	provider := models.InboxProvider(acc.Provider)
 
 	saveToSent := acc.SaveToSent
+	sync, err := s.syncDataFor(ctx, acc.ID)
+	if err != nil {
+		return nil, err
+	}
 	out := &models.AddWorkerEmail{
 		ID:             acc.ID,
 		UserID:         userID,
@@ -268,9 +282,31 @@ func (s *emailService) buildAddWorkerEmail(ctx context.Context, acc *models.Emai
 		FirstName:      first,
 		LastName:       last,
 		Type:           provider,
-		Sync:           s.syncDataFor(ctx, acc.ID),
+		Sync:           sync,
 		// Only SMTP/IMAP acts on this; Gmail and Graph file their own copy.
 		SaveToSent: &saveToSent,
+	}
+
+	// A mailbox under an administrator's grant has no stored credential
+	// either; the worker draws tokens the control plane mints per use.
+	if acc.AuthMethod == models.MailAuthDelegated {
+		d, xerr := s.emailRepository.GetDelegation(ctx, acc.ID)
+		if xerr != nil {
+			return nil, xerr
+		}
+		if d == nil {
+			return nil, nil
+		}
+		out.Brokered = true
+		switch provider {
+		case models.InboxProviderGoogle:
+			out.Google = &models.AddWorkerEmailGoogleData{LastHistoryID: s.lastHistoryFor(ctx, userID, acc.ID, acc.LastID)}
+		case models.InboxProviderOutlook:
+			out.Graph = &models.AddWorkerEmailGraphData{DeltaLinks: s.deltaLinksFor(ctx, userID, acc.ID), User: d.Subject}
+		default:
+			return nil, nil
+		}
+		return out, nil
 	}
 
 	// A managed mailbox has no local credential; the worker draws brokered tokens.
@@ -355,7 +391,7 @@ func (s *emailService) lastHistoryFor(ctx context.Context, userID, emailID uuid.
 // state a previous worker left behind. Policy comes from instance settings
 // (compiled defaults when none are wired), so an operator's change applies at
 // the next load: onboarding, reassignment, or the reconciler's republish.
-func (s *emailService) syncDataFor(ctx context.Context, emailID uuid.UUID) *models.AddWorkerEmailSyncData {
+func (s *emailService) syncDataFor(ctx context.Context, emailID uuid.UUID) (*models.AddWorkerEmailSyncData, error) {
 	budget := instancesettings.DefaultSync()
 	if s.syncBudget != nil {
 		budget = s.syncBudget.SyncBudget(ctx)
@@ -368,6 +404,15 @@ func (s *emailService) syncDataFor(ctx context.Context, emailID uuid.UUID) *mode
 			OrgDailyMessages: budget.DailyMessagesPerOrg,
 		},
 	}
+	// The skip list is part of the policy a republish replaces on the loaded
+	// mailbox, so a failed read cannot fall back to "skip nothing": that
+	// would have the worker baseline and import the excluded folders until
+	// the next republish. The load fails instead and the reconciler retries.
+	skip, xerr := s.emailRepository.GetSyncSkipFolders(ctx, emailID)
+	if xerr != nil {
+		return nil, fmt.Errorf("sync skip folders lookup: %w", xerr)
+	}
+	data.Policy.SkipFolders = skip
 	// A pool-linked mailbox is a warmup-only mirror: no history import.
 	if s.poolLink != nil {
 		if linked, err := s.poolLink.GetMailboxByAccount(ctx, emailID); err == nil && linked != nil {
@@ -382,7 +427,7 @@ func (s *emailService) syncDataFor(ctx context.Context, emailID uuid.UUID) *mode
 			log.Warn().Err(err).Str("email_id", emailID.String()).Msg("sync state lookup failed; worker starts fresh")
 		}
 	}
-	return data
+	return data, nil
 }
 
 // mailboxesFor is the IMAP folder state (name, UIDVALIDITY, HIGHESTMODSEQ)

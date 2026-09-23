@@ -53,8 +53,11 @@ type mvSingleResponse struct {
 }
 
 type mvCreditsResponse struct {
-	Credits int    `json:"credits"`
-	Error   string `json:"error"`
+	Credits int `json:"credits"`
+	// RenewingCredits is a subscription's allowance, which real-time checks
+	// also draw on; an account living on one reports zero Credits.
+	RenewingCredits int    `json:"renewing_credits"`
+	Error           string `json:"error"`
 }
 
 // Verify implements Verifier. An API failure is never an "invalid" verdict:
@@ -133,7 +136,8 @@ func (m *MillionVerifier) Account(ctx context.Context) (*int, error) {
 	return &n, err
 }
 
-// Credits returns the account's remaining credits, and validates the key.
+// Credits returns the credits a real-time check can spend (pay-as-you-go plus
+// a subscription's renewing allowance), and validates the key.
 func (m *MillionVerifier) Credits(ctx context.Context) (int, error) {
 	q := url.Values{}
 	q.Set("api", m.apiKey)
@@ -160,7 +164,7 @@ func (m *MillionVerifier) Credits(ctx context.Context) (int, error) {
 	if out.Error != "" {
 		return 0, m.accountError(nil, out.Error)
 	}
-	return out.Credits, nil
+	return out.Credits + out.RenewingCredits, nil
 }
 
 func (m *MillionVerifier) accountError(res *Result, msg string) error {

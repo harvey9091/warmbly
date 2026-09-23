@@ -322,7 +322,7 @@ func (h *Handler) UpdateAdvisorSettings(c *gin.Context) {
 	}
 	var req models.AdvisorSettings
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	// This route is JWT-only, so there is always a real member behind it to

@@ -51,7 +51,7 @@ func (h *Handler) CreateMCPServer(c *gin.Context) {
 	}
 	var req models.CreateMCPServer
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	sv, cerr := h.MCPService.Create(c.Request.Context(), orgID, userID, &req)
@@ -77,7 +77,7 @@ func (h *Handler) UpdateMCPServer(c *gin.Context) {
 	}
 	var req models.UpdateMCPServer
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	sv, uerr := h.MCPService.Update(c.Request.Context(), orgID, id, &req)

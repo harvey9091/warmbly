@@ -52,7 +52,7 @@ func (h *Handler) SubmitWarmupAppeal(c *gin.Context) {
 
 	var req submitWarmupAppealRequest
 	if bindErr := c.ShouldBindJSON(&req); bindErr != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(bindErr))
 		return
 	}
 

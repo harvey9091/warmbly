@@ -1557,6 +1557,18 @@ func (r *warmupRepository) IsWarmupDelivery(ctx context.Context, accountID uuid.
 		      AND lower(ea.email) = lower($3) AND lower(btrim(wt.subject)) = lower($4)
 		      AND wt.sent_message_id = '' AND wt.expires_at > NOW()
 		      AND t.status IN ('active', 'completed', 'dead_lettered')
+		  ) OR EXISTS (
+		    -- A live arrival from the sender of a send not yet confirmed: its
+		    -- subject may not survive delivery, the confirmed id will. The
+		    -- historical sweep passes no subject and is never held.
+		    SELECT 1 FROM warmup_tokens wt
+		    JOIN email_accounts ea ON ea.id = wt.sender_account_id
+		    JOIN tasks t ON t.id = wt.task_id
+		    WHERE wt.recipient_account_id = $1 AND $3 <> '' AND $4 <> ''
+		      AND lower(ea.email) = lower($3)
+		      AND wt.sent_message_id = '' AND wt.consumed_at IS NULL
+		      AND wt.created_at > NOW() - INTERVAL '30 minutes'
+		      AND t.status IN ('active', 'completed')
 		  )`
 	// One snapshot ensures a send confirmation cannot fall between known and pending checks.
 	var known, pending bool

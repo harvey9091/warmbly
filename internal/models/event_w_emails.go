@@ -20,6 +20,10 @@ type JobEventRemoveEmail struct {
 	UserID  uuid.UUID `json:"user_id" avro:"user_id"`
 	EmailID uuid.UUID `json:"email_id" avro:"email_id"`
 	ID      uuid.UUID `json:"id" avro:"id"`
+	// SkippedFolder is set when the message was found in a folder the owner
+	// excluded from sync: it still exists in the mailbox, so the removal is
+	// filing, not deletion.
+	SkippedFolder string `json:"skipped_folder,omitempty" avro:"skipped_folder"`
 }
 
 type JobEventFlags struct {

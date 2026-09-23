@@ -12,6 +12,7 @@ package sandbox
 import (
 	"os"
 	"strconv"
+	"time"
 )
 
 // Config carries the endpoints the seeder and simulator talk to. Defaults
@@ -40,6 +41,11 @@ type Config struct {
 	IMAPHost string
 	IMAPPort int
 
+	// VendorAddr is where the mock inbox vendor API listens; the backend's MAILVENDOR_SANDBOX_URL points at it.
+	VendorAddr string
+	// VendorLatency is how long the mock vendor takes to answer, like a real API.
+	VendorLatency time.Duration
+
 	// CredentialsKey is the CREDENTIALS_ENCRYPTION_KEY hex used to seal the
 	// seeded SMTP/IMAP credentials; must match the backend's key.
 	CredentialsKey string
@@ -57,6 +63,8 @@ func FromEnv() Config {
 		SMTPPort:       getenvInt("SANDBOX_SMTP_PORT", 11025),
 		IMAPHost:       getenv("SANDBOX_IMAP_HOST", "localhost"),
 		IMAPPort:       getenvInt("SANDBOX_IMAP_PORT", 10993),
+		VendorAddr:     getenv("SANDBOX_VENDOR_ADDR", "127.0.0.1:18099"),
+		VendorLatency:  time.Duration(getenvInt("SANDBOX_VENDOR_LATENCY_MS", 1200)) * time.Millisecond,
 		CredentialsKey: os.Getenv("CREDENTIALS_ENCRYPTION_KEY"),
 	}
 }

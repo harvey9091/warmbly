@@ -92,7 +92,7 @@ Returns a `data` array of contacts plus a `pagination` envelope. Paginate by pas
 }
 ```
 
-Every contact carries its address verification: `verification_status` (`valid`, `risky`, `invalid`, or `unknown`), `verification_sub_status` (`catch_all`, `disposable`, `role`, `spamtrap`, `mailbox_full`, `no_mx`, `syntax`, `undisclosed`, or empty), `verification_source` (`probe` for the built-in check, `provider` for a connected verification service, `imported` for a verdict that came with the contact, `manual` for one a member set, empty when never checked), `verification_provider` (who produced it), `verification_reason`, `verification_checked_at`, and `verification_confidence` (0 to 100, scored from the check plus what real mail to the address showed; see [what real mail teaches the check](/guides/deliverability/#what-real-mail-teaches-the-check)). Campaigns never send to `invalid`, and send to `risky` only when their `risky_emails` setting is on.
+Every contact carries its address verification: `verification_status` (`valid`, `risky`, `invalid`, or `unknown`), `verification_sub_status` (`catch_all`, `disposable`, `role`, `spamtrap`, `mailbox_full`, `no_mx`, `syntax`, `undisclosed`, or empty), `verification_source` (`probe` for the built-in check, `provider` for a connected verification service, `imported` for a verdict that came with the contact, `manual` for one a member set, empty when never checked), `verification_provider` (who produced it), `verification_reason`, `verification_checked_at`, `verification_requested_at` (set while a re-check a member asked for is waiting to run; the verdict stands until it lands), and `verification_confidence` (0 to 100, scored from the check plus what real mail to the address showed; see [what real mail teaches the check](/guides/deliverability/#what-real-mail-teaches-the-check)). Campaigns never send to `invalid`, and send to `risky` only when their `risky_emails` setting is on.
 
 When the search filters by exactly one campaign, each contact additionally carries a `campaign_lead` object with its processing state inside that campaign (`status`, `sent`, `opened`, `machine_opened`, `clicked`, `replied`, `bounced`, `current_step`, `sender`, `last_activity_at`, `hold` when held, and `failure_reason` when failed). `sender` is the mailbox address the lead's whole sequence sends from, fixed when its first email went out and absent until then. `opened` counts steps opened by a person; steps fetched automatically by a mail client (Apple Mail Privacy Protection and similar) are in `machine_opened` instead, matching the machine opens the analytics summary reports. The `status` derivation, highest priority first, is `unsubscribed` (not subscribed), then `bounced`, `replied`, `failed` (a step could not be sent after every retry; `failure_reason` carries the sending worker's reason), `completed` (every email step sent, no reply), `paused` (the lead's flow is held, by an out-of-office auto-reply or by hand; the `hold` object carries `since`, `until`, `reason` and `source`), `active` (some steps sent, more to send), `undeliverable` (pre-send verification refused the address, so the campaign skips the lead and never sends to it), and `pending` (queued, nothing sent). A step counts as sent only once the sending worker has delivered it to the mailbox provider; a send the worker could not complete is retried on the campaign's next pass and never shows as sent. The `lead_status` filter narrows to one of these buckets.
 
@@ -136,13 +136,13 @@ On the first page (no `cursor`), the response includes a `counts` object with or
 
 `POST /contacts`
 
-Creates one or more contacts. The body is a JSON array, so a single create is an array of length one.
+Creates one or more contacts. The body is a JSON array of contacts, or a single contact object, which is read as an array of one.
 
 Auth: **Scope** `WRITE_CONTACTS` · **Org permission** `manage_contacts`
 
 ### Request body
 
-A JSON array of contact objects (at least one, up to the per-request maximum; an empty array is a `400`).
+A JSON array of contact objects (at least one, up to the per-request maximum; an empty array is a `400`), or one contact object on its own. The response is an array either way.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -361,21 +361,25 @@ Send the file as `multipart/form-data` with a `file` form field. Uploads are cap
   "filename": "leads.csv",
   "format": "csv",
   "total_rows": 1243,
-  "columns": ["Email", "First", "Last", "Company"],
+  "columns": ["Email", "First", "Last", "Company", "industry", "Notes"],
   "has_header": true,
   "sample_rows": [
-    ["dana@acme.com", "Dana", "Reyes", "Acme"]
+    ["dana@acme.com", "Dana", "Reyes", "Acme", "Real Estate", "Met at SaaStr"]
   ],
   "suggested_mapping": [
     { "index": 0, "target": "email" },
     { "index": 1, "target": "first_name" },
     { "index": 2, "target": "last_name" },
-    { "index": 3, "target": "company" }
+    { "index": 3, "target": "company" },
+    { "index": 4, "target": "custom", "custom_key": "Industry" },
+    { "index": 5, "target": "ignore" }
   ]
 }
 ```
 
-`sample_rows` is capped at 20 rows. `suggested_mapping` is a default the client may override.
+`sample_rows` is capped at 20 rows. `suggested_mapping` is a default the client may override. A header that names one of the workspace's existing custom fields, ignoring case, spaces, underscores, dashes and dots, is suggested as `custom` with that field's stored spelling in `custom_key` (above, `industry` maps to the existing `Industry`). Each field is suggested for one column at most, standard fields are matched first, and a header that matches nothing is `ignore`. A column of email addresses is suggested as `email` whatever its header when no header named one. `GET /contacts/custom-fields` ([endpoints](/api/endpoints/#contacts)) lists the fields a mapping can target.
+
+On an instance with TypeSafe configured, the columns still `ignore` after that are placed by what their header means, and `inferred_columns` lists their indexes so a client can ask for a second look. Only the headers, the kind of value each column holds and the workspace's field names are sent, never a cell value. The field is omitted when no column was inferred.
 
 ## Commit an import
 
@@ -469,7 +473,7 @@ Reports which verifier checks this workspace's addresses and the contacts by ver
 }
 ```
 
-`provider` is `builtin`, `millionverifier`, or `cleanmylist`. `credits` is the connected service's remaining balance when available (omitted for CleanMyList); `provider_error` is set instead when the service is connected but unusable (a rejected key, no credits), in which case the built-in check is in use. `builtin_ready` says whether the built-in mailbox probe can run on this instance. `pending` is the share of `unknown` nobody has checked yet.
+`provider` is `builtin`, `millionverifier`, or `cleanmylist`. `credits` is the connected service's remaining balance when available (omitted for CleanMyList); `provider_error` is set instead when the service is connected but unusable (a rejected key, no credits), in which case the built-in check is in use. `builtin_ready` says whether the built-in mailbox probe can run on this instance. `pending` counts contacts nobody has checked yet plus those with a re-check queued.
 
 ## Verify or override contacts
 
@@ -481,7 +485,7 @@ Queues a fresh check of the listed contacts, or records a manual verdict on them
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `action` | string | Yes | `verify` queues a re-check (each contact updates as its verdict lands); `mark_deliverable` records `valid`; `mark_undeliverable` records `invalid`. Manual verdicts are never re-checked automatically. Anything else is rejected with `invalid_action`. |
+| `action` | string | Yes | `verify` queues a re-check ahead of the background backlog, whatever the contact's current verdict, its age, or the evidence behind it; the verdict stays in force until the new one lands, and each contact updates as it does. `mark_deliverable` records `valid`; `mark_undeliverable` records `invalid`, and either answers a re-check still waiting. Manual verdicts are never re-checked unless asked. Anything else is rejected with `invalid_action`. |
 | `contacts` | string[] | No | Contact ids, up to the bulk maximum per request. |
 | `all`, `filters`, `exclude` | — | No | Select by filter instead; see [selecting contacts](#selecting-contacts-for-a-bulk-action). |
 | `campaign_id` | string | No | Instead of, or as well as, a selection: every lead of this campaign that verification refused. |
@@ -491,8 +495,16 @@ At least one contact must be selected (`no_contacts`). Marking leads deliverable
 ### Response
 
 ```json
-{ "affected": 512, "action": "verify", "queued": true }
+{
+  "affected": 512,
+  "action": "verify",
+  "queued": true,
+  "verifier": "millionverifier",
+  "verifier_label": "MillionVerifier"
+}
 ```
+
+For `verify`, `verifier` names who runs the checks (`builtin`, `millionverifier`, or `cleanmylist`) and `verifier_label` its display name. When a verifier is connected but cannot be used right now, `verifier` is `builtin` and `verifier_error` says why (the same sentence as the overview's `provider_error`).
 
 ## Look up a contact by email
 
@@ -531,7 +543,7 @@ Auth: **Scope** `READ_CONTACTS` · **Org permission** `view_contacts`
 
 `GET /contacts/:id`
 
-Returns the hydrated contact 360 payload: the contact plus an engagement summary, when present suppression state, and a `verification` object explaining the verdict: `status`, `confidence`, `reasons` (sentences, strongest first), `decisive` (true when real mail rather than a check decided the status), and `evidence`, the observations it was scored from, newest first, each `{ "kind", "detail", "observed_at" }` with `kind` one of `delivered`, `opened`, `clicked`, `replied`, `auto_replied`, `bounced_recipient`, `bounced_other`. Engagement and suppression counts are org-scoped; they are returned only when an organization is selected.
+Returns the hydrated contact 360 payload: the contact plus an engagement summary, when present suppression state, and a `verification` object explaining the verdict: `status`, `confidence`, `reasons` (sentences, strongest first), `decisive` (true when real mail rather than a check decided the status), `source` and `provider` (who produced the last verdict, as on the contact) with `provider_label` (the verifier's display name, such as `MillionVerifier`), `check_status` (what that check itself answered, which differs from `status` when real mail decided otherwise), `checked_at`, `requested_at` (set while a re-check is waiting), and `evidence`, the observations it was scored from, newest first, each `{ "kind", "detail", "observed_at" }` with `kind` one of `delivered`, `opened`, `clicked`, `replied`, `auto_replied`, `bounced_recipient`, `bounced_other`. Engagement and suppression counts are org-scoped; they are returned only when an organization is selected.
 
 Auth: **Scope** `READ_CONTACTS` · **Org permission** `view_contacts`
 
@@ -569,13 +581,19 @@ Auth: **Scope** `READ_CONTACTS` · **Org permission** `view_contacts`
     "total_complained": 0,
     "last_sent_at": "2026-06-09T08:00:00Z",
     "last_opened_at": "2026-06-09T08:14:00Z",
-    "last_replied_at": "2026-06-09T11:02:00Z"
+    "last_replied_at": "2026-06-09T11:02:00Z",
+    "reads_on": [
+      { "client": "Apple Mail", "client_type": "app", "device_type": "mobile", "os": "iOS", "opens": 2, "last_opened_at": "2026-06-09T08:14:00Z" },
+      { "client": "Gmail", "device_hidden": true, "opens": 1, "last_opened_at": "2026-06-02T16:40:00Z" }
+    ]
   },
   "suppression": null
 }
 ```
 
 `engagement.total_opened` and `engagement.last_opened_at` count opens by a person; opens a mail client or security gateway fetched automatically are left out, as they are in campaign analytics. A person's click counts as an open too; an automated click does not add to either field.
+
+`engagement.reads_on` is how the contact reads your mail: each client and device a person's opens came from, most recent first, at most four, with the number of `opens` and the latest `last_opened_at`. Its fields mean what they do on a timeline event's `origin` (see [the timeline](#list-a-contacts-timeline)). It is omitted until an open says something about itself.
 
 When the contact is suppressed, `suppression` is an object: `{ "id", "kind", "value", "reason", "source", "expires_at", "created_at" }`. `kind` is `email` when the contact's own address is on the list or `domain` when its whole domain is, `value` is the matching entry, and `source` is `bounce`, `complaint`, `unsubscribe`, `manual`, or `import`. `id` is the suppression entry, which `DELETE /suppressions/:id` lifts; see [deliverability and ops](/api/reference/deliverability-ops/#list-the-suppression-list).
 
@@ -787,7 +805,7 @@ Returns a `data` array and the standard `pagination` envelope. Paginate by passi
 
 `type` is one of `email_sent`, `email_opened`, `email_clicked`, `email_replied`, `email_bounced`, `reply_received`, `deliverability`, `suppressed`, `note`, `meeting_booked`, `meeting_rescheduled`, `meeting_canceled`, `contact_created`, `campaign_added`, `campaign_removed`, `category_added`, `category_removed`, `form_submitted`, or `page_hit`. Fields not relevant to an event type are omitted.
 
-`email_opened` and `email_clicked` carry `machine`: `true` when an automated fetcher did it rather than the person (a mail privacy proxy, a fetch inside the instance's automated-engagement window, which starts when the step is dispatched to a worker, several links followed within seconds). Per-link `email_clicked` events carry `machine_reason` (`prefetch`, `instant`, `scanner` or `burst`), and per-event `email_opened` rows carry it too (`prefetch`, `instant` or `scanner`); an open summarised from the lead alone carries only the flag. Both kinds carry an `origin` object when the event was logged: `client` when the user agent names a mail client or image proxy, `device_type`, `os`, `browser`, `browser_version`, and `country_code`, `region`, `city` when the consumer could resolve them. A stripped WebKit image-proxy signature shared by Outlook and Apple is reported as `client: "Image proxy"` and omits device, operating-system and browser claims that the proxy header cannot support. Opens appear once per event, so a contact who opened from two devices has two rows. Automated clicks are on the feed for the record but never count the step as clicked. An `email_clicked` event carries `link` with the link's `id`, `url`, `label` (its anchor text), the `utm_*` parameters the URL carried, and the `user_agent`; every link in an email is tracked on its own, so each link clicked is its own event. Clicks recorded before per-link attribution have no `link`.
+`email_opened` and `email_clicked` carry `machine`: `true` when an automated fetcher did it rather than the person (a mail privacy proxy, a fetch inside the instance's automated-engagement window, which starts when the step is dispatched to a worker, several links followed within seconds). Per-link `email_clicked` events carry `machine_reason` (`prefetch`, `instant`, `scanner` or `burst`), and per-event `email_opened` rows carry it too (`prefetch`, `instant` or `scanner`); an open summarised from the lead alone carries only the flag. Both kinds carry an `origin` object when the event was logged: `client` when the user agent names a mail client (`Gmail`, `Apple Mail`, `Outlook`, `Yahoo Mail`, `Thunderbird` and others); `client_type`, `app` for an installed mail app or `webmail` for a browser (on a click, `app` only when a mail app made the request itself, and never `webmail`); `device_hidden: true` when the mailbox provider's image proxy fetched the email (Gmail, Yahoo Mail, HEY, Fastmail, Seznam, and Apple Mail Privacy Protection, whose user agent is just `Mozilla/5.0`); `device_type` (`desktop`, `mobile` or `tablet`), `os`, `browser`, `browser_version`; and `country_code`, `region`, `city` when the consumer could resolve them. A hidden device omits the device, operating system and browser, which would describe the proxy, and the location too, except the country and region Apple's relay keeps. The stripped WebKit user agent that Mail on a Mac and the new Outlook for Windows both send is reported as `client: "Apple Mail or Outlook"`, `client_type: "app"`, with no device. On a click, `browser` and `device_type` are where the link opened, and `client` is set only when a mail app made the request itself. Opens appear once per event, so a contact who opened from two devices has two rows. Automated clicks are on the feed for the record but never count the step as clicked. An `email_clicked` event carries `link` with the link's `id`, `url`, `label` (its anchor text), the `utm_*` parameters the URL carried, and the `user_agent`; every link in an email is tracked on its own, so each link clicked is its own event. Clicks recorded before per-link attribution have no `link`.
 
 A `form_submitted` event carries `form_id` and `form_name`. A `page_hit` event is a page view on your own site from a browser tied to the contact through an email-link ticket (see [Website tracking](/guides/website-tracking/)); `subject` is the page title, or its path when the page has none, and `page_hit` carries the full view: `url`, `path`, `title`, `referrer`, `referrer_domain`, `landing` (the first view of a session), the `utm_*` parameters, `device_type`, `os`, `browser`, `browser_version`, `device_brand`, `language`, `timezone`, `screen_width`, `screen_height`, and `country_code`, `region`, `city` when known.
 

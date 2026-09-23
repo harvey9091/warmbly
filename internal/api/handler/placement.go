@@ -99,7 +99,7 @@ func (h *Handler) AdminCreatePlacementTest(c *gin.Context) {
 
 	var req createPlacementTestRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	senderID, err := uuid.Parse(req.SenderAccountID)
@@ -274,7 +274,7 @@ func (h *Handler) AdminSetSeedMailbox(c *gin.Context) {
 	}
 	var req setSeedRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 

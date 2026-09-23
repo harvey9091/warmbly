@@ -95,6 +95,8 @@ const (
 	SyncBackfillPerMinute           = 240   // backfill pacing per mailbox
 	SyncFloodPerHour                = 5_000 // new live messages observed in one hour that mark a mailbox as flooding
 	SyncThrottleEscalationDays      = 3     // throttled UTC days out of the last 7 that deactivate a mailbox
+	SyncSkipFoldersMax              = 50    // folders one mailbox may exclude from sync
+	SyncSkipFolderNameMax           = 255   // characters in one excluded folder name
 
 	// Forms. Funnel events feed analytics ranges up to 90 days, so the default
 	// window keeps double coverage. Operator-editable under Instance settings.
@@ -399,6 +401,19 @@ const (
 	// file shows live progress instead of one request that times out.
 	MailboxBulkBatchMax    = 50
 	MailboxBulkConcurrency = 8
+
+	// Mailbox import (background job): rows per file, upload size, how many
+	// rows connect at once overall and per mail host (a burst of sign-ins to
+	// one provider from one address earns an auth throttle), how long a row
+	// may run before another pass takes it back, how long failed rows keep
+	// their sealed credentials for a retry, and when a finished import goes.
+	MailboxImportMaxRows            = 5000
+	MailboxImportMaxBytes           = 10 << 20
+	MailboxImportConcurrency        = 8
+	MailboxImportPerHostConcurrency = 3
+	MailboxImportLeaseSeconds       = 120
+	MailboxImportCredentialDays     = 7
+	MailboxImportRetentionDays      = 30
 
 	// Daily creation throttles. The total caps above stop "you have
 	// 5000 campaigns on this org" — the throttles below stop "you

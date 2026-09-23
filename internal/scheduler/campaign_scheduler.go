@@ -330,7 +330,7 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 
 	// STEP 5: Apply campaign schedule constraints
 	// Fall back to UTC if campaign has no timezone set (account timezone checked later)
-	campaignTZName := campaign.Timezone
+	campaignTZName := campaign.ClockTimezone()
 	campaignTZ := loadLocation(campaignTZName)
 	// Authoritative per-day sending windows (or derived from the legacy
 	// days/start/end fields). Drives every day-of-week + time-window gate below.
@@ -701,7 +701,17 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 			// anyway, and the drawer is reporting a time, not a sender.
 			selected = stableCandidate(candidates)
 		} else {
-			selected = selectAccountByRotationMode(campaign.RotationMode, candidates)
+			// A new lead starts on a mailbox whose gap has passed. "prefer"
+			// falls back to the whole pool when no matching one is clear.
+			pick := candidates
+			if clear := s.gapClearCandidates(ctx, pass, candidates); len(clear) > 0 {
+				pick = clear
+			} else if campaign.ESPMatchMode == "prefer" && len(candidates) < len(wholePool) {
+				if clear := s.gapClearCandidates(ctx, pass, wholePool); len(clear) > 0 {
+					pick = clear
+				}
+			}
+			selected = selectAccountByRotationMode(campaign.RotationMode, pick)
 		}
 	}
 	if selected == nil {
@@ -720,6 +730,11 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 		gapSeconds = s.behaviorGapFloor(selected.Behavior, candidateTime, account.MinWaitTime)
 	} else {
 		gapSeconds = s.behaviorGap(selected.Behavior, candidateTime, account.MinWaitTime)
+		// The gap the selection filter drew, while the send is still today.
+		if drawn, ok := pass.gapDraws[account.ID]; ok &&
+			(!selected.Behavior.Enabled || sameLocalDay(time.Now(), candidateTime, selected.Behavior.Loc)) {
+			gapSeconds = drawn
+		}
 	}
 
 	// leadFloor records that the hard floor below belongs to THIS lead and not
@@ -818,14 +833,11 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 			// which is this lead's wait and nobody else's: the lead behind it,
 			// on another mailbox, can still go now.
 			//
-			// An unbound lead keeps the pool-wide answer. Selection does not
-			// look at the min-gap, so rotation can hand an unbound lead a
-			// mailbox that has just sent — but round_robin and
-			// least_recently_used both pick the least-used mailbox, which is
-			// the one that has NOT just sent, and weighted re-draws on the next
-			// tick. Skipping the lead would spend the whole candidate budget
-			// re-deriving one shared gap on a single-mailbox campaign, which is
-			// most of them.
+			// An unbound lead keeps the pool-wide answer. Selection already
+			// prefers a mailbox whose gap has elapsed (gapClearCandidates), so
+			// reaching here means none has. Skipping the lead would spend the
+			// whole candidate budget re-deriving one shared gap on a
+			// single-mailbox campaign, which is most of them.
 			if bound != nil && bound.ID == account.ID {
 				leadFloor = true
 			}
@@ -942,7 +954,7 @@ func scheduledSlot(t time.Time, preview bool) time.Time {
 // floor is the honest answer anyway, because what the step is waiting for is
 // the day rolling over, not the wake-up the chain happens to have picked.
 func (s *schedulerService) deferToNextDay(campaign *models.Campaign, preview bool) time.Time {
-	tz := loadLocation(campaign.Timezone)
+	tz := loadLocation(campaign.ClockTimezone())
 	windows := effectiveWindows(campaign)
 	if preview {
 		local := time.Now().In(tz)

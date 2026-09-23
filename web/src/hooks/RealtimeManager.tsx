@@ -127,9 +127,9 @@ export function RealtimeManager({ children }: { children: React.ReactNode }) {
     }
   }, [isConnected, wsLatencyMs, setConnectionQuality])
 
-  // Seed the unread inbox count from the server. The store value is otherwise
-  // session-only (realtime increments it but it starts at 0), so seeding makes
-  // the title + favicon badge reflect the real unread count.
+  // The unread inbox count comes from the server and nowhere else: realtime
+  // inbox events invalidate this query rather than counting, so the title,
+  // favicon and nav badge always match what the Inbox lists.
   //
   // This is a react-query (not a one-shot fetch) on purpose: /unibox/count is
   // org-scoped, and on a fresh login the bootstrap fires before OrgGate has
@@ -139,11 +139,13 @@ export function RealtimeManager({ children }: { children: React.ReactNode }) {
   // and corrects the badge without a reload. Gated on a selected workspace so a
   // multi-org login (which redirects to /select-org before any sync) doesn't
   // fire a NULL-org read. Best-effort: a failure leaves the current count as-is.
+  // Keyed on every fetch, not on the value, so each refetch is applied.
   const unseenQuery = useUnseenCount({ enabled: !!currentOrg })
+  const unseenFetched = unseenQuery.dataUpdatedAt
   useEffect(() => {
     const c = unseenQuery.data?.count
     if (typeof c === 'number') setUnseenCount(c)
-  }, [unseenQuery.data, setUnseenCount])
+  }, [unseenQuery.data, unseenFetched, setUnseenCount])
 
   // Set up event-to-store routing
   useRealtimeEvents()

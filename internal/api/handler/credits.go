@@ -105,7 +105,7 @@ func (h *Handler) CreateCreditCheckoutSession(c *gin.Context) {
 		CancelURL  string `json:"cancel_url" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -266,7 +266,7 @@ func (h *Handler) UpdateCreditSettings(c *gin.Context) {
 		AutoTopupMaxPerMonth int    `json:"auto_topup_max_per_month"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	if body.AutoTopupPack == "" {

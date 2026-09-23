@@ -125,10 +125,14 @@ type Campaign struct {
 
 	StartDate *time.Time `json:"start_date"`
 	EndDate   *time.Time `json:"end_date"`
-	Timezone  string     `json:"timezone"`
-	Days      uint8      `json:"days"`
-	StartTime string     `json:"start_time"`
-	EndTime   string     `json:"end_time"`
+	// Timezone is the zone the schedule is read in. Empty means the campaign
+	// follows the workspace timezone; EffectiveTimezone is the zone in use
+	// either way, resolved on read.
+	Timezone          string `json:"timezone"`
+	EffectiveTimezone string `json:"effective_timezone"`
+	Days              uint8  `json:"days"`
+	StartTime         string `json:"start_time"`
+	EndTime           string `json:"end_time"`
 
 	// ScheduleWindows, when non-empty, is the authoritative per-day sending
 	// schedule (supersedes Days/StartTime/EndTime). Indexed by time.Weekday.
@@ -209,6 +213,18 @@ type Campaign struct {
 
 	UpdatedAt time.Time `json:"updated_at"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// ClockTimezone is the IANA zone the campaign's schedule is read in: its own
+// when set, else the workspace's as resolved on read, else UTC.
+func (c *Campaign) ClockTimezone() string {
+	if c.Timezone != "" {
+		return c.Timezone
+	}
+	if c.EffectiveTimezone != "" {
+		return c.EffectiveTimezone
+	}
+	return "UTC"
 }
 
 // CampaignSender is one mailbox in an explicit-strategy campaign's sender pool.

@@ -2,24 +2,24 @@ package contact
 
 import (
 	"context"
-	"encoding/csv"
 	"fmt"
 	"github.com/rs/zerolog/log"
 	"io"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/app/importmap"
 	"github.com/warmbly/warmbly/internal/app/orgrisk"
 	"github.com/warmbly/warmbly/internal/email"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/pkg/emailverify"
 	"github.com/warmbly/warmbly/internal/pkg/listquality"
+	"github.com/warmbly/warmbly/internal/pkg/spreadsheet"
 	"github.com/warmbly/warmbly/internal/utils"
-	"github.com/xuri/excelize/v2"
 )
 
 // ImportPreview parses the uploaded file enough to drive the column
@@ -27,15 +27,8 @@ import (
 // a second time on commit; storing the parsed buffer between calls
 // would either pin memory or require a tmp store, neither of which is
 // worth it for the typical (small) file size.
-// XLSX decompression budgets. A contact import is a list of people, so even a
-// very large one is tens of megabytes of text; these are generous for that and
-// far below what a zip bomb needs.
-const (
-	xlsxUnzipLimitBytes    = 512 << 20 // 512 MiB total uncompressed
-	xlsxUnzipXMLLimitBytes = 64 << 20  // 64 MiB for any single XML part
-)
 
-func (s *contactService) ImportPreview(ctx context.Context, r io.Reader, filename string) (*models.ContactImportPreview, *errx.Error) {
+func (s *contactService) ImportPreview(ctx context.Context, orgID uuid.UUID, r io.Reader, filename string) (*models.ContactImportPreview, *errx.Error) {
 	rows, format, xerr := parseSpreadsheet(r, filename)
 	if xerr != nil {
 		return nil, xerr
@@ -61,6 +54,7 @@ func (s *contactService) ImportPreview(ctx context.Context, r io.Reader, filenam
 	}
 
 	totalRows := len(rows) - dataStart
+	suggested, inferred := s.SuggestImportMapping(ctx, orgID, headers, sample)
 
 	return &models.ContactImportPreview{
 		Filename:         filename,
@@ -69,8 +63,34 @@ func (s *contactService) ImportPreview(ctx context.Context, r io.Reader, filenam
 		Columns:          headers,
 		HasHeader:        hasHeader,
 		SampleRows:       sample,
-		SuggestedMapping: suggestMapping(headers, sample),
+		SuggestedMapping: suggested,
+		InferredColumns:  inferred,
 	}, nil
+}
+
+// SuggestImportMapping is the mapping every importer's preview starts from:
+// the deterministic suggestion, then the TypeSafe judgment for the columns it
+// left unmapped when one is wired. inferred lists the columns the judgment
+// placed, so the mapper can ask for a second look at those.
+func (s *contactService) SuggestImportMapping(ctx context.Context, orgID uuid.UUID, headers []string, sample [][]string) ([]models.ContactImportColumnMapping, []int) {
+	keys := s.existingCustomFieldKeys(ctx, orgID)
+	shapes := importmap.Shapes(len(headers), sample)
+	suggested := suggestMapping(headers, sample, shapes, keys)
+	if s.columnJudge == nil {
+		return suggested, nil
+	}
+	return importmap.Infer(ctx, s.columnJudge, suggested, headers, shapes, keys)
+}
+
+// existingCustomFieldKeys is the workspace's custom-field keys for the
+// suggester. A failed read only costs the suggestion, never the preview.
+func (s *contactService) existingCustomFieldKeys(ctx context.Context, orgID uuid.UUID) []string {
+	keys, err := s.contactRepository.DistinctCustomFieldKeys(ctx, orgID)
+	if err != nil {
+		log.Warn().Str("organization_id", orgID.String()).Msg("could not read custom field keys for the import suggestion")
+		return nil
+	}
+	return keys
 }
 
 // importColumn is one validated mapping entry: exactly one destination
@@ -735,91 +755,13 @@ func appendUnique(dst []string, add ...string) []string {
 	return dst
 }
 
-// parseSpreadsheet returns rows as a 2-D slice and the detected format.
-// CSV is decoded with the stdlib (forgiving about trailing commas /
-// quoting), XLSX is decoded with excelize. Anything else 400s.
-// parseSpreadsheet turns an uploaded file into rows.
-//
-// It recovers from a panic in the parser. The XLSX reader is a third-party
-// parser of a zip of XML written by whoever uploaded the file, and it carries
-// at least one open advisory with no fix available (a negative shared-string
-// index panics). The request middleware would catch that and answer 500, but a
-// malformed workbook is the caller's problem and should read as one, not as an
-// instance fault that pages the error tracker.
-func parseSpreadsheet(r io.Reader, filename string) (rows [][]string, kind string, xerr *errx.Error) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			rows, kind = nil, ""
-			xerr = errx.New(errx.BadRequest, "this file could not be read as a spreadsheet; export it again from your spreadsheet application and retry")
-		}
-	}()
-	return parseSpreadsheetInner(r, filename)
-}
-
-func parseSpreadsheetInner(r io.Reader, filename string) ([][]string, string, *errx.Error) {
-	ext := strings.ToLower(filepath.Ext(filename))
-	switch ext {
-	case ".csv", ".tsv", ".txt", "":
-		reader := csv.NewReader(r)
-		reader.FieldsPerRecord = -1 // tolerate ragged rows; we pad
-		reader.LazyQuotes = true
-		if ext == ".tsv" {
-			reader.Comma = '\t'
-		}
-		rows, err := reader.ReadAll()
-		if err != nil {
-			return nil, "csv", errx.New(errx.BadRequest, "failed to parse CSV: "+err.Error())
-		}
-		return rows, "csv", nil
-	case ".xlsx", ".xlsm":
-		// An XLSX is a zip of XML, so its uncompressed size is unrelated to the
-		// upload cap. excelize defaults to a 16 GB unzip budget, and GetRows
-		// materialises the whole sheet before the row cap is ever applied, so a
-		// small file with a sparse dimension and a large shared-strings table
-		// could exhaust memory on the backend. Bound the decompression, then
-		// stream the rows and stop at the cap.
-		f, err := excelize.OpenReader(r, excelize.Options{
-			UnzipSizeLimit:    xlsxUnzipLimitBytes,
-			UnzipXMLSizeLimit: xlsxUnzipXMLLimitBytes,
-		})
-		if err != nil {
-			return nil, "xlsx", errx.New(errx.BadRequest, "failed to parse XLSX: "+err.Error())
-		}
-		defer f.Close()
-		sheetName := f.GetSheetName(f.GetActiveSheetIndex())
-		if sheetName == "" {
-			names := f.GetSheetList()
-			if len(names) == 0 {
-				return nil, "xlsx", errx.New(errx.BadRequest, "workbook has no sheets")
-			}
-			sheetName = names[0]
-		}
-		it, err := f.Rows(sheetName)
-		if err != nil {
-			return nil, "xlsx", errx.New(errx.BadRequest, "failed to read XLSX rows: "+err.Error())
-		}
-		defer it.Close()
-
-		// One row past the cap, so the caller can still tell "too many rows"
-		// from "exactly at the limit".
-		limit := models.MaxContactImportRows + 1
-		rows := make([][]string, 0, 256)
-		for it.Next() {
-			cols, cerr := it.Columns()
-			if cerr != nil {
-				return nil, "xlsx", errx.New(errx.BadRequest, "failed to read XLSX rows: "+cerr.Error())
-			}
-			rows = append(rows, cols)
-			if len(rows) >= limit {
-				break
-			}
-		}
-		if err := it.Error(); err != nil {
-			return nil, "xlsx", errx.New(errx.BadRequest, "failed to read XLSX rows: "+err.Error())
-		}
-		return rows, "xlsx", nil
+// parseSpreadsheet turns an uploaded file into rows, up to one past the row cap.
+func parseSpreadsheet(r io.Reader, filename string) ([][]string, string, *errx.Error) {
+	rows, kind, err := spreadsheet.Parse(r, filename, models.MaxContactImportRows+1)
+	if err != nil {
+		return nil, kind, errx.New(errx.BadRequest, err.Error())
 	}
-	return nil, "", errx.New(errx.BadRequest, "unsupported file type: "+ext)
+	return rows, kind, nil
 }
 
 // detectHeaders applies a simple heuristic: if every cell in the first
@@ -873,10 +815,16 @@ func padRow(row []string, n int) []string {
 	return out
 }
 
-// suggestMapping uses fuzzy header matches to pick a target for each
-// column. Anything we don't recognise becomes ignore — better than
-// inventing a custom-field key the user didn't ask for.
-func suggestMapping(headers []string, sample [][]string) []models.ContactImportColumnMapping {
+// SuggestMapping picks a target for each column from its header and sample:
+// a standard field, a verification verdict, or a custom field the workspace
+// already has (existingKeys, most used first). Anything else becomes ignore,
+// better than inventing a custom-field key the user didn't ask for. Every
+// importer that shows a column mapper calls this, so they suggest alike.
+func SuggestMapping(headers []string, sample [][]string, existingKeys []string) []models.ContactImportColumnMapping {
+	return suggestMapping(headers, sample, importmap.Shapes(len(headers), sample), existingKeys)
+}
+
+func suggestMapping(headers []string, sample [][]string, shapes []importmap.Shape, existingKeys []string) []models.ContactImportColumnMapping {
 	out := make([]models.ContactImportColumnMapping, len(headers))
 	for i, h := range headers {
 		out[i] = guessTarget(i, h)
@@ -909,7 +857,79 @@ func suggestMapping(headers []string, sample [][]string) []models.ContactImportC
 		}
 		out[i] = models.ContactImportColumnMapping{Index: i, Target: models.ContactImportTargetVerificationStatus, VerificationProvider: provider}
 	}
+	// Email first: a custom field must never take the one column an import
+	// cannot go without.
+	matchEmailByValues(out, shapes)
+	matchExistingCustomFields(out, headers, existingKeys)
 	return out
+}
+
+// matchEmailByValues maps the first column of addresses to Email when no
+// header named it, so a file with "Work contact" or no header row at all
+// still has the one column an import cannot go without.
+func matchEmailByValues(out []models.ContactImportColumnMapping, shapes []importmap.Shape) {
+	for _, m := range out {
+		if m.Target == models.ContactImportTargetEmail {
+			return
+		}
+	}
+	for i := range out {
+		if i < len(shapes) && out[i].Target == models.ContactImportTargetIgnore && shapes[i] == importmap.ShapeEmail {
+			out[i] = models.ContactImportColumnMapping{Index: i, Target: models.ContactImportTargetEmail}
+			return
+		}
+	}
+}
+
+// matchExistingCustomFields maps each still-ignored column whose header names
+// an existing custom field onto that field's stored spelling: the exact name
+// first, then one differing only in case or separators, so "industry" in a
+// file lands on "Industry" instead of starting a second field. Each field is
+// claimed by one column at most. Mirrored by matchExistingKey in the web app.
+func matchExistingCustomFields(out []models.ContactImportColumnMapping, headers, existingKeys []string) {
+	if len(existingKeys) == 0 {
+		return
+	}
+	exact := make(map[string]bool, len(existingKeys))
+	byFold := make(map[string]string, len(existingKeys))
+	for _, k := range existingKeys {
+		exact[k] = true
+		f := FoldCustomFieldKey(k)
+		if _, taken := byFold[f]; f != "" && !taken {
+			byFold[f] = k
+		}
+	}
+	claimed := make(map[string]bool, len(out))
+	for i, h := range headers {
+		if out[i].Target != models.ContactImportTargetIgnore {
+			continue
+		}
+		key := utils.NormalizeJSONKey(h)
+		if !exact[key] {
+			var ok bool
+			if key, ok = byFold[FoldCustomFieldKey(h)]; !ok {
+				continue
+			}
+		}
+		if claimed[key] {
+			continue
+		}
+		claimed[key] = true
+		out[i] = models.ContactImportColumnMapping{Index: i, Target: models.ContactImportTargetCustom, CustomKey: key}
+	}
+}
+
+// FoldCustomFieldKey reduces a header or field name to lowercase letters and
+// digits, the form two spellings of one field ("Company URL", "company_url")
+// share.
+func FoldCustomFieldKey(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // guessTarget runs against ~the set of header aliases we've seen in the

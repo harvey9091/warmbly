@@ -5,7 +5,7 @@ description: "A unified inbox across all connected mailboxes, with categories an
 
 One inbox for every connected mailbox. Read, sort, and reply from a single screen instead of logging into each account. Three columns: a **scope rail** for picking what to look at, a **conversation list**, and a **thread view** where you read and reply.
 
-Verified [warmup mail](/guides/warmup/) stays out of Unibox, including your mailbox's Sent copies and warmup run by [Warmbly Cloud](/guides/warmbly-cloud/). It does not create inbox notifications or trigger reply classification. After an upgrade, the consumer automatically checks existing messages in batches and removes confirmed warmup from Unibox. This leaves the messages in your email provider and keeps ordinary conversations intact.
+Verified [warmup mail](/guides/warmup/) stays out of Unibox, including your mailbox's Sent copies and warmup run by [Warmbly Cloud](/guides/warmbly-cloud/). It does not create inbox notifications, raise the unread count or trigger reply classification. The consumer also checks existing messages in batches (once a day and after every restart) and removes confirmed warmup from Unibox, and any reply notification it had raised goes with it. This leaves the messages in your email provider and keeps ordinary conversations intact.
 
 ## Layout
 
@@ -44,7 +44,7 @@ The rail is two short groups and then your mailboxes. The first group is where y
 
 | Folder | Group | Shows |
 | --- | --- | --- |
-| Inbox | First | Inbound mail, plus anything filed in a custom folder at the provider |
+| Inbox | First | Inbound mail, plus anything filed in a custom folder at the provider, unless that folder is [excluded from sync](/guides/mailboxes/#folders-you-do-not-want-synced) |
 | Drafts | Second | Messages sitting in a mailbox's drafts folder |
 | Sent | Second | Outbound mail, campaign and manual |
 | Archive | Second | Archived (Gmail's All Mail, the Archive folder elsewhere) |
@@ -226,7 +226,7 @@ Scheduled and smart-queued sends skip the undo window, since they already wait. 
 
 ## Realtime
 
-Nothing needs refreshing. New mail appears in the list, updates the open thread, and raises the unread count on its own. Read-state changes, replies, scheduled sends, snoozes, and label changes all refresh the affected views, keeping rail counts, the list, and the open thread consistent.
+Nothing needs refreshing. New mail appears in the list, updates the open thread, and raises the unread count on its own. The count on **Unibox** in the navigation (and in the browser tab) is the number of unread conversations in **Inbox**, the view it opens, so it never points at mail that view does not list: sent mail, drafts, archived and snoozed conversations are left out. Read-state changes, replies, scheduled sends, snoozes, and label changes all refresh the affected views, keeping rail counts, the list, and the open thread consistent.
 
 <Callout type="info" title="Keeping inboxes healthy">
 Replying promptly supports sender reputation, which warmup and good deliverability practice protect. See [Deliverability](/guides/deliverability/).

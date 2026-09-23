@@ -180,7 +180,7 @@ func (s *schedulerService) deferralConstraint(ctx context.Context, campaign *mod
 	if campaign.StartDate != nil && campaign.StartDate.After(grace) {
 		return ConstraintStartDate
 	}
-	if nextScheduleSlot(time.Now(), effectiveWindows(campaign), loadLocation(campaign.Timezone)).After(grace) {
+	if nextScheduleSlot(time.Now(), effectiveWindows(campaign), loadLocation(campaign.ClockTimezone())).After(grace) {
 		return ConstraintSendingWindow
 	}
 	if route.IsNewLead && campaign.MaxNewLeadsPerDay > 0 {

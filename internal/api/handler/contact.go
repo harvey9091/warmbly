@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -24,10 +25,18 @@ func (h *Handler) AddContacts(c *gin.Context) {
 		return
 	}
 
+	var raw json.RawMessage
+	if err := c.ShouldBindJSON(&raw); err != nil {
+		errx.Handle(c, errx.InvalidBody(err))
+		return
+	}
+	// A single contact may be sent as a bare object; it is read as a one-item array.
+	if trimmed := bytes.TrimSpace(raw); len(trimmed) > 0 && trimmed[0] == '{' {
+		raw = append(append(json.RawMessage{'['}, trimmed...), ']')
+	}
 	var data []models.AddContact
-
-	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+	if err := json.Unmarshal(raw, &data); err != nil {
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -88,7 +97,7 @@ func (h *Handler) SearchContacts(c *gin.Context) {
 	var data models.SearchContacts
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -150,7 +159,7 @@ func (h *Handler) UpdateContactBulk(c *gin.Context) {
 	var data models.BulkEditContactsData
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -192,7 +201,7 @@ func (h *Handler) UpdateContact(c *gin.Context) {
 	var data models.UpdateContact
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -224,13 +233,13 @@ func (h *Handler) DeleteContactBulk(c *gin.Context) {
 	// is the published contract, so it keeps working untouched.
 	var raw json.RawMessage
 	if err := c.ShouldBindJSON(&raw); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 	var sel models.ContactSelection
 	if err := json.Unmarshal(raw, &sel.Contacts); err != nil {
 		if err := json.Unmarshal(raw, &sel); err != nil {
-			errx.Handle(c, errx.ErrInvalid)
+			errx.Handle(c, errx.InvalidBody(err))
 			return
 		}
 	}

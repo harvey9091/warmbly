@@ -69,6 +69,10 @@ type UniboxRepository interface {
 	// are left out: there is nothing to relay through.
 	SeenRelayTargets(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) ([]models.SeenRelayTarget, error)
 	Delete(ctx context.Context, userID, id uuid.UUID) error
+	// DeleteByFolderPaths drops every stored message one mailbox synced from
+	// the named source folders, for folders the owner has excluded from sync.
+	// Exact names only; the worker names each subfolder it retires itself.
+	DeleteByFolderPaths(ctx context.Context, emailID uuid.UUID, folderPaths []string) (int64, error)
 	ListWarmupReviewCandidates(ctx context.Context, afterID uuid.UUID, limit int) ([]models.JobEventNewEmail, error)
 	// ListUnprocessedCampaignReplies pages inbound messages that reply
 	// processing never claimed and that look like campaign replies: they
@@ -715,29 +719,27 @@ func (r *uniboxRepository) Search(ctx context.Context, orgID uuid.UUID, params *
 }
 
 func (r *uniboxRepository) GetUnseenCount(ctx context.Context, orgID uuid.UUID, emailAccountID *uuid.UUID) (int64, error) {
-	var count int64
-
-	// Count unread THREADS (distinct, empty-thread-safe), not messages,
-	// so the badge agrees with the collapsed list + Overview.Unread.
+	// Unread threads exactly as the Inbox view (where the badge links) lists
+	// them: inbox folder only, snoozed left out.
+	query := `SELECT COUNT(DISTINCT COALESCE(NULLIF(ue.thread_id, ''), ue.id::text))
+		FROM unibox_emails ue
+		WHERE ue.email_id IN (SELECT id FROM email_accounts WHERE organization_id = $1)
+		  AND ue.seen = FALSE
+		  AND ue.folder = '` + models.FolderInbox + `'
+		  AND NOT EXISTS (
+			SELECT 1 FROM unibox_snoozes s
+			WHERE s.user_id = ue.user_id
+			  AND s.thread_id = ue.thread_id
+			  AND s.snoozed_until > NOW()
+		  )`
+	args := []any{orgID}
 	if emailAccountID != nil {
-		err := r.db.QueryRow(ctx,
-			`SELECT COUNT(DISTINCT COALESCE(NULLIF(thread_id, ''), id::text))
-			 FROM unibox_emails
-			 WHERE email_id IN (SELECT id FROM email_accounts WHERE organization_id = $1)
-			   AND email_id = $2 AND seen = FALSE
-			   AND folder NOT IN `+foldersOutsideWorkingViews,
-			orgID, *emailAccountID,
-		).Scan(&count)
-		return count, err
+		query += ` AND ue.email_id = $2`
+		args = append(args, *emailAccountID)
 	}
 
-	err := r.db.QueryRow(ctx,
-		`SELECT COUNT(DISTINCT COALESCE(NULLIF(thread_id, ''), id::text))
-		 FROM unibox_emails
-		 WHERE email_id IN (SELECT id FROM email_accounts WHERE organization_id = $1) AND seen = FALSE
-		   AND folder NOT IN `+foldersOutsideWorkingViews,
-		orgID,
-	).Scan(&count)
+	var count int64
+	err := r.db.QueryRow(ctx, query, args...).Scan(&count)
 	return count, err
 }
 
@@ -916,6 +918,51 @@ func (r *uniboxRepository) Delete(ctx context.Context, userID, id uuid.UUID) err
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// DeleteByFolderPaths removes the mirror rows for whole source folders. The
+// mail stays where it is at the provider; only the platform's copy goes.
+// The message map entries go with the rows: the sync reads a mapped
+// Message-ID as already stored, so an entry left behind would keep the
+// message from ever being imported again if it moved back into a synced
+// folder. An arrival still parked on warmup verification is dropped too, or
+// it would surface into a folder nobody follows.
+func (r *uniboxRepository) DeleteByFolderPaths(ctx context.Context, emailID uuid.UUID, folderPaths []string) (int64, error) {
+	if len(folderPaths) == 0 {
+		return 0, nil
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM email_message_map m
+		USING unibox_emails u
+		WHERE u.email_id = $1 AND u.folder_path = ANY($2)
+		  AND m.email_id = u.email_id AND m.message_id = u.message_id`, emailID, folderPaths); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM email_message_map m
+		USING unibox_pending_emails p
+		WHERE p.email_account_id = $1 AND p.payload->'message'->>'folder_path' = ANY($2)
+		  AND m.email_id = p.email_account_id AND m.message_id = p.payload->'message'->>'message_id'`, emailID, folderPaths); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM unibox_pending_emails
+		WHERE email_account_id = $1 AND payload->'message'->>'folder_path' = ANY($2)`, emailID, folderPaths); err != nil {
+		return 0, err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM unibox_emails WHERE email_id = $1 AND folder_path = ANY($2)`, emailID, folderPaths)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // queryPreviewList executes a query returning preview rows with limit+1 pagination.
