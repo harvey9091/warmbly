@@ -29307,7 +29307,7 @@
           },
           "surfaces": {
             "type": "array",
-            "description": "Device and app or webmail together: mobile_app, desktop_app, tablet_app, webmail, mobile, desktop, tablet, or hidden (a provider's image proxy hid the device).",
+            "description": "Device and app or webmail together: mobile_app, desktop_app, tablet_app, webmail, mobile, desktop, tablet, or hidden (a provider's image proxy hid the device). A click sits under its bare device type unless a mail app made the request itself.",
             "items": {
               "$ref": "#/components/schemas/EngagementBucket"
             }
@@ -32396,7 +32396,7 @@
               "app",
               "webmail"
             ],
-            "description": "Whether the open came from an installed mail app or webmail in a browser. Omitted when the request cannot tell, and on clicks."
+            "description": "Whether the open came from an installed mail app or webmail in a browser. Omitted when the request cannot tell. On a click it is `app` only when a mail app made the request itself, and never `webmail`."
           },
           "device_hidden": {
             "type": "boolean",
