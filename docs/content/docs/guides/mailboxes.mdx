@@ -13,7 +13,7 @@ Open **Accounts** and choose **Add account**.
 |----------|--------|-------|
 | Gmail / Google Workspace | App password over IMAP + SMTP (`smtp_imap`) | The connect dialog walks you through it in three steps, see [Gmail and Google Workspace](#gmail-and-google-workspace) below. Google sign-in for new mailboxes is coming soon |
 | Outlook / Microsoft 365 | OAuth (`outlook`) | Recommended. No password stored. Runs on Microsoft Graph |
-| Any other server | IMAP + SMTP (`smtp_imap`) | Custom domains, self-hosted, or providers without OAuth. Any IMAP server works, including Outlook.com, Microsoft 365 over IMAP, Yahoo, Fastmail, Zoho, cPanel and self-hosted Dovecot |
+| Any other server | IMAP + SMTP (`smtp_imap`) | Custom domains, self-hosted, or providers without OAuth. Any IMAP server works, including Outlook.com, Microsoft 365 over IMAP, Yahoo, Fastmail, Zoho, Seznam.cz, cPanel and self-hosted Dovecot |
 
 <Callout title="Google sign-in is coming soon">
   For now, new Gmail and Google Workspace mailboxes connect with an app password; the connect dialog says so and walks you through it. A mailbox you already connected with Google sign-in is not affected: it keeps sending and syncing as before, and if Google ever invalidates its token the **Re-authorize** button in its drawer still works. Nothing has to be reconnected. A self-hosted instance with its own Google app can turn sign-in back on for new mailboxes with `BOX_GOOGLE_OAUTH_CONNECT=true`, see [configuration](/development/configuration/#mailbox-connections).
@@ -175,7 +175,7 @@ Reconnecting never counts against the mailbox allowance, so a workspace at its c
 
 Connecting a mailbox does two things: it imports the mailbox's recent history, and from then on it follows new mail as it arrives. Both are the same on every provider.
 
-**The import** brings in the last `90` days, newest first, up to `5,000` messages per mailbox (the defaults; a self-hosted instance can change both under Instance settings). It reads the inbox, sent mail and archive (plus your own folders on Gmail and IMAP), and skips trash, drafts, spam and Gmail's "All Mail". You can watch it in the mailbox drawer's **Sync** card: a progress bar with a running count while it works, then "Up to date" with what was imported. Because it runs newest first, the mail you would look for is there within the first minute; a large mailbox finishes over the next while at a steady pace.
+**The import** brings in the last `90` days, newest first, up to `5,000` messages per mailbox (the defaults; a self-hosted instance can change both under Instance settings). It reads the inbox, sent mail and archive (plus your own folders on Gmail and IMAP), and skips trash, drafts, spam and Gmail's "All Mail". You can watch it in the mailbox drawer's **Sync** card: a progress bar with a running count while it works, then "Up to date" with what was imported. Because it runs newest first, the mail you would look for is there within the first minute; a large mailbox finishes over the next while at a steady pace. A few IMAP servers (Seznam.cz, for one) refuse to search a folder by date; on those the import reads each message's arrival date instead, which makes the first pass over a large folder a little slower and changes nothing else.
 
 **Live sync** then follows every folder the provider exposes, including junk (so placement problems are visible) and sent mail (so a conversation shows both sides). Read state, flags, deletions and moves are mirrored too.
 
