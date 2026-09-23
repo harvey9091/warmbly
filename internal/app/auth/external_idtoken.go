@@ -259,7 +259,7 @@ func (s *authService) createExternalUser(ctx context.Context, email *mail.Addres
 	if s.organizationService != nil {
 		orgName := displayname.DefaultWorkspace(u.FirstName)
 		var orgErr *errx.Error
-		org, orgErr = s.organizationService.Create(ctx, u.ID, orgName)
+		org, orgErr = s.organizationService.Create(ctx, u.ID, orgName, "")
 		if orgErr != nil {
 			errs.CaptureException(orgErr)
 			// Don't fail the sign-in if org creation fails.

@@ -24,6 +24,9 @@ import (
 
 type CampaignRepository interface {
 	Create(ctx context.Context, userID string, orgID *uuid.UUID, data *models.CreateCampaign) (*models.Campaign, *errx.Error)
+	// WorkspaceTimezone is the zone a campaign with no timezone of its own is
+	// read in: the workspace's, else UTC.
+	WorkspaceTimezone(ctx context.Context, orgID uuid.UUID) string
 	Get(ctx context.Context, userID, id string) (*models.Campaign, error)
 	GetByID(ctx context.Context, campaignID uuid.UUID) (*models.Campaign, error)
 	GetSequenceByID(ctx context.Context, sequenceID uuid.UUID) (*models.Sequence, error)
@@ -144,7 +147,7 @@ func NewCampaignRepostory(db *db.DB) CampaignRepository {
 const CAMPAIGN_SELECT = `id, name, description, status,
 		  stop_on_reply, open_tracking, link_tracking,
 		  text_only, daily_limit, unsubscribe_header, risky_emails,
-		  cc_addr, bcc_addr, start_date, end_date, timezone, days,
+		  cc_addr, bcc_addr, start_date, end_date, timezone, COALESCE(NULLIF(timezone, ''), (SELECT NULLIF(o.timezone, '') FROM organizations o WHERE o.id = organization_id), 'UTC') AS effective_timezone, days,
 		  start_time, end_time,
 		  contact_order_by, contact_order_dir, contact_order_field,
 		  updated_at, created_at,
@@ -166,7 +169,7 @@ func getCampaign(rows db.Scannable, campaign *models.Campaign, extra ...any) err
 		&campaign.ID, &campaign.Name, &campaign.Description, &campaign.Status,
 		&campaign.StopOnReply, &campaign.OpenTracking, &campaign.LinkTracking,
 		&campaign.TextOnly, &campaign.DailyLimit, &campaign.UnsubscribeHeader, &campaign.RiskyEmails,
-		&campaign.CC, &campaign.BCC, &campaign.StartDate, &campaign.EndDate, &campaign.Timezone, &campaign.Days,
+		&campaign.CC, &campaign.BCC, &campaign.StartDate, &campaign.EndDate, &campaign.Timezone, &campaign.EffectiveTimezone, &campaign.Days,
 		&campaign.StartTime, &campaign.EndTime,
 		&campaign.ContactOrderBy, &campaign.ContactOrderDir, &campaign.ContactOrderField,
 		&campaign.UpdatedAt, &campaign.CreatedAt,
@@ -193,7 +196,7 @@ const CAMPAIGN_SELECT_FULL = `
 	c.id, c.name, c.description, c.status,
 	c.stop_on_reply, c.open_tracking, c.link_tracking,
 	c.text_only, c.daily_limit, c.unsubscribe_header, c.risky_emails,
-	c.cc_addr, c.bcc_addr, c.start_date, c.end_date, c.timezone, c.days,
+	c.cc_addr, c.bcc_addr, c.start_date, c.end_date, c.timezone, COALESCE(NULLIF(c.timezone, ''), (SELECT NULLIF(o.timezone, '') FROM organizations o WHERE o.id = c.organization_id), 'UTC') AS effective_timezone, c.days,
 	c.start_time, c.end_time,
 	c.contact_order_by, c.contact_order_dir, c.contact_order_field,
 	c.updated_at, c.created_at,
@@ -217,6 +220,16 @@ func getCampaignFull(rows db.Scannable, campaign *models.Campaign) error {
 	return getCampaign(rows, campaign, &campaign.EmailTags, &campaign.Folders)
 }
 
+// WorkspaceTimezone is the zone a campaign with none of its own is read in:
+// the workspace timezone, else UTC.
+func (r *campaignRepository) WorkspaceTimezone(ctx context.Context, orgID uuid.UUID) string {
+	var zone string
+	if err := r.DB.QueryRow(ctx, `SELECT timezone FROM organizations WHERE id = $1`, orgID).Scan(&zone); err == nil && zone != "" {
+		return zone
+	}
+	return "UTC"
+}
+
 // Create inserts a new campaign and, in the same transaction, applies every
 // optional bit of initial config the caller sent (schedule, tracking flags,
 // sender pool, initial sequences, A/B variants, advanced overrides). The
@@ -232,8 +245,9 @@ func (r *campaignRepository) Create(ctx context.Context, userID string, orgID *u
 		}
 		days = *data.Days
 	}
-	timezone := "Europe/London"
-	if data.Timezone != nil {
+	// Empty follows the workspace timezone, resolved on every read.
+	timezone := ""
+	if data.Timezone != nil && *data.Timezone != "" {
 		if !tz.Valid(*data.Timezone) {
 			return nil, errx.ErrTimezone
 		}
@@ -1050,7 +1064,7 @@ func (r *campaignRepository) Update(ctx context.Context, orgID, campaignID strin
 		argPos++
 	}
 	if data.Timezone != nil {
-		if !tz.Valid(*data.Timezone) {
+		if *data.Timezone != "" && !tz.Valid(*data.Timezone) {
 			return nil, errx.ErrTimezone
 		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "timezone", argPos))
@@ -1427,7 +1441,7 @@ func (r *campaignRepository) GetByID(ctx context.Context, campaignID uuid.UUID) 
 		&campaign.ID, &campaign.Name, &campaign.Description, &campaign.Status,
 		&campaign.StopOnReply, &campaign.OpenTracking, &campaign.LinkTracking,
 		&campaign.TextOnly, &campaign.DailyLimit, &campaign.UnsubscribeHeader, &campaign.RiskyEmails,
-		&campaign.CC, &campaign.BCC, &campaign.StartDate, &campaign.EndDate, &campaign.Timezone, &campaign.Days,
+		&campaign.CC, &campaign.BCC, &campaign.StartDate, &campaign.EndDate, &campaign.Timezone, &campaign.EffectiveTimezone, &campaign.Days,
 		&campaign.StartTime, &campaign.EndTime,
 		&campaign.ContactOrderBy, &campaign.ContactOrderDir, &campaign.ContactOrderField,
 		&campaign.UpdatedAt, &campaign.CreatedAt,

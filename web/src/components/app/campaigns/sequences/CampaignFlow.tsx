@@ -444,8 +444,8 @@ function IfNode({ data, selected }: NodeProps) {
 
 // TriggerNode — where every contact enters the flow, and the one place on the
 // canvas that shows (and sets) how long their FIRST email waits after they
-// entered. It edits campaigns.entry_delay_minutes, the same value the Schedule
-// tab writes, so the two can never disagree. Self-contained on purpose: it reads
+// entered. It edits campaigns.entry_delay_minutes, the same value campaign
+// Settings > First email writes, so the two can never disagree. Self-contained on purpose: it reads
 // the campaign itself rather than taking the delay through node data, which keeps
 // the layout effect from re-running on every save.
 function TriggerNode({ data }: NodeProps) {

@@ -168,7 +168,7 @@ func (r *advisorRepository) loadCampaigns(ctx context.Context, orgID uuid.UUID) 
 			c.id, c.name, c.status::text,
 			c.daily_limit, c.open_tracking, c.link_tracking, c.unsubscribe_header,
 			c.stop_on_reply, c.text_only,
-			c.timezone, c.days, to_char(c.start_time, 'HH24:MI'), to_char(c.end_time, 'HH24:MI'),
+			COALESCE(NULLIF(c.timezone, ''), (SELECT NULLIF(o.timezone, '') FROM organizations o WHERE o.id = c.organization_id), 'UTC'), c.days, to_char(c.start_time, 'HH24:MI'), to_char(c.end_time, 'HH24:MI'),
 			COALESCE(c.schedule_windows, '{}'::jsonb),
 			c.sender_strategy, c.rotation_mode, c.esp_match_mode,
 			c.ramp_enabled, c.ramp_start, c.ramp_ceiling,

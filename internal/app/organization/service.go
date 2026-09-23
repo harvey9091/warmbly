@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/app/dailythrottle"
+	"github.com/warmbly/warmbly/internal/app/tz"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
@@ -61,7 +62,7 @@ type OrganizationService interface {
 	WireWorkspaceSeeder(fn func(ctx context.Context, orgID uuid.UUID))
 
 	// CRUD
-	Create(ctx context.Context, userID uuid.UUID, name string) (*models.Organization, *errx.Error)
+	Create(ctx context.Context, userID uuid.UUID, name, timezone string) (*models.Organization, *errx.Error)
 	Get(ctx context.Context, orgID uuid.UUID) (*models.Organization, *errx.Error)
 	GetBySlug(ctx context.Context, slug string) (*models.Organization, *errx.Error)
 	Update(ctx context.Context, orgID uuid.UUID, req *models.UpdateOrganizationRequest) (*models.Organization, *errx.Error)
@@ -255,10 +256,14 @@ func NewService(
 }
 
 // Create creates a new organization and adds the user as owner
-func (s *organizationService) Create(ctx context.Context, userID uuid.UUID, name string) (*models.Organization, *errx.Error) {
+func (s *organizationService) Create(ctx context.Context, userID uuid.UUID, name, timezone string) (*models.Organization, *errx.Error) {
 	name, nerr := displayname.Validate("Workspace name", name, displayname.Workspace, false)
 	if nerr != nil {
 		return nil, nerr
+	}
+	timezone = strings.TrimSpace(timezone)
+	if timezone != "" && !tz.Valid(timezone) {
+		return nil, errx.ErrTimezone
 	}
 
 	// Ban-scope enforcement (migration 000045). Block new workspace
@@ -302,6 +307,7 @@ func (s *organizationService) Create(ctx context.Context, userID uuid.UUID, name
 		ID:          uuid.New(),
 		Name:        name,
 		OwnerUserID: userID,
+		Timezone:    timezone,
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -442,6 +448,13 @@ func (s *organizationService) Update(ctx context.Context, orgID uuid.UUID, req *
 	}
 	if req.AssistantSharedHistory != nil {
 		org.AssistantSharedHistory = *req.AssistantSharedHistory
+	}
+	if req.Timezone != nil {
+		zone := strings.TrimSpace(*req.Timezone)
+		if zone != "" && !tz.Valid(zone) {
+			return nil, errx.ErrTimezone
+		}
+		org.Timezone = zone
 	}
 
 	org.UpdatedAt = time.Now()

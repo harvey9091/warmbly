@@ -31,7 +31,7 @@ func (h *Handler) CreateOrganization(c *gin.Context) {
 		return
 	}
 
-	org, xerr := h.OrganizationService.Create(c.Request.Context(), userID, req.Name)
+	org, xerr := h.OrganizationService.Create(c.Request.Context(), userID, req.Name, req.Timezone)
 	if xerr != nil {
 		errx.JSON(c, xerr)
 		return

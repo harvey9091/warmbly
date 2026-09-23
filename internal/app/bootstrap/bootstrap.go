@@ -126,7 +126,7 @@ func (s *Service) createOwner(ctx context.Context, address string) error {
 	}
 
 	orgName := bootstrapOrgName(u.FirstName)
-	org, orgErr := s.orgSvc.Create(ctx, u.ID, orgName)
+	org, orgErr := s.orgSvc.Create(ctx, u.ID, orgName, "")
 	if orgErr != nil {
 		return fmt.Errorf("bootstrap: creating the organization: %w", orgErr)
 	}
@@ -320,7 +320,7 @@ func (s *Service) Claim(ctx context.Context, token, address, password, firstName
 	}
 
 	orgName := bootstrapOrgName(u.FirstName)
-	org, orgErr := s.orgSvc.Create(ctx, u.ID, orgName)
+	org, orgErr := s.orgSvc.Create(ctx, u.ID, orgName, "")
 	if orgErr != nil {
 		errs.CaptureException(orgErr)
 		return nil, errx.InternalError()

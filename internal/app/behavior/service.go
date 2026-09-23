@@ -92,7 +92,7 @@ func (s *service) Get(ctx context.Context, accountID uuid.UUID) (models.SendingB
 	if err != nil {
 		return models.SendingBehavior{}, err
 	}
-	b.Timezone = account.Timezone
+	b.Timezone = account.ClockTimezone()
 	return b, nil
 }
 
@@ -232,9 +232,9 @@ func (s *service) Resolve(ctx context.Context, account *models.Email) Resolved {
 		return r
 	}
 
-	b.Timezone = account.Timezone
+	b.Timezone = account.ClockTimezone()
 	r.Behavior = b
-	r.Loc = loadLocation(account.Timezone)
+	r.Loc = loadLocation(account.ClockTimezone())
 	r.Enabled = b.Enabled
 	return r
 }
@@ -261,11 +261,11 @@ func (s *service) ResolveMany(ctx context.Context, accounts []models.Email) map[
 		if !ok {
 			b = models.DefaultSendingBehavior(a.ID)
 		}
-		b.Timezone = a.Timezone
+		b.Timezone = a.ClockTimezone()
 		out[a.ID] = Resolved{
 			Enabled:   b.Enabled,
 			Behavior:  b,
-			Loc:       loadLocation(a.Timezone),
+			Loc:       loadLocation(a.ClockTimezone()),
 			accountID: a.ID,
 			svc:       s,
 			ctx:       ctx,

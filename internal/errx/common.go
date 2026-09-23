@@ -17,7 +17,7 @@ var (
 	ErrBitmask   = New(BadRequest, "Invalid bitmask value.")
 	ErrRole      = New(BadRequest, "Role doesn't exists.")
 	ErrPosition  = New(BadRequest, "Invalid position.")
-	ErrTimezone  = New(BadRequest, "Timezone doesn't exists.")
+	ErrTimezone  = New(BadRequest, "Invalid timezone. Use an IANA name such as America/New_York or Europe/London.")
 	ErrTime      = New(BadRequest, "Invalid time format.")
 	ErrNotEnough = New(BadRequest, "Not enough data to perform this action.")
 	ErrLimit     = New(BadRequest, "Limit must be between 10 and 200.")

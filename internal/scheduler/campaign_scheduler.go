@@ -330,7 +330,7 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 
 	// STEP 5: Apply campaign schedule constraints
 	// Fall back to UTC if campaign has no timezone set (account timezone checked later)
-	campaignTZName := campaign.Timezone
+	campaignTZName := campaign.ClockTimezone()
 	campaignTZ := loadLocation(campaignTZName)
 	// Authoritative per-day sending windows (or derived from the legacy
 	// days/start/end fields). Drives every day-of-week + time-window gate below.
@@ -942,7 +942,7 @@ func scheduledSlot(t time.Time, preview bool) time.Time {
 // floor is the honest answer anyway, because what the step is waiting for is
 // the day rolling over, not the wake-up the chain happens to have picked.
 func (s *schedulerService) deferToNextDay(campaign *models.Campaign, preview bool) time.Time {
-	tz := loadLocation(campaign.Timezone)
+	tz := loadLocation(campaign.ClockTimezone())
 	windows := effectiveWindows(campaign)
 	if preview {
 		local := time.Now().In(tz)

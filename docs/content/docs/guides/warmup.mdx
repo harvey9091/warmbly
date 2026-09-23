@@ -86,6 +86,8 @@ At defaults a mailbox sends 10 on day one, 11 the next, and levels off at 40 aft
 
 Four things shape the real daily number: sends are spread across your warmup hours with jitter, the target is capped by how many eligible partners exist, a mailbox whose health drops gets reduced volume and wider spacing until it recovers, and a recent spam placement holds the ramp where it is.
 
+Warmup hours are read in the mailbox's timezone: its own when one is set on the **Settings** tab of its drawer, otherwise the workspace timezone under **Settings > Profile > Timezones**, and UTC when neither is set. Set the workspace timezone once and every mailbox that follows it reads its warmup hours in the team's day. A mailbox with its own timezone keeps it, and changing the workspace timezone does not change any mailbox's hours.
+
 ### Holding the ramp on an early signal
 
 If any warmup email lands in a recipient's spam folder, that mailbox stops climbing immediately:

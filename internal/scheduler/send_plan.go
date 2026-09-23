@@ -222,7 +222,7 @@ func (s *schedulerService) planMailbox(ctx context.Context, pass *campaignPass, 
 				r = byHour
 			}
 		}
-	} else if acct.Timezone != "" && acct.Timezone != pass.campaign.Timezone {
+	} else if acct.Timezone != "" && acct.Timezone != pass.campaign.ClockTimezone() {
 		// The 8am-8pm band in the mailbox's own timezone, both ends: the
 		// placer moves any send past 8pm to the next morning.
 		loc := loadLocation(acct.Timezone)
@@ -294,7 +294,7 @@ func (s *schedulerService) planMailbox(ctx context.Context, pass *campaignPass, 
 
 // dayWindow is the campaign's calendar for today, in its own timezone.
 func dayWindow(campaign *models.Campaign, now time.Time) (models.CampaignSendWindow, int, time.Time) {
-	tz := loadLocation(campaign.Timezone)
+	tz := loadLocation(campaign.ClockTimezone())
 	windows := effectiveWindows(campaign)
 	local := now.In(tz)
 	y, m, d := local.Date()
@@ -400,7 +400,7 @@ func (s *schedulerService) PlanCampaignDay(ctx context.Context, campaignID uuid.
 	}
 	now := time.Now()
 	projectRampLevel(campaign, now)
-	tz := loadLocation(campaign.Timezone)
+	tz := loadLocation(campaign.ClockTimezone())
 	window, windowSecondsLeft, closesAt := dayWindow(campaign, now)
 
 	plan := &models.CampaignSendPlan{

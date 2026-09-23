@@ -54,6 +54,11 @@ export default interface Inbox {
     warmup_end_time?: string;
     warmup_days?: number;
     /**
+     * The mailbox's own IANA zone, "" when it follows the workspace timezone.
+     * Its warmup hours and sending-behaviour workday are read in this zone.
+     */
+    timezone?: string;
+    /**
      * Where warmup mail is filed in the mail client itself: "folder" moves it
      * into warmup_folder, "inbox" leaves it where the provider put it,
      * "archive" takes it out of the inbox without a folder of its own.

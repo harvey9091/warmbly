@@ -274,7 +274,7 @@ func (s *schedulerService) windowFor(ctx context.Context, p *campaignPass, acct 
 		}
 		return &openAt, bhv.Loc, remaining, mailboxGate{}
 	}
-	if acct.Timezone == "" || acct.Timezone == p.campaign.Timezone {
+	if acct.Timezone == "" || acct.Timezone == p.campaign.ClockTimezone() {
 		return nil, nil, remaining, mailboxGate{}
 	}
 	loc := loadLocation(acct.Timezone)
