@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin/binding"
 	"github.com/go-playground/validator/v10"
@@ -38,6 +39,7 @@ func InvalidBody(err error) *Error {
 		syntaxErr *json.SyntaxError
 		typeErr   *json.UnmarshalTypeError
 		sizeErr   *http.MaxBytesError
+		timeErr   *time.ParseError
 	)
 	switch {
 	case err == nil:
@@ -52,6 +54,8 @@ func InvalidBody(err error) *Error {
 		return New(BadRequest, fmt.Sprintf("The request body is not valid JSON: %s (at byte %d).", strings.TrimPrefix(syntaxErr.Error(), "json: "), syntaxErr.Offset))
 	case errors.As(err, &typeErr):
 		return typeMismatch(typeErr)
+	case errors.As(err, &timeErr):
+		return New(BadRequest, fmt.Sprintf("The request body has a time that is not RFC 3339 (such as 2026-10-01T09:00:00Z): %q.", strings.Trim(timeErr.Value, `"`)))
 	case strings.HasPrefix(err.Error(), "invalid UUID"):
 		return New(BadRequest, "The request body has a value that should be a UUID and is not one.")
 	}

@@ -91,6 +91,18 @@ func TestCommandBodiesMatchTheAPI(t *testing.T) {
 		}
 	})
 
+	for _, cmd := range [][]string{{"add-step", "C"}, {"edit-step", "C", "S"}} {
+		t.Run("campaign "+cmd[0], func(t *testing.T) {
+			args := append([]string{"campaign"}, cmd...)
+			args = append(args, "--subject", "Hi", "--body-plain", "Hi", "--wait-after", "3")
+			var step models.UpdateSequence
+			strictDecode(t, runAgainst(t, args...).body, &step)
+			if step.Subject == nil || step.WaitAfter == nil || *step.WaitAfter != 3 {
+				t.Fatalf("decoded %+v", step)
+			}
+		})
+	}
+
 	t.Run("mailbox set-tracking", func(t *testing.T) {
 		r := runAgainst(t, "mailbox", "set-tracking", "MB", "--domain", "t.example.com")
 		if r.method != http.MethodPatch || r.query.Get("domain") != "t.example.com" || len(r.body) != 0 {

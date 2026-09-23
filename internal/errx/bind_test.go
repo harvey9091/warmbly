@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -22,6 +23,7 @@ type bindSend struct {
 
 type bindContact struct {
 	Email    string      `json:"email" binding:"required"`
+	Due      *time.Time  `json:"due"`
 	Campaign uuid.UUID   `json:"campaign"`
 	Tags     []uuid.UUID `json:"tags"`
 }
@@ -54,6 +56,7 @@ func TestInvalidBody(t *testing.T) {
 		{"array where an object is expected", `[]`, func() any { return &bindSend{} }, []string{"must be a JSON object, not a JSON array"}},
 		{"slice element validation", `[{"email":"a@b.co"},{}]`, func() any { return &[]bindContact{} }, []string{`"email" is required`}},
 		{"uuid", `{"email":"a@b.co","campaign":"nope"}`, func() any { return &bindContact{} }, []string{"should be a UUID"}},
+		{"time", `{"email":"a@b.co","due":"tomorrow"}`, func() any { return &bindContact{} }, []string{"not RFC 3339", `"tomorrow"`}},
 		{"uuid of the wrong JSON type", `{"email":"a@b.co","campaign":5}`, func() any { return &bindContact{} }, []string{`Field "campaign" must be a JSON string, not a JSON number`}},
 	}
 	for _, tc := range cases {
