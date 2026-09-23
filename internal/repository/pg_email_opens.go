@@ -65,14 +65,16 @@ func (r *emailOpenRepository) Insert(ctx context.Context, o *EmailOpen) error {
 		INSERT INTO email_opens
 			(id, task_id, campaign_id, contact_id, sequence_id, opened_at,
 			 machine, machine_reason, user_agent, ip_hash,
-			 client, device_type, os, browser, browser_version, country_code, region, city)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+			 client, device_type, os, browser, browser_version, country_code, region, city,
+			 client_type, device_hidden)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 	`
 	_, err := r.db.Exec(ctx, query,
 		o.ID, o.TaskID, o.CampaignID, o.ContactID, o.SequenceID, o.OpenedAt,
 		o.Machine, o.MachineReason, o.UserAgent, o.IPHash,
 		o.Origin.Client, o.Origin.DeviceType, o.Origin.OS, o.Origin.Browser, o.Origin.BrowserVersion,
 		o.Origin.CountryCode, o.Origin.Region, o.Origin.City,
+		o.Origin.ClientType, o.Origin.DeviceHidden,
 	)
 	return err
 }

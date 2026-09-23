@@ -24652,6 +24652,13 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "reads_on": {
+            "type": "array",
+            "description": "How the contact reads your mail: each client and device a person's opens came from, most recent first, at most four. Omitted until a person's open says something about itself.",
+            "items": {
+              "$ref": "#/components/schemas/ContactReadingOrigin"
+            }
           }
         }
       },
@@ -28830,6 +28837,18 @@
           "timestamp": {
             "type": "string",
             "format": "date-time"
+          },
+          "link": {
+            "type": "string",
+            "description": "For clicked: the first link a person clicked on the step."
+          },
+          "origin": {
+            "description": "Client, device and location of a person's open or click, when it was logged per event.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/EngagementOrigin"
+              }
+            ]
           }
         }
       },
@@ -29236,6 +29255,74 @@
             "items": {
               "$ref": "#/components/schemas/CampaignStepStats"
             }
+          },
+          "engagement": {
+            "description": "Where and on what people opened and clicked.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CampaignEngagementBreakdown"
+              }
+            ]
+          }
+        }
+      },
+      "CampaignEngagementBreakdown": {
+        "type": "object",
+        "description": "Where and on what people opened and clicked, from human events only. Each list holds the busiest eight buckets.",
+        "required": [
+          "countries",
+          "clients",
+          "devices",
+          "surfaces"
+        ],
+        "properties": {
+          "countries": {
+            "type": "array",
+            "description": "Keyed by ISO country code.",
+            "items": {
+              "$ref": "#/components/schemas/EngagementBucket"
+            }
+          },
+          "clients": {
+            "type": "array",
+            "description": "Keyed by mail client (Gmail, Apple Mail, Outlook), `Webmail in <browser>` for an open read in a browser's webmail, or the browser a click opened in.",
+            "items": {
+              "$ref": "#/components/schemas/EngagementBucket"
+            }
+          },
+          "devices": {
+            "type": "array",
+            "description": "Keyed by device type: desktop, mobile or tablet.",
+            "items": {
+              "$ref": "#/components/schemas/EngagementBucket"
+            }
+          },
+          "surfaces": {
+            "type": "array",
+            "description": "Device and app or webmail together: mobile_app, desktop_app, tablet_app, webmail, mobile, desktop, tablet, or hidden (a provider's image proxy hid the device).",
+            "items": {
+              "$ref": "#/components/schemas/EngagementBucket"
+            }
+          }
+        }
+      },
+      "EngagementBucket": {
+        "type": "object",
+        "description": "One slice of the engagement breakdown: distinct contacts who opened and clicked from it. An empty key is unknown.",
+        "required": [
+          "key",
+          "opens",
+          "clicks"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "opens": {
+            "type": "integer"
+          },
+          "clicks": {
+            "type": "integer"
           }
         }
       },
@@ -32293,10 +32380,27 @@
         "properties": {
           "client": {
             "type": "string",
-            "description": "Mail client or image proxy named by the user agent (Gmail, Apple Mail, Outlook)."
+            "description": "Mail client named by the user agent, for example Gmail, Apple Mail, Outlook, Yahoo Mail, Thunderbird. On a click, the app whose in-app browser opened the link, when it says so."
+          },
+          "client_type": {
+            "type": "string",
+            "enum": [
+              "app",
+              "webmail"
+            ],
+            "description": "Whether the open came from an installed mail app or webmail in a browser. Omitted when the request cannot tell, and on clicks."
+          },
+          "device_hidden": {
+            "type": "boolean",
+            "description": "True when a mailbox provider's image proxy fetched the image (Gmail, Yahoo, Apple Mail Privacy Protection), so the reader's device is unknowable. device_type, os and browser are then omitted, and so is the location for proxies that do not keep the reader's region."
           },
           "device_type": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "desktop",
+              "mobile",
+              "tablet"
+            ]
           },
           "os": {
             "type": "string"
@@ -32315,6 +32419,51 @@
           },
           "city": {
             "type": "string"
+          }
+        }
+      },
+      "ContactReadingOrigin": {
+        "type": "object",
+        "description": "One client and device a contact opened mail on.",
+        "required": [
+          "opens",
+          "last_opened_at"
+        ],
+        "properties": {
+          "client": {
+            "type": "string"
+          },
+          "client_type": {
+            "type": "string",
+            "enum": [
+              "app",
+              "webmail"
+            ]
+          },
+          "device_hidden": {
+            "type": "boolean"
+          },
+          "device_type": {
+            "type": "string",
+            "enum": [
+              "desktop",
+              "mobile",
+              "tablet"
+            ]
+          },
+          "os": {
+            "type": "string"
+          },
+          "browser": {
+            "type": "string"
+          },
+          "opens": {
+            "type": "integer",
+            "description": "A person's opens from this client and device."
+          },
+          "last_opened_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },

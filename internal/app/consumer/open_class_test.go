@@ -7,6 +7,8 @@ import (
 	"github.com/warmbly/warmbly/internal/app/instancesettings"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/events"
+	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/mailclient"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -117,19 +119,45 @@ func TestLateBareWebKitOpenIsNotEnoughToProveApplePrefetch(t *testing.T) {
 	}
 }
 
-func TestBareWebKitProxyDoesNotInventAppleDeviceMetadata(t *testing.T) {
-	origin := (&TrackingConsumer{}).originOf(&events.TrackingEvent{UserAgent: strp(bareWebKitUA)})
+func TestBareWebKitNamesBothClientsAndNoDevice(t *testing.T) {
+	origin := (&TrackingConsumer{}).originOf(&events.TrackingEvent{EventType: events.EventTypeEmailOpened, UserAgent: strp(bareWebKitUA)})
 
-	if origin.Client != "Image proxy" {
-		t.Fatalf("ambiguous proxy client = %q, want Image proxy", origin.Client)
+	if origin.Client != mailclient.BareWebKitClient || origin.ClientType != models.EngagementClientApp {
+		t.Fatalf("bare webkit client = %q/%q, want %q app", origin.Client, origin.ClientType, mailclient.BareWebKitClient)
 	}
-	if origin.DeviceType != "" || origin.OS != "" || origin.Browser != "" || origin.BrowserVersion != "" {
-		t.Fatalf("ambiguous proxy invented device metadata: %+v", origin)
+	if origin.DeviceType != "" || origin.OS != "" || origin.Browser != "" || origin.BrowserVersion != "" || origin.DeviceHidden {
+		t.Fatalf("bare webkit invented device metadata: %+v", origin)
 	}
 
 	compatibilityOnly := "Mozilla/5.0 (KHTML, like Gecko)"
-	if isBareWebKit(&compatibilityOnly) {
-		t.Fatal("the generic compatibility suffix without an AppleWebKit engine is not an image proxy")
+	if isImageFetcher(&compatibilityOnly) {
+		t.Fatal("the generic compatibility suffix without an AppleWebKit engine is not an image fetcher")
+	}
+}
+
+// Mail Privacy Protection sends the bare product token. At delivery it is a
+// prefetch, later a person on an Apple device, and never a device or a city.
+func TestPrivacyProxyOpen(t *testing.T) {
+	sent := time.Now()
+	w, p := opens(instancesettings.DefaultTracking())
+	mpp := "Mozilla/5.0"
+
+	if machine, reason := classifyOpen(engagement{userAgent: &mpp, sentAt: &sent, at: sent.Add(5 * time.Second)}, w, p); !machine || reason != repository.EmailOpenReasonPrefetch {
+		t.Fatalf("the privacy relay at delivery is a prefetch, got %v %q", machine, reason)
+	}
+	origin := (&TrackingConsumer{}).originOf(&events.TrackingEvent{EventType: events.EventTypeEmailOpened, UserAgent: &mpp})
+	if origin.Client != "Apple Mail" || !origin.DeviceHidden || origin.DeviceType != "" || origin.City != "" {
+		t.Fatalf("privacy relay origin = %+v", origin)
+	}
+}
+
+// Gmail's proxy carries a fixed Windows XP Firefox; none of it is the reader's.
+func TestGmailProxyClaimsNoDevice(t *testing.T) {
+	ua := "Mozilla/5.0 (Windows NT 5.1; rv:11.0) Gecko Firefox/11.0 (via ggpht.com GoogleImageProxy)"
+	origin := (&TrackingConsumer{}).originOf(&events.TrackingEvent{EventType: events.EventTypeEmailOpened, UserAgent: &ua})
+	want := models.EngagementOrigin{Client: "Gmail", DeviceHidden: true}
+	if origin != want {
+		t.Fatalf("gmail proxy origin = %+v, want %+v", origin, want)
 	}
 }
 

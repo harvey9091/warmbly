@@ -458,8 +458,8 @@ The full catalog is available at `GET /webhooks/event-types`. Below is the compl
 | `campaign.deleted` | A campaign is deleted. | |
 | `campaign.email_sent` | A campaign email is dispatched by a worker. | yes |
 | `campaign.email_delivered` | A campaign email is accepted by the recipient's mail server. | yes |
-| `campaign.email_opened` | A person opens a tracked email. Automated opens (mail privacy proxies, fetches inside seconds of the send) do not fire it. | yes |
-| `campaign.email_clicked` | A person clicks a tracked link. The payload carries the `url` and the link's `link_label`. Automated clicks (security gateways walking the links) do not fire it. | yes |
+| `campaign.email_opened` | A person opens a tracked email. The payload carries `origin` when the open said anything about itself: the mail client, app or webmail, device and location, as on a [contact timeline](/api/reference/contacts/#list-a-contacts-timeline) event. Automated opens (mail privacy proxies, fetches inside seconds of the send) do not fire it. | yes |
+| `campaign.email_clicked` | A person clicks a tracked link. The payload carries the `url`, the link's `link_label`, and `origin` with the device and browser the link opened in. Automated clicks (security gateways walking the links) do not fire it. | yes |
 | `campaign.email_bounced` | A campaign email bounces. | |
 | `campaign.reply_received` | A human reply lands for a campaign thread. | |
 | `campaign.unsubscribed` | A recipient opts out. `source` is `one_click` (the mail client's button), `link` (the link in the email), `reply` (a reply asking to stop) or `action` (a sequence's unsubscribe step). | |

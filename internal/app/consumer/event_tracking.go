@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mileusna/useragent"
 	"github.com/rs/zerolog/log"
 	"github.com/warmbly/warmbly/internal/app/advanced"
 	"github.com/warmbly/warmbly/internal/app/instancesettings"
@@ -20,6 +19,7 @@ import (
 	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/pkg/geo"
+	"github.com/warmbly/warmbly/internal/pkg/mailclient"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -645,34 +645,51 @@ func (tc *TrackingConsumer) logOpen(ctx context.Context, task *repository.Campai
 	}
 }
 
-// originOf reads what the event says about its source: the user agent parsed
-// to client, browser and device, and the source network resolved to a
-// location. The network is used here and dropped.
+// originOf reads what the event says about its source: the mail client,
+// device and browser from the user agent, and the location from the source
+// network, as far as a proxy in between leaves it meaningful. The network is
+// used here and dropped.
 func (tc *TrackingConsumer) originOf(event *events.TrackingEvent) models.EngagementOrigin {
 	var o models.EngagementOrigin
-	if event.UserAgent != nil && strings.TrimSpace(*event.UserAgent) != "" {
-		if isBareWebKit(event.UserAgent) {
-			// The signature's Macintosh platform belongs to the proxy, not the recipient.
-			o.Client = clientName(*event.UserAgent)
-		} else {
-			ua := useragent.Parse(*event.UserAgent)
-			o.OS, o.Browser, o.BrowserVersion = ua.OS, ua.Name, ua.Version
-			o.DeviceType = deviceType(ua)
-			o.Client = clientName(*event.UserAgent)
-		}
+	locate := mailclient.LocateFull
+	if event.UserAgent != nil {
+		r := mailclient.Detect(*event.UserAgent, event.EventType == events.EventTypeEmailClicked)
+		o.Client, o.ClientType, o.DeviceHidden = r.Client, r.ClientType, r.DeviceHidden
+		o.DeviceType, o.OS, o.Browser, o.BrowserVersion = r.DeviceType, r.OS, r.Browser, r.BrowserVersion
+		locate = r.Locate
 	}
-	if event.ClientIP != nil && tc.geo != nil {
-		if addr, err := netip.ParseAddr(strings.TrimSpace(*event.ClientIP)); err == nil && !addr.IsPrivate() && !addr.IsLoopback() {
-			if info, err := tc.geo.Lookup(addr); err == nil && info != nil {
-				o.CountryCode = info.CountryCode
-				o.Region = info.Region
-				if info.City != "Unknown" {
-					o.City = info.City
-				}
+	if locate == mailclient.LocateNone || event.ClientIP == nil || tc.geo == nil {
+		return o
+	}
+	if addr, err := netip.ParseAddr(strings.TrimSpace(*event.ClientIP)); err == nil && !addr.IsPrivate() && !addr.IsLoopback() {
+		if info, err := tc.geo.Lookup(addr); err == nil && info != nil {
+			o.CountryCode = info.CountryCode
+			o.Region = info.Region
+			if info.City != "Unknown" && locate == mailclient.LocateFull {
+				o.City = info.City
 			}
 		}
 	}
 	return o
+}
+
+// originData is the origin as a plain map, the shape integration templates
+// and automations walk, with unknown fields left out as on the API.
+func originData(o models.EngagementOrigin) map[string]any {
+	out := map[string]any{}
+	for k, v := range map[string]string{
+		"client": o.Client, "client_type": o.ClientType, "device_type": o.DeviceType,
+		"os": o.OS, "browser": o.Browser, "browser_version": o.BrowserVersion,
+		"country_code": o.CountryCode, "region": o.Region, "city": o.City,
+	} {
+		if v != "" {
+			out[k] = v
+		}
+	}
+	if o.DeviceHidden {
+		out["device_hidden"] = true
+	}
+	return out
 }
 
 func clipString(s string, n int) string {
@@ -724,6 +741,9 @@ func (tc *TrackingConsumer) publishTrackingEvent(ctx context.Context, task *repo
 					data["link_label"] = linkLabel
 				}
 			}
+			if !origin.Empty() {
+				data["origin"] = originData(origin)
+			}
 			tc.advancedService.EmitCampaignEvent(ctx, *campaign.OrganizationID, whType, data)
 		}
 	}
@@ -763,7 +783,11 @@ func (tc *TrackingConsumer) publishTrackingEvent(ctx context.Context, task *repo
 		Machine:      machine,
 		OccurredAt:   eventTime(event.Timestamp),
 		Client:       origin.Client,
+		ClientType:   origin.ClientType,
+		DeviceHidden: origin.DeviceHidden,
 		DeviceType:   origin.DeviceType,
+		OS:           origin.OS,
+		Browser:      origin.Browser,
 		CountryCode:  origin.CountryCode,
 		City:         origin.City,
 	}

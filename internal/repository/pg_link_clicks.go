@@ -103,16 +103,16 @@ func (r *linkClickRepository) Insert(ctx context.Context, c *LinkClick) error {
 			(id, tracked_link_id, task_id, campaign_id, contact_id, sequence_id,
 			 destination, label, user_agent, ip_hash, machine, machine_reason, clicked_at,
 			 client, device_type, os, browser, browser_version, country_code, region, city,
-			 announce_pending)
+			 client_type, device_hidden, announce_pending)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-		        $14, $15, $16, $17, $18, $19, $20, $21, $22)
+		        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 	`
 	_, err := r.db.Exec(ctx, query,
 		c.ID, c.TrackedLinkID, c.TaskID, c.CampaignID, c.ContactID, c.SequenceID,
 		c.Destination, c.Label, c.UserAgent, c.IPHash, c.Machine, c.MachineReason, c.ClickedAt,
 		c.Origin.Client, c.Origin.DeviceType, c.Origin.OS, c.Origin.Browser, c.Origin.BrowserVersion,
 		c.Origin.CountryCode, c.Origin.Region, c.Origin.City,
-		c.AnnouncePending,
+		c.Origin.ClientType, c.Origin.DeviceHidden, c.AnnouncePending,
 	)
 	return err
 }
@@ -149,7 +149,8 @@ func (r *linkClickRepository) ListPendingAnnouncements(ctx context.Context, befo
 	query := `
 		SELECT id, tracked_link_id, task_id, campaign_id, contact_id, sequence_id,
 		       destination, label, machine, machine_reason, clicked_at,
-		       client, device_type, os, browser, browser_version, country_code, region, city
+		       client, device_type, os, browser, browser_version, country_code, region, city,
+		       client_type, device_hidden
 		FROM email_link_clicks
 		WHERE announce_pending AND clicked_at < $1
 		  AND (announce_claimed_at IS NULL OR announce_claimed_at < NOW() - INTERVAL '` + announceLease + `')
@@ -167,7 +168,8 @@ func (r *linkClickRepository) ListPendingAnnouncements(ctx context.Context, befo
 		if err := rows.Scan(&c.ID, &c.TrackedLinkID, &c.TaskID, &c.CampaignID, &c.ContactID, &c.SequenceID,
 			&c.Destination, &c.Label, &c.Machine, &c.MachineReason, &c.ClickedAt,
 			&c.Origin.Client, &c.Origin.DeviceType, &c.Origin.OS, &c.Origin.Browser, &c.Origin.BrowserVersion,
-			&c.Origin.CountryCode, &c.Origin.Region, &c.Origin.City); err != nil {
+			&c.Origin.CountryCode, &c.Origin.Region, &c.Origin.City,
+			&c.Origin.ClientType, &c.Origin.DeviceHidden); err != nil {
 			return nil, err
 		}
 		c.AnnouncePending = true

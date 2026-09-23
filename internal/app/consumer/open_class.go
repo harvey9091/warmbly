@@ -4,17 +4,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mileusna/useragent"
+	"github.com/warmbly/warmbly/internal/pkg/mailclient"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
-// isBareWebKit reports the stripped image-fetcher signature shared by Apple MPP and Outlook.
-func isBareWebKit(userAgent *string) bool {
-	if userAgent == nil {
-		return false
-	}
-	ua := strings.ToLower(strings.TrimSpace(*userAgent))
-	return strings.Contains(ua, "applewebkit/") && strings.HasSuffix(ua, "(khtml, like gecko)")
+// isImageFetcher reports a user agent that loads images without a browser of
+// its own: Mail Privacy Protection's bare product token, and the stripped
+// WebKit signature Mac Mail and the new Outlook share.
+func isImageFetcher(userAgent *string) bool {
+	return userAgent != nil && (mailclient.IsPrivacyProxy(*userAgent) || mailclient.IsBareWebKit(*userAgent))
 }
 
 // isInstant reports whether an engagement arrived so soon after the step was
@@ -136,51 +134,10 @@ func classifyOpen(e engagement, window, probable time.Duration) (bool, string) {
 		return true, repository.EmailOpenReasonScanner
 	}
 	if isInstant(e.sentAt, e.at, window) {
-		if isBareWebKit(e.userAgent) {
+		if isImageFetcher(e.userAgent) {
 			return true, repository.EmailOpenReasonPrefetch
 		}
 		return true, repository.EmailOpenReasonInstant
 	}
 	return false, ""
-}
-
-// clientName names the mail client or image proxy behind a user agent when
-// it says so; empty for a plain browser, which the parsed fields describe.
-func clientName(userAgent string) string {
-	ua := strings.ToLower(strings.TrimSpace(userAgent))
-	switch {
-	case ua == "":
-		return ""
-	case strings.Contains(ua, "googleimageproxy"):
-		return "Gmail"
-	case strings.Contains(ua, "yahoomailproxy"), strings.Contains(ua, "yahoo mail"):
-		return "Yahoo Mail"
-	case strings.Contains(ua, "outlook"), strings.Contains(ua, "microsoft office"):
-		return "Outlook"
-	case strings.Contains(ua, "thunderbird"):
-		return "Thunderbird"
-	case strings.Contains(ua, "superhuman"):
-		return "Superhuman"
-	case strings.Contains(ua, "protonmail"), strings.Contains(ua, "proton mail"):
-		return "Proton Mail"
-	case strings.Contains(ua, "hey.com"):
-		return "HEY"
-	case isBareWebKit(&userAgent):
-		return "Image proxy"
-	}
-	return ""
-}
-
-// deviceType folds the parser's flags into desktop, mobile, tablet or unknown.
-func deviceType(ua useragent.UserAgent) string {
-	switch {
-	case ua.Tablet:
-		return "tablet"
-	case ua.Mobile:
-		return "mobile"
-	case ua.Desktop:
-		return "desktop"
-	default:
-		return "unknown"
-	}
 }

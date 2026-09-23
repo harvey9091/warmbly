@@ -13,6 +13,21 @@ export interface ContactEngagement {
     last_clicked_at?: string | null;
     last_replied_at?: string | null;
     last_bounced_at?: string | null;
+
+    // How the contact reads your mail: each client and device a person's
+    // opens came from, most recent first.
+    reads_on?: ContactReadingOrigin[];
+}
+
+export interface ContactReadingOrigin {
+    client?: string;
+    client_type?: "app" | "webmail";
+    device_hidden?: boolean;
+    device_type?: string;
+    os?: string;
+    browser?: string;
+    opens: number;
+    last_opened_at: string;
 }
 
 export interface ContactSuppression {
