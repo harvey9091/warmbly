@@ -471,8 +471,8 @@ export default function SendingBehaviorTab({ mailboxId, timezone }: { mailboxId:
                         <p className="text-[11.5px] text-sky-900/90 leading-relaxed">
                             Every time here is local to <b>{tz || "UTC"}</b>: this mailbox&apos;s own timezone, or the
                             workspace timezone when it has none. Mailboxes in other regions keep their own working hours on
-                            the same campaign. Change it on this mailbox&apos;s Settings tab, or set the workspace timezone
-                            under Settings &gt; Profile &gt; Timezones, to move the whole schedule.
+                            the same campaign. Change it on this mailbox&apos;s Settings tab. The workspace timezone under
+                            Settings &gt; Profile &gt; Timezones moves this schedule only while the mailbox follows it.
                         </p>
                     </div>
                 </div>

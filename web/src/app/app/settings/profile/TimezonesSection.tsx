@@ -130,8 +130,24 @@ export default function TimezonesSection() {
 
 /* ── Campaigns ─────────────────────────────────────────────────────── */
 
+// Summaries and "Set all" speak for every row, so keep paging until the list is whole.
+// Returns true while pages remain; a failed page stops the loop instead of retrying it.
+function useRemainingPages(list: {
+    hasNextPage: boolean;
+    isFetchingNextPage: boolean;
+    isFetchNextPageError: boolean;
+    fetchNextPage: () => unknown;
+}): boolean {
+    const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = list;
+    React.useEffect(() => {
+        if (hasNextPage && !isFetchingNextPage && !isFetchNextPageError) void fetchNextPage();
+    }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
+    return hasNextPage && !isFetchNextPageError;
+}
+
 function CampaignClocks({ workspaceZone }: { workspaceZone: string }) {
     const list = useCampaigns({ query: "", folder: "", limit: LIST_LIMIT });
+    const loading = useRemainingPages(list) || list.isPending;
     const queryClient = useQueryClient();
     const confirm = useConfirm();
     const [open, setOpen] = React.useState(false);
@@ -166,11 +182,11 @@ function CampaignClocks({ workspaceZone }: { workspaceZone: string }) {
             icon={MegaphoneIcon}
             title="Campaign sending windows"
             description={`Each campaign's window is read in its own timezone or, with none set, the workspace's (${fallback} right now). Change it here or on the campaign's Schedule tab.`}
-            summary={list.isPending ? undefined : summaryLabel(campaigns.length, "campaign", zones)}
+            summary={loading ? undefined : summaryLabel(campaigns.length, "campaign", zones)}
             open={open}
-            onToggle={campaigns.length > 0 ? () => setOpen((v) => !v) : undefined}
+            onToggle={!loading && campaigns.length > 0 ? () => setOpen((v) => !v) : undefined}
             chips={
-                list.isPending ? (
+                loading ? (
                     <Loading className="!w-4 h-4" />
                 ) : campaigns.length === 0 ? (
                     <span className="text-[11.5px] text-slate-400">No campaigns yet</span>
@@ -179,7 +195,7 @@ function CampaignClocks({ workspaceZone }: { workspaceZone: string }) {
                 )
             }
         >
-            {open && campaigns.length > 0 && (
+            {open && !loading && campaigns.length > 0 && (
                 <ClockList
                     action={
                         own.length > 0 ? (
@@ -240,6 +256,7 @@ function CampaignZoneRow({ campaign, workspaceZone, fallback }: { campaign: Camp
 
 function MailboxClocks({ workspaceZone }: { workspaceZone: string }) {
     const list = useEmails({ query: "", tag: "", limit: LIST_LIMIT });
+    const loading = useRemainingPages(list) || list.isPending;
     const queryClient = useQueryClient();
     const confirm = useConfirm();
     const [open, setOpen] = React.useState(false);
@@ -273,11 +290,11 @@ function MailboxClocks({ workspaceZone }: { workspaceZone: string }) {
             icon={InboxIcon}
             title="Warmup hours and working hours"
             description={`Each mailbox's warmup window and its Sending behaviour workday are read in its own timezone. A mailbox without one follows the workspace, which is ${fallback} right now.`}
-            summary={list.isPending ? undefined : summaryLabel(mailboxes.length, "mailbox", zones)}
+            summary={loading ? undefined : summaryLabel(mailboxes.length, "mailbox", zones)}
             open={open}
-            onToggle={mailboxes.length > 0 ? () => setOpen((v) => !v) : undefined}
+            onToggle={!loading && mailboxes.length > 0 ? () => setOpen((v) => !v) : undefined}
             chips={
-                list.isPending ? (
+                loading ? (
                     <Loading className="!w-4 h-4" />
                 ) : mailboxes.length === 0 ? (
                     <span className="text-[11.5px] text-slate-400">No mailboxes yet</span>
@@ -286,7 +303,7 @@ function MailboxClocks({ workspaceZone }: { workspaceZone: string }) {
                 )
             }
         >
-            {open && mailboxes.length > 0 && (
+            {open && !loading && mailboxes.length > 0 && (
                 <ClockList
                     action={
                         own.length > 0 ? (
@@ -311,7 +328,7 @@ function MailboxZoneRow({ mailbox, fallback }: { mailbox: Inbox; fallback: strin
     const { timezones } = useUserProfile();
     const update = useUpdateEmail(mailbox.id);
     const options = React.useMemo<SelectOption[]>(
-        () => [{ value: "", label: `Follow the workspace (${fallback})` }, ...timezoneOptions(timezones, mailbox.timezone)],
+        () => [{ value: "", label: followWorkspaceLabel(fallback) }, ...timezoneOptions(timezones, mailbox.timezone)],
         [timezones, mailbox.timezone, fallback],
     );
     const zone = mailbox.timezone ?? "";

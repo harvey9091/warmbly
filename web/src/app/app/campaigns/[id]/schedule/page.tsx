@@ -135,6 +135,7 @@ export default function CampaignSchedule() {
     const org = useCurrentOrganization();
     const followLabel = followWorkspaceLabel(org.data?.timezone);
     const tzLabel = newData.timezone === "" ? followLabel : (u.timezones.find((tz) => tz.name === newData.timezone)?.display_name ?? newData.timezone);
+    const tzPhrase = newData.timezone === "" ? `the workspace timezone (${org.data?.timezone || "UTC"})` : tzLabel;
 
     const startDate = newData.start_date instanceof Date ? newData.start_date : null;
     const endDate = newData.end_date instanceof Date ? newData.end_date : null;
@@ -240,7 +241,7 @@ export default function CampaignSchedule() {
                     </div>
                     <p className="text-[11px] text-slate-400 mt-3">
                         Each day is independent — set different windows per day, or several windows in one day. Sends
-                        are scheduled in {tzLabel}; worker IPs spread distribution naturally.
+                        are scheduled in {tzPhrase}; worker IPs spread distribution naturally.
                     </p>
                 </div>
             </section>

@@ -249,7 +249,12 @@ export function NewCampaignDialog({ open, onClose }: Props) {
     const lastStep = steps.length - 1;
     const current = steps[Math.min(step, lastStep)];
 
-    const patch = React.useCallback((p: Partial<Draft>) => setDraft((d) => ({ ...d, ...p })), []);
+    // Set once the user picks a zone, so a workspace default that loads late never overrides it.
+    const tzTouched = React.useRef(false);
+    const patch = React.useCallback((p: Partial<Draft>) => {
+        if (p.timezone !== undefined) tzTouched.current = true;
+        setDraft((d) => ({ ...d, ...p }));
+    }, []);
 
     const setKind = React.useCallback(
         (kind: CampaignKind) =>
@@ -272,6 +277,9 @@ export function NewCampaignDialog({ open, onClose }: Props) {
             setNudged(false);
             setSubmitting(false);
             setDraft(initialDraft(defaultTimezone));
+            tzTouched.current = false;
+        } else if (!tzTouched.current) {
+            setDraft((d) => (d.timezone === defaultTimezone ? d : { ...d, timezone: defaultTimezone }));
         }
     }, [open, defaultTimezone]);
 

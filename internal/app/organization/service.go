@@ -307,6 +307,7 @@ func (s *organizationService) Create(ctx context.Context, userID uuid.UUID, name
 		ID:          uuid.New(),
 		Name:        name,
 		OwnerUserID: userID,
+		Timezone:    timezone,
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}

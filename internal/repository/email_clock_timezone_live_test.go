@@ -100,6 +100,16 @@ func TestLiveMailboxClockTimezoneFollowsTheWorkspace(t *testing.T) {
 		t.Fatalf("own zone: clock %q org %q", own.ClockTimezone(), own.OrgTimezone)
 	}
 
+	// An unrelated edit returns both clock fields, since the dashboard caches this row.
+	rename := "Clock test mailbox"
+	updated, xerr := emails.Update(ctx, f.org.String(), f.mailbox.String(), &models.UpdateEmail{Name: &rename})
+	if xerr != nil {
+		t.Fatalf("Update: %v", xerr)
+	}
+	if updated.Timezone != "Europe/Paris" || updated.OrgTimezone != "America/New_York" {
+		t.Fatalf("Update returned timezone %q org %q", updated.Timezone, updated.OrgTimezone)
+	}
+
 	// A campaign created without a timezone follows the workspace's.
 	campaigns := NewCampaignRepostory(handle)
 	created, xerr := campaigns.Create(ctx, f.user.String(), &f.org, &models.CreateCampaign{Name: f.tag + " default zone"})

@@ -220,11 +220,6 @@ func getCampaignFull(rows db.Scannable, campaign *models.Campaign) error {
 	return getCampaign(rows, campaign, &campaign.EmailTags, &campaign.Folders)
 }
 
-// Create inserts a new campaign and, in the same transaction, applies every
-// optional bit of initial config the caller sent (schedule, tracking flags,
-// sender pool, initial sequences, A/B variants, advanced overrides). The
-// previous version omitted updated_at/created_at which are NOT NULL and have
-// no DEFAULT, so any call returned a 500.
 // WorkspaceTimezone is the zone a campaign with none of its own is read in:
 // the workspace timezone, else UTC.
 func (r *campaignRepository) WorkspaceTimezone(ctx context.Context, orgID uuid.UUID) string {
@@ -235,6 +230,11 @@ func (r *campaignRepository) WorkspaceTimezone(ctx context.Context, orgID uuid.U
 	return "UTC"
 }
 
+// Create inserts a new campaign and, in the same transaction, applies every
+// optional bit of initial config the caller sent (schedule, tracking flags,
+// sender pool, initial sequences, A/B variants, advanced overrides). The
+// previous version omitted updated_at/created_at which are NOT NULL and have
+// no DEFAULT, so any call returned a 500.
 func (r *campaignRepository) Create(ctx context.Context, userID string, orgID *uuid.UUID, data *models.CreateCampaign) (*models.Campaign, *errx.Error) {
 	// Validate all optional inputs up front so we don't open a tx for a
 	// payload we'll reject. Required fields are validated by the service.

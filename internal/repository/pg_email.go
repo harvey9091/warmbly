@@ -1110,7 +1110,8 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 		          COALESCE(last_synced_at, created_at) AS last_synced_at, last_id, campaign_limit, min_wait_time, reply_to, tracking_domain, tracking_domain_verified, tracking_domain_verified_at, track_direct_mail,
 		          auth_state, auth_spf, auth_dkim, auth_dmarc, auth_dmarc_policy, auth_reason, auth_checked_at, auth_failing_since,
 		          warmup, warmup_paused_at, warmup_base, warmup_max, warmup_increase, warmup_reply_rate, warmup_tag, warmup_pool_type,
-		          warmup_start_time, warmup_end_time, warmup_days, warmup_placement, warmup_folder, COALESCE(warmup_retention_days, 0) AS warmup_retention_days, save_to_sent, created_at, updated_at
+		          warmup_start_time, warmup_end_time, warmup_days, warmup_placement, warmup_folder, COALESCE(warmup_retention_days, 0) AS warmup_retention_days, save_to_sent, created_at, updated_at,
+		          timezone, COALESCE((SELECT o.timezone FROM organizations o WHERE o.id = email_accounts.organization_id), '') AS org_timezone
 	`, strings.Join(setClauses, ", "))
 
 	var i models.Email
@@ -1124,6 +1125,7 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 		&i.Warmup, &i.WarmupPausedAt, &i.WarmupBase, &i.WarmupMax, &i.WarmupIncrease, &i.WarmupReplyRate, &i.WarmupTag, &i.WarmupPoolType,
 		&i.WarmupStartTime, &i.WarmupEndTime, &i.WarmupDays, &i.WarmupPlacement, &i.WarmupFolder, &i.WarmupRetentionDays, &i.SaveToSent,
 		&i.CreatedAt, &i.UpdatedAt,
+		&i.Timezone, &i.OrgTimezone,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

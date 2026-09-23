@@ -163,7 +163,7 @@ export default function OnboardingPage() {
     const queryClient = useQueryClient();
     const completeOnboarding = useCompleteOnboarding();
     const updateOrganization = useUpdateOrganization();
-    const { data: org } = useCurrentOrganization();
+    const { data: org, refetch: refetchOrg } = useCurrentOrganization();
 
     const authConfig = useAuthConfig();
     const selfHosted = authConfig.data?.self_hosted === true;
@@ -198,10 +198,12 @@ export default function OnboardingPage() {
             // warmup windows start in the user's own day. Best effort: a hiccup
             // here must never block completing onboarding.
             const workspace = normalizeName(data.workspace);
+            // A submit that beats the organization query still has to know what to patch.
+            const current = org ?? (await refetchOrg().catch(() => undefined))?.data;
             const patch: Partial<Organization> = {};
-            if (org?.name && org.name !== workspace) patch.name = workspace;
+            if (current?.name && current.name !== workspace) patch.name = workspace;
             const zone = browserTimezone();
-            if (org && !org.timezone && zone) patch.timezone = zone;
+            if (current && !current.timezone && zone) patch.timezone = zone;
             if (Object.keys(patch).length > 0) {
                 try {
                     await updateOrganization.mutateAsync(patch);
