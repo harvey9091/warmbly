@@ -240,6 +240,7 @@ func NewWMail(
 				FirstName: data.FirstName,
 				LastName:  data.LastName,
 
+				User:       data.Graph.User,
 				Cache:      mail.Cache,
 				DeltaLinks: cloneStringMap(deltaLinks),
 

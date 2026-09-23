@@ -21,6 +21,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/credits"
 	"github.com/warmbly/warmbly/internal/app/crm"
 	"github.com/warmbly/warmbly/internal/app/dangerzone"
+	"github.com/warmbly/warmbly/internal/app/delegation"
 	"github.com/warmbly/warmbly/internal/app/discount"
 	"github.com/warmbly/warmbly/internal/app/email"
 	"github.com/warmbly/warmbly/internal/app/emailsend"
@@ -34,6 +35,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/instancesettings"
 	"github.com/warmbly/warmbly/internal/app/integration"
 	"github.com/warmbly/warmbly/internal/app/leadsync"
+	"github.com/warmbly/warmbly/internal/app/mailboximport"
 	"github.com/warmbly/warmbly/internal/app/mcp"
 	"github.com/warmbly/warmbly/internal/app/notification"
 	"github.com/warmbly/warmbly/internal/app/oauth"
@@ -48,6 +50,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/referral"
 	"github.com/warmbly/warmbly/internal/app/research"
 	"github.com/warmbly/warmbly/internal/app/segment"
+	"github.com/warmbly/warmbly/internal/app/sendingdomain"
 	"github.com/warmbly/warmbly/internal/app/sequence"
 	"github.com/warmbly/warmbly/internal/app/skills"
 	"github.com/warmbly/warmbly/internal/app/socket"
@@ -64,6 +67,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/unsublink"
 	"github.com/warmbly/warmbly/internal/app/updates"
 	"github.com/warmbly/warmbly/internal/app/user"
+	"github.com/warmbly/warmbly/internal/app/vendorconn"
 	"github.com/warmbly/warmbly/internal/app/viewprefs"
 	"github.com/warmbly/warmbly/internal/app/warmup"
 	"github.com/warmbly/warmbly/internal/app/warmupcontent"
@@ -105,12 +109,20 @@ type Handler struct {
 	BootstrapService *bootstrap.Service
 	UserService      user.UserService
 	EmailService     email.EmailService
-	CampaignService  campaign.CampaignService
-	ContactService   contact.ContactService
-	SegmentService   segment.Service
-	FormService      form.Service
-	SequenceService  sequence.SequenceService
-	UniboxService    unibox.UniboxService
+	// MailboxImportService runs mailbox imports from files and pasted lists.
+	MailboxImportService *mailboximport.Service
+	// DelegationService connects whole Google Workspace domains and Microsoft 365 tenants.
+	DelegationService *delegation.Service
+	// VendorConnService imports mailboxes straight from inbox vendors' APIs.
+	VendorConnService *vendorconn.Service
+	// SendingDomainService manages tracking hosts and bare-domain redirects per sending domain.
+	SendingDomainService *sendingdomain.Service
+	CampaignService      campaign.CampaignService
+	ContactService       contact.ContactService
+	SegmentService       segment.Service
+	FormService          form.Service
+	SequenceService      sequence.SequenceService
+	UniboxService        unibox.UniboxService
 
 	FolderService   group.GroupService
 	TagService      group.GroupService

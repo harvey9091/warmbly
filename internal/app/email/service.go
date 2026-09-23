@@ -81,7 +81,8 @@ type EmailService interface {
 	// Onboarding flow. OAuthFinish's second return is true when the round
 	// trip renewed an existing mailbox (OAuthReauth) rather than connecting
 	// a new one, so the handler can audit and answer accordingly.
-	OAuthStart(ctx context.Context, userID string, orgID *uuid.UUID, provider models.InboxProvider) (*models.EmailOnboardingStartResponse, *errx.Error)
+	// loginHint preselects an address in the provider's picker; "" for none.
+	OAuthStart(ctx context.Context, userID string, orgID *uuid.UUID, provider models.InboxProvider, loginHint string) (*models.EmailOnboardingStartResponse, *errx.Error)
 	OAuthFinish(ctx context.Context, userID, code, state string) (*models.Email, bool, *errx.Error)
 	OnboardSMTPIMAP(ctx context.Context, userID string, orgID *uuid.UUID, data *models.NewSMTPIMAPAccount) (*models.Email, *errx.Error)
 	// OnboardSMTPIMAPBulk connects many SMTP/IMAP mailboxes in one call and
@@ -120,6 +121,16 @@ type EmailService interface {
 	WireCloudLink(repo repository.CloudLinkRepository)
 	// WireCloudUnenroll attaches cloud credential revocation to mailbox deletion.
 	WireCloudUnenroll(u CloudUnenroller)
+	// ConnectDelegated stores a Gmail or Outlook mailbox reached through an
+	// administrator's grant and loads it; tokens are minted per use.
+	ConnectDelegated(ctx context.Context, userID string, orgID *uuid.UUID, data models.NewDelegatedAccount) (*models.Email, *errx.Error)
+	// SwitchToAppPassword moves a per-mailbox Google sign-in onto an app password in place.
+	SwitchToAppPassword(ctx context.Context, orgID *uuid.UUID, accountID uuid.UUID, appPassword string) (*models.Email, *errx.Error)
+	// ReactivateDelegated puts a delegated mailbox back to work after its grant recovered.
+	ReactivateDelegated(ctx context.Context, accountID uuid.UUID) (*models.Email, *errx.Error)
+	// WireImportSignin lets an OAuth connect close the import rows that were
+	// waiting for someone to sign in as that mailbox.
+	WireImportSignin(r ImportSigninResolver)
 	// WireAccountErrors lets a successful reconnect resolve the credential
 	// errors it just fixed, which is what clears the mailbox's error banner.
 	WireAccountErrors(repo repository.EmailAccountErrorRepository)
@@ -187,6 +198,8 @@ type emailService struct {
 	// unibox is where a skipped folder's already-stored mail is dropped from.
 	// Optional: without it the worker's retirement of the folder does it.
 	unibox repository.UniboxRepository
+	// importSignin closes import rows waiting on a sign-in. Optional.
+	importSignin ImportSigninResolver
 }
 
 // WireUnibox attaches the unified inbox store, for the purge that follows a

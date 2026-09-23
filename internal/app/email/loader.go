@@ -278,6 +278,28 @@ func (s *emailService) buildAddWorkerEmail(ctx context.Context, acc *models.Emai
 		SaveToSent: &saveToSent,
 	}
 
+	// A mailbox under an administrator's grant has no stored credential
+	// either; the worker draws tokens the control plane mints per use.
+	if acc.AuthMethod == models.MailAuthDelegated {
+		d, xerr := s.emailRepository.GetDelegation(ctx, acc.ID)
+		if xerr != nil {
+			return nil, xerr
+		}
+		if d == nil {
+			return nil, nil
+		}
+		out.Brokered = true
+		switch provider {
+		case models.InboxProviderGoogle:
+			out.Google = &models.AddWorkerEmailGoogleData{LastHistoryID: s.lastHistoryFor(ctx, userID, acc.ID, acc.LastID)}
+		case models.InboxProviderOutlook:
+			out.Graph = &models.AddWorkerEmailGraphData{DeltaLinks: s.deltaLinksFor(ctx, userID, acc.ID), User: d.Subject}
+		default:
+			return nil, nil
+		}
+		return out, nil
+	}
+
 	// A managed mailbox has no local credential; the worker draws brokered tokens.
 	if s.cloudLink != nil {
 		if m, err := s.cloudLink.GetByAccount(ctx, acc.ID); err == nil && m != nil && m.Managed {

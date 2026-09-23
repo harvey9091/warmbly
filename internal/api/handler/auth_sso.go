@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/warmbly/warmbly/internal/app/auth"
+	"github.com/warmbly/warmbly/internal/app/delegation"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
@@ -52,8 +54,14 @@ func (h *Handler) OIDCCallback(c *gin.Context) {
 	})
 }
 
-// GoogleCallback is where Google sends the browser back.
+// GoogleCallback is where Google sends the browser back. An administrator's
+// sign-in proving a Workspace domain shares this client and redirect, and is
+// handed to the dashboard window that opened it rather than signing anyone in.
 func (h *Handler) GoogleCallback(c *gin.Context) {
+	if strings.HasPrefix(c.Query("state"), delegation.GoogleStatePrefix) {
+		h.renderOAuthCallback(c, "google")
+		return
+	}
 	h.ssoCallback(c, auth.SSOCallback{
 		Provider: models.IdentityProviderGoogle,
 		Code:     c.Query("code"),

@@ -72,6 +72,7 @@ type Config struct {
 }
 
 type Server struct {
+	redirects *redirects
 	client    *backendClient
 	views     *ttlSet
 	limits    *ipLimiter
@@ -110,8 +111,10 @@ func New(cfg Config) (*Server, error) {
 	if limit <= 0 {
 		limit = submitDefaultLimit
 	}
+	client := newBackendClient(strings.TrimRight(cfg.BackendURL, "/"), cfg.InternalToken)
 	return &Server{
-		client:    newBackendClient(strings.TrimRight(cfg.BackendURL, "/"), cfg.InternalToken),
+		redirects: newRedirects(client),
+		client:    client,
 		views:     newTTLSet(viewDedupeTTL),
 		limits:    newIPLimiter(limit, submitWindow),
 		events:    newIPLimiter(eventWindowLimit, submitWindow),
@@ -145,6 +148,7 @@ func (s *Server) Router(trustedProxies []string) (*gin.Engine, error) {
 	} else if err := r.SetTrustedProxies(nil); err != nil {
 		return nil, err
 	}
+	r.Use(s.domainRedirect)
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	r.GET("/", rootPage)
 	r.GET("/forms.js", s.ServeFormsEmbedJS)

@@ -346,6 +346,7 @@ func (r *poolLinkRepository) ListAdoptableMailboxes(ctx context.Context, orgID u
 		WHERE a.organization_id = $1
 		  AND a.status = 'active'
 		  AND a.provider IN ('gmail', 'outlook')
+		  AND a.auth_method <> 'delegated'
 		  AND NOT EXISTS (SELECT 1 FROM pool_link_mailboxes m WHERE m.email_account_id = a.id)
 		ORDER BY a.created_at
 	`

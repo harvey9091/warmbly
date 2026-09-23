@@ -766,6 +766,30 @@ var table = []Entry{
 		DocsAnchor: docsWorkers,
 		Resolve:    envValue("BOX_OUTLOOK_CLIENT_SECRET"),
 	},
+	{
+		Key: "GOOGLE_WORKSPACE_DELEGATION_KEY", Group: GroupWorkers, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "A Google Cloud service account key (JSON) for connecting whole Google Workspace domains through domain-wide delegation. Unset hides that option.",
+		DocsAnchor: docsWorkers,
+		Resolve:    envValue("GOOGLE_WORKSPACE_DELEGATION_KEY"),
+	},
+	{
+		Key: "GOOGLE_WORKSPACE_DELEGATION_KEY_FILE", Group: GroupWorkers, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "A path to the same service account key, read when GOOGLE_WORKSPACE_DELEGATION_KEY is unset.",
+		DocsAnchor: docsWorkers,
+		Resolve:    envValue("GOOGLE_WORKSPACE_DELEGATION_KEY_FILE"),
+	},
+	{
+		Key: "MAILHOST_ISPDB", Group: GroupWorkers, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "true lets mailbox server detection ask Thunderbird's ISPDB about unknown domains, which sends it the domain name. Off by default on a self-host.",
+		DocsAnchor: docsWorkers,
+		Resolve:    func(*Runtime) string { return yesNo(config.MailhostISPDB()) },
+	},
+	{
+		Key: "MAILVENDOR_SANDBOX_URL", Group: GroupWorkers, RuntimeChangeable: ChangeBootOnly,
+		Effect:     "Development only: points every inbox vendor client at the sandbox's mock vendor API. Ignored when APP_ENV is production.",
+		DocsAnchor: docsWorkers,
+		Resolve:    func(*Runtime) string { return config.MailvendorSandboxURL() },
+	},
 
 	// Tracking.
 	{

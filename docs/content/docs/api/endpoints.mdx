@@ -408,7 +408,7 @@ These never accept an API key. They depend on a human-bound session: billing flo
 
 ### Actions that need a recent confirmation
 
-Four changes require the session to have confirmed the account holder within the last five minutes, over and above the permission they already need:
+These changes require the session to have confirmed the account holder within the last five minutes, over and above the permission they already need:
 
 | Action | Route |
 |--------|-------|
@@ -417,8 +417,9 @@ Four changes require the session to have confirmed the account holder within the
 | Remove a passkey | `DELETE /auth/passkey/credentials/:id` |
 | Transfer a workspace | `POST /organizations/transfer-ownership` |
 | Schedule a workspace or account for deletion | `POST /organizations/current/danger-zone/delete`, `POST /me/danger-zone/delete` |
+| Record, use or remove an admin grant over a whole domain | `POST /emails/grants/google/finish`, `POST /emails/grants/microsoft/finish`, `POST /emails/grants/:id/connect`, `DELETE /emails/grants/:id` |
 
-Each either hands out a credential that outlives the session that created it, or cannot be reversed by the person it was done to. Without a confirmation they answer `403` with code `reauth_required`; confirm with `POST /auth/reauth` (password or a current two-factor code) and retry. See [error codes](/api/error-codes/#confirmation-required).
+Each either hands out a credential that outlives the session that created it, cannot be reversed by the person it was done to, or reaches a whole domain's mail. Without a confirmation they answer `403` with code `reauth_required`; confirm with `POST /auth/reauth` (password or a current two-factor code) and retry. See [error codes](/api/error-codes/#confirmation-required).
 
 This applies to session callers. An API key or OAuth token has no session to confirm and is not the threat here, so it passes straight through to the route's permission gate.
 
@@ -439,9 +440,53 @@ Alongside them, `api_url` is this API's own public base (for a copyable example 
 - `POST /auth/sso/link` (completes a provider sign-in that resolved to an existing password account: takes that account's password, attaches the identity and returns the session)
 - `POST /auth/logout`, `POST /auth/logout-all`, `GET /auth/me`, `PATCH /auth/me/onboarding`
 - `POST /auth/me/avatar`, `DELETE /auth/me/avatar`
-- `POST /emails/onboarding/oauth/start`, `POST /emails/onboarding/oauth/finish`, `POST /emails/onboarding/smtp-imap`
+- `POST /emails/onboarding/oauth/start`, `POST /emails/onboarding/oauth/finish`, `POST /emails/onboarding/smtp-imap`. `oauth/start` accepts an optional `login_hint` (an email address) that preselects that mailbox in the provider's sign-in, which is how an import's **Sign in** rows open
 - `POST /emails/onboarding/smtp-imap/bulk` (up to `50` SMTP/IMAP rows in `accounts`, answered `200` with a per-row `status` of `connected`, `skipped` or `failed` and a `code`; rows past the workspace's [mailbox allowance](/guides/mailboxes/#mailbox-allowance) fail with `mailbox_allowance_reached` before any credential is dialled. Naturally retry-safe: an already connected mailbox is `skipped`, so it takes no `Idempotency-Key`)
+- The [mailbox import](/guides/mailbox-import/) routes under `/emails/imports`, all with JWT permission `MANAGE_EMAILS`. They carry passwords, so like onboarding they never accept an API key:
+  - `POST /emails/imports/preview`: what an import of this input would do, row by row and domain by domain, without doing any of it
+  - `POST /emails/imports`: store the rows and connect them in the background; answers `201` with the import
+  - `GET /emails/imports`: the workspace's imports, newest first
+  - `GET /emails/imports/:id`: one import with its counts and its failures grouped by `cause`
+  - `GET /emails/imports/:id/rows`: an import's rows by line, filtered by `status` (comma-separated) and `cause`
+  - `PATCH /emails/imports/:id/rows/:line`: correct one failed row (`password`, `app_password`, `username`, `smtp`, `imap`) and queue it again
+  - `POST /emails/imports/:id/retry`: requeue failed rows, all of them or those with one `cause` or the listed `lines`, optionally with one new `password` for all
+  - `POST /emails/imports/:id/cancel`: stop the rows not yet started; rows already connecting finish
+  - `GET /emails/imports/:id/failed.csv`: every row that did not connect, as uploaded minus passwords, with `status`, `problem` and `how_to_fix`
+
+  Preview and create take `multipart/form-data`: `file` (CSV, TSV or XLSX up to 10 MB) or `text` (a pasted list), `mapping` (a JSON object of column index to field, such as `{"0":"email","1":"password"}`; omit it to use the automatic mapping) and `options` (JSON: `has_header`, `shared_password`, `on_existing` of `update` or `skip`, `save_mapping`, and `settings` applied to every mailbox). One import takes up to 5,000 rows. The two lists answer `data` plus `pagination` with `next_cursor` and `has_more`; `limit` is at most `100` for imports and `200` for rows, and a cursor that is not one this API issued returns `400` with `invalid_cursor`. None of these takes an `Idempotency-Key`. Repeating a create makes a second import, whose rows find the first one's mailboxes already connected and update (or skip) them, so nothing is connected twice. A retry only requeues rows that failed, and a fix is refused for a row that is not failed, so repeating either connects nothing twice. Cancelling an import twice is a no-op. Progress is published as the realtime event `MAILBOX_IMPORT_PROGRESS`; see [realtime](/api/realtime/). Error codes are under [mailbox import refusals](/api/error-codes/#mailbox-import-refusals)
+- [Inbox vendor](/guides/mailbox-import/#import-from-an-inbox-vendor) connections under `/emails/vendors`, JWT permission `MANAGE_EMAILS`. The key is sealed on the server and no response ever returns it:
+  - `GET /emails/vendors/catalog`: the supported vendors, with each one's `fields` (key, label, secret, required, help) and `key_help_url`
+  - `GET /emails/vendors`: the workspace's vendor connections with `status`, `last_error` and mailbox count
+  - `POST /emails/vendors`: `vendor`, `label` and `fields`; the key is checked with the vendor first, answers `201`. Repeating it makes a second connection
+  - `PATCH /emails/vendors/:id`: rename, or replace `fields` after checking the new key with the vendor. Safe to repeat
+  - `DELETE /emails/vendors/:id`: forget the key; the mailboxes it brought in stay connected. A repeat is a `404`
+  - `GET /emails/vendors/:id/mailboxes`: the vendor account's mailboxes, each marked `connected` when already in the workspace
+  - `POST /emails/vendors/:id/import`: `mailbox_ids` or `all`, plus the same `options` as a file import; answers `201` with the import. Each call creates a new import; a repeat finds the first run's mailboxes connected and updates (or skips) them
+- [Admin grants](/guides/mailbox-import/#connect-a-whole-google-workspace-domain) under `/emails/grants`, JWT permission `MANAGE_EMAILS`. The four routes that record, use or remove a grant also need a [recent confirmation](#actions-that-need-a-recent-confirmation):
+  - `GET /emails/grants/config`: whether this instance takes Google and Microsoft grants, the Google `google_client_id` and `google_scopes` an administrator authorizes, and `google_missing` and `microsoft_missing`, the names of the instance settings still unset (empty when that provider is ready)
+  - `GET /emails/grants`, `GET /emails/grants/:id`: grants with their `provider`, `tenant`, covered `domains`, `status` and mailbox count
+  - `GET /emails/grants/migration`: the workspace's mailboxes still on per-mailbox Google sign-in, which is [being retired](/guides/mailboxes/#moving-off-per-mailbox-google-sign-in), grouped by domain: `data` is a list of `domain`, `kind` (`workspace`, which moves onto an admin grant, or `personal`, a shared address such as `gmail.com`, which moves to an app password), `grant_id` when the workspace has an active Google grant covering the domain, and `mailboxes` (`id`, `email`, `name`, `status`); `total` counts the mailboxes. Mailboxes whose sign-in Warmbly Cloud holds are not listed. Read only
+  - `POST /emails/grants/google/start`: `domain` and `admin_email` (on that domain). Answers how this workspace proves it controls the domain: `method` `signin` with a Google sign-in `url` and `state` (valid for 15 minutes) when the instance has a Google sign-in app, else `method` `dns`. Both carry `txt_name` (`_warmbly.<domain>`) and `txt_value` (`warmbly-verify=...`, unique to the workspace and domain), because the DNS proof always works. Safe to repeat
+  - `POST /emails/grants/google/finish` (recent confirmation): either `state` and `code` from the Google sign-in, which must be `admin_email` itself on that domain, or `domain` and `admin_email` once the `TXT` record is published. The directory must list `admin_email` as a super administrator. Answers `201`. A `state` is single-use; repeating a DNS finish re-verifies and updates the same grant, one per domain
+  - `POST /emails/grants/microsoft/start`: the admin consent `url` and `state` for a Global Administrator, valid for 15 minutes
+  - `POST /emails/grants/microsoft/finish` (recent confirmation): `state` and `code` from the consent callback; answers `201`. The organization recorded is the one the administrator consented for, as the redeemed sign-in reports it. The `state` is single-use, so a repeat is refused with `mailbox_grant_state_invalid`. One grant per tenant: consenting again updates the same grant
+  - `POST /emails/grants/:id/check`: verify now, and restart the grant's stopped mailboxes when it passes. Safe to repeat
+  - `DELETE /emails/grants/:id` (recent confirmation): remove the grant; every mailbox it connected stops. A repeat is a `404`
+  - `GET /emails/grants/:id/users`: the granted directory, each user marked `enabled` and `connected`, with `email_account_id` when connected. `upgrade` is `true` for a user whose mailbox is already here on its own sign-in with the same provider (Google or Microsoft, not held by Warmbly Cloud): connecting it moves that mailbox onto the grant in place
+  - `POST /emails/grants/:id/connect` (recent confirmation): `user_ids` or `all` (every enabled user not yet connected, plus every user marked `upgrade`), plus import `options`; answers `201` with the import. Each call creates a new import; a repeat finds the first run's mailboxes connected and updates (or skips) them. A user whose mailbox is already here as a delegated mailbox is relinked to this grant, and one on its own sign-in is converted onto the grant in place, keeping its history, campaigns and warmup, without counting against the mailbox allowance
+- [Sending domains](/guides/sending-domains/) under `/emails/domains`, JWT permission `MANAGE_EMAILS`. `:domain` is the bare domain:
+  - `GET /emails/domains`: every domain the workspace sends from, with mailbox count, mail hosts, SPF, DKIM and DMARC, tracking hosts in use and the redirect. When a connected [inbox vendor](/guides/sending-domains/#domains-held-by-an-inbox-vendor) account holds the domain, `vendor_domain` carries `vendor`, `connection_id`, the current `forwarding` when the vendor reports it, `can_forward`, `can_unforward`, `forwarding_reviewed` (a change is applied later by the vendor's staff), `can_dns` and `dns_types`
+  - `GET /emails/domains/:domain/tracking-suggestion`: the tracking `host` to offer, its `status` (`active`, `found` or `suggested`) and the `cname_target`
+  - `PUT /emails/domains/:domain/tracking`: `host` for every mailbox on the domain (empty clears it); answers the verification result and the number of `mailboxes` changed. Idempotent
+  - `PUT /emails/domains/:domain/redirect`: `target_url` and optional `include_www` (default `true`); checks DNS once and answers the redirect with its `records`. Idempotent: a repeat keeps the same ownership value, so the `TXT` record stays valid
+  - `POST /emails/domains/:domain/redirect/verify`: check DNS now. Safe to repeat
+  - `DELETE /emails/domains/:domain/redirect`: stop serving it. A repeat is a `404`
+  - `PUT /emails/domains/:domain/vendor-forwarding`: `url`; the vendor account holding the domain forwards its root there. An empty `url` removes the forwarding where `can_unforward`. Answers the updated `vendor_domain`. Idempotent
+  - `POST /emails/domains/:domain/vendor-tracking`: `host`, a subdomain of the domain; the vendor writes its `CNAME` to this instance's tracking host, then every mailbox on the domain uses the host. Answers like `PUT .../tracking`. Safe to retry: the record is replaced, not added
+
+  None of these takes an `Idempotency-Key`; the retry behavior of each is stated above. Changes to vendor connections, grants and redirects publish `AUDIT_CREATED` with `entity_type` `mailbox_vendor`, `mailbox_grant` or `domain_redirect`. Error codes are under [mailbox source refusals](/api/error-codes/#mailbox-source-refusals)
 - `POST /emails/onboarding/oauth/reauth/:id`, `PUT /emails/onboarding/smtp-imap/:id` (reconnect an existing mailbox after a credential change; JWT permission `MANAGE_EMAILS`)
+- `POST /emails/onboarding/app-password/:id` (JWT permission `MANAGE_EMAILS`): move a mailbox off per-mailbox Google sign-in onto Gmail's IMAP and SMTP with `app_password`, a 16-letter Google app password (spaces are ignored). The password is checked against Gmail's servers before anything is stored, with the same refusals as an SMTP/IMAP connect; on success the mailbox becomes `smtp_imap` in place, keeps its imported mail, campaigns and warmup, and answers `200` with the mailbox. `409` `mailbox_not_google_signin` for any other mailbox, including one already switched, so a repeat changes nothing and takes no `Idempotency-Key`; `400` `app_password_invalid` when the value is not 16 letters. Publishes `AUDIT_CREATED` with `entity_type` `email_account`
 - `GET /oauth/authorize/details`, `POST /oauth/authorize` (the consent flow: a human approves a third-party app)
 - `GET /oauth/authorized-apps`, `DELETE /oauth/authorized-apps/:id` (apps the user has authorized)
 - `POST /getaway` (websocket bootstrap)
@@ -546,6 +591,7 @@ On the tracking service (the `TRACKING_DOMAIN` host, not the API), also public a
 
 - `GET /t/o/:task_id.png` (open pixel), `GET /c/:link_id` (click redirect)
 - `GET /tracking.js` (the website tracking snippet), `POST /p` (page-view ingest; JSON body up to 8 KB, `429` over budget, `204` otherwise. Nothing in the request can name a contact)
+- A visit to a [sending domain's root](/guides/sending-domains/#root-redirects) (or its `www`) that a workspace pointed here. On a verified domain every path except `/health` answers `302` to its website with `Cache-Control: public, max-age=300`, before any route above; an unknown host is a `404`. The forms service answers a verified redirect domain the same way
 
 ## Notes
 

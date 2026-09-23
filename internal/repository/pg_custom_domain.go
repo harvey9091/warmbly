@@ -46,6 +46,9 @@ func (r *customDomainRepository) IsVerified(ctx context.Context, host string) (b
 			UNION ALL
 			SELECT 1 FROM organizations
 			WHERE forms_domain = $1 AND forms_domain_verified
+			UNION ALL
+			SELECT 1 FROM domain_redirects
+			WHERE verified AND (domain = $1 OR (include_www AND 'www.' || domain = $1))
 		)
 	`, host).Scan(&ok)
 	if err != nil {

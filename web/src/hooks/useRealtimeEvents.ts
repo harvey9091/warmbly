@@ -62,6 +62,16 @@ export function useRealtimeEvents() {
       const threadId = getString('thread_id')
       const emailId = getString('email_id') ?? getString('message_id')
 
+      // A mailbox import moved: its job, the import list and the mailbox list
+      // all refresh. Checked before the ACCOUNT/EMAIL branches below.
+      if (event === 'MAILBOX_IMPORT_PROGRESS') {
+        const importId = getString('import_id')
+        // A finished row can move a mailbox off Google sign-in.
+        invalidate([['emails', 'imports'], ['emails', 'list'], ['sending-domains'], ['mailbox-grants', 'migration']])
+        if (importId) invalidate([['emails', 'imports', importId]])
+        return
+      }
+
       // An AI-suggested unibox reply was drafted and is awaiting human review.
       // Refresh the unibox (badge/overview) + the drafts list, and the specific
       // thread if present.
@@ -378,7 +388,17 @@ export function useRealtimeEvents() {
           // per-mailbox detail reads too (['emails', id, 'behavior'] and its
           // rolled plan), so a teammate retuning a mailbox's sending behaviour
           // refreshes everyone's open drawer instead of only the list row.
-          email_account: [['emails'], ['analytics', 'accounts']],
+          // A mailbox write can move it off Google sign-in, so the migration list follows.
+          email_account: [['emails'], ['analytics', 'accounts'], ['sending-domains'], ['mailbox-grants', 'migration']],
+          // A mailbox import created, retried or cancelled by a teammate; it may move mailboxes onto a grant.
+          mailbox_import: [['emails', 'imports'], ['mailbox-grants', 'migration']],
+          // An admin grant added, re-checked or removed, and an inbox vendor
+          // account connected, re-keyed or removed.
+          mailbox_grant: [['mailbox-grants'], ['emails', 'list']],
+          mailbox_vendor: [['mailbox-vendors'], ['sending-domains']],
+          // A sending domain's root redirect or vendor forwarding changed. Its
+          // tracking host is an email_account write, covered above.
+          domain_redirect: [['sending-domains']],
           api_key: [['api-keys']],
           webhook: [['webhooks'], ['integrations', 'connections']],
           template: [['templates']],

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/warmbly/warmbly/internal/app/delegation"
 	"github.com/warmbly/warmbly/internal/app/poollink"
 	"github.com/warmbly/warmbly/internal/config"
 )
@@ -120,6 +121,9 @@ func (h *Handler) renderOAuthCallback(c *gin.Context, provider string) {
 		Error:     providerErr,
 		Status:    "Connecting your mailbox… this window will close.",
 		AppOrigin: callbackTargetOrigin(),
+	}
+	if strings.HasPrefix(state, delegation.GoogleStatePrefix) {
+		data.Status = "Signed in. Finishing in Warmbly… this window will close."
 	}
 	if providerErr != "" {
 		data.Status = "Connection cancelled."

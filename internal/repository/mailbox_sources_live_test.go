@@ -1,0 +1,311 @@
+package repository
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/encrypt"
+)
+
+// Admin grants, vendor connections and domain redirects are organization
+// assets; every read is scoped, and a verified redirect answers for its domain
+// in exactly one workspace.
+//
+//	WARMBLY_TEST_DB=postgres://warmbly:warmbly@localhost:15432/<scratch>?sslmode=disable \
+//	  go test ./internal/repository/ -run LiveMailboxSources -v
+
+func TestLiveMailboxSourcesGrants(t *testing.T) {
+	handle, pool := liveContactDB(t)
+	requireSchemaVersion(t, pool, 206)
+	f := newImportFixture(t, pool)
+	grants := NewDomainGrantRepository(handle)
+	emails := NewEmailRepostory(handle, nil)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM mailbox_domain_grants WHERE organization_id = ANY($1)`, []uuid.UUID{f.org, f.other})
+	})
+
+	g := &models.DomainGrant{ID: uuid.New(), OrganizationID: f.org, Provider: models.GrantProviderMicrosoft, Tenant: "tenant-1", Domains: []string{"Contoso.com"}}
+	mustImport(t, grants.Upsert(ctx, g, f.owner))
+	again := &models.DomainGrant{ID: uuid.New(), OrganizationID: f.org, Provider: models.GrantProviderMicrosoft, Tenant: "tenant-1", Domains: []string{"contoso.com", "fabrikam.com"}}
+	mustImport(t, grants.Upsert(ctx, again, f.owner))
+	if again.ID != g.ID {
+		t.Fatal("a second consent for the same tenant made a second grant")
+	}
+
+	t.Run("covering domain is found, scoped", func(t *testing.T) {
+		got, err := grants.ForDomain(ctx, f.org, models.GrantProviderMicrosoft, "FABRIKAM.com")
+		if err != nil || got == nil || got.ID != g.ID {
+			t.Fatalf("got %+v, %v", got, err)
+		}
+		if got, _ := grants.ForDomain(ctx, f.other, models.GrantProviderMicrosoft, "contoso.com"); got != nil {
+			t.Fatal("another workspace found the grant")
+		}
+		if got, _ := grants.Get(ctx, f.other, g.ID); got != nil {
+			t.Fatal("another workspace read the grant")
+		}
+	})
+
+	t.Run("a delegated mailbox stores no credential and is found for tokens", func(t *testing.T) {
+		acc, xerr := emails.NewDelegatedAccount(ctx, f.owner.String(), models.NewDelegatedAccount{
+			OrganizationID: &f.org, Provider: models.InboxProviderOutlook, Email: "sam@contoso.com", Name: "Sam",
+			MailHost: "microsoft365", GrantID: g.ID, Subject: "graph-user-1",
+		})
+		if xerr != nil {
+			t.Fatal(xerr)
+		}
+		if acc.AuthMethod != models.MailAuthDelegated || acc.MailHost != "microsoft365" {
+			t.Fatalf("account = %+v", acc)
+		}
+		d, xerr := emails.GetDelegation(ctx, acc.ID)
+		if xerr != nil || d == nil || d.Subject != "graph-user-1" || d.GrantID != g.ID || d.OrganizationID != f.org {
+			t.Fatalf("delegation = %+v, %v", d, xerr)
+		}
+		var oauthRows int
+		_ = pool.QueryRow(ctx, `SELECT count(*) FROM email_accounts_oauth WHERE email_account_id = $1`, acc.ID).Scan(&oauthRows)
+		if oauthRows != 0 {
+			t.Fatal("a delegated mailbox stored a token")
+		}
+		if _, xerr := emails.NewDelegatedAccount(ctx, f.owner.String(), models.NewDelegatedAccount{
+			OrganizationID: &f.org, Provider: models.InboxProviderOutlook, Email: "SAM@contoso.com", GrantID: g.ID, Subject: "x",
+		}); xerr == nil {
+			t.Fatal("the same address was connected twice")
+		}
+		list, err := grants.List(ctx, f.org)
+		if err != nil || len(list) != 1 || list[0].Mailboxes != 1 {
+			t.Fatalf("list = %+v, %v", list, err)
+		}
+		mustImport(t, grants.SetStatus(ctx, g.ID, "invalid", "revoked"))
+		if got, _ := grants.ForDomain(ctx, f.org, models.GrantProviderMicrosoft, "contoso.com"); got != nil {
+			t.Fatal("an invalid grant still covers its domain")
+		}
+		ids, err := grants.Delete(ctx, f.org, g.ID)
+		if err != nil || len(ids) != 1 || ids[0] != acc.ID {
+			t.Fatalf("deleted mailboxes = %v, %v", ids, err)
+		}
+		if d, _ := emails.GetDelegation(ctx, acc.ID); d != nil {
+			t.Fatal("a mailbox kept minting after its grant was deleted")
+		}
+	})
+}
+
+func TestLiveMailboxSourcesVendors(t *testing.T) {
+	handle, pool := liveContactDB(t)
+	requireSchemaVersion(t, pool, 206)
+	f := newImportFixture(t, pool)
+	vendors := NewVendorConnectionRepository(handle)
+	emails := NewEmailRepostory(handle, nil)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM mailbox_vendor_connections WHERE organization_id = ANY($1)`, []uuid.UUID{f.org, f.other})
+	})
+
+	c := &models.VendorConnection{ID: uuid.New(), OrganizationID: f.org, Vendor: "inboxkit", Label: "Main", Credentials: "sealed"}
+	mustImport(t, vendors.Create(ctx, c, f.owner))
+	list, err := vendors.List(ctx, f.org)
+	if err != nil || len(list) != 1 || list[0].Credentials != "" {
+		t.Fatalf("list leaks or misses: %+v, %v", list, err)
+	}
+	if got, _ := vendors.Get(ctx, f.other, c.ID); got != nil {
+		t.Fatal("another workspace read the connection")
+	}
+	if ok, _ := vendors.Update(ctx, f.org, c.ID, "Renamed", ""); !ok {
+		t.Fatal("update failed")
+	}
+	if got, _ := vendors.Get(ctx, f.org, c.ID); got.Credentials != "sealed" || got.Label != "Renamed" {
+		t.Fatalf("a rename replaced the key: %+v", got)
+	}
+
+	box := f.mailbox(t, pool, f.org, f.owner, "v@acme.io")
+	if xerr := emails.SetVendorLink(ctx, box, c.ID, "ik-1"); xerr != nil {
+		t.Fatal(xerr)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE email_accounts SET status = 'inactive' WHERE id = $1`, box); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO email_account_errors (email_account_id, user_id, error_code, severity, title, message)
+		VALUES ($1, $2, 'INVALID_CREDENTIALS', 'CRITICAL', 'Sign-in failed', 'x')`, box, f.owner); err != nil {
+		t.Fatal(err)
+	}
+	cands, err := vendors.ReconnectCandidates(ctx, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, cand := range cands {
+		found = found || (cand.AccountID == box && cand.VendorMailboxID == "ik-1" && cand.OrgID == f.org)
+	}
+	if !found {
+		t.Fatalf("the failed vendor mailbox was not offered for reconnect: %+v", cands)
+	}
+	if ok, _ := vendors.Delete(ctx, f.org, c.ID); !ok {
+		t.Fatal("delete failed")
+	}
+	var link *uuid.UUID
+	_ = pool.QueryRow(ctx, `SELECT vendor_connection_id FROM email_accounts WHERE id = $1`, box).Scan(&link)
+	if link != nil {
+		t.Fatal("the mailbox kept a link to a deleted connection")
+	}
+}
+
+func TestLiveMailboxSourcesRedirects(t *testing.T) {
+	handle, pool := liveContactDB(t)
+	requireSchemaVersion(t, pool, 206)
+	f := newImportFixture(t, pool)
+	redirects := NewDomainRedirectRepository(handle)
+	emails := NewEmailRepostory(handle, nil)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM domain_redirects WHERE organization_id = ANY($1)`, []uuid.UUID{f.org, f.other})
+	})
+	domain := "redir-" + f.org.String()[:8] + ".io"
+
+	a := &models.DomainRedirect{ID: uuid.New(), OrganizationID: f.org, Domain: domain, TargetURL: "https://acme.com", IncludeWWW: true, VerifyToken: "tok-a"}
+	mustImport(t, redirects.Upsert(ctx, a, f.owner))
+	again := &models.DomainRedirect{ID: uuid.New(), OrganizationID: f.org, Domain: domain, TargetURL: "https://acme.com/new", IncludeWWW: true, VerifyToken: "tok-new"}
+	mustImport(t, redirects.Upsert(ctx, again, f.owner))
+	if again.VerifyToken != "tok-a" || again.TargetURL != "https://acme.com/new" {
+		t.Fatalf("an update rotated the token or kept the old target: %+v", again)
+	}
+	if _, ok, _ := redirects.Lookup(ctx, domain); ok {
+		t.Fatal("an unverified redirect is served")
+	}
+	mustImport(t, redirects.SetCheck(ctx, a.ID, true, ""))
+	for _, host := range []string{domain, "www." + domain, domain + "."} {
+		if target, ok, err := redirects.Lookup(ctx, host); err != nil || !ok || target != "https://acme.com/new" {
+			t.Fatalf("%s -> %q, %v, %v", host, target, ok, err)
+		}
+	}
+	custom := NewCustomDomainRepository(pool)
+	if ok, err := custom.IsVerified(ctx, "www."+domain); err != nil || !ok {
+		t.Fatalf("certificate issuance refused the verified redirect: %v", err)
+	}
+
+	b := &models.DomainRedirect{ID: uuid.New(), OrganizationID: f.other, Domain: domain, TargetURL: "https://evil.com", VerifyToken: "tok-b"}
+	mustImport(t, redirects.Upsert(ctx, b, f.owner))
+	if err := redirects.SetCheck(ctx, b.ID, true, ""); !errors.Is(err, ErrRedirectTaken) {
+		t.Fatalf("a second workspace verified the same domain: %v", err)
+	}
+	if target, _, _ := redirects.Lookup(ctx, domain); target != "https://acme.com/new" {
+		t.Fatalf("the redirect was taken over: %q", target)
+	}
+
+	t.Run("domain overview and bulk tracking", func(t *testing.T) {
+		f.mailbox(t, pool, f.org, f.owner, "one@"+domain)
+		f.mailbox(t, pool, f.org, f.teammate, "two@"+domain)
+		n, xerr := emails.SetDomainTracking(ctx, f.org, domain, "track."+domain, false, nil)
+		if xerr != nil || n != 2 {
+			t.Fatalf("updated %d, %v", n, xerr)
+		}
+		if n, _ := emails.CountDomainMailboxes(ctx, f.other, domain); n != 0 {
+			t.Fatal("another workspace counted the domain's mailboxes")
+		}
+		list, xerr := emails.DomainsOverview(ctx, f.org)
+		if xerr != nil {
+			t.Fatal(xerr)
+		}
+		for _, d := range list {
+			if d.Domain == domain {
+				if d.Mailboxes != 2 || len(d.TrackingDomains) != 1 || d.TrackingDomains[0].Host != "track."+domain {
+					t.Fatalf("overview = %+v", d)
+				}
+				return
+			}
+		}
+		t.Fatal("the domain is missing from the overview")
+	})
+}
+
+func TestLiveMailboxSourcesSigninConversions(t *testing.T) {
+	handle, pool := liveContactDB(t)
+	requireSchemaVersion(t, pool, 206)
+	f := newImportFixture(t, pool)
+	grants := NewDomainGrantRepository(handle)
+	enc, err := encrypt.NewEncrypter(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	emails := NewEmailRepostory(handle, enc)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM mailbox_domain_grants WHERE organization_id = ANY($1)`, []uuid.UUID{f.org, f.other})
+	})
+	signin := func(email string) uuid.UUID {
+		id := f.mailbox(t, pool, f.org, f.owner, email)
+		if _, err := pool.Exec(ctx, `UPDATE email_accounts SET provider = 'gmail', auth_method = 'oauth', last_id = 42 WHERE id = $1`, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO email_accounts_oauth (email_account_id, access_token, refresh_token, expires_at) VALUES ($1, 'a', 'r', now())`, id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	g := &models.DomainGrant{ID: uuid.New(), OrganizationID: f.org, Provider: models.GrantProviderGoogle, Tenant: "conv.io", Domains: []string{"conv.io"}}
+	mustImport(t, grants.Upsert(ctx, g, f.owner))
+
+	alex, me := signin("alex@conv.io"), signin("me-"+f.org.String()[:8]+"@gmail.com")
+	list, xerr := emails.ListSigninRetiring(ctx, f.org)
+	if xerr != nil || len(list) != 2 {
+		t.Fatalf("retiring = %+v, %v", list, xerr)
+	}
+	if other, _ := emails.ListSigninRetiring(ctx, f.other); len(other) != 0 {
+		t.Fatal("another workspace listed the mailboxes")
+	}
+
+	t.Run("onto the grant, in place", func(t *testing.T) {
+		if ok, _ := emails.ConvertToDelegated(ctx, f.other, alex, models.InboxProviderGoogle, g.ID, "alex@conv.io", "google_workspace"); ok {
+			t.Fatal("another workspace converted the mailbox")
+		}
+		if ok, _ := emails.ConvertToDelegated(ctx, f.org, alex, models.InboxProviderOutlook, g.ID, "alex@conv.io", ""); ok {
+			t.Fatal("a Google mailbox moved onto a Microsoft grant")
+		}
+		ok, xerr := emails.ConvertToDelegated(ctx, f.org, alex, models.InboxProviderGoogle, g.ID, "alex@conv.io", "google_workspace")
+		if xerr != nil || !ok {
+			t.Fatalf("convert = %v, %v", ok, xerr)
+		}
+		d, _ := emails.GetDelegation(ctx, alex)
+		if d == nil || d.GrantID != g.ID || d.Subject != "alex@conv.io" {
+			t.Fatalf("delegation = %+v", d)
+		}
+		var tokens int
+		_ = pool.QueryRow(ctx, `SELECT count(*) FROM email_accounts_oauth WHERE email_account_id = $1`, alex).Scan(&tokens)
+		if tokens != 0 {
+			t.Fatal("the per-mailbox token was kept")
+		}
+		if ok, _ := emails.ConvertToDelegated(ctx, f.org, alex, models.InboxProviderGoogle, g.ID, "alex@conv.io", ""); ok {
+			t.Fatal("a second conversion matched")
+		}
+	})
+
+	t.Run("onto an app password, in place", func(t *testing.T) {
+		creds := &models.SmtpImap{
+			SMTP: &models.Service{Host: "smtp.gmail.com", Port: 587, Username: "me@gmail.com", Password: "abcdabcdabcdabcd"},
+			IMAP: &models.Service{Host: "imap.gmail.com", Port: 993, Username: "me@gmail.com", Password: "abcdabcdabcdabcd"},
+		}
+		if ok, _ := emails.ConvertGoogleToAppPassword(ctx, f.org, alex, creds, "gmail"); ok {
+			t.Fatal("a delegated mailbox switched to an app password")
+		}
+		ok, xerr := emails.ConvertGoogleToAppPassword(ctx, f.org, me, creds, "gmail")
+		if xerr != nil || !ok {
+			t.Fatalf("convert = %v, %v", ok, xerr)
+		}
+		var provider, auth, backfill string
+		var lastID *int64
+		_ = pool.QueryRow(ctx, `SELECT provider, auth_method, last_id FROM email_accounts WHERE id = $1`, me).Scan(&provider, &auth, &lastID)
+		_ = pool.QueryRow(ctx, `SELECT backfill_status FROM email_sync_state WHERE email_id = $1`, me).Scan(&backfill)
+		if provider != "smtp_imap" || auth != models.MailAuthAppPassword || lastID != nil || backfill != "complete" {
+			t.Fatalf("after = %s %s %v %s", provider, auth, lastID, backfill)
+		}
+		got, err := emails.GetSMTPCredentials(ctx, me)
+		if err != nil || got.IMAPHost != "imap.gmail.com" || got.SMTPPassword != "abcdabcdabcdabcd" {
+			t.Fatalf("stored credentials = %+v, %v", got, err)
+		}
+		if list, _ := emails.ListSigninRetiring(ctx, f.org); len(list) != 0 {
+			t.Fatalf("still retiring: %+v", list)
+		}
+	})
+}

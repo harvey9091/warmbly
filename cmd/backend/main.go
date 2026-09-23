@@ -49,6 +49,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/crm"
 	"github.com/warmbly/warmbly/internal/app/dailythrottle"
 	"github.com/warmbly/warmbly/internal/app/dangerzone"
+	"github.com/warmbly/warmbly/internal/app/delegation"
 	"github.com/warmbly/warmbly/internal/app/discount"
 	"github.com/warmbly/warmbly/internal/app/email"
 	"github.com/warmbly/warmbly/internal/app/emailsend"
@@ -67,6 +68,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/instancesettings"
 	"github.com/warmbly/warmbly/internal/app/integration"
 	"github.com/warmbly/warmbly/internal/app/leadsync"
+	"github.com/warmbly/warmbly/internal/app/mailboximport"
 	"github.com/warmbly/warmbly/internal/app/mcp"
 	"github.com/warmbly/warmbly/internal/app/nativeactions"
 	"github.com/warmbly/warmbly/internal/app/notification"
@@ -85,6 +87,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/replyclassify"
 	"github.com/warmbly/warmbly/internal/app/research"
 	"github.com/warmbly/warmbly/internal/app/segment"
+	"github.com/warmbly/warmbly/internal/app/sendingdomain"
 	"github.com/warmbly/warmbly/internal/app/sequence"
 	"github.com/warmbly/warmbly/internal/app/settings"
 	"github.com/warmbly/warmbly/internal/app/skills"
@@ -102,6 +105,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/unibox"
 	"github.com/warmbly/warmbly/internal/app/updates"
 	"github.com/warmbly/warmbly/internal/app/user"
+	"github.com/warmbly/warmbly/internal/app/vendorconn"
 	"github.com/warmbly/warmbly/internal/app/viewprefs"
 	warmupapp "github.com/warmbly/warmbly/internal/app/warmup"
 	"github.com/warmbly/warmbly/internal/app/warmupcontent"
@@ -128,17 +132,22 @@ import (
 	"github.com/warmbly/warmbly/internal/observability"
 	productanalytics "github.com/warmbly/warmbly/internal/observability/analytics"
 	"github.com/warmbly/warmbly/internal/pkg/captcha"
+	"github.com/warmbly/warmbly/internal/pkg/domainproof"
 	"github.com/warmbly/warmbly/internal/pkg/emailverify"
 	"github.com/warmbly/warmbly/internal/pkg/encrypt"
 	"github.com/warmbly/warmbly/internal/pkg/generation"
 	"github.com/warmbly/warmbly/internal/pkg/geo"
 	"github.com/warmbly/warmbly/internal/pkg/idtoken"
+	"github.com/warmbly/warmbly/internal/pkg/mailhost"
+	"github.com/warmbly/warmbly/internal/pkg/mailvendor"
 	"github.com/warmbly/warmbly/internal/pkg/typesafe"
 	"github.com/warmbly/warmbly/internal/repository"
 	"github.com/warmbly/warmbly/internal/scheduler"
 	"github.com/warmbly/warmbly/internal/tasks"
 	"github.com/warmbly/warmbly/internal/tasks/proto"
 	"github.com/warmbly/warmbly/internal/tasksched"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 )
 
 func main() {
@@ -164,6 +173,10 @@ func main() {
 	var externalAuthProviders models.ExternalAuthProviders
 	var userService user.UserService
 	var emailService email.EmailService
+	var mailboxImportService *mailboximport.Service
+	var delegationService *delegation.Service
+	var vendorConnService *vendorconn.Service
+	var sendingDomainService *sendingdomain.Service
 	var poolLinkService poollink.Service
 	var cloudLinkService cloudlink.Service
 	var cliAuthService cliauth.Service
@@ -1628,6 +1641,95 @@ func main() {
 		// ledger as the automation AI nodes. Nil provider leaves them
 		// returning a clean "not available".
 		tasksService.SetAI(aiProvider, creditService)
+
+		// Mailbox imports: files and pasted lists connected in the background,
+		// with each domain's mail host detected from its DNS.
+		// One prover for every DNS ownership proof, keyed by the instance secret.
+		domainProver := domainproof.New(authCfg.AuthSecret)
+
+		// Whole-domain connects: Google Workspace delegation to the instance's
+		// service account, Microsoft 365 consent to its Outlook app.
+		outlookApp := oauth2Cfg.InboxAuthorization.Outlook
+		// A Workspace admin proves the domain by signing in with Google, through
+		// the dashboard's own sign-in client (openid and email only) and its
+		// callback; the mailbox client stands in only where sign-in is off.
+		var googleSignin *oauth2.Config
+		if redirect := ssoRedirectURL(authCfg.GoogleRedirectURI, "google"); authCfg.GoogleClientID != "" && authCfg.GoogleClientSecret != "" && redirect != "" {
+			googleSignin = &oauth2.Config{
+				ClientID: authCfg.GoogleClientID, ClientSecret: authCfg.GoogleClientSecret, RedirectURL: redirect,
+				Scopes: []string{"openid", "email"}, Endpoint: google.Endpoint,
+			}
+		} else if g := oauth2Cfg.InboxAuthorization.Google; g != nil && g.ClientID != "" && g.ClientSecret != "" {
+			googleSignin = &oauth2.Config{
+				ClientID: g.ClientID, ClientSecret: g.ClientSecret, RedirectURL: g.RedirectURL,
+				Scopes: []string{"openid", "email"}, Endpoint: g.Endpoint,
+			}
+		}
+		delegationService = delegation.NewService(delegation.Deps{
+			Repo:              repository.NewDomainGrantRepository(primaryDB),
+			Mailboxes:         emailService,
+			Store:             emailRepostory,
+			Cache:             cache,
+			GoogleKey:         config.GoogleDelegationKey(),
+			MicrosoftClientID: outlookApp.ClientID,
+			MicrosoftSecret:   outlookApp.ClientSecret,
+			MicrosoftRedirect: outlookApp.RedirectURL,
+			GoogleSignin:      googleSignin,
+			Prover:            domainProver,
+		})
+		go delegationService.StartHealth(ctx)
+
+		// Inbox vendor accounts: keys sealed per workspace, mailboxes imported by API.
+		var sandboxVendors func(string, map[string]string) (mailvendor.Client, error)
+		if u := config.MailvendorSandboxURL(); u != "" {
+			log.Printf("inbox vendors: using the sandbox mock at %s", u)
+			sandboxVendors = func(vendor string, fields map[string]string) (mailvendor.Client, error) {
+				return mailvendor.New(vendor, fields, mailvendor.WithBaseURL(u+"/"+vendor))
+			}
+		}
+		vendorConnService = vendorconn.NewService(vendorconn.Deps{
+			Repo:      repository.NewVendorConnectionRepository(primaryDB),
+			Cipher:    cipherService,
+			Mailboxes: emailRepostory,
+			Reconnect: emailService,
+			Cache:     cache,
+			NewClient: sandboxVendors,
+		})
+
+		// Sending domains: tracking host per domain and the bare-domain redirect.
+		sendingDomainService = sendingdomain.NewService(repository.NewDomainRedirectRepository(primaryDB), emailRepostory, nil, domainProver)
+		sendingDomainService.WireAuditor(auditService)
+		go sendingDomainService.StartSweep(ctx)
+
+		mailhostDetector := mailhost.NewDetector(nil, nil, mailboximport.NewRedisDetectionCache(cache))
+		if !config.MailhostISPDB() {
+			mailhostDetector.WithoutISPDB()
+		}
+		mailboxImportService = mailboximport.NewService(mailboximport.Deps{
+			Repo:      repository.NewMailboxImportRepository(primaryDB),
+			Emails:    emailService,
+			Mailboxes: emailRepostory,
+			Tags:      tagRepostory,
+			Cipher:    cipherService,
+			Detector:  mailhostDetector,
+			Allowance: organizationService,
+			Asker:     typeSafeAsker(typeSafeClient),
+			Warmup:    tasksService,
+			Auditor:   auditService,
+			Publisher: streamingPublisher,
+			Delegator: delegationService,
+			Vendors:   vendorConnService,
+			Domains:   sendingDomainService,
+			GoogleSignin: func() bool {
+				return config.GoogleOAuthConnect() && oauth2Cfg.InboxAuthorization.Google != nil &&
+					oauth2Cfg.InboxAuthorization.Google.ClientID != ""
+			},
+		})
+		emailService.WireImportSignin(mailboxImportService)
+		vendorConnService.SetImporter(mailboxImportService)
+		sendingDomainService.WireVendors(vendorConnService)
+		go vendorConnService.StartReconnect(ctx)
+		go mailboxImportService.Start(ctx)
 		tasksService.SetAISearch(aiSearch)
 		// Research-mode AI variables run a bounded web-research agent over the
 		// shared tool registry at send time.
@@ -1971,18 +2073,22 @@ func main() {
 		CloudLinkService: cloudLinkService,
 		CLIAuthService:   cliAuthService,
 
-		TokenService:     tokenService,
-		PasskeyService:   passkeyService,
-		UserService:      userService,
-		EmailService:     emailService,
-		CampaignService:  campaignService,
-		AnalyticsService: analyticsService,
-		RateLimitService: rateLimitService,
-		ContactService:   contactService,
-		SegmentService:   segmentService,
-		FormService:      formService,
-		SequenceService:  sequenceService,
-		UniboxService:    uniboxService,
+		TokenService:         tokenService,
+		PasskeyService:       passkeyService,
+		UserService:          userService,
+		EmailService:         emailService,
+		MailboxImportService: mailboxImportService,
+		DelegationService:    delegationService,
+		VendorConnService:    vendorConnService,
+		SendingDomainService: sendingDomainService,
+		CampaignService:      campaignService,
+		AnalyticsService:     analyticsService,
+		RateLimitService:     rateLimitService,
+		ContactService:       contactService,
+		SegmentService:       segmentService,
+		FormService:          formService,
+		SequenceService:      sequenceService,
+		UniboxService:        uniboxService,
 
 		FolderService:   folderService,
 		TagService:      tagService,

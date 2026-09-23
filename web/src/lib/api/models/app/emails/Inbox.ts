@@ -12,6 +12,16 @@ export default interface Inbox {
     send_as_email: string;
     tags: string[];
     provider: string;
+    /** Detected mailbox host (google_workspace, microsoft365, zoho, ...); "" until known. */
+    mail_host?: string;
+    /** How the mailbox signs in: password, app_password, oauth or delegated; "" until known. */
+    auth_method?: string;
+    /** The administrator's grant a delegated mailbox connects through. */
+    domain_grant_id?: string | null;
+    /** The inbox vendor account this mailbox was imported from. */
+    vendor_connection_id?: string | null;
+    /** That vendor's id (inboxkit, zapmail, ...); absent when none. */
+    vendor?: string;
     status: string;
     last_synced_at: Date;
     last_id?: number | null;

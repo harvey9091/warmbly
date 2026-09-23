@@ -1,7 +1,8 @@
 use axum::{
     body::Bytes,
-    extract::{ConnectInfo, Path, State},
+    extract::{ConnectInfo, Path, Request as HttpRequest, State},
     http::{header, HeaderMap, StatusCode},
+    middleware::Next,
     response::{IntoResponse, Redirect, Response},
 };
 use chrono::Utc;
@@ -18,6 +19,7 @@ use crate::events::TrackingEvent;
 use crate::hits::{ForwardedHit, HitForwarder, HitPayload, Outcome};
 use crate::links::{LinkResolver, Resolution};
 use crate::producer::Producer;
+use crate::redirects::{normalize_host, Lookup, RedirectResolver};
 use crate::scanners::{AsnSources, Request, ScannerNetworks};
 use crate::unsubscribe::{body_content_type, invalid_token, valid_token, UnsubscribeProxy};
 
@@ -78,6 +80,8 @@ pub struct AppState {
     pub ip_hash_key: Arc<String>,
     /// Recipient opt-out, proxied to the backend that owns the pages
     pub unsubscribe: Arc<UnsubscribeProxy>,
+    /// Verified sending-domain redirects (backend internal API + layered caches)
+    pub redirects: Arc<RedirectResolver>,
 }
 
 impl AppState {
@@ -126,6 +130,10 @@ impl AppState {
             client_ip_header: Arc::new(config.client_ip_header.clone()),
             ip_hash_key: Arc::new(config.ip_hash_key.clone()),
             unsubscribe: Arc::new(UnsubscribeProxy::new(config.backend_internal_url.clone())),
+            redirects: Arc::new(RedirectResolver::new(
+                config.backend_internal_url.clone(),
+                config.internal_api_token.clone(),
+            )),
         }
     }
 
@@ -231,6 +239,55 @@ pub async fn track_open(
     });
 
     pixel_response()
+}
+
+/// Answers a request on a sending domain a workspace pointed here with its
+/// redirect, before any tracking, unsubscribe or form route can answer under
+/// that domain. Any other host continues to the routes.
+pub async fn redirect_first(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    req: HttpRequest,
+    next: Next,
+) -> Response {
+    if req.uri().path() != "/health" {
+        if let Some(host) = req
+            .headers()
+            .get(header::HOST)
+            .and_then(|h| h.to_str().ok())
+            .and_then(normalize_host)
+        {
+            let ip = client_ip(
+                peer,
+                req.headers(),
+                &state.trusted_proxies,
+                &state.client_ip_header,
+            );
+            let source = hash_ip(&state.ip_hash_key, &ip);
+            if let Lookup::Found(target) = state.redirects.lookup(&host, &source, false).await {
+                return redirect_to(target);
+            }
+        }
+    }
+    next.run(req).await
+}
+
+/// A request no route matched: a redirect domain was already answered by
+/// redirect_first, so what is left is unknown.
+pub async fn not_found() -> Response {
+    (StatusCode::NOT_FOUND, "Not found").into_response()
+}
+
+fn redirect_to(target: String) -> Response {
+    // A redirect a workspace can change or remove must not be cached for long.
+    (
+        StatusCode::FOUND,
+        [
+            (header::LOCATION, target),
+            (header::CACHE_CONTROL, "public, max-age=300".to_string()),
+        ],
+    )
+        .into_response()
 }
 
 /// Click tracking redirect handler

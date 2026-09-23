@@ -57,9 +57,9 @@ func (s *emailService) OAuthConnectWithCode(ctx context.Context, userID string, 
 	if xerr != nil {
 		return nil, xerr
 	}
-	if exists, xerr := s.emailRepository.ExistsForUser(ctx, userID, owner.Email); xerr != nil {
+	if existing, xerr := s.findExisting(ctx, userID, orgID, owner.Email); xerr != nil {
 		return nil, xerr
-	} else if exists {
+	} else if existing != nil {
 		return nil, errx.ErrEmailOnboardAlreadyExists
 	}
 	name := strings.TrimSpace(owner.Name)
@@ -72,6 +72,7 @@ func (s *emailService) OAuthConnectWithCode(ctx context.Context, userID string, 
 		Provider:       provider,
 		Name:           name,
 		Email:          owner.Email,
+		MailHost:       oauthMailHost(provider, owner.Email),
 		AccessToken:    tok.AccessToken,
 		RefreshToken:   tok.RefreshToken,
 		ExpiresAt:      tok.Expiry,
@@ -92,6 +93,9 @@ func (s *emailService) OAuthAccessToken(ctx context.Context, accountID uuid.UUID
 	acc, xerr := s.emailRepository.GetByID(ctx, accountID)
 	if xerr != nil {
 		return nil, xerr
+	}
+	if acc == nil || acc.AuthMethod == models.MailAuthDelegated {
+		return nil, errx.ErrEmailCredentials
 	}
 	creds, xerr := s.emailRepository.GetOAuthCredentials(ctx, accountID)
 	if xerr != nil {

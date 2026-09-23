@@ -20752,6 +20752,3446 @@
           }
         }
       }
+    },
+    "/emails/imports/preview": {
+      "post": {
+        "operationId": "mailbox_imports_preview",
+        "summary": "Preview a mailbox import",
+        "description": "What an import of this input would do, row by row and domain by domain, without doing any of it. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/MailboxImportForm"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The preview.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxImportPreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input, file over 10 MB (mailbox_import_too_large), or more rows than one import takes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/imports": {
+      "get": {
+        "operationId": "mailbox_imports_list",
+        "summary": "List mailbox imports",
+        "description": "The workspace's imports, newest first. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of imports.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "pagination"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MailboxImport"
+                      }
+                    },
+                    "pagination": {
+                      "type": "object",
+                      "required": [
+                        "has_more"
+                      ],
+                      "properties": {
+                        "next_cursor": {
+                          "type": "string",
+                          "description": "Opaque cursor for the next page; empty on the last page."
+                        },
+                        "has_more": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid limit or cursor (invalid_cursor).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "mailbox_imports_create",
+        "summary": "Create a mailbox import",
+        "description": "Stores the rows and connects them in the background. Repeating it makes a second import, whose rows find the first one's mailboxes already connected. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/MailboxImportForm"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The import.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxImport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or file over 10 MB.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/imports/{id}": {
+      "get": {
+        "operationId": "mailbox_imports_get",
+        "summary": "Get a mailbox import",
+        "description": "One import with its counts and its failures grouped by cause. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Import id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The import.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxImport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Import not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/imports/{id}/rows": {
+      "get": {
+        "operationId": "mailbox_imports_rows",
+        "summary": "List an import's rows",
+        "description": "An import's rows by line, filtered by status (comma-separated) and cause. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Import id."
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cause",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "maximum": 200
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of rows.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "pagination"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MailboxImportRow"
+                      }
+                    },
+                    "pagination": {
+                      "type": "object",
+                      "required": [
+                        "has_more"
+                      ],
+                      "properties": {
+                        "next_cursor": {
+                          "type": "string",
+                          "description": "Opaque cursor for the next page; empty on the last page."
+                        },
+                        "has_more": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid id, limit or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Import not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/imports/{id}/rows/{line}": {
+      "patch": {
+        "operationId": "mailbox_imports_fix_row",
+        "summary": "Fix a failed import row",
+        "description": "Corrects one failed row and queues it again. Refused for a row that is not failed. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Import id."
+          },
+          {
+            "name": "line",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MailboxImportRowFix"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The row.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxImportRow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Import or row not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/imports/{id}/retry": {
+      "post": {
+        "operationId": "mailbox_imports_retry",
+        "summary": "Retry failed import rows",
+        "description": "Requeues failed rows. Only failed rows are requeued, so repeating it connects nothing twice. Possible for 7 days after the import finishes. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Import id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MailboxImportRetry"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The import.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxImport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Import not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/imports/{id}/cancel": {
+      "post": {
+        "operationId": "mailbox_imports_cancel",
+        "summary": "Cancel a mailbox import",
+        "description": "Stops the rows not yet started; rows already connecting finish. Cancelling twice is a no-op. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Import id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The import.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxImport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Import not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/imports/{id}/failed.csv": {
+      "get": {
+        "operationId": "mailbox_imports_failed_csv",
+        "summary": "Download failed import rows",
+        "description": "Every row that did not connect, as uploaded minus passwords, with status, problem and how_to_fix. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Import id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The CSV.",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Import not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/vendors/catalog": {
+      "get": {
+        "operationId": "mailbox_vendors_catalog",
+        "summary": "List supported inbox vendors",
+        "description": "The supported vendors, with the fields each one asks for. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The catalog.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MailboxVendor"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/vendors": {
+      "get": {
+        "operationId": "mailbox_vendors_list",
+        "summary": "List inbox vendor connections",
+        "description": "The workspace's vendor connections with status, last error and mailbox count. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The connections.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/VendorConnection"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "mailbox_vendors_create",
+        "summary": "Connect an inbox vendor",
+        "description": "Checks the key with the vendor, then stores it sealed with the workspace's key. Repeating it makes a second connection. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VendorConnectionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VendorConnection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, unknown vendor, missing field, or the vendor refused the key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/vendors/{id}": {
+      "patch": {
+        "operationId": "mailbox_vendors_update",
+        "summary": "Update an inbox vendor connection",
+        "description": "Renames it, or replaces its fields after checking the new key with the vendor. Safe to repeat. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Connection id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VendorConnectionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VendorConnection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Connection not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "mailbox_vendors_delete",
+        "summary": "Delete an inbox vendor connection",
+        "description": "Forgets the key; the mailboxes it brought in stay connected. A repeat is a 404. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Connection id."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Connection not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/vendors/{id}/mailboxes": {
+      "get": {
+        "operationId": "mailbox_vendors_mailboxes",
+        "summary": "List a vendor account's mailboxes",
+        "description": "Each mailbox is marked connected when already in the workspace. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Connection id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The mailboxes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/VendorMailbox"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Connection not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/vendors/{id}/import": {
+      "post": {
+        "operationId": "mailbox_vendors_import",
+        "summary": "Import a vendor account's mailboxes",
+        "description": "mailbox_ids or all, plus import options. Each call creates a new import; a repeat finds the first run's mailboxes connected and updates (or skips) them. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Connection id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MailboxSourceImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The import.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxImport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Connection not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/onboarding/app-password/{id}": {
+      "post": {
+        "operationId": "mailbox_switch_app_password",
+        "summary": "Switch a mailbox to an app password",
+        "description": "Moves a mailbox connected with per-mailbox Google sign-in onto Gmail's IMAP and SMTP with a Google app password. The password is checked against imap.gmail.com and smtp.gmail.com before anything is stored; a refusal answers with the same codes as an SMTP/IMAP connect, such as mailbox_auth_refused, and changes nothing. On success the mailbox becomes smtp_imap with auth_method app_password in place, keeping its id, imported mail, campaigns, warmup and settings. A repeat answers 409 mailbox_not_google_signin, so it changes nothing. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Mailbox id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "app_password"
+                ],
+                "properties": {
+                  "app_password": {
+                    "type": "string",
+                    "description": "A 16-letter Google app password. Spaces are ignored.",
+                    "example": "abcd efgh ijkl mnop"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The mailbox.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Mailbox"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, app_password is not 16 letters (app_password_invalid), or Gmail refused the password (mailbox_auth_refused and the other SMTP/IMAP connect codes).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Mailbox not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The mailbox is not connected with per-mailbox Google sign-in (mailbox_not_google_signin).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No worker could check the password.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/grants/config": {
+      "get": {
+        "operationId": "mailbox_grants_config",
+        "summary": "Get admin grant settings",
+        "description": "Whether this instance takes Google and Microsoft grants, what a Google administrator authorizes, and the settings still unset. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainGrantConfig"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/grants": {
+      "get": {
+        "operationId": "mailbox_grants_list",
+        "summary": "List admin grants",
+        "description": "The workspace's Google Workspace and Microsoft 365 grants. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The grants.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DomainGrant"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/grants/migration": {
+      "get": {
+        "operationId": "mailbox_grants_signin_migration",
+        "summary": "List mailboxes on per-mailbox Google sign-in",
+        "description": "The workspace's mailboxes still connected with per-mailbox Google sign-in, which is being retired, grouped by domain with where each moves: an admin grant (workspace) or an app password (personal). Mailboxes whose sign-in Warmbly Cloud holds are not listed. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The mailboxes by domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "total"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SigninMigration"
+                      }
+                    },
+                    "total": {
+                      "type": "integer",
+                      "description": "How many mailboxes are listed across every domain."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/grants/google/start": {
+      "post": {
+        "operationId": "mailbox_grants_google_start",
+        "summary": "Start a Google Workspace grant",
+        "description": "Takes domain and admin_email (on that domain) and answers how this workspace proves it controls the domain: a Google sign-in as that administrator, or a TXT record at _warmbly.<domain>. Safe to repeat. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "domain",
+                  "admin_email"
+                ],
+                "properties": {
+                  "domain": {
+                    "type": "string"
+                  },
+                  "admin_email": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The proof to complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoogleGrantStart"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, admin_email not on domain (mailbox_grant_domain_mismatch), or Google grants not set up (mailbox_grant_not_configured).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/grants/google/finish": {
+      "post": {
+        "operationId": "mailbox_grants_google_finish",
+        "summary": "Finish a Google Workspace grant",
+        "description": "Records the grant once the domain is proved (the sign-in was admin_email on that domain, or the TXT record holds this workspace's value) and the directory lists admin_email as a super administrator. A state is single-use; repeating a DNS finish re-verifies and updates the same grant. Requires a user session token (not an API key) and the manage_emails organization permission. Also requires a recent confirmation (POST /auth/reauth); without one it answers 403 with code reauth_required.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoogleGrantFinish"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The grant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainGrant"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, or a refusal with a stable code such as mailbox_grant_not_configured, mailbox_grant_state_invalid, mailbox_grant_proof_missing or google_delegation_unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, called with an API key, or no recent confirmation (reauth_required).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Google or the DNS lookup did not answer (mailbox_grant_unavailable).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/grants/microsoft/start": {
+      "post": {
+        "operationId": "mailbox_grants_microsoft_start",
+        "summary": "Start a Microsoft 365 grant",
+        "description": "The admin consent URL a Global Administrator opens, and its state, valid for 15 minutes. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The consent URL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Microsoft grants not set up (mailbox_grant_not_configured).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/grants/microsoft/finish": {
+      "post": {
+        "operationId": "mailbox_grants_microsoft_finish",
+        "summary": "Finish a Microsoft 365 grant",
+        "description": "Takes state and code from the consent callback. The organization recorded is the one the administrator consented for, read from the redeemed sign-in. The state is single-use; consenting again for the same organization updates the same grant. Requires a user session token (not an API key) and the manage_emails organization permission. Also requires a recent confirmation (POST /auth/reauth); without one it answers 403 with code reauth_required.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "state",
+                  "code"
+                ],
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  },
+                  "code": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The grant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainGrant"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, or a refusal such as mailbox_grant_state_invalid or microsoft_consent_missing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, called with an API key, or no recent confirmation (reauth_required).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Microsoft did not answer (mailbox_grant_unavailable).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/grants/{id}": {
+      "get": {
+        "operationId": "mailbox_grants_get",
+        "summary": "Get an admin grant",
+        "description": "One grant with its covered domains, status and mailbox count. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Grant id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The grant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainGrant"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Grant not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "mailbox_grants_delete",
+        "summary": "Delete an admin grant",
+        "description": "Removes the grant; every mailbox it connected stops. A repeat is a 404. Requires a user session token (not an API key) and the manage_emails organization permission. Also requires a recent confirmation (POST /auth/reauth); without one it answers 403 with code reauth_required.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Grant id."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, called with an API key, or no recent confirmation (reauth_required).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Grant not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/grants/{id}/check": {
+      "post": {
+        "operationId": "mailbox_grants_check",
+        "summary": "Check an admin grant",
+        "description": "Verifies the grant now, and restarts its stopped mailboxes when it passes. Safe to repeat. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Grant id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The grant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainGrant"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, or a refusal with a stable code such as mailbox_grant_not_configured, mailbox_grant_state_invalid, mailbox_grant_proof_missing or google_delegation_unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Grant not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The provider did not answer (mailbox_grant_unavailable); the grant is left as it was.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/grants/{id}/users": {
+      "get": {
+        "operationId": "mailbox_grants_users",
+        "summary": "List a grant's directory",
+        "description": "The granted directory, each user marked enabled and connected; upgrade marks a mailbox here on its own sign-in that connecting moves onto the grant. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Grant id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The users.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DirectoryUser"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Grant not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The provider did not answer (mailbox_grant_unavailable).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/grants/{id}/connect": {
+      "post": {
+        "operationId": "mailbox_grants_connect",
+        "summary": "Connect users through an admin grant",
+        "description": "user_ids or all (every enabled user not yet connected, plus every user marked upgrade), plus import options; runs as a background import. A user whose delegated mailbox is already in the workspace is relinked to this grant, and one on its own sign-in is moved onto the grant in place. Requires a user session token (not an API key) and the manage_emails organization permission. Also requires a recent confirmation (POST /auth/reauth); without one it answers 403 with code reauth_required.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Grant id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MailboxSourceImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The import.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxImport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, called with an API key, or no recent confirmation (reauth_required).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Grant not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/domains": {
+      "get": {
+        "operationId": "sending_domains_list",
+        "summary": "List sending domains",
+        "description": "Every domain the workspace sends from, with authentication, tracking hosts, the redirect, and vendor_domain when a connected inbox vendor account holds the domain. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The domains.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SendingDomain"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/domains/{domain}/tracking-suggestion": {
+      "get": {
+        "operationId": "sending_domains_tracking_suggestion",
+        "summary": "Suggest a tracking host",
+        "description": "The tracking host to offer the domain and the CNAME target. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The bare sending domain, such as acme.io."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The suggestion.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackingSuggestion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Tracking is not set up on this instance (tracking_host_not_configured).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The workspace has no mailbox on this domain (sending_domain_not_in_workspace).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/domains/{domain}/tracking": {
+      "put": {
+        "operationId": "sending_domains_set_tracking",
+        "summary": "Set a domain's tracking host",
+        "description": "One tracking host for every mailbox on the domain; an empty host clears it. Idempotent. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The bare sending domain, such as acme.io."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "host": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The verification result and mailbox count.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainTrackingResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, or a refusal such as sending_domain_shared_provider, domain_redirect_invalid_target or tracking_host_not_configured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The workspace has no mailbox on this domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/domains/{domain}/redirect": {
+      "put": {
+        "operationId": "sending_domains_set_redirect",
+        "summary": "Set a root redirect",
+        "description": "Records the redirect and checks DNS once. Idempotent: a repeat keeps the same ownership value. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The bare sending domain, such as acme.io."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "target_url"
+                ],
+                "properties": {
+                  "target_url": {
+                    "type": "string"
+                  },
+                  "include_www": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The redirect with the records to add.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainRedirect"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, or a refusal such as sending_domain_shared_provider, domain_redirect_invalid_target or tracking_host_not_configured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The workspace has no mailbox on this domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another workspace already serves a verified redirect for this domain (domain_redirect_taken).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "sending_domains_delete_redirect",
+        "summary": "Delete a root redirect",
+        "description": "Stops serving the redirect. A repeat is a 404. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The bare sending domain, such as acme.io."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "400": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No redirect for this domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/domains/{domain}/redirect/verify": {
+      "post": {
+        "operationId": "sending_domains_verify_redirect",
+        "summary": "Check a root redirect",
+        "description": "Checks DNS now. Safe to repeat. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The bare sending domain, such as acme.io."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The redirect.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainRedirect"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, or a refusal such as sending_domain_shared_provider, domain_redirect_invalid_target or tracking_host_not_configured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No redirect, or no mailbox, for this domain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another workspace already serves a verified redirect for this domain (domain_redirect_taken).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/domains/{domain}/vendor-forwarding": {
+      "put": {
+        "operationId": "sending_domains_vendor_forwarding",
+        "summary": "Forward a domain through its inbox vendor",
+        "description": "The inbox vendor account holding the domain forwards its root to url. An empty url removes the forwarding where can_unforward. Idempotent. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The bare sending domain, such as acme.io."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated vendor link.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VendorDomainLink"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid url (domain_redirect_invalid_target), or the vendor cannot do this through its API (mailbox_vendor_domain_unsupported).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No mailbox on this domain, or no active vendor account holds it (mailbox_vendor_domain_not_found).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/emails/domains/{domain}/vendor-tracking": {
+      "post": {
+        "operationId": "sending_domains_vendor_tracking",
+        "summary": "Write a tracking record through the inbox vendor",
+        "description": "The inbox vendor holding the domain writes host's CNAME to this instance's tracking host, then every mailbox on the domain uses host. Safe to retry: the record is replaced, not added. Requires a user session token (not an API key) and the manage_emails organization permission.",
+        "tags": [
+          "mailboxes"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The bare sending domain, such as acme.io."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "host"
+                ],
+                "properties": {
+                  "host": {
+                    "type": "string",
+                    "description": "A subdomain of the domain."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The verification result and mailbox count.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainTrackingResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing host, host not under the domain (domain_redirect_invalid_target), tracking not set up, or the vendor cannot write the record (mailbox_vendor_domain_unsupported).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing manage_emails permission, or called with an API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No mailbox on this domain, or no active vendor account holds it (mailbox_vendor_domain_not_found).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -21693,6 +25133,45 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "mail_host": {
+            "type": "string",
+            "description": "Who hosts the mailbox, whatever the transport. Empty until known; a mailbox whose host is not recorded yet is classified in the background from its domain's DNS.",
+            "enum": [
+              "",
+              "google_workspace",
+              "gmail",
+              "microsoft365",
+              "outlook",
+              "zoho",
+              "yahoo",
+              "aol",
+              "icloud",
+              "fastmail",
+              "godaddy",
+              "namecheap",
+              "ionos",
+              "hostinger",
+              "ovh",
+              "migadu",
+              "purelymail",
+              "rackspace",
+              "yandex",
+              "gmx",
+              "proton",
+              "other"
+            ]
+          },
+          "auth_method": {
+            "type": "string",
+            "description": "How the mailbox signs in. Empty until known.",
+            "enum": [
+              "",
+              "password",
+              "app_password",
+              "oauth",
+              "delegated"
+            ]
           }
         },
         "required": [
@@ -32988,6 +36467,1013 @@
         "required": [
           "affected"
         ]
+      },
+      "MailboxImportSettings": {
+        "type": "object",
+        "description": "Applied to every mailbox an import connects or updates; a mapped column overrides them per row. Omitted fields leave the mailbox as it is.",
+        "properties": {
+          "tag_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "daily_limit": {
+            "type": "integer"
+          },
+          "min_wait": {
+            "type": "integer",
+            "description": "Seconds between sends."
+          },
+          "warmup": {
+            "type": "boolean"
+          },
+          "warmup_start": {
+            "type": "integer"
+          },
+          "warmup_max": {
+            "type": "integer"
+          },
+          "warmup_increase": {
+            "type": "integer"
+          },
+          "warmup_reply_rate": {
+            "type": "integer"
+          },
+          "reply_to": {
+            "type": "string"
+          },
+          "signature": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          }
+        }
+      },
+      "MailboxImportOptions": {
+        "type": "object",
+        "properties": {
+          "has_header": {
+            "type": "boolean",
+            "description": "Overrides the header guess."
+          },
+          "shared_password": {
+            "type": "string",
+            "description": "Used for rows with no password of their own."
+          },
+          "on_existing": {
+            "type": "string",
+            "enum": [
+              "update",
+              "skip"
+            ],
+            "description": "What happens to an address already in the workspace. Default update."
+          },
+          "save_mapping": {
+            "type": "boolean"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/MailboxImportSettings"
+          },
+          "tracking_domains": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Tracking host per sending domain, such as {\"acme.io\": \"track.acme.io\"}. Up to 500 domains."
+          },
+          "redirects": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Root redirect per sending domain, such as {\"acme.io\": \"https://acme.com\"}. Uses the inbox vendor's forwarding when a connected vendor account holds the domain. Up to 500 domains."
+          }
+        }
+      },
+      "MailboxImportForm": {
+        "type": "object",
+        "description": "A file or pasted text, plus the mapping and options as JSON strings.",
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "description": "CSV, TSV or XLSX, up to 10 MB."
+          },
+          "text": {
+            "type": "string",
+            "description": "A pasted list, used when no file is sent."
+          },
+          "mapping": {
+            "type": "string",
+            "description": "JSON object of column index to field, such as {\"0\":\"email\",\"1\":\"password\"}. Omit for the automatic mapping."
+          },
+          "options": {
+            "type": "string",
+            "description": "JSON-encoded MailboxImportOptions."
+          }
+        }
+      },
+      "MailboxImportPreview": {
+        "type": "object",
+        "description": "What an import of this input would do, row by row and domain by domain.",
+        "properties": {
+          "format": {
+            "type": "string"
+          },
+          "has_header": {
+            "type": "boolean"
+          },
+          "vendor": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "description": "A recognised export, when one is."
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "saved_mapping": {
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "integer"
+              },
+              "ready": {
+                "type": "integer"
+              },
+              "needs_signin": {
+                "type": "integer"
+              },
+              "invalid": {
+                "type": "integer"
+              },
+              "existing": {
+                "type": "integer"
+              },
+              "duplicate": {
+                "type": "integer"
+              }
+            }
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "max_rows": {
+            "type": "integer"
+          }
+        }
+      },
+      "MailboxImport": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "file",
+              "paste",
+              "vendor",
+              "workspace"
+            ],
+            "description": "Where the rows came from: a file, a pasted list, an inbox vendor, or an admin grant (workspace)."
+          },
+          "filename": {
+            "type": "string"
+          },
+          "vendor": {
+            "type": "string"
+          },
+          "on_existing": {
+            "type": "string",
+            "enum": [
+              "update",
+              "skip"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "credentials_expire_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "queued": {
+                "type": "integer"
+              },
+              "running": {
+                "type": "integer"
+              },
+              "connected": {
+                "type": "integer"
+              },
+              "updated": {
+                "type": "integer"
+              },
+              "skipped": {
+                "type": "integer"
+              },
+              "failed": {
+                "type": "integer"
+              },
+              "needs_signin": {
+                "type": "integer"
+              },
+              "cancelled": {
+                "type": "integer"
+              }
+            }
+          },
+          "causes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "cause": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "fix": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                },
+                "retryable": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      },
+      "MailboxImportRow": {
+        "type": "object",
+        "properties": {
+          "line": {
+            "type": "integer"
+          },
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "mail_host": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "cause": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "email_account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The uploaded cells that are not passwords."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "MailboxImportRowFix": {
+        "type": "object",
+        "description": "Corrects one failed row; omitted fields keep what was uploaded.",
+        "properties": {
+          "password": {
+            "type": "string"
+          },
+          "app_password": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "smtp": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string"
+              },
+              "port": {
+                "type": "integer"
+              },
+              "security": {
+                "type": "string"
+              },
+              "username": {
+                "type": "string"
+              },
+              "password": {
+                "type": "string"
+              }
+            }
+          },
+          "imap": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string"
+              },
+              "port": {
+                "type": "integer"
+              },
+              "security": {
+                "type": "string"
+              },
+              "username": {
+                "type": "string"
+              },
+              "password": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "MailboxImportRetry": {
+        "type": "object",
+        "description": "Requeues failed rows: all of them (empty body), those with one cause, or the listed lines.",
+        "properties": {
+          "cause": {
+            "type": "string"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "password": {
+            "type": "string",
+            "description": "One new password for every requeued row."
+          }
+        }
+      },
+      "MailboxVendor": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "website": {
+            "type": "string"
+          },
+          "key_help_url": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "secret": {
+                  "type": "boolean"
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "help": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "VendorConnection": {
+        "type": "object",
+        "description": "An inbox vendor account. Its key never leaves the server.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "vendor": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "invalid"
+            ]
+          },
+          "last_error": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "mailboxes": {
+            "type": "integer"
+          }
+        }
+      },
+      "VendorConnectionInput": {
+        "type": "object",
+        "properties": {
+          "vendor": {
+            "type": "string",
+            "description": "A vendor id from the catalog. Ignored on update."
+          },
+          "label": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The vendor's fields, keyed as the catalog lists them."
+          }
+        }
+      },
+      "VendorMailbox": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "email_account_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "MailboxSourceImportRequest": {
+        "type": "object",
+        "description": "Which vendor mailboxes or directory users to import, plus the same options as a file import.",
+        "properties": {
+          "mailbox_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Vendor mailbox ids (vendor import only)."
+          },
+          "user_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Directory user ids (grant connect only)."
+          },
+          "all": {
+            "type": "boolean",
+            "description": "Every mailbox or enabled user not yet in the workspace."
+          },
+          "options": {
+            "$ref": "#/components/schemas/MailboxImportOptions"
+          }
+        }
+      },
+      "DomainGrant": {
+        "type": "object",
+        "description": "An administrator's grant over a Google Workspace domain or a Microsoft 365 organization. Holds no token.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "google",
+              "microsoft"
+            ]
+          },
+          "tenant": {
+            "type": "string",
+            "description": "The Workspace domain, or the Microsoft tenant id."
+          },
+          "admin_email": {
+            "type": "string",
+            "description": "Google only: the super administrator the directory is read as."
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "invalid"
+            ]
+          },
+          "last_error": {
+            "type": "string"
+          },
+          "verified_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "mailboxes": {
+            "type": "integer"
+          }
+        }
+      },
+      "DomainGrantConfig": {
+        "type": "object",
+        "properties": {
+          "google_enabled": {
+            "type": "boolean"
+          },
+          "google_client_id": {
+            "type": "string",
+            "description": "The service account client id a Workspace administrator authorizes."
+          },
+          "google_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "microsoft_enabled": {
+            "type": "boolean"
+          },
+          "google_missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Instance settings still unset for Google grants; empty when ready."
+          },
+          "microsoft_missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Instance settings still unset for Microsoft grants; empty when ready."
+          }
+        }
+      },
+      "GoogleGrantStart": {
+        "type": "object",
+        "description": "How the workspace proves it controls the Workspace domain.",
+        "required": [
+          "method",
+          "txt_name",
+          "txt_value"
+        ],
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "signin",
+              "dns"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "description": "The Google sign-in for the administrator (method signin)."
+          },
+          "state": {
+            "type": "string",
+            "description": "Single-use, valid for 15 minutes (method signin)."
+          },
+          "txt_name": {
+            "type": "string",
+            "description": "_warmbly.<domain>"
+          },
+          "txt_value": {
+            "type": "string",
+            "description": "warmbly-verify=<value>, unique to the workspace and domain. Always present: the DNS proof works either way."
+          }
+        }
+      },
+      "GoogleGrantFinish": {
+        "type": "object",
+        "description": "Either state and code from the Google sign-in, or domain and admin_email once the TXT record is published.",
+        "properties": {
+          "state": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "admin_email": {
+            "type": "string"
+          }
+        }
+      },
+      "DirectoryUser": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The address (Google) or Graph user id (Microsoft)."
+          },
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "email_account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "upgrade": {
+            "type": "boolean",
+            "description": "The user's mailbox is already in the workspace on its own sign-in with the same provider (not held by Warmbly Cloud). Connecting it moves that mailbox onto the grant in place, keeping its history, campaigns and warmup; all: true includes it."
+          }
+        }
+      },
+      "DomainDNSRecord": {
+        "type": "object",
+        "properties": {
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "ownership",
+              "root",
+              "www"
+            ]
+          },
+          "type": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "optional": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DomainRedirect": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "target_url": {
+            "type": "string"
+          },
+          "include_www": {
+            "type": "boolean"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "verified_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_error": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DomainDNSRecord"
+            }
+          }
+        }
+      },
+      "VendorDomainLink": {
+        "type": "object",
+        "description": "A sending domain held by a connected inbox vendor account, with what its API can do for it.",
+        "properties": {
+          "vendor": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "forwarding": {
+            "type": "string",
+            "description": "The current forwarding target, when the vendor reports it."
+          },
+          "can_forward": {
+            "type": "boolean"
+          },
+          "can_unforward": {
+            "type": "boolean",
+            "description": "Whether an empty url removes the forwarding."
+          },
+          "forwarding_reviewed": {
+            "type": "boolean",
+            "description": "A forwarding change is a request the vendor's staff apply later."
+          },
+          "can_dns": {
+            "type": "boolean"
+          },
+          "dns_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SendingDomain": {
+        "type": "object",
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "mailboxes": {
+            "type": "integer"
+          },
+          "mail_hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "auth_state": {
+            "type": "string"
+          },
+          "auth_spf": {
+            "type": "boolean"
+          },
+          "auth_dkim": {
+            "type": "boolean"
+          },
+          "auth_dmarc": {
+            "type": "boolean"
+          },
+          "tracking_domains": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "host": {
+                  "type": "string"
+                },
+                "verified": {
+                  "type": "boolean"
+                },
+                "mailboxes": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "redirect": {
+            "$ref": "#/components/schemas/DomainRedirect"
+          },
+          "vendors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The inbox vendors this domain's mailboxes were imported from."
+          },
+          "vendor_connection_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "vendor_domain": {
+            "$ref": "#/components/schemas/VendorDomainLink"
+          }
+        }
+      },
+      "TrackingSuggestion": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "found",
+              "suggested"
+            ]
+          },
+          "cname_target": {
+            "type": "string"
+          }
+        }
+      },
+      "DomainTrackingResult": {
+        "type": "object",
+        "properties": {
+          "tracking": {
+            "$ref": "#/components/schemas/TrackingDomainStatus"
+          },
+          "mailboxes": {
+            "type": "integer",
+            "description": "How many mailboxes on the domain were changed."
+          }
+        }
+      },
+      "SigninMigration": {
+        "type": "object",
+        "required": [
+          "domain",
+          "kind",
+          "mailboxes"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "workspace",
+              "personal"
+            ],
+            "description": "workspace moves onto an admin grant; personal is a shared address such as gmail.com and moves to an app password."
+          },
+          "grant_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The workspace's active Google grant covering the domain, when there is one."
+          },
+          "mailboxes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "email",
+                "name",
+                "status"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "email": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
       }
     }
   }

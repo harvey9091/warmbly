@@ -45,7 +45,9 @@ Events arrive as channel messages whose event name is the event type, for exampl
 
 `AI_DRAFT_READY` fires when the [inbox agent](/guides/inbox-agent/) drafts a suggested reply awaiting review; it carries `thread_id` and `draft_id` and requires `access_unibox`.
 
-Permission filtering happens per event on the org channel: for example inbox events require `access_unibox`, campaign pulses require `view_campaigns`, member changes require `manage_team`, and billing events require `manage_billing`. A member without the permission simply never receives the event.
+`MAILBOX_IMPORT_PROGRESS` fires on the org channel as a [mailbox import](/guides/mailbox-import/) moves: at most once a second per import while rows finish, and always when it completes, is cancelled, or a waiting sign-in row connects. It carries `org_id`, `import_id` and `status` (`running`, `completed` or `cancelled`), not the rows, so refetch `GET /emails/imports/:id` on receipt. It requires `manage_emails`.
+
+Permission filtering happens per event on the org channel: for example inbox events require `access_unibox`, campaign pulses require `view_campaigns`, mailbox and mailbox import events require `manage_emails`, member changes require `manage_team`, and billing events require `manage_billing`. A member without the permission simply never receives the event.
 
 ## Selecting events with intents
 

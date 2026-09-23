@@ -100,3 +100,25 @@ func providerOr(env, def string) string {
 func TurnstileSiteKey() string {
 	return strings.TrimSpace(os.Getenv("TURNSTILE_SITE_KEY"))
 }
+
+// MailhostISPDB reports whether mailbox server detection may ask Thunderbird's
+// ISPDB (autoconfig.thunderbird.net), which sends it the domain name. On by
+// default for the hosted product and off for a self-host; MAILHOST_ISPDB overrides.
+func MailhostISPDB() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("MAILHOST_ISPDB"))) {
+	case "true", "1", "yes", "on":
+		return true
+	case "false", "0", "no", "off":
+		return false
+	}
+	return !SelfHosted()
+}
+
+// MailvendorSandboxURL points every inbox vendor client at the sandbox's mock
+// vendor API (<url>/<vendor>). Honoured only outside production.
+func MailvendorSandboxURL() string {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("APP_ENV")), "production") {
+		return ""
+	}
+	return strings.TrimRight(strings.TrimSpace(os.Getenv("MAILVENDOR_SANDBOX_URL")), "/")
+}

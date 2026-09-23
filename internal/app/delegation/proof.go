@@ -1,0 +1,296 @@
+package delegation
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"golang.org/x/oauth2"
+
+	"github.com/warmbly/warmbly/internal/errx"
+	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/domainproof"
+)
+
+// A grant is only recorded for the workspace that proves it controls the
+// domain or tenant: the instance's service account and Microsoft app are
+// shared by every workspace, so an administrator authorizing them proves
+// nothing about which workspace asked.
+const (
+	googleStatePrefix    = GoogleStatePrefix
+	microsoftStatePrefix = "mac_"
+	stateTTL             = 15 * time.Minute
+)
+
+// ConsentState binds a sign-in round trip to who started it and what for.
+type ConsentState struct {
+	OrgID  uuid.UUID `json:"org_id"`
+	UserID uuid.UUID `json:"user_id"`
+	Domain string    `json:"domain,omitempty"`
+	Admin  string    `json:"admin,omitempty"`
+}
+
+// TXTLookup reads a domain's TXT records, for the DNS proof.
+type TXTLookup interface {
+	LookupTXT(ctx context.Context, name string) ([]string, error)
+}
+
+func newState(prefix string) (string, error) {
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return prefix + base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func (s *Service) takeState(ctx context.Context, prefix, state string, orgID, userID uuid.UUID) (ConsentState, *errx.Error) {
+	refused := errx.NewWithIdentifier(errx.BadRequest, ErrIDState, "This sign-in expired or belongs to someone else. Start again.")
+	if !strings.HasPrefix(state, prefix) || s.states == nil {
+		return ConsentState{}, refused
+	}
+	st, ok := s.states.Take(ctx, "mailbox_grant_state:"+state)
+	if !ok || st.OrgID != orgID || st.UserID != userID {
+		return ConsentState{}, refused
+	}
+	return st, nil
+}
+
+// idTokenClaims reads the claims of an ID token this service received
+// directly from the provider's token endpoint over TLS, in exchange for a code
+// and its own client secret. Nothing else can put a token there, so the
+// signature is not checked a second time.
+func idTokenClaims(tok *oauth2.Token) (map[string]any, bool) {
+	raw, _ := tok.Extra("id_token").(string)
+	parts := strings.Split(raw, ".")
+	if len(parts) != 3 {
+		return nil, false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, false
+	}
+	var claims map[string]any
+	if json.Unmarshal(payload, &claims) != nil {
+		return nil, false
+	}
+	return claims, true
+}
+
+func claimString(c map[string]any, k string) string {
+	v, _ := c[k].(string)
+	return v
+}
+
+// ---- Google -------------------------------------------------------------
+
+// GoogleStatePrefix marks the state of an administrator's Google sign-in, so
+// the sign-in callback can hand it to the dashboard instead of logging in.
+const GoogleStatePrefix = "gac_"
+
+// GoogleStart is how a workspace proves it controls a Workspace domain.
+type GoogleStart struct {
+	// Method is "signin" (the administrator signs in with Google) when this
+	// instance has a Google sign-in client, else "dns".
+	Method string `json:"method"`
+	URL    string `json:"url,omitempty"`
+	State  string `json:"state,omitempty"`
+	// The DNS proof always works, with or without a sign-in client.
+	TXTName  string `json:"txt_name"`
+	TXTValue string `json:"txt_value"`
+}
+
+func (s *Service) googleSigninEnabled() bool {
+	return s.googleSignin != nil && s.googleSignin.ClientID != "" && s.googleSignin.ClientSecret != ""
+}
+
+func cleanDomainAdmin(domain, admin string) (string, string, *errx.Error) {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	admin = strings.ToLower(strings.TrimSpace(admin))
+	if domain == "" || !strings.HasSuffix(admin, "@"+domain) || strings.Count(admin, "@") != 1 {
+		return "", "", errx.NewWithIdentifier(errx.BadRequest, ErrIDNotCovered, "Enter the Workspace domain and an administrator address on that domain.")
+	}
+	return domain, admin, nil
+}
+
+// StartGoogle begins the proof for a Workspace domain.
+func (s *Service) StartGoogle(ctx context.Context, orgID, userID uuid.UUID, domain, admin string) (*GoogleStart, *errx.Error) {
+	if !s.googleEnabled() {
+		return nil, notConfigured("Google Workspace")
+	}
+	domain, admin, xerr := cleanDomainAdmin(domain, admin)
+	if xerr != nil {
+		return nil, xerr
+	}
+	out := &GoogleStart{Method: "dns", TXTName: domainproof.Name(domain), TXTValue: s.proof.Value(orgID, domain)}
+	if !s.googleSigninEnabled() || s.states == nil {
+		return out, nil
+	}
+	state, err := newState(googleStatePrefix)
+	if err != nil {
+		return nil, errx.InternalError()
+	}
+	if err := s.states.Put(ctx, "mailbox_grant_state:"+state, ConsentState{OrgID: orgID, UserID: userID, Domain: domain, Admin: admin}, stateTTL); err != nil {
+		return nil, errx.InternalError()
+	}
+	out.Method, out.State = "signin", state
+	out.URL = s.googleSignin.AuthCodeURL(state,
+		oauth2.SetAuthURLParam("hd", domain),
+		oauth2.SetAuthURLParam("login_hint", admin),
+		oauth2.SetAuthURLParam("prompt", "select_account"))
+	return out, nil
+}
+
+// GoogleFinish completes the proof: a sign-in code with its state, or the DNS record for domain and admin.
+type GoogleFinish struct {
+	State      string `json:"state"`
+	Code       string `json:"code"`
+	Domain     string `json:"domain"`
+	AdminEmail string `json:"admin_email"`
+}
+
+// FinishGoogle records the grant once the workspace has proved the domain
+// and the administrator is one in the directory.
+func (s *Service) FinishGoogle(ctx context.Context, orgID, userID uuid.UUID, in GoogleFinish) (*models.DomainGrant, *errx.Error) {
+	if !s.googleEnabled() {
+		return nil, notConfigured("Google Workspace")
+	}
+	var domain, admin string
+	if in.State != "" {
+		st, xerr := s.takeState(ctx, googleStatePrefix, in.State, orgID, userID)
+		if xerr != nil {
+			return nil, xerr
+		}
+		domain, admin = st.Domain, st.Admin
+		if !s.googleSigninEnabled() || strings.TrimSpace(in.Code) == "" {
+			return nil, errx.NewWithIdentifier(errx.BadRequest, ErrIDState, "The Google sign-in did not complete. Start again.")
+		}
+		tok, err := s.googleSignin.Exchange(ctx, in.Code)
+		if err != nil {
+			return nil, errx.NewWithIdentifier(errx.BadRequest, ErrIDState, "Google did not accept the sign-in. Start again.")
+		}
+		claims, ok := idTokenClaims(tok)
+		verified, _ := claims["email_verified"].(bool)
+		if !ok || !verified || !strings.EqualFold(claimString(claims, "email"), admin) || !strings.EqualFold(claimString(claims, "hd"), domain) {
+			return nil, errx.NewWithIdentifier(errx.BadRequest, ErrIDProof, "Sign in as "+admin+", the administrator you entered, on "+domain+".")
+		}
+	} else {
+		var xerr *errx.Error
+		if domain, admin, xerr = cleanDomainAdmin(in.Domain, in.AdminEmail); xerr != nil {
+			return nil, xerr
+		}
+		cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		txts, err := s.txt.LookupTXT(cctx, domainproof.Name(domain))
+		cancel()
+		var dnsErr *net.DNSError
+		if err != nil && !(errors.As(err, &dnsErr) && dnsErr.IsNotFound) {
+			return nil, errx.NewWithIdentifier(errx.ServiceUnavailable, ErrIDUnavailable, "The DNS lookup did not complete. Try again in a minute.")
+		}
+		if !s.proof.Matches(txts, orgID, domain) {
+			return nil, errx.NewWithIdentifier(errx.BadRequest, ErrIDProof,
+				"The TXT record "+domainproof.Name(domain)+" with this workspace's value is not there yet. DNS changes can take a while to appear.")
+		}
+	}
+	g, xerr := s.verifyGoogle(ctx, domain, admin)
+	if xerr != nil {
+		return nil, xerr
+	}
+	if xerr := s.googleRequireAdmin(ctx, admin); xerr != nil {
+		return nil, xerr
+	}
+	g.ID, g.OrganizationID = uuid.New(), orgID
+	if err := s.repo.Upsert(ctx, g, userID); err != nil {
+		return nil, errx.InternalError()
+	}
+	return s.get(ctx, orgID, g.ID)
+}
+
+// googleRequireAdmin refuses an address the directory does not list as an administrator.
+func (s *Service) googleRequireAdmin(ctx context.Context, admin string) *errx.Error {
+	ts, err := s.googleSource(admin, s.directoryScope())
+	if err != nil {
+		return errx.InternalError()
+	}
+	var u struct {
+		IsAdmin bool `json:"isAdmin"`
+	}
+	if err := s.getJSON(ctx, ts, s.adminBase+"/users/"+url.PathEscape(admin)+"?projection=basic", &u); err != nil {
+		return s.googleErr(err)
+	}
+	if !u.IsAdmin {
+		return errx.NewWithIdentifier(errx.BadRequest, ErrIDProof, admin+" is not a super administrator of this Workspace.")
+	}
+	return nil
+}
+
+// ---- Microsoft ----------------------------------------------------------
+
+func (s *Service) microsoftConsentConfig() *oauth2.Config {
+	return &oauth2.Config{
+		ClientID: s.msClientID, ClientSecret: s.msSecret, RedirectURL: s.msRedirect,
+		Scopes: []string{"openid", "https://graph.microsoft.com/.default"},
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  s.msLoginBase + "/organizations/oauth2/v2.0/authorize",
+			TokenURL: s.msLoginBase + "/organizations/oauth2/v2.0/token",
+		},
+	}
+}
+
+// StartMicrosoft is the admin consent sign-in a Global Administrator completes.
+func (s *Service) StartMicrosoft(ctx context.Context, orgID, userID uuid.UUID) (string, string, *errx.Error) {
+	if !s.microsoftEnabled() {
+		return "", "", notConfigured("Microsoft 365")
+	}
+	if s.states == nil {
+		return "", "", errx.InternalError()
+	}
+	state, err := newState(microsoftStatePrefix)
+	if err != nil {
+		return "", "", errx.InternalError()
+	}
+	if err := s.states.Put(ctx, "mailbox_grant_state:"+state, ConsentState{OrgID: orgID, UserID: userID}, stateTTL); err != nil {
+		return "", "", errx.InternalError()
+	}
+	u := s.microsoftConsentConfig().AuthCodeURL(state, oauth2.SetAuthURLParam("prompt", "admin_consent"))
+	return u, state, nil
+}
+
+// FinishMicrosoft records the tenant the administrator consented for. The
+// tenant comes from the ID token this service redeems the code for, never
+// from the caller.
+func (s *Service) FinishMicrosoft(ctx context.Context, orgID, userID uuid.UUID, state, code string) (*models.DomainGrant, *errx.Error) {
+	if !s.microsoftEnabled() {
+		return nil, notConfigured("Microsoft 365")
+	}
+	if _, xerr := s.takeState(ctx, microsoftStatePrefix, state, orgID, userID); xerr != nil {
+		return nil, xerr
+	}
+	if strings.TrimSpace(code) == "" {
+		return nil, errx.NewWithIdentifier(errx.BadRequest, ErrIDMicrosoftConsent, "Microsoft did not complete the consent. Start again as a Global Administrator.")
+	}
+	tok, err := s.microsoftConsentConfig().Exchange(context.WithValue(ctx, oauth2.HTTPClient, s.http), code)
+	if err != nil {
+		return nil, errx.NewWithIdentifier(errx.BadRequest, ErrIDMicrosoftConsent, "Microsoft did not accept the consent. Start again as a Global Administrator.")
+	}
+	claims, ok := idTokenClaims(tok)
+	tenant := claimString(claims, "tid")
+	if _, err := uuid.Parse(tenant); !ok || err != nil {
+		return nil, errx.NewWithIdentifier(errx.BadRequest, ErrIDMicrosoftConsent, "Microsoft did not say which organization consented. Start again.")
+	}
+	s.forget("m\x00" + tenant)
+	g, xerr := s.verifyMicrosoft(ctx, tenant)
+	if xerr != nil {
+		return nil, xerr
+	}
+	g.ID, g.OrganizationID = uuid.New(), orgID
+	if err := s.repo.Upsert(ctx, g, userID); err != nil {
+		return nil, errx.InternalError()
+	}
+	return s.get(ctx, orgID, g.ID)
+}

@@ -1,0 +1,110 @@
+---
+title: Sending domains
+description: "Every domain your mailboxes send from, with its authentication, tracking host and a redirect for visitors to the bare domain."
+---
+
+A sending domain is any domain one of the workspace's mailboxes has an address on. Warmbly builds the list from the mailboxes themselves, so there is nothing to add: connect a mailbox on `acme.io` and `acme.io` is here.
+
+The same choices are offered per domain while [importing mailboxes](/guides/mailbox-import/#tracking-domains-and-root-redirects), so a new domain can be set up in one pass.
+
+## The domains list
+
+Each domain shows:
+
+| Column | What it holds |
+| --- | --- |
+| Mailboxes | How many of the workspace's mailboxes are on the domain, and who hosts their mail |
+| Authentication | Whether SPF, DKIM and DMARC are published, and the domain's overall state. See [domain authentication](/guides/deliverability/#domain-authentication) |
+| Tracking hosts | The [custom tracking domains](/guides/mailboxes/#custom-tracking-domain) the domain's mailboxes use, how many mailboxes use each, and whether each is verified |
+| Redirect | Where visitors to the bare domain are sent, and whether the redirect is live |
+| Vendor | The [inbox vendor](/guides/mailbox-import/#import-from-an-inbox-vendor) account that holds the domain, when one of the workspace's connected vendor accounts does, with its current forwarding and what its API can do for the domain |
+
+## One tracking host for a whole domain
+
+A tracking host is normally set per mailbox. From the domain you can set one for every mailbox on it in one step, or clear it for all of them.
+
+Warmbly suggests a host: one a verified mailbox on the domain already uses, else one whose DNS already points at this instance (it tries `track`, `t`, `link`, `links`, `click`, `go`, `email` and `trk`), else `track.<domain>`. The suggestion comes with the `CNAME` value to add.
+
+The host is saved even before its DNS record exists. Until the record resolves, links keep using the shared tracking host, so nothing breaks; the hourly tracking check verifies the host by itself, and new sends switch to it from then on. Setting the same host again changes nothing.
+
+When an inbox vendor account holds the domain and can write DNS records for it, Warmbly can add the `CNAME` for you instead; see [domains held by an inbox vendor](#domains-held-by-an-inbox-vendor).
+
+## Root redirects
+
+A domain bought for cold email usually answers nothing when someone types it into a browser. A recipient who checks who wrote to them, or a filter that looks at the domain, finds an empty page or an error, which reads as a throwaway domain. A redirect sends visitors to the bare domain (and its `www`) on to your company's main website instead, so the domain looks like what it is: part of a real business.
+
+Warmbly serves the redirect from this instance's tracking service once DNS proves two things: that you control the domain, and that its root points here.
+
+### Set one up
+
+Enter the website to send visitors to, such as `https://yourcompany.com`. It must be an `http` or `https` address on another host; a redirect back to the same domain or its `www` is refused. **Include www** is on by default. Warmbly then lists the records to add at your DNS provider:
+
+| Purpose | Type | Name | Value | Needed to verify |
+| --- | --- | --- | --- | --- |
+| Ownership | `TXT` | `_warmbly.<domain>` | `warmbly-verify=<value>` | Yes |
+| Root | `A` and `AAAA` | `<domain>` | The tracking host's public addresses, as listed | Yes |
+| www | `CNAME` | `www.<domain>` | The tracking host | No |
+
+The ownership value is unique to your workspace and the domain on this instance, so a record another workspace published proves nothing for yours. It is the same record a [Google Workspace admin grant](/guides/mailbox-import/#prove-the-workspace-controls-the-domain) accepts as proof, so a domain that has one for either needs nothing more for the other.
+
+When the tracking host has no public address to list, the root record is shown as an `ALIAS` to the tracking host instead. A provider that offers `ALIAS`, `ANAME` or a flattened `CNAME` at the root can use that in place of the address records either way: Warmbly compares the addresses the root resolves to.
+
+The root of a domain has to point here for the redirect to work, so a domain whose root already serves a website is not a candidate. Mail is unaffected: `MX`, SPF, DKIM and DMARC records live beside these and nothing here changes them.
+
+### Verification
+
+A redirect verifies when the `TXT` record and the root record are both in place. The `www` record is optional; without it, only the bare domain redirects.
+
+Warmbly checks the records as soon as you save, whenever you press **Check now**, and on its own: every 10 minutes while the redirect is pending (for its first 14 days, then every 6 hours), and every 6 hours once it is verified. A verified redirect only stops when a check finds the records definitively gone or pointing elsewhere; a DNS lookup that fails or times out leaves it running.
+
+Saving the redirect again, to change the website or the `www` setting, keeps the same ownership value, so the `TXT` record you already added stays valid.
+
+### What visitors get
+
+A visit to the domain (and to its `www` when included) answers with a `302` to the website you entered, cacheable for five minutes. The path they asked for is not carried over: every visit lands on that one address. The answer is temporary on purpose, so a change or a deletion reaches every visitor within minutes instead of lingering in browsers.
+
+HTTPS needs a certificate for your domain. Warmbly Cloud issues one on demand the first time someone visits, and only for a domain whose redirect is verified. A self-hosted instance installed with the bundled Caddy does the same. Behind an operator's own proxy, the proxy has to route the domain to the tracking service and hold a certificate for it; see [custom tracking domain](/guides/mailboxes/#custom-tracking-domain) for the same caveat.
+
+### Limits
+
+- The workspace must have a mailbox on the domain.
+- Domains of shared email providers, such as `gmail.com` or `outlook.com`, are refused.
+- One workspace per domain on an instance. While one workspace's redirect for a domain is verified, another workspace's redirect for it is refused with `domain_redirect_taken` and does not verify.
+- The instance needs a tracking host (`TRACKING_DOMAIN`), because the tracking service is what answers. Without one, redirects are not offered.
+
+## Domains held by an inbox vendor
+
+A domain bought from an [inbox vendor](/guides/mailbox-import/#import-from-an-inbox-vendor) usually has its DNS hosted by that vendor, and most vendors can forward the domain themselves. When one of the workspace's connected vendor accounts holds a domain, the domain shows that vendor, and two shortcuts replace the DNS work above:
+
+- **Forward through the vendor.** Enter the website, and Warmbly asks the vendor to forward the domain's root to it. Nothing needs adding at a DNS provider and nothing is served by this instance. The website has the same rules as a redirect: an `http` or `https` address on another host. Clearing the website removes the forwarding where the vendor allows it.
+- **Write the tracking record through the vendor.** Pick a tracking host under the domain, and Warmbly writes its `CNAME` at the vendor, then sets the host on every mailbox on the domain. It is the only record Warmbly writes. A record of the same name and type is replaced, and one the vendor manages itself is left alone and the write refused.
+
+What each vendor's API allows:
+
+| Vendor | Forwarding | Remove forwarding | Tracking `CNAME` |
+| --- | --- | --- | --- |
+| InboxKit | Yes | Yes | Yes |
+| Zapmail | Yes | Yes | Yes |
+| Cheap Inboxes | Yes | Yes | Yes |
+| Maildoso | Yes | Yes | No |
+| ScaledMail | Yes, as a request ScaledMail's staff apply later | Yes | No |
+| Mailforge | Yes | No | No |
+| Infraforge | Yes | No | No |
+
+Mailforge and Infraforge replace a domain's whole record set on every DNS change, so Warmbly writes no records there: one write could drop the domain's mail records. Add the tracking `CNAME` in their dashboard instead.
+
+A [mailbox import](/guides/mailbox-import/#tracking-domains-and-root-redirects) uses these automatically. A root redirect chosen during an import uses the vendor's forwarding when a vendor account holds the domain and can forward it, and a redirect served by this instance otherwise. A tracking host chosen during an import has its `CNAME` written through the vendor when the vendor can, and waits for you to add it otherwise.
+
+The vendor's domain list is read with the workspace's own API key, only for connections that are active, and kept for five minutes. A vendor that does not answer is left out, so its domains show without a vendor until it does.
+
+## What travels in an export
+
+Redirects travel in a [workspace export](/guides/workspace-export-import/). They arrive unverified and are served once the destination's own check sees both records. The ownership value belongs to the workspace on the instance that issued it, so the destination lists its own value: publish that value in the `TXT` record, and point the root at the destination. A tracking host is part of each mailbox's settings and travels with the mailbox. Forwarding set through a vendor lives at the vendor and is unaffected by a move.
+
+## Related guides
+
+<Cards>
+  <Card title="Mailboxes" href="/guides/mailboxes/" />
+  <Card title="Import mailboxes" href="/guides/mailbox-import/" />
+  <Card title="Deliverability" href="/guides/deliverability/" />
+</Cards>

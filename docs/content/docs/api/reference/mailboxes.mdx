@@ -42,6 +42,8 @@ A `data` array of mailbox objects plus a `pagination` envelope.
       "signature_code": false,
       "send_as_email": "",
       "provider": "gmail",
+      "mail_host": "google_workspace",
+      "auth_method": "oauth",
       "status": "active",
       "last_synced_at": "2026-06-11T09:14:00Z",
       "last_id": 184213,
@@ -84,7 +86,7 @@ A `data` array of mailbox objects plus a `pagination` envelope.
 }
 ```
 
-`provider` is one of `gmail`, `outlook`, or `smtp_imap`. `status` is one of `active`, `inactive`, or `revoked`. `warmup` is the warmup anchor timestamp (null when warmup has never been enabled); a non-null `warmup_paused_at` means warmup is enabled but paused. `auth_state` is the sending domain's authentication state, one of `passing` (SPF and DMARC present), `failing` (SPF or DMARC missing), or `unknown` (not checked yet, the DNS lookup could not complete, or the domain is special-use and cannot resolve). It is refreshed by a background check. `auth_dkim` is positive-only and never gates: `true` means a DKIM key was found at a probed selector, `false` means none answered, which is unverified rather than missing because selectors are not discoverable from DNS. `auth_failing_since` is when the domain entered `failing` and is null otherwise; a domain that stays `failing` past the instance grace period stops cold sending and warmup from every mailbox on it, so this is the clock that decides. See [domain authentication](/guides/deliverability/#domain-authentication). `total` and `next_cursor` may be null when not applicable.
+`provider` is one of `gmail`, `outlook`, or `smtp_imap`, and says how Warmbly talks to the mailbox. `mail_host` says who hosts it, whatever the transport: one of `google_workspace`, `gmail`, `microsoft365`, `outlook`, `zoho`, `yahoo`, `aol`, `icloud`, `fastmail`, `godaddy`, `namecheap`, `ionos`, `hostinger`, `ovh`, `migadu`, `purelymail`, `rackspace`, `yandex`, `gmx`, `proton`, or `other`. `auth_method` is how it signs in: `password`, `app_password`, `oauth`, or `delegated`. A Google Workspace mailbox on an app password is `provider` `smtp_imap`, `mail_host` `google_workspace`, `auth_method` `app_password`. Either may be an empty string until known; a mailbox whose host is not recorded yet is classified in the background from its domain's DNS. `status` is one of `active`, `inactive`, or `revoked`. `warmup` is the warmup anchor timestamp (null when warmup has never been enabled); a non-null `warmup_paused_at` means warmup is enabled but paused. `auth_state` is the sending domain's authentication state, one of `passing` (SPF and DMARC present), `failing` (SPF or DMARC missing), or `unknown` (not checked yet, the DNS lookup could not complete, or the domain is special-use and cannot resolve). It is refreshed by a background check. `auth_dkim` is positive-only and never gates: `true` means a DKIM key was found at a probed selector, `false` means none answered, which is unverified rather than missing because selectors are not discoverable from DNS. `auth_failing_since` is when the domain entered `failing` and is null otherwise; a domain that stays `failing` past the instance grace period stops cold sending and warmup from every mailbox on it, so this is the clock that decides. See [domain authentication](/guides/deliverability/#domain-authentication). `total` and `next_cursor` may be null when not applicable.
 
 ## Get a mailbox
 
@@ -715,7 +717,7 @@ Auth: **Scope** `SEND_CAMPAIGNS` · **Org permission** `send_campaigns`. Require
 
 ## Connect a mailbox (onboarding)
 
-The three onboarding routes connect a new mailbox. They are **session only (not available to API keys)** because they write user-encrypted provider refresh tokens through the SPA popup flow.
+The three onboarding routes connect a new mailbox, and a fourth moves an existing one to an app password. They are **session only (not available to API keys)** because they write user-encrypted provider refresh tokens through the SPA popup flow.
 
 ### Start OAuth
 
@@ -803,3 +805,36 @@ Connects an SMTP/IMAP mailbox in a single call.
 ```
 
 Response: `201 Created` with the new mailbox object.
+
+### Switch to an app password
+
+`POST /emails/onboarding/app-password/:id`
+
+Moves a mailbox connected with per-mailbox Google sign-in, which is [being retired](/guides/mailboxes/#moving-off-per-mailbox-google-sign-in), onto Gmail's IMAP and SMTP with a Google app password. Session only, and needs the `manage_emails` organization permission.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `app_password` | string | yes | A 16-letter app password from [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords). Spaces are ignored. |
+
+```json
+{
+  "app_password": "abcd efgh ijkl mnop"
+}
+```
+
+The password is checked against `imap.gmail.com` and `smtp.gmail.com` before anything is stored, and refused with the same codes as [Connect SMTP/IMAP](#connect-smtpimap) (such as `mailbox_auth_refused`); a refusal changes nothing. On success the mailbox becomes `smtp_imap` with `auth_method` `app_password` in place: its id, imported mail, campaigns, warmup and settings stay, and sync continues with new mail.
+
+Response: `200 OK` with the mailbox object. `409` `mailbox_not_google_signin` when the mailbox is not on per-mailbox Google sign-in (including one already switched, so a repeat changes nothing), and `400` `app_password_invalid` when the value is not 16 letters.
+
+## Connect many mailboxes
+
+Four more route families connect and set up mailboxes in bulk. Like onboarding they are **session only (not available to API keys)**, because they carry passwords or reach a whole domain's mail, and each needs the `manage_emails` organization permission:
+
+| Routes | What they do |
+|--------|--------------|
+| `/emails/imports` | [Import mailboxes](/guides/mailbox-import/) from a file or a pasted list, in the background |
+| `/emails/vendors` | Connect an [inbox vendor](/guides/mailbox-import/#import-from-an-inbox-vendor) account and import its mailboxes |
+| `/emails/grants` | Connect a whole [Google Workspace domain](/guides/mailbox-import/#connect-a-whole-google-workspace-domain) or [Microsoft 365 organization](/guides/mailbox-import/#connect-a-whole-microsoft-365-organization) through an administrator's grant, and move mailboxes on per-mailbox sign-in onto one (`GET /emails/grants/migration` lists those still on Google sign-in). Recording, using and removing a grant also need a [recent confirmation](/api/endpoints/#actions-that-need-a-recent-confirmation) |
+| `/emails/domains` | Set a tracking host and a root redirect per [sending domain](/guides/sending-domains/), directly or through the inbox vendor that holds the domain |
+
+Every route, with its body and retry behavior, is listed under [JWT only](/api/endpoints/#jwt-only).

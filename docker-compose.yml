@@ -368,6 +368,11 @@ services:
       BOX_GOOGLE_CLIENT_SECRET: ${BOX_GOOGLE_CLIENT_SECRET:-}
       BOX_OUTLOOK_CLIENT_ID: ${BOX_OUTLOOK_CLIENT_ID:-}
       BOX_OUTLOOK_CLIENT_SECRET: ${BOX_OUTLOOK_CLIENT_SECRET:-}
+      # Whole Google Workspace domains: the service account key, inline or as a
+      # path (mount the file read-only). Unset hides that connect method.
+      GOOGLE_WORKSPACE_DELEGATION_KEY: ${GOOGLE_WORKSPACE_DELEGATION_KEY:-}
+      GOOGLE_WORKSPACE_DELEGATION_KEY_FILE: ${GOOGLE_WORKSPACE_DELEGATION_KEY_FILE:-}
+      MAILHOST_ISPDB: ${MAILHOST_ISPDB:-false}
       # Sign in with Google / Apple. Separate from the BOX_* mailbox clients
       # above; email+password and passkeys work without any of these.
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
