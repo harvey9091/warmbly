@@ -145,6 +145,8 @@ type Notification struct {
 	// loop can coalesce it into one email with every recipient in To.
 	GroupKey      string     `json:"-"`
 	UniboxEmailID *uuid.UUID `json:"-"`
+	// MessageSeen reports, on create, that the message was already read.
+	MessageSeen   bool       `json:"-"`
 	EmailState    string     `json:"-"`
 	EmailDueAt    *time.Time `json:"-"`
 	EmailAttempts int        `json:"-"`

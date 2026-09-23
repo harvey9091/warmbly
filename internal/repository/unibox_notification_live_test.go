@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -142,7 +143,66 @@ func TestLiveUniboxNotificationLeavesWithTheMessage(t *testing.T) {
 	if _, err := notifs.Create(ctx, &models.Notification{
 		UserID: f.user, OrganizationID: &f.org, Category: models.NotifInboundReply,
 		Title: "New reply", UniboxEmailID: &id,
-	}); err == nil {
-		t.Fatal("created a notification about a message no longer in the unibox")
+	}); !errors.Is(err, ErrNotificationMessageGone) {
+		t.Fatalf("error = %v, want ErrNotificationMessageGone", err)
+	}
+}
+
+// A message read before its notification is written (read in the mail client
+// before the sync, or in a race with the reader) is announced as read, and
+// an email-only notification is cancelled when its message is read.
+func TestLiveUniboxNotificationRespectsTheMessagesReadState(t *testing.T) {
+	handle := liveUniboxFolderDB(t)
+	f := newUniboxFolderFixture(t, handle.Pool)
+	repo := NewUniboxRepository(handle)
+	notifs := NewNotificationRepository(handle.Pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	due := now.Add(time.Hour)
+
+	state := func(id uuid.UUID) (bool, string) {
+		var read bool
+		var email string
+		if err := handle.Pool.QueryRow(ctx,
+			`SELECT read_at IS NOT NULL, email_state FROM notifications WHERE id = $1`, id).Scan(&read, &email); err != nil {
+			t.Fatalf("read notification: %v", err)
+		}
+		return read, email
+	}
+
+	already := f.scopedMessage(t, repo, "thread-already-read", "them@example.com", models.FolderInbox, now)
+	if _, err := repo.MarkSeenByThreads(ctx, f.org, []string{"thread-already-read"}, true); err != nil {
+		t.Fatalf("MarkSeenByThreads: %v", err)
+	}
+	n, err := notifs.Create(ctx, &models.Notification{
+		UserID: f.user, OrganizationID: &f.org, Category: models.NotifInboundReply,
+		Title: "New reply", UniboxEmailID: &already, EmailState: "pending", EmailDueAt: &due,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if !n.MessageSeen {
+		t.Error("Create did not report the message as already read")
+	}
+	if read, email := state(n.ID); !read || email != "skipped" {
+		t.Errorf("already-read message: read=%v email=%q, want read with no email", read, email)
+	}
+
+	emailOnly := f.scopedMessage(t, repo, "thread-email-only", "them@example.com", models.FolderInbox, now)
+	n, err = notifs.Create(ctx, &models.Notification{
+		UserID: f.user, OrganizationID: &f.org, Category: models.NotifInboundReply,
+		Title: "New reply", UniboxEmailID: &emailOnly, EmailState: "pending", EmailDueAt: &due, PreRead: true,
+	})
+	if err != nil {
+		t.Fatalf("Create email-only: %v", err)
+	}
+	if n.MessageSeen {
+		t.Error("an unread message was reported as read")
+	}
+	if _, err := repo.MarkSeenByThreads(ctx, f.org, []string{"thread-email-only"}, true); err != nil {
+		t.Fatalf("MarkSeenByThreads: %v", err)
+	}
+	if read, email := state(n.ID); !read || email != "skipped" {
+		t.Errorf("email-only notification: read=%v email=%q, want its email cancelled by the read", read, email)
 	}
 }

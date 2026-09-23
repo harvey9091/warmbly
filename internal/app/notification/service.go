@@ -7,6 +7,7 @@ package notification
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -232,8 +233,11 @@ func (s *service) notifyOne(ctx context.Context, userID uuid.UUID, orgID *uuid.U
 			n.EmailDueAt = &due
 		}
 		created, cerr := s.repo.Create(ctx, n)
-		if cerr != nil && uniboxEmailID != nil {
+		if errors.Is(cerr, repository.ErrNotificationMessageGone) {
 			return false // the message left the unibox first; nothing to announce
+		}
+		if cerr == nil && created != nil && created.MessageSeen {
+			return false // already read where it arrived; the row is the record
 		}
 		if cerr == nil && created != nil && cat.Channels.InApp && s.publisher != nil {
 			s.publisher.PublishNotificationCreated(ctx, userID.String(), created.ID.String(), string(category), title, link)
