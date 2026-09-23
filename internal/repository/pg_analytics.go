@@ -24,7 +24,7 @@ type AnalyticsRepository interface {
 	GetCampaignDailyStats(ctx context.Context, campaignID uuid.UUID, from, to time.Time) ([]models.CampaignDailyStats, *errx.Error)
 	GetSequenceStats(ctx context.Context, campaignID uuid.UUID) ([]models.SequenceStats, *errx.Error)
 	// GetCampaignEngagementBreakdown groups the campaign's human opens and
-	// clicks by country, client and device: distinct contacts per bucket, the
+	// clicks by country, client, device and surface: distinct contacts per bucket, the
 	// busiest `limit` buckets of each. A click counts as an open, as it does
 	// on the progress row.
 	GetCampaignEngagementBreakdown(ctx context.Context, campaignID uuid.UUID, limit int) (*models.CampaignEngagementBreakdown, *errx.Error)
@@ -254,11 +254,11 @@ func (r *analyticsRepository) GetCampaignEngagementBreakdown(ctx context.Context
 		// named `opens` on email_opens and every call failed with 42703.
 		query := `
 			WITH ev AS (
-				SELECT contact_id, 'open' AS kind, client, browser, device_type, country_code
+				SELECT contact_id, 'open' AS kind, client, client_type, device_hidden, browser, device_type, country_code
 				FROM email_opens
 				WHERE campaign_id = $1 AND NOT machine
 				UNION ALL
-				SELECT contact_id, 'click' AS kind, client, browser, device_type, country_code
+				SELECT contact_id, 'click' AS kind, client, client_type, device_hidden, browser, device_type, country_code
 				FROM email_link_clicks
 				WHERE campaign_id = $1 AND NOT machine
 			), buckets AS (
@@ -299,7 +299,12 @@ func (r *analyticsRepository) GetCampaignEngagementBreakdown(ctx context.Context
 	if xerr != nil {
 		return nil, xerr
 	}
-	clients, xerr := bucket(`COALESCE(NULLIF(client, ''), browser)`)
+	// An open with no named client was read in a browser's webmail; a click
+	// with none is the browser the link opened in.
+	clients, xerr := bucket(`CASE
+		WHEN client <> '' THEN client
+		WHEN kind = 'open' AND client_type = 'webmail' AND browser <> '' THEN 'Webmail in ' || browser
+		ELSE browser END`)
 	if xerr != nil {
 		return nil, xerr
 	}
@@ -307,7 +312,16 @@ func (r *analyticsRepository) GetCampaignEngagementBreakdown(ctx context.Context
 	if xerr != nil {
 		return nil, xerr
 	}
-	return &models.CampaignEngagementBreakdown{Countries: countries, Clients: clients, Devices: devices}, nil
+	surfaces, xerr := bucket(`CASE
+		WHEN device_hidden THEN '` + models.EngagementSurfaceHidden + `'
+		WHEN client_type = 'app' AND device_type IN ('desktop', 'mobile', 'tablet') THEN device_type || '_app'
+		WHEN client_type = 'webmail' THEN '` + models.EngagementSurfaceWebmail + `'
+		WHEN device_type IN ('desktop', 'mobile', 'tablet') THEN device_type
+		ELSE '' END`)
+	if xerr != nil {
+		return nil, xerr
+	}
+	return &models.CampaignEngagementBreakdown{Countries: countries, Clients: clients, Devices: devices, Surfaces: surfaces}, nil
 }
 
 func (r *analyticsRepository) GetSequenceStats(ctx context.Context, campaignID uuid.UUID) ([]models.SequenceStats, *errx.Error) {
@@ -569,12 +583,14 @@ func (r *analyticsRepository) GetDashboardOverallStats(ctx context.Context, orgI
 }
 
 func (r *analyticsRepository) GetRecentActivity(ctx context.Context, orgID uuid.UUID, limit int) ([]models.RecentActivityItem, *errx.Error) {
-	// Union query to get recent opens, clicks, replies, and bounces
+	// Union query to get recent opens, clicks, replies, and bounces. The
+	// origin of an open or click is looked up only for the rows that make
+	// the page, from the person's first logged open or click on the step.
 	query := `
 		WITH recent_events AS (
 			-- Opens
 			SELECT 'opened' as type, ccp.campaign_id, c.name as campaign_name,
-				   co.email as contact_email, ccp.contact_id, ccp.opened_at as timestamp, NULL as link
+				   co.email as contact_email, ccp.contact_id, ccp.sequence_id, ccp.opened_at as timestamp, NULL as link
 			FROM campaign_contact_progress ccp
 			JOIN campaigns c ON c.id = ccp.campaign_id
 			JOIN contacts co ON co.id = ccp.contact_id
@@ -584,7 +600,7 @@ func (r *analyticsRepository) GetRecentActivity(ctx context.Context, orgID uuid.
 
 			-- Clicks (the first link a person clicked on the step, when logged per link)
 			SELECT 'clicked' as type, ccp.campaign_id, c.name as campaign_name,
-				   co.email as contact_email, ccp.contact_id, ccp.clicked_at as timestamp,
+				   co.email as contact_email, ccp.contact_id, ccp.sequence_id, ccp.clicked_at as timestamp,
 				   (SELECT lc.destination FROM email_link_clicks lc
 				    WHERE lc.campaign_id = ccp.campaign_id AND lc.contact_id = ccp.contact_id
 				      AND lc.sequence_id = ccp.sequence_id AND lc.machine = false
@@ -598,7 +614,7 @@ func (r *analyticsRepository) GetRecentActivity(ctx context.Context, orgID uuid.
 
 			-- Replies
 			SELECT 'replied' as type, ccp.campaign_id, c.name as campaign_name,
-				   co.email as contact_email, ccp.contact_id, ccp.replied_at as timestamp, NULL as link
+				   co.email as contact_email, ccp.contact_id, ccp.sequence_id, ccp.replied_at as timestamp, NULL as link
 			FROM campaign_contact_progress ccp
 			JOIN campaigns c ON c.id = ccp.campaign_id
 			JOIN contacts co ON co.id = ccp.contact_id
@@ -608,16 +624,37 @@ func (r *analyticsRepository) GetRecentActivity(ctx context.Context, orgID uuid.
 
 			-- Bounces
 			SELECT 'bounced' as type, ccp.campaign_id, c.name as campaign_name,
-				   co.email as contact_email, ccp.contact_id, ccp.bounced_at as timestamp, NULL as link
+				   co.email as contact_email, ccp.contact_id, ccp.sequence_id, ccp.bounced_at as timestamp, NULL as link
 			FROM campaign_contact_progress ccp
 			JOIN campaigns c ON c.id = ccp.campaign_id
 			JOIN contacts co ON co.id = ccp.contact_id
 			WHERE c.organization_id = $1 AND ccp.bounced_at IS NOT NULL
+		), page AS (
+			SELECT * FROM recent_events
+			ORDER BY timestamp DESC
+			LIMIT $2
 		)
-		SELECT type, campaign_id, campaign_name, contact_email, contact_id, timestamp, COALESCE(link, '') as link
-		FROM recent_events
-		ORDER BY timestamp DESC
-		LIMIT $2
+		SELECT p.type, p.campaign_id, p.campaign_name, p.contact_email, p.contact_id, p.timestamp, COALESCE(p.link, '') as link,
+		       COALESCE(og.client, ''), COALESCE(og.client_type, ''), COALESCE(og.device_hidden, false),
+		       COALESCE(og.device_type, ''), COALESCE(og.os, ''), COALESCE(og.browser, ''),
+		       COALESCE(og.country_code, ''), COALESCE(og.region, ''), COALESCE(og.city, '')
+		FROM page p
+		LEFT JOIN LATERAL (
+			SELECT o.opened_at AS at, o.client, o.client_type, o.device_hidden, o.device_type, o.os, o.browser, o.country_code, o.region, o.city
+			FROM email_opens o
+			WHERE p.type = 'opened'
+			  AND o.campaign_id = p.campaign_id AND o.contact_id = p.contact_id AND o.sequence_id = p.sequence_id
+			  AND NOT o.machine
+			UNION ALL
+			SELECT lc.clicked_at, lc.client, lc.client_type, lc.device_hidden, lc.device_type, lc.os, lc.browser, lc.country_code, lc.region, lc.city
+			FROM email_link_clicks lc
+			WHERE p.type = 'clicked'
+			  AND lc.campaign_id = p.campaign_id AND lc.contact_id = p.contact_id AND lc.sequence_id = p.sequence_id
+			  AND NOT lc.machine
+			ORDER BY 1
+			LIMIT 1
+		) og ON TRUE
+		ORDER BY p.timestamp DESC
 	`
 
 	params := []any{orgID, limit}
@@ -632,11 +669,21 @@ func (r *analyticsRepository) GetRecentActivity(ctx context.Context, orgID uuid.
 	activities := make([]models.RecentActivityItem, 0)
 	for rows.Next() {
 		var a models.RecentActivityItem
-		if err := rows.Scan(&a.Type, &a.CampaignID, &a.CampaignName, &a.ContactEmail, &a.ContactID, &a.Timestamp, &a.Link); err != nil {
+		var o models.EngagementOrigin
+		if err := rows.Scan(&a.Type, &a.CampaignID, &a.CampaignName, &a.ContactEmail, &a.ContactID, &a.Timestamp, &a.Link,
+			&o.Client, &o.ClientType, &o.DeviceHidden, &o.DeviceType, &o.OS, &o.Browser,
+			&o.CountryCode, &o.Region, &o.City); err != nil {
 			db.CaptureError(err, "", nil, "scan")
 			return nil, errx.InternalError()
 		}
+		if !o.Empty() {
+			a.Origin = &o
+		}
 		activities = append(activities, a)
+	}
+	if err := rows.Err(); err != nil {
+		db.CaptureError(err, query, params, "rows")
+		return nil, errx.InternalError()
 	}
 
 	return activities, nil

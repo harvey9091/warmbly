@@ -3329,6 +3329,40 @@ func (r *contactRepository) GetDetail(ctx context.Context, userID uuid.UUID, org
 
 	// 3. Org-scoped extras. Only run when we have an org id.
 	if orgID != nil {
+		// How the contact reads: a person's opens grouped by client and
+		// device. Opens with nothing known about them are left out.
+		readsQuery := `
+			SELECT o.client, o.client_type, o.device_hidden, o.device_type, o.os, o.browser,
+			       COUNT(*), MAX(o.opened_at)
+			FROM email_opens o
+			JOIN campaigns cam ON cam.id = o.campaign_id
+			WHERE o.contact_id = $1 AND cam.organization_id = $2 AND NOT o.machine
+			  AND (o.client <> '' OR o.device_hidden OR o.device_type <> '')
+			GROUP BY 1, 2, 3, 4, 5, 6
+			ORDER BY MAX(o.opened_at) DESC
+			LIMIT 4
+		`
+		rrows, qerr := r.DB.Query(ctx, readsQuery, contactID, *orgID)
+		if qerr != nil {
+			db.CaptureError(qerr, readsQuery, []any{contactID, *orgID}, "GetDetail reads on")
+			return nil, errx.InternalError()
+		}
+		for rrows.Next() {
+			var ro models.ContactReadingOrigin
+			if err := rrows.Scan(&ro.Client, &ro.ClientType, &ro.DeviceHidden, &ro.DeviceType, &ro.OS, &ro.Browser,
+				&ro.Opens, &ro.LastOpenedAt); err != nil {
+				rrows.Close()
+				db.CaptureError(err, "", nil, "GetDetail reads on scan")
+				return nil, errx.InternalError()
+			}
+			detail.Engagement.ReadsOn = append(detail.Engagement.ReadsOn, ro)
+		}
+		rrows.Close()
+		if rerr := rrows.Err(); rerr != nil {
+			db.CaptureError(rerr, readsQuery, nil, "GetDetail reads on rows")
+			return nil, errx.InternalError()
+		}
+
 		// Complaints don't live in campaign_contact_progress — they
 		// arrive via deliverability_events. Count rows of type
 		// "complaint" pointing at this contact (either by contact_id
@@ -3670,6 +3704,7 @@ func (r *contactRepository) ListTimeline(ctx context.Context, orgID, contactID u
 	clickQuery := `
 		SELECT lc.id, lc.task_id, lc.clicked_at, lc.destination, lc.label, lc.user_agent, lc.machine, lc.machine_reason,
 		       lc.client, lc.device_type, lc.os, lc.browser, lc.browser_version, lc.country_code, lc.region, lc.city,
+		       lc.client_type, lc.device_hidden,
 		       cam.id, cam.name,
 		       seq.id, seq.name, seq.subject,
 		       ea.id, ea.email, ea.name
@@ -3705,6 +3740,7 @@ func (r *contactRepository) ListTimeline(ctx context.Context, orgID, contactID u
 			&link.ID, &taskID, &at, &link.URL, &link.Label, &link.UserAgent, &machine, &reason,
 			&origin.Client, &origin.DeviceType, &origin.OS, &origin.Browser, &origin.BrowserVersion,
 			&origin.CountryCode, &origin.Region, &origin.City,
+			&origin.ClientType, &origin.DeviceHidden,
 			&campID, &campName,
 			&seqID, &seqName, &seqSubject,
 			&eaID, &eaEmail, &eaName,
@@ -3753,6 +3789,7 @@ func (r *contactRepository) ListTimeline(ctx context.Context, orgID, contactID u
 	openQuery := `
 		SELECT o.id, o.task_id, o.opened_at, o.user_agent, o.machine, o.machine_reason,
 		       o.client, o.device_type, o.os, o.browser, o.browser_version, o.country_code, o.region, o.city,
+		       o.client_type, o.device_hidden,
 		       cam.id, cam.name,
 		       seq.id, seq.name, seq.subject,
 		       ea.id, ea.email, ea.name
@@ -3787,6 +3824,7 @@ func (r *contactRepository) ListTimeline(ctx context.Context, orgID, contactID u
 			&id, &taskID, &at, &userAgent, &machine, &reason,
 			&origin.Client, &origin.DeviceType, &origin.OS, &origin.Browser, &origin.BrowserVersion,
 			&origin.CountryCode, &origin.Region, &origin.City,
+			&origin.ClientType, &origin.DeviceHidden,
 			&campID, &campName,
 			&seqID, &seqName, &seqSubject,
 			&eaID, &eaEmail, &eaName,

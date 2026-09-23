@@ -232,10 +232,14 @@ type TrackingEventPayload struct {
 	// base timestamp is when this event was published.
 	OccurredAt time.Time `json:"occurred_at,omitempty"`
 	// Where and on what, from the engagement logs, for live feeds.
-	Client      string `json:"client,omitempty"`
-	DeviceType  string `json:"device_type,omitempty"`
-	CountryCode string `json:"country_code,omitempty"`
-	City        string `json:"city,omitempty"`
+	Client       string `json:"client,omitempty"`
+	ClientType   string `json:"client_type,omitempty"`
+	DeviceHidden bool   `json:"device_hidden,omitempty"`
+	DeviceType   string `json:"device_type,omitempty"`
+	OS           string `json:"os,omitempty"`
+	Browser      string `json:"browser,omitempty"`
+	CountryCode  string `json:"country_code,omitempty"`
+	City         string `json:"city,omitempty"`
 }
 
 // PageHitEvent is a website page view tied to a contact.

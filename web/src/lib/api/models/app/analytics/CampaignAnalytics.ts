@@ -63,6 +63,9 @@ export interface CampaignEngagementBreakdown {
     countries: EngagementBucket[]
     clients: EngagementBucket[]
     devices: EngagementBucket[]
+    // Device and app-or-webmail together: mobile_app, desktop_app, tablet_app,
+    // webmail, mobile, desktop, tablet, or hidden (a provider's image proxy).
+    surfaces?: EngagementBucket[]
 }
 
 export default interface CampaignAnalytics {

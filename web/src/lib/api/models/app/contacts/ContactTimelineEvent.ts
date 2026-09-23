@@ -68,10 +68,13 @@ export interface ContactLinkClick {
 }
 
 // Where an open or click came from, when it was logged per event: the mail
-// client or image proxy when the user agent names one, otherwise browser,
-// OS and device; the location resolved from the source network.
+// client when the user agent names one, whether it was an app or webmail,
+// otherwise browser, OS and device; the location resolved from the source
+// network. device_hidden marks a fetch by a provider's image proxy.
 export interface EngagementOrigin {
     client?: string;
+    client_type?: "app" | "webmail";
+    device_hidden?: boolean;
     device_type?: string;
     os?: string;
     browser?: string;

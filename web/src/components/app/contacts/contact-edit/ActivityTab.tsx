@@ -51,10 +51,7 @@ import {
 import useContactTimeline from "@/lib/api/hooks/app/contacts/useContactTimeline";
 import useContactCampaignStates from "@/lib/api/hooks/app/contacts/useContactCampaignStates";
 import type ContactTimelineEvent from "@/lib/api/models/app/contacts/ContactTimelineEvent";
-import type {
-    ContactTimelineEventType,
-    EngagementOrigin,
-} from "@/lib/api/models/app/contacts/ContactTimelineEvent";
+import type { ContactTimelineEventType } from "@/lib/api/models/app/contacts/ContactTimelineEvent";
 import type ContactCampaignState from "@/lib/api/models/app/contacts/ContactCampaignState";
 import type {
     ContactCampaignStep,
@@ -70,6 +67,8 @@ import { useWriteGuard } from "@/hooks/usePermission";
 import useClickOutside from "@/hooks/useClickOutside";
 import { useFlipAlignment } from "@/hooks/useFlipPlacement";
 import { fmtAbsolute, fmtRelative } from "./format";
+import OriginBadge from "@/components/app/engagement/OriginBadge";
+import { deviceLabel, hiddenReason, originPlace, originSummary, readerLabel } from "@/lib/engagementOrigin";
 
 type FilterId =
     | "all"
@@ -770,7 +769,7 @@ function applyFilters(
                 e.link?.label,
                 e.link?.utm_content,
                 e.link?.utm_campaign,
-                e.origin?.client,
+                e.origin ? originSummary(e.origin, e.type === "email_clicked" ? "click" : "open") : "",
                 e.origin?.city,
                 e.origin?.country_code,
             ]
@@ -1225,10 +1224,16 @@ function detailsFor(e: ContactTimelineEvent): [string, React.ReactNode][] {
     }
     if (e.origin) {
         const o = e.origin;
-        add("Client", o.client);
-        add("Device", cap(o.device_type ?? ""));
+        const kind = e.type === "email_clicked" ? "click" : "open";
+        if (kind === "open") add("Read in", readerLabel(o, "open"));
+        add("Device", o.device_hidden ? hiddenReason(o) : deviceLabel(o));
         add("Operating system", o.os);
-        add("Browser", [o.browser, o.browser_version].filter(Boolean).join(" "));
+        if (kind === "click") {
+            // A mail app that made the request itself names no browser.
+            add("Opened in", o.client || [o.browser, o.browser_version].filter(Boolean).join(" "));
+        } else if (o.client_type !== "app") {
+            add("Browser", [o.browser, o.browser_version].filter(Boolean).join(" "));
+        }
         add("Location", [o.city, o.region, o.country_code].filter(Boolean).join(", "));
     }
     if (e.type === "email_opened" || e.type === "email_clicked") {
@@ -1278,17 +1283,6 @@ function MachineBadge({ reason }: { reason?: string | null }) {
 function cap(s: string): string {
     if (!s || s === "unknown") return "";
     return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-// "Gmail", or "Chrome on Windows", or "Mobile" when the user agent said
-// little; empty when it said nothing.
-function originLabel(o: EngagementOrigin): string {
-    if (o.client) return o.client;
-    const browser = [o.browser, o.browser_version ? o.browser_version.split(".")[0] : ""].filter(Boolean).join(" ");
-    if (browser && o.os) return `${browser} on ${o.os}`;
-    if (browser) return browser;
-    if (o.os) return o.os;
-    return cap(o.device_type ?? "");
 }
 
 function EventMeta({
@@ -1444,9 +1438,14 @@ function EventMeta({
             );
         }
         if (event.origin) {
-            const on = originLabel(event.origin);
-            if (on) parts.push(<span key="origin">{on}</span>);
-            const where = [event.origin.city, event.origin.country_code].filter(Boolean).join(", ");
+            parts.push(
+                <OriginBadge
+                    key="origin"
+                    origin={event.origin}
+                    kind={event.type === "email_clicked" ? "click" : "open"}
+                />,
+            );
+            const where = originPlace(event.origin);
             if (where) {
                 parts.push(
                     <span key="where">
@@ -1476,7 +1475,7 @@ function EventMeta({
     if (parts.length === 0) return null;
 
     return (
-        <div className="text-[11px] text-slate-500 mt-0.5 flex gap-1.5 flex-wrap">
+        <div className="text-[11px] text-slate-500 mt-0.5 flex gap-1.5 flex-wrap items-center">
             {parts.map((p, i) => (
                 <React.Fragment key={i}>
                     {p}

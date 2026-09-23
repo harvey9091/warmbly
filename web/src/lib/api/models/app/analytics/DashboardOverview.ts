@@ -1,4 +1,5 @@
 import type { WorkspaceSendCapacity } from "@/lib/api/models/app/campaigns/SendPlan"
+import type { EngagementOrigin } from "@/lib/api/models/app/contacts/ContactTimelineEvent"
 
 // GET /analytics/dashboard?period=7d|30d|90d — a single (un-enveloped) object
 // mirroring the backend models.DashboardAnalytics. The previous flat shape
@@ -30,6 +31,8 @@ export interface RecentActivityItem {
     contact_id?: string
     timestamp: string
     link?: string
+    // Client, device and location of a person's open or click, when logged.
+    origin?: EngagementOrigin
 }
 
 export interface TopCampaignStats {
