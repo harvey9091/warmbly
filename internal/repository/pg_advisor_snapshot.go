@@ -186,11 +186,22 @@ func (r *advisorRepository) loadCampaigns(ctx context.Context, orgID uuid.UUID) 
 			WHERE ea.organization_id = c.organization_id
 			  AND ea.status = 'active'
 			  AND (
-			    EXISTS (SELECT 1 FROM campaign_senders cs WHERE cs.campaign_id = c.id AND cs.email_account_id = ea.id)
+			    EXISTS (SELECT 1 FROM campaign_senders cs WHERE cs.campaign_id = c.id AND cs.email_account_id = ea.id AND cs.enabled)
 			    OR EXISTS (
 			      SELECT 1 FROM campaign_email_tags cet
 			      JOIN email_tags et ON et.tag_id = cet.tag_id
 			      WHERE cet.campaign_id = c.id AND et.email_id = ea.id
+			    )
+			    -- The "all active mailboxes" fallback, on ResolveCampaignSenderPool's terms.
+			    OR (
+			      c.sender_strategy <> 'explicit'
+			      AND NOT EXISTS (SELECT 1 FROM campaign_email_tags cet WHERE cet.campaign_id = c.id)
+			      AND NOT EXISTS (
+			        SELECT 1 FROM campaign_senders cs
+			        JOIN email_accounts sea ON sea.id = cs.email_account_id
+			        WHERE cs.campaign_id = c.id AND cs.enabled
+			          AND sea.organization_id = c.organization_id AND sea.status = 'active'
+			      )
 			    )
 			  )
 		) snd ON true

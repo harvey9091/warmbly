@@ -39,14 +39,21 @@ func (h *Handler) auditOrg(c *gin.Context, action models.AuditAction, entityType
 // advice follows the change instead of the next scheduled pass. Campaign and
 // step edits are left to the schedule: they autosave, and each pass re-judges copy.
 func (h *Handler) refreshAdvisorAfter(orgID uuid.UUID, action models.AuditAction, entityType models.AuditEntityType) {
+	switch {
+	case entityType == models.AuditEntityEmailAccount,
+		action == models.AuditActionDelete && (entityType == models.AuditEntityCampaign || entityType == models.AuditEntitySequence),
+		entityType == models.AuditEntityCampaign && (action == models.AuditActionStart || action == models.AuditActionStop):
+		h.refreshAdvisorNow(orgID)
+	}
+}
+
+// refreshAdvisorNow re-evaluates the advisor now, for a change it reads that is
+// not an autosave (a campaign's sender pool, its start or stop).
+func (h *Handler) refreshAdvisorNow(orgID uuid.UUID) {
 	if h.AdvisorService == nil {
 		return
 	}
-	switch {
-	case entityType == models.AuditEntityEmailAccount,
-		action == models.AuditActionDelete && (entityType == models.AuditEntityCampaign || entityType == models.AuditEntitySequence):
-		advisor.RefreshNow(h.AdvisorService, orgID, "change")
-	}
+	advisor.RefreshNow(h.AdvisorService, orgID, "change")
 }
 
 // GetAuditLogs returns the organization-wide activity trail for the caller's
