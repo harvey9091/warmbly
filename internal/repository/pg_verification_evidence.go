@@ -26,13 +26,21 @@ type VerificationEvidenceRepository interface {
 	// ListForContact returns the contact's evidence, newest first.
 	ListForContact(ctx context.Context, contactID uuid.UUID) ([]models.ContactVerificationEvidence, error)
 	// Verdict reads the contact's current check verdict for scoring.
-	Verdict(ctx context.Context, contactID uuid.UUID) (emailverify.Verdict, error)
-	// SetScore writes the derived status and confidence.
+	Verdict(ctx context.Context, contactID uuid.UUID) (ContactVerdict, error)
+	// SetScore writes the derived status and confidence; a lapsed override falls back to the check's status.
 	SetScore(ctx context.Context, contactID uuid.UUID, status string, confidence int, reason string, lastPositive time.Time, decisive bool) error
 	// CreditCleanDeliveries records a delivered observation for every campaign
 	// step sent at least `window` ago that never bounced and is not yet in
 	// the ledger. Returns the contacts credited.
 	CreditCleanDeliveries(ctx context.Context, window time.Duration, limit int) ([]uuid.UUID, error)
+}
+
+// ContactVerdict is a contact's last verdict (the check's own status) and any re-check waiting on it.
+type ContactVerdict struct {
+	emailverify.Verdict
+	// Stored is verification_status as saved, after any override from real mail.
+	Stored      emailverify.Status
+	RequestedAt *time.Time
 }
 
 type verificationEvidenceRepository struct {
@@ -98,19 +106,26 @@ func (r *verificationEvidenceRepository) ListForContact(ctx context.Context, con
 	return out, rows.Err()
 }
 
-func (r *verificationEvidenceRepository) Verdict(ctx context.Context, contactID uuid.UUID) (emailverify.Verdict, error) {
-	var v emailverify.Verdict
-	var status, source string
+func (r *verificationEvidenceRepository) Verdict(ctx context.Context, contactID uuid.UUID) (ContactVerdict, error) {
+	var v ContactVerdict
+	var stored, status, source, provider string
 	var checked *time.Time
-	query := `SELECT verification_status, verification_source, verification_checked_at FROM contacts WHERE id = $1`
-	if err := r.DB.QueryRow(ctx, query, contactID).Scan(&status, &source, &checked); err != nil {
+	// The check's own status only means something for a check; an imported or
+	// manual verdict is its own status.
+	query := `
+		SELECT verification_status,
+		       CASE WHEN verification_source IN ('probe', 'provider') AND verification_check_status <> ''
+		            THEN verification_check_status ELSE verification_status END,
+		       verification_source, verification_provider, verification_checked_at, verification_requested_at
+		FROM contacts WHERE id = $1`
+	if err := r.DB.QueryRow(ctx, query, contactID).Scan(&stored, &status, &source, &provider, &checked, &v.RequestedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return v, errx.ErrNotFound
 		}
 		db.CaptureError(err, query, []any{contactID}, "queryrow")
 		return v, err
 	}
-	v.Status, v.Source = emailverify.Status(status), source
+	v.Stored, v.Status, v.Source, v.Provider = emailverify.Status(stored), emailverify.Status(status), source, provider
 	if checked != nil {
 		v.CheckedAt = *checked
 	}
@@ -122,15 +137,19 @@ func (r *verificationEvidenceRepository) SetScore(ctx context.Context, contactID
 	if !lastPositive.IsZero() {
 		lp = &lastPositive
 	}
-	// A decisive score from real mail replaces the status and says so in the
-	// reason; otherwise only the confidence moves and the check's own reason
-	// stays.
+	// Decisive real mail sets the status; otherwise a lapsed override falls back
+	// to the check's own status, read from the row so a check landing meanwhile wins.
 	query := `
 		UPDATE contacts
 		SET verification_confidence = $2,
 		    verification_evidence_at = COALESCE($3, verification_evidence_at),
-		    verification_status = CASE WHEN $5 THEN $4 ELSE verification_status END,
-		    verification_reason = CASE WHEN $5 THEN $6 ELSE verification_reason END,
+		    verification_status = CASE WHEN $5 THEN $4
+		        WHEN verification_source IN ('probe', 'provider') AND verification_check_status <> '' THEN verification_check_status
+		        ELSE verification_status END,
+		    verification_reason = CASE WHEN $5 THEN $6
+		        WHEN verification_source IN ('probe', 'provider') AND verification_check_status <> ''
+		             AND verification_check_status <> verification_status THEN $6
+		        ELSE verification_reason END,
 		    updated_at = NOW()
 		WHERE id = $1
 	`

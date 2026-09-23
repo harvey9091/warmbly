@@ -53,6 +53,15 @@ func TestMillionVerifierMapsResults(t *testing.T) {
 		t.Fatalf("no credits = %+v, %v", res, err)
 	}
 
+	// A subscription account reports its allowance apart from bought credits.
+	sub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"credits":0,"bulk_credits":0,"renewing_credits":5000,"plan":3}`))
+	}))
+	defer sub.Close()
+	if n, err := NewMillionVerifier("key", sub.URL).Account(context.Background()); err != nil || n == nil || *n != 5000 {
+		t.Fatalf("subscription allowance = %v, %v", n, err)
+	}
+
 	bad := NewMillionVerifier("wrong", srv.URL)
 	if _, err := bad.Credits(context.Background()); !errors.Is(err, ErrProviderKey) {
 		t.Fatalf("bad key = %v", err)

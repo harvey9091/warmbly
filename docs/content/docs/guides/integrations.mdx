@@ -35,7 +35,7 @@ Zapier, Make, and n8n connect in one click with nothing stored on the integratio
 </Callout>
 
 <Callout type="info" title="MillionVerifier is checked before it is saved">
-The key is tested against your MillionVerifier account when you connect, so a mistyped key is refused rather than silently leaving contacts on the built-in check. From then on every new contact, and every re-verify, spends one credit there. When the balance runs out or the key is revoked, the connection is marked and the built-in check covers until it is fixed. See [address verification](/guides/deliverability/#address-verification).
+The key is tested against your MillionVerifier account when you connect, so a mistyped key is refused rather than silently leaving contacts on the built-in check. From then on every new contact, and every re-verify, spends one credit there, from pay-as-you-go credits or a subscription's renewing allowance. Each verdict it produces reads **Verified with MillionVerifier** on the contact. When the balance runs out or the key is revoked, the connection is marked and the built-in check covers until it is fixed. See [address verification](/guides/deliverability/#address-verification).
 </Callout>
 
 **Credentials** (OAuth tokens, pasted keys, webhook URLs) are sealed with envelope encryption before touching the database. Only non-secret display details like an account name or Salesforce instance host are stored in the clear, so the dashboard can label the connection.

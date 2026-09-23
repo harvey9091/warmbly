@@ -416,9 +416,11 @@ func (s *service) verifyOrgBatch(ctx context.Context, orgID uuid.UUID, cands []r
 		go func(c repository.VerificationCandidate) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			// What real mail showed outranks what the check says.
-			res := s.evidence.Apply(ctx, c.ID, verify(ctx, c.Email))
-			if xerr := s.repo.UpdateContactVerification(ctx, c.ID, res); xerr != nil {
+			// What real mail showed outranks what the check says; the check's
+			// own answer is kept beside it for the drawer.
+			checked := verify(ctx, c.Email)
+			res := s.evidence.Apply(ctx, c.ID, checked)
+			if xerr := s.repo.UpdateContactVerification(ctx, c.ID, res, checked.Status, c.RequestedAt); xerr != nil {
 				// Skip this one; a transient DB error shouldn't abort the whole pass.
 				return
 			}
@@ -458,11 +460,12 @@ func (s *service) Request(ctx context.Context, orgID uuid.UUID, req models.Conta
 	resp := &models.ContactVerificationResponse{Action: req.Action}
 	switch req.Action {
 	case models.ContactVerificationActionVerify:
-		n, xerr := s.repo.ResetContactsVerification(ctx, orgID, ids)
+		n, xerr := s.repo.RequestContactsVerification(ctx, orgID, ids)
 		if xerr != nil {
 			return nil, xerr
 		}
 		resp.Affected, resp.Queued = n, true
+		resp.Verifier, resp.VerifierLabel, resp.VerifierError = s.verifierFor(ctx, orgID)
 		s.Kick()
 	case models.ContactVerificationActionMarkDeliverable:
 		n, xerr := s.repo.SetContactsVerification(ctx, orgID, ids, models.ContactVerificationWrite{
@@ -493,6 +496,20 @@ func (s *service) Request(ctx context.Context, orgID uuid.UUID, req models.Conta
 		return nil, errx.NewWithIdentifier(errx.BadRequest, "invalid_action", "action must be verify, mark_deliverable or mark_undeliverable")
 	}
 	return resp, nil
+}
+
+// verifierFor names who will run the org's next check, and why a connected
+// provider is being passed over when it is.
+func (s *service) verifierFor(ctx context.Context, orgID uuid.UUID) (name, label, problem string) {
+	name, label = emailverify.ProviderBuiltin, emailverify.ProviderLabel(emailverify.ProviderBuiltin)
+	p := s.providerFor(ctx, orgID)
+	if p == nil {
+		return name, label, ""
+	}
+	if _, err := s.providerUsable(ctx, p); err != nil {
+		return name, label, providerErrorText(p.Label, err)
+	}
+	return p.Name, p.Label, ""
 }
 
 func (s *service) Overview(ctx context.Context, orgID uuid.UUID) (*models.VerificationOverview, *errx.Error) {
@@ -527,9 +544,9 @@ func providerErrorText(label string, err error) string {
 	}
 	switch {
 	case errors.Is(err, emailverify.ErrProviderUnconfirmed):
-		return label + " has not had its account email confirmed yet. Confirm it, then reconnect."
+		return label + " has not had its account email confirmed yet. Confirm it, then reconnect; the built-in check is used meanwhile."
 	case errors.Is(err, emailverify.ErrProviderKey):
-		return label + " rejected the API key. Reconnect it with a current key."
+		return label + " rejected the API key. Reconnect it with a current key; the built-in check is used meanwhile."
 	case errors.Is(err, emailverify.ErrProviderCredits):
 		return "The " + label + " account has no allowance or credits left. Top it up to keep using it; the built-in check is used meanwhile."
 	default:

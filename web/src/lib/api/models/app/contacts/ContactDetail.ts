@@ -79,6 +79,17 @@ export interface ContactVerificationDetail {
     // True when real mail, not a check, decided the status.
     decisive: boolean;
     evidence: ContactVerificationEvidence[];
+    // Who produced the last verdict: "probe", "provider", "imported",
+    // "manual", or "" when never checked. provider_label is the verifier's
+    // display name ("MillionVerifier") when there is one.
+    source: "" | "probe" | "provider" | "imported" | "manual";
+    provider: string;
+    provider_label?: string;
+    // What that check said, before real mail was weighed against it.
+    check_status: "" | "valid" | "risky" | "invalid" | "unknown";
+    checked_at?: string | null;
+    // Set while a re-check a member asked for waits to run.
+    requested_at?: string | null;
 }
 
 export default interface ContactDetail extends Contact {
