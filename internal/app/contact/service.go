@@ -37,7 +37,7 @@ type ContactService interface {
 
 	// ImportPreview parses an uploaded CSV/XLSX file and reports back
 	// the columns + first N rows + suggested mapping — no DB writes.
-	ImportPreview(ctx context.Context, file io.Reader, filename string) (*models.ContactImportPreview, *errx.Error)
+	ImportPreview(ctx context.Context, orgID uuid.UUID, file io.Reader, filename string) (*models.ContactImportPreview, *errx.Error)
 
 	// ValidateImportMapping reports whether a column mapping is usable:
 	// exactly the checks ImportCommit runs before it touches a row. Callers

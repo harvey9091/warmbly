@@ -361,21 +361,23 @@ Send the file as `multipart/form-data` with a `file` form field. Uploads are cap
   "filename": "leads.csv",
   "format": "csv",
   "total_rows": 1243,
-  "columns": ["Email", "First", "Last", "Company"],
+  "columns": ["Email", "First", "Last", "Company", "industry", "Notes"],
   "has_header": true,
   "sample_rows": [
-    ["dana@acme.com", "Dana", "Reyes", "Acme"]
+    ["dana@acme.com", "Dana", "Reyes", "Acme", "Real Estate", "Met at SaaStr"]
   ],
   "suggested_mapping": [
     { "index": 0, "target": "email" },
     { "index": 1, "target": "first_name" },
     { "index": 2, "target": "last_name" },
-    { "index": 3, "target": "company" }
+    { "index": 3, "target": "company" },
+    { "index": 4, "target": "custom", "custom_key": "Industry" },
+    { "index": 5, "target": "ignore" }
   ]
 }
 ```
 
-`sample_rows` is capped at 20 rows. `suggested_mapping` is a default the client may override.
+`sample_rows` is capped at 20 rows. `suggested_mapping` is a default the client may override. A header that names one of the workspace's existing custom fields, ignoring case, spaces, underscores, dashes and dots, is suggested as `custom` with that field's stored spelling in `custom_key` (above, `industry` maps to the existing `Industry`). Each field is suggested for one column at most, standard fields are matched first, and a header that matches nothing is `ignore`. `GET /contacts/custom-fields` ([endpoints](/api/endpoints/#contacts)) lists the fields a mapping can target.
 
 ## Commit an import
 

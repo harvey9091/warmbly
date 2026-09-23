@@ -885,3 +885,43 @@ func TestLiveImportReportsAPinThatDidNotLand(t *testing.T) {
 		t.Fatalf("first note = %+v, want the segment-pin reason", first)
 	}
 }
+
+// Issue #649: a second import lands on the custom fields the first one made,
+// in their stored spelling, instead of starting near-duplicate fields.
+func TestLiveImportPreviewSuggestsExistingCustomFields(t *testing.T) {
+	f := newImportFixture(t)
+	if _, msg := f.commit(t, "Email,Industry,Company URL\ndana@acme.com,Real Estate,https://acme.com\n", &models.ContactImportCommit{
+		Mapping: []models.ContactImportColumnMapping{col(0, models.ContactImportTargetEmail), customCol(1, "Industry"), customCol(2, "company_url")},
+		Dedup:   models.ContactImportDedupSkip, HasHeader: true,
+	}); msg != "" {
+		t.Fatalf("seed import: %s", msg)
+	}
+
+	preview, xerr := f.svc.ImportPreview(context.Background(), f.org,
+		strings.NewReader("email,industry,company-url,Notes\nlee@beta.io,SaaS,https://beta.io,hi\n"), "next.csv")
+	if xerr != nil {
+		t.Fatalf("preview: %s", xerr.Message)
+	}
+	want := []models.ContactImportColumnMapping{
+		col(0, models.ContactImportTargetEmail),
+		customCol(1, "Industry"),
+		customCol(2, "company_url"),
+		col(3, models.ContactImportTargetIgnore),
+	}
+	for i, w := range want {
+		if preview.SuggestedMapping[i] != w {
+			t.Errorf("column %d: got %+v, want %+v", i, preview.SuggestedMapping[i], w)
+		}
+	}
+
+	// Another workspace's fields are never suggested.
+	other := newImportFixture(t)
+	preview, xerr = other.svc.ImportPreview(context.Background(), other.org,
+		strings.NewReader("email,industry\nlee@beta.io,SaaS\n"), "next.csv")
+	if xerr != nil {
+		t.Fatalf("preview: %s", xerr.Message)
+	}
+	if got := preview.SuggestedMapping[1].Target; got != models.ContactImportTargetIgnore {
+		t.Fatalf("another workspace's field was suggested: %q", got)
+	}
+}

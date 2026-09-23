@@ -110,7 +110,7 @@ func (s *service) Preview(ctx context.Context, orgID, connID uuid.UUID, sheetID,
 		Columns:          headers,
 		HasHeader:        true,
 		SampleRows:       sample,
-		SuggestedMapping: suggestMapping(headers),
+		SuggestedMapping: contact.SuggestMapping(headers, sample, s.existingCustomFieldKeys(ctx, orgID)),
 	}, nil
 }
 
@@ -415,34 +415,12 @@ func padRow(row []string, n int) []string {
 	return out
 }
 
-// suggestMapping applies the same fuzzy header heuristics the contact importer
-// uses so the dashboard's preview arrives with sensible defaults.
-func suggestMapping(headers []string) []models.ContactImportColumnMapping {
-	out := make([]models.ContactImportColumnMapping, len(headers))
-	for i, h := range headers {
-		out[i] = guessTarget(i, h)
+// existingCustomFieldKeys is the workspace's custom-field keys for the
+// suggester. A failed read only costs the suggestion, never the preview.
+func (s *service) existingCustomFieldKeys(ctx context.Context, orgID uuid.UUID) []string {
+	keys, xerr := s.contacts.ListCustomFieldKeys(ctx, orgID)
+	if xerr != nil {
+		return nil
 	}
-	return out
-}
-
-func guessTarget(idx int, header string) models.ContactImportColumnMapping {
-	key := strings.ToLower(header)
-	key = strings.NewReplacer(" ", "", "_", "", "-", "", ".", "").Replace(key)
-	switch key {
-	case "email", "emailaddress", "mail", "primaryemail":
-		return models.ContactImportColumnMapping{Index: idx, Target: models.ContactImportTargetEmail}
-	case "firstname", "givenname", "fname", "first":
-		return models.ContactImportColumnMapping{Index: idx, Target: models.ContactImportTargetFirstName}
-	case "lastname", "familyname", "surname", "lname", "last":
-		return models.ContactImportColumnMapping{Index: idx, Target: models.ContactImportTargetLastName}
-	case "company", "companyname", "organization", "organisation", "employer", "account", "accountname":
-		return models.ContactImportColumnMapping{Index: idx, Target: models.ContactImportTargetCompany}
-	case "phone", "phonenumber", "mobile", "cell":
-		return models.ContactImportColumnMapping{Index: idx, Target: models.ContactImportTargetPhone}
-	case "subscribed", "optin", "optedin", "subscribe":
-		return models.ContactImportColumnMapping{Index: idx, Target: models.ContactImportTargetSubscribed}
-	case "categories", "category", "tags", "tag", "labels", "label":
-		return models.ContactImportColumnMapping{Index: idx, Target: models.ContactImportTargetCategories}
-	}
-	return models.ContactImportColumnMapping{Index: idx, Target: models.ContactImportTargetIgnore}
+	return keys
 }
