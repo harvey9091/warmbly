@@ -117,6 +117,7 @@ func (s *Service) completeFinished(ctx context.Context) {
 		return
 	}
 	for _, f := range done {
+		s.forgetDomainSetup(f.ID)
 		s.publish(ctx, f.OrgID, f.ID, models.ImportCompleted, true)
 		if f.CreatedBy != nil {
 			s.audit(ctx, f.OrgID, *f.CreatedBy, models.AuditActionUpdate, f.ID, map[string]string{"status": models.ImportCompleted})
@@ -291,6 +292,8 @@ func (s *Service) domainExtras(ctx context.Context, w repository.ImportWorkRow, 
 	if p.RedirectURL != "" && s.domains != nil && w.CreatedBy != nil {
 		if _, done := s.redirected.LoadOrStore(w.ImportID.String()+"\x00"+domain, true); !done {
 			if xerr := s.domains.AutoRedirect(ctx, w.OrgID, *w.CreatedBy, domain, p.RedirectURL); xerr != nil {
+				// A later row or a retry tries again.
+				s.redirected.Delete(w.ImportID.String() + "\x00" + domain)
 				notes = append(notes, "Redirect not set up: "+xerr.Message)
 			}
 		}
@@ -630,4 +633,16 @@ func (s *Service) fillVendorPasswords(ctx context.Context, w repository.ImportWo
 		return causeInvalidValue, "The vendor returned no password for this mailbox. Add one to the row."
 	}
 	return "", ""
+}
+
+// forgetDomainSetup drops a finished import's once-per-domain marks, so the map
+// does not grow for the life of the process and a reopened import sets up again.
+func (s *Service) forgetDomainSetup(importID uuid.UUID) {
+	prefix := importID.String() + "\x00"
+	s.redirected.Range(func(k, _ any) bool {
+		if key, _ := k.(string); strings.HasPrefix(key, prefix) {
+			s.redirected.Delete(k)
+		}
+		return true
+	})
 }

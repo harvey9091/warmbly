@@ -115,9 +115,10 @@ func MailhostISPDB() bool {
 }
 
 // MailvendorSandboxURL points every inbox vendor client at the sandbox's mock
-// vendor API (<url>/<vendor>). Honoured only outside production.
+// vendor API (<url>/<vendor>). Honoured only in development (APP_ENV dev or
+// unset), so a stray value can never send real vendor keys elsewhere.
 func MailvendorSandboxURL() string {
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("APP_ENV")), "production") {
+	if env := strings.TrimSpace(os.Getenv("APP_ENV")); env != "" && !strings.EqualFold(env, "dev") {
 		return ""
 	}
 	return strings.TrimRight(strings.TrimSpace(os.Getenv("MAILVENDOR_SANDBOX_URL")), "/")

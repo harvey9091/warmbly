@@ -275,6 +275,14 @@ func TestVendorDomainsTakeTheEasyPath(t *testing.T) {
 	if _, _, xerr := s.VendorTracking(ctx, org, "acme.io", "track.elsewhere.com"); xerr == nil || xerr.Identifier != ErrIDTarget {
 		t.Fatalf("wrote a record for a host outside the domain: %v", xerr)
 	}
+	for _, host := range []string{"selector1._domainkey.acme.io", "_dmarc.acme.io", "x y.acme.io"} {
+		if _, _, xerr := s.VendorTracking(ctx, org, "acme.io", host); xerr == nil {
+			t.Fatalf("%q was accepted", host)
+		}
+	}
+	if len(v.records) != 1 {
+		t.Fatalf("a refused host reached the vendor: %v", v.records)
+	}
 
 	// Without a vendor, the redirect is served here once DNS proves the domain.
 	s.WireVendors(&fakeVendors{forwards: map[string]string{}})

@@ -81,7 +81,7 @@ func parsePaste(text string) [][]string {
 		if recs, err := r.ReadAll(); err == nil {
 			return recs
 		}
-	case strings.Contains(text, ","):
+	case strings.Contains(text, ",") && !addressPairs(lines):
 		r := csv.NewReader(strings.NewReader(text))
 		r.FieldsPerRecord = -1
 		r.LazyQuotes = true
@@ -149,4 +149,25 @@ func semicolonTable(text string) bool {
 		}
 	}
 	return true
+}
+
+// addressPairs is a list of "address:password" (or ";") lines, whose passwords
+// may hold commas: every line has an address, then the separator, before any comma.
+func addressPairs(lines []string) bool {
+	seen := false
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l == "" {
+			continue
+		}
+		i := strings.IndexAny(l, ":;")
+		if i <= 0 || !strings.Contains(l[:i], "@") {
+			return false
+		}
+		if c := strings.IndexByte(l, ','); c >= 0 && c < i {
+			return false
+		}
+		seen = true
+	}
+	return seen
 }

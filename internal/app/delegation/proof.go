@@ -283,6 +283,12 @@ func (s *Service) FinishMicrosoft(ctx context.Context, orgID, userID uuid.UUID, 
 	if _, err := uuid.Parse(tenant); !ok || err != nil {
 		return nil, errx.NewWithIdentifier(errx.BadRequest, ErrIDMicrosoftConsent, "Microsoft did not say which organization consented. Start again.")
 	}
+	// The consent alone proves nothing once another workspace has consented for
+	// the tenant; the person signing in must hold a role that can grant it.
+	if !microsoftConsentAdmin(claims) {
+		return nil, errx.NewWithIdentifier(errx.Forbidden, ErrIDProof,
+			"Sign in as a Global Administrator or Privileged Role Administrator of the organization to connect it.")
+	}
 	s.forget("m\x00" + tenant)
 	g, xerr := s.verifyMicrosoft(ctx, tenant)
 	if xerr != nil {
@@ -293,4 +299,21 @@ func (s *Service) FinishMicrosoft(ctx context.Context, orgID, userID uuid.UUID, 
 		return nil, errx.InternalError()
 	}
 	return s.get(ctx, orgID, g.ID)
+}
+
+// Directory roles that can grant tenant-wide consent to Graph application permissions.
+var microsoftAdminRoles = map[string]bool{
+	"62e90394-69f5-4237-9190-012177145e10": true, // Global Administrator
+	"e8611ab8-c189-46e8-94e1-60213ab1f814": true, // Privileged Role Administrator
+}
+
+// microsoftConsentAdmin reports whether the ID token's wids claim holds an administrator role.
+func microsoftConsentAdmin(claims map[string]any) bool {
+	wids, _ := claims["wids"].([]any)
+	for _, w := range wids {
+		if id, _ := w.(string); microsoftAdminRoles[strings.ToLower(id)] {
+			return true
+		}
+	}
+	return false
 }

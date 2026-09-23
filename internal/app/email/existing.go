@@ -141,8 +141,31 @@ func (s *emailService) reloadConverted(ctx context.Context, before *models.Email
 	if xerr := s.dropFromWorker(ctx, before.UserID, before.ID); xerr != nil {
 		log.Warn().Str("email_account_id", before.ID.String()).Str("error", xerr.Message).Msg("converted mailbox: worker drop failed; it reloads on that worker's next restart")
 	}
-	// Reactivating loads it onto its worker and publishes the change.
+	// A mailbox someone switched off stays off; one stopped by its broken sign-in
+	// is the reason to move it, so it comes back. Reactivating loads it and publishes.
+	if before.Status != "active" && !s.stoppedBySignin(ctx, before.ID) {
+		return s.emailRepository.GetByID(ctx, before.ID)
+	}
 	return s.reconnectAccount(ctx, before.ID)
+}
+
+// stoppedBySignin is a mailbox with an unresolved credential-class error.
+func (s *emailService) stoppedBySignin(ctx context.Context, accountID uuid.UUID) bool {
+	if s.accountErrors == nil {
+		return false
+	}
+	open, xerr := s.accountErrors.GetByAccountID(ctx, accountID, true)
+	if xerr != nil {
+		return false
+	}
+	for _, e := range open {
+		for _, c := range errx.CredentialMailErrorCodes {
+			if e.ErrorCode == string(c) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // SwitchToAppPassword moves a mailbox off per-mailbox Google sign-in onto

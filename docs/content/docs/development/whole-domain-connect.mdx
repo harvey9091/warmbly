@@ -172,7 +172,7 @@ Application permissions reach every mailbox in a consenting organization. We rec
 
 ### What the customer does
 
-A **Global Administrator** of the organization chooses **Add account > Microsoft > Whole organization**, signs in, and chooses **Accept** on Microsoft's consent screen once. The organization recorded is the one the administrator signed in to, as Microsoft reports it, never a value from the request. Then a member picks the mailboxes to connect.
+A **Global Administrator** of the organization chooses **Add account > Microsoft > Whole organization**, signs in, and chooses **Accept** on Microsoft's consent screen once. The organization recorded is the one the administrator signed in to, as Microsoft reports it, never a value from the request, and the grant is recorded only when that sign-in holds the Global Administrator or Privileged Role Administrator role in it. Then a member picks the mailboxes to connect.
 
 ### When Microsoft refuses
 
@@ -183,6 +183,8 @@ A **Global Administrator** of the organization chooses **Add account > Microsoft
 - **Permissions missing.** The app registration lacks one of the three application permissions, or they were added after the organization consented. A consent covers only the permissions the app had at the time, so the administrator has to consent again after a change
 - **Single tenant.** The app registration is not multitenant, so other organizations cannot find it
 - **Unknown organization.** Microsoft does not know the tenant the consent named
+
+`mailbox_grant_proof_missing` from the Microsoft consent means the person who signed in does not hold the Global Administrator or Privileged Role Administrator role in the organization. Sign in with an account that does.
 
 See [`microsoft_consent_missing`](/api/error-codes/#mailbox-source-refusals).
 

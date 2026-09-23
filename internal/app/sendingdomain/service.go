@@ -464,6 +464,10 @@ func (s *Service) writeTrackingCNAME(ctx context.Context, orgID uuid.UUID, domai
 	if xerr := s.ownDomain(ctx, orgID, domain); xerr != nil {
 		return xerr
 	}
+	// Checked before any vendor write: the upsert replaces whatever record sits at the name.
+	if xerr := validate.ValidateTrackingDomain(host); xerr != nil {
+		return xerr
+	}
 	target := s.target()
 	if target == "" {
 		return errx.NewWithIdentifier(errx.BadRequest, ErrIDNoTracking, "Open and click tracking is not set up on this instance.")

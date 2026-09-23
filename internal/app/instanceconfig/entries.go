@@ -786,7 +786,7 @@ var table = []Entry{
 	},
 	{
 		Key: "MAILVENDOR_SANDBOX_URL", Group: GroupWorkers, RuntimeChangeable: ChangeBootOnly,
-		Effect:     "Development only: points every inbox vendor client at the sandbox's mock vendor API. Ignored when APP_ENV is production.",
+		Effect:     "Development only: points every inbox vendor client at the sandbox's mock vendor API. Ignored unless APP_ENV is dev.",
 		DocsAnchor: docsWorkers,
 		Resolve:    func(*Runtime) string { return config.MailvendorSandboxURL() },
 	},

@@ -78,7 +78,7 @@ import type MailboxAllowance from "@/lib/api/models/app/emails/MailboxAllowance"
 import MailboxAllowanceDialog from "@/components/app/emails/MailboxAllowanceDialog";
 import GmailAppPasswordPanel from "@/components/app/emails/GmailAppPasswordPanel";
 import MailboxImportWizard from "@/components/app/emails/import/MailboxImportWizard";
-import VendorImportWizard from "@/components/app/emails/import/vendor/VendorImportWizard";
+import VendorImportWizard from "@/components/app/emails/import/vendors/VendorImportWizard";
 import GrantImportWizard from "@/components/app/emails/import/grants/GrantImportWizard";
 import ProviderLogo, { LogoStack } from "@/components/app/emails/ProviderLogo";
 import { useGrantConfig } from "@/lib/api/hooks/app/emails/useMailboxGrants";

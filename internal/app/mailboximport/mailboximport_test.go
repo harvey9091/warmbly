@@ -382,3 +382,14 @@ func TestPasteReadsASemicolonTable(t *testing.T) {
 		t.Fatalf("pairs = %q", pairs)
 	}
 }
+
+func TestPasteKeepsPairsWhosePasswordHasAComma(t *testing.T) {
+	rows := parsePaste("a@x.test:pa,ss\nb@x.test:secret\n")
+	if len(rows) != 2 || rows[0][0] != "a@x.test" || rows[0][1] != "pa,ss" || rows[1][1] != "secret" {
+		t.Fatalf("rows = %q", rows)
+	}
+	csv := parsePaste("email,password\na@x.test,secret\n")
+	if len(csv) != 2 || len(csv[1]) != 2 || csv[1][1] != "secret" {
+		t.Fatalf("csv = %q", csv)
+	}
+}

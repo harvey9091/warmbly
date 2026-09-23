@@ -138,6 +138,15 @@ func (s *emailService) LoadAccountOntoWorker(ctx context.Context, accountID uuid
 	if acc.Status != "active" {
 		return nil
 	}
+	// A delegated mailbox without its grant (it arrived in an archive, or the grant
+	// went) has nothing to sign in with; it waits inactive until the domain is
+	// connected again, which relinks and reactivates it.
+	if acc.AuthMethod == models.MailAuthDelegated && acc.DomainGrantID == nil {
+		if xerr := s.emailRepository.SetStatus(ctx, acc.ID, "inactive"); xerr != nil {
+			return xerr
+		}
+		return nil
+	}
 
 	workerID, rerr := s.releaseDeadWorker(ctx, acc.ID, acc.WorkerID)
 	if rerr != nil {

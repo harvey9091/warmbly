@@ -281,6 +281,50 @@ func TestLiveMailboxSourcesSigninConversions(t *testing.T) {
 		}
 	})
 
+	t.Run("an Outlook move drops its Graph cursors", func(t *testing.T) {
+		box := signin("ol-" + f.org.String()[:8] + "@conv.io")
+		if _, err := pool.Exec(ctx, `UPDATE email_accounts SET provider = 'outlook' WHERE id = $1`, box); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO email_delta_links (user_id, email_id, folder, delta_link) VALUES ($1, $2, 'inbox', 'https://graph.microsoft.com/v1.0/me/x')`, f.owner, box); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO email_sync_state (email_id, user_id, backfill_status, backfill_cursor) VALUES ($1, $2, 'running', '{"inbox":"https://graph.microsoft.com/v1.0/me/next"}')`, box, f.owner); err != nil {
+			t.Fatal(err)
+		}
+		mg := &models.DomainGrant{ID: uuid.New(), OrganizationID: f.org, Provider: models.GrantProviderMicrosoft, Tenant: "t-conv", Domains: []string{"conv.io"}}
+		mustImport(t, grants.Upsert(ctx, mg, f.owner))
+		if ok, xerr := emails.ConvertToDelegated(ctx, f.org, box, models.InboxProviderOutlook, mg.ID, "graph-user", "microsoft365"); xerr != nil || !ok {
+			t.Fatalf("convert = %v, %v", ok, xerr)
+		}
+		var links int
+		var cursor, status string
+		_ = pool.QueryRow(ctx, `SELECT count(*) FROM email_delta_links WHERE email_id = $1`, box).Scan(&links)
+		_ = pool.QueryRow(ctx, `SELECT backfill_cursor::text, backfill_status FROM email_sync_state WHERE email_id = $1`, box).Scan(&cursor, &status)
+		if links != 0 || cursor != "{}" || status != "running" {
+			t.Fatalf("links %d, cursor %s, status %s", links, cursor, status)
+		}
+	})
+
+	t.Run("a mailbox managed elsewhere is never offered or moved", func(t *testing.T) {
+		box := signin("managed-" + f.org.String()[:8] + "@conv.io")
+		if _, err := pool.Exec(ctx, `INSERT INTO cloud_link_mailboxes (email_account_id, remote_id, managed) VALUES ($1, $2, true)`, box, uuid.New()); err != nil {
+			t.Fatal(err)
+		}
+		list, _ := emails.ListSigninRetiring(ctx, f.org)
+		for _, m := range list {
+			if m.ID == box {
+				t.Fatal("a managed mailbox was offered for the move")
+			}
+		}
+		if ok, _ := emails.ConvertToDelegated(ctx, f.org, box, models.InboxProviderGoogle, g.ID, "x", ""); ok {
+			t.Fatal("a managed mailbox was moved onto the grant")
+		}
+		if ref, _ := emails.FindInOrganization(ctx, f.org, "managed-"+f.org.String()[:8]+"@conv.io"); ref == nil || !ref.Managed {
+			t.Fatalf("ref = %+v", ref)
+		}
+	})
+
 	t.Run("onto an app password, in place", func(t *testing.T) {
 		creds := &models.SmtpImap{
 			SMTP: &models.Service{Host: "smtp.gmail.com", Port: 587, Username: "me@gmail.com", Password: "abcdabcdabcdabcd"},

@@ -149,6 +149,8 @@ type fakeProviders struct {
 	subjects     []string
 	// What the next sign-in or consent token says.
 	signinEmail, signinHD, consentTenant string
+	// consentRoles are the directory role template ids in the consent's ID token; nil means a Global Administrator.
+	consentRoles []any
 }
 
 func fakeIDToken(claims map[string]any) string {
@@ -198,7 +200,7 @@ func newProviders(t *testing.T) *fakeProviders {
 	})
 	mux.HandleFunc("/ms/organizations/oauth2/v2.0/token", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"access_token": "x", "token_type": "Bearer", "expires_in": 3600,
-			"id_token": fakeIDToken(map[string]any{"tid": f.consentTenant})})
+			"id_token": fakeIDToken(map[string]any{"tid": f.consentTenant, "wids": f.roles()})})
 	})
 	mux.HandleFunc("/ms/", func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, "11111111-1111-1111-1111-111111111111") {
@@ -517,5 +519,33 @@ func TestSigninMailboxesMoveOntoTheGrant(t *testing.T) {
 	}
 	if groups, _ := s.SigninMigration(context.Background(), uuid.New()); len(groups) != 3 || groups[0].GrantID != nil {
 		t.Fatal("another workspace's grant was offered")
+	}
+}
+
+func (f *fakeProviders) roles() []any {
+	if f.consentRoles == nil {
+		return []any{"b79fbf4d-3ef9-4689-8143-76b194e85509", "62e90394-69f5-4237-9190-012177145e10"}
+	}
+	return f.consentRoles
+}
+
+func TestMicrosoftGrantNeedsAnAdministratorsSignin(t *testing.T) {
+	s, p, grants, _, _ := newTestService(t)
+	org, user := uuid.New(), uuid.New()
+	p.consentTenant = "11111111-1111-1111-1111-111111111111"
+	for _, roles := range [][]any{{}, {"b79fbf4d-3ef9-4689-8143-76b194e85509"}, {"9b895d92-2cd3-44c7-9d02-a6ac2d5ea5c3"}} {
+		p.consentRoles = roles
+		_, state, _ := s.StartMicrosoft(context.Background(), org, user)
+		if _, xerr := s.FinishMicrosoft(context.Background(), org, user, state, "code"); xerr == nil || xerr.Identifier != ErrIDProof {
+			t.Fatalf("roles %v recorded a grant: %v", roles, xerr)
+		}
+	}
+	if len(grants.grants) != 0 {
+		t.Fatal("a refused consent left a grant behind")
+	}
+	p.consentRoles = []any{"E8611AB8-C189-46E8-94E1-60213AB1F814"}
+	_, state, _ := s.StartMicrosoft(context.Background(), org, user)
+	if _, xerr := s.FinishMicrosoft(context.Background(), org, user, state, "code"); xerr != nil {
+		t.Fatalf("a Privileged Role Administrator was refused: %v", xerr)
 	}
 }

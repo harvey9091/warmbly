@@ -329,7 +329,9 @@ func (s *Service) client(ctx context.Context, c *models.VendorConnection) (mailv
 	return client, nil
 }
 
+// forget drops a connection's cached clients and domain list, so a changed or removed key is never used again.
 func (s *Service) forget(id uuid.UUID) {
+	s.forgetDomains(id)
 	prefix := id.String() + ":"
 	s.clients.Range(func(k, _ any) bool {
 		if strings.HasPrefix(k.(string), prefix) {

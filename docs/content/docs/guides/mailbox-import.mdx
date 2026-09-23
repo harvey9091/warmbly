@@ -176,7 +176,7 @@ Connecting mailboxes through a grant and deleting a grant both reach a whole dom
 
 A Global Administrator can approve Warmbly once for the whole Microsoft 365 organization. Mailboxes then connect through Microsoft Graph with application permissions: no sign-in per mailbox. It is the recommended way to connect Microsoft 365 mailboxes.
 
-Choose **Add account**, then **Microsoft**, then **Whole organization**, and have a Global Administrator sign in on the Microsoft consent screen that opens and choose **Accept**. That is the only step on the Microsoft side, and it happens once. On a self-hosted instance the option needs the operator's Microsoft app set up first; see [whole-domain mailbox connects](/development/whole-domain-connect/#microsoft-365). The consent gives the instance's Microsoft app these application permissions in the organization:
+Choose **Add account**, then **Microsoft**, then **Whole organization**, and have a Global Administrator (or Privileged Role Administrator) sign in on the Microsoft consent screen that opens and choose **Accept**. Warmbly records the organization only when the person who signed in holds one of those roles. That is the only step on the Microsoft side, and it happens once. On a self-hosted instance the option needs the operator's Microsoft app set up first; see [whole-domain mailbox connects](/development/whole-domain-connect/#microsoft-365). The consent gives the instance's Microsoft app these application permissions in the organization:
 
 | Permission | What it is for |
 | --- | --- |

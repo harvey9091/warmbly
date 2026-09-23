@@ -352,8 +352,10 @@ func (r *emailRepository) NewDelegatedAccount(ctx context.Context, userID string
 	return r.GetByID(ctx, id)
 }
 
-// managedExpr is whether the mailbox aliased ea signs in through Warmbly Cloud.
-const managedExpr = `EXISTS (SELECT 1 FROM cloud_link_mailboxes clm WHERE clm.email_account_id = ea.id AND clm.managed)`
+// managedExpr is whether the mailbox aliased ea holds a token another instance
+// depends on: managed through Warmbly Cloud here, or lent to a linked instance.
+const managedExpr = `(EXISTS (SELECT 1 FROM cloud_link_mailboxes clm WHERE clm.email_account_id = ea.id AND clm.managed)
+	OR EXISTS (SELECT 1 FROM pool_link_mailboxes plm WHERE plm.email_account_id = ea.id AND plm.managed))`
 
 // ConvertToDelegated moves a per-mailbox sign-in onto an administrator's grant
 // in place, so its history, campaigns and warmup stay; the stored token goes.
@@ -361,8 +363,15 @@ func (r *emailRepository) ConvertToDelegated(ctx context.Context, orgID, account
 	query := `UPDATE email_accounts ea SET auth_method = 'delegated', domain_grant_id = $4, delegated_subject = $5,
 		       mail_host = CASE WHEN $6 = '' THEN mail_host ELSE $6 END, updated_at = now()
 		WHERE organization_id = $1 AND id = $2 AND provider = $3::email_provider AND auth_method = 'oauth' AND NOT ` + managedExpr
-	return r.convertTx(ctx, query, []any{orgID, accountID, string(provider), grantID, subject, mailHost},
-		[]txStep{{`DELETE FROM email_accounts_oauth WHERE email_account_id = $1`, []any{accountID}}})
+	steps := []txStep{{`DELETE FROM email_accounts_oauth WHERE email_account_id = $1`, []any{accountID}}}
+	if provider == models.InboxProviderOutlook {
+		// Graph cursors name /me, which an application token cannot call; the
+		// worker re-primes each folder from "now" and restarts any unfinished backfill.
+		steps = append(steps,
+			txStep{`DELETE FROM email_delta_links WHERE email_id = $1`, []any{accountID}},
+			txStep{`UPDATE email_sync_state SET backfill_cursor = '{}'::jsonb, updated_at = now() WHERE email_id = $1`, []any{accountID}})
+	}
+	return r.convertTx(ctx, query, []any{orgID, accountID, string(provider), grantID, subject, mailHost}, steps)
 }
 
 // ConvertGoogleToAppPassword moves a per-mailbox Google sign-in onto IMAP and
