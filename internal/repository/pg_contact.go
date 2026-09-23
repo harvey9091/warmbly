@@ -665,8 +665,8 @@ func (r *contactRepository) UpdateContactVerification(ctx context.Context, conta
 		checkStatus = emailverify.Status(status)
 	}
 
-	// A request that arrived while this check ran is newer than it, so only
-	// the request the check was picked for is cleared.
+	// Only the request this check answers is cleared, and a manual verdict set
+	// while it ran is not overwritten.
 	query := `
 		UPDATE contacts
 		SET verification_status = $2,
@@ -683,6 +683,7 @@ func (r *contactRepository) UpdateContactVerification(ctx context.Context, conta
 		        ELSE verification_requested_at END,
 		    updated_at = NOW()
 		WHERE id = $1
+		  AND (verification_source <> 'manual' OR ($11::timestamptz IS NOT NULL AND verification_requested_at IS NOT NULL))
 	`
 	params := []any{contactID, status, res.Reason, res.IsCatchAll, checkedAt, source, provider, string(res.SubStatus), res.Confidence, string(checkStatus), requestedAt}
 	cmd, err := r.DB.Exec(ctx, query, params...)
@@ -719,21 +720,21 @@ func (r *contactRepository) ListVerificationCandidates(ctx context.Context, limi
 	if limit <= 0 {
 		limit = 100
 	}
+	// Requests take at most half a batch first, so one workspace's bulk
+	// re-verify cannot hold every other workspace's new contacts back.
 	requestedQuery := `
 		SELECT c.id, c.organization_id, c.email, c.verification_requested_at
 		FROM contacts c
 		WHERE c.verification_requested_at IS NOT NULL
 		  AND c.organization_id IS NOT NULL
 		ORDER BY c.verification_requested_at ASC, c.id
-		LIMIT $1
+		LIMIT $1 OFFSET $2
 	`
 	out := make([]VerificationCandidate, 0, limit)
-	if xerr := r.scanVerificationCandidates(ctx, requestedQuery, []any{limit}, &out); xerr != nil {
+	if xerr := r.scanVerificationCandidates(ctx, requestedQuery, []any{(limit + 1) / 2, 0}, &out); xerr != nil {
 		return nil, xerr
 	}
-	if len(out) >= limit {
-		return out, nil
-	}
+	requested := len(out)
 
 	query := `
 		SELECT c.id, c.organization_id, c.email, c.verification_requested_at
@@ -777,6 +778,12 @@ func (r *contactRepository) ListVerificationCandidates(ctx context.Context, limi
 	}
 	if xerr := r.scanVerificationCandidates(ctx, query, params, &out); xerr != nil {
 		return nil, xerr
+	}
+	// Room the backlog left goes back to requests.
+	if len(out) < limit && requested == (limit+1)/2 {
+		if xerr := r.scanVerificationCandidates(ctx, requestedQuery, []any{limit - len(out), requested}, &out); xerr != nil {
+			return nil, xerr
+		}
 	}
 	return out, nil
 }

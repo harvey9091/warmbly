@@ -249,7 +249,7 @@ type ContactsCounts struct {
 }
 
 // ContactVerificationCounts is the org's contacts by verification status.
-// Pending is the subset of Unknown nobody has checked yet.
+// Pending counts contacts never checked plus those with a re-check queued.
 type ContactVerificationCounts struct {
 	Valid   int `json:"valid"`
 	Risky   int `json:"risky"`

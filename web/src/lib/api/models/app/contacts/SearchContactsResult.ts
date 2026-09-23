@@ -19,8 +19,8 @@ export interface ContactsCounts {
     verification?: ContactVerificationCounts;
 }
 
-// Org contacts by verification verdict. pending is the subset of unknown
-// nobody has checked yet.
+// Org contacts by verification verdict. pending counts contacts never checked
+// plus those with a re-check queued.
 export interface ContactVerificationCounts {
     valid: number;
     risky: number;

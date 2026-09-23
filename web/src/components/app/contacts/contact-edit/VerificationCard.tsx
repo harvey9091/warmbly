@@ -1,8 +1,7 @@
 // The "why" behind a contact's deliverability verdict: an animated
 // confidence ring, who produced it, the reasons in plain words, and the
 // observations they were scored from. Absence of engagement is never listed,
-// because it is not evidence of anything. Re-verify queues a fresh check; the
-// current verdict stands until it lands, live.
+// because it is not evidence of anything.
 
 import { AnimatePresence, motion } from "framer-motion";
 import { Link } from "react-router-dom";

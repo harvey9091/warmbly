@@ -119,7 +119,7 @@ func TestLiveVerificationRequestReachesTheVerifier(t *testing.T) {
 
 	// Scoring starts from what the check said, not from the stored override.
 	v, err := evidence.Verdict(ctx, paid)
-	if err != nil || v.Status != emailverify.StatusInvalid || v.Provider != emailverify.ProviderMillionVerifier {
+	if err != nil || v.Status != emailverify.StatusInvalid || v.Stored != emailverify.StatusValid || v.Provider != emailverify.ProviderMillionVerifier {
 		t.Fatalf("verdict = %+v, %v", v, err)
 	}
 
@@ -131,6 +131,49 @@ func TestLiveVerificationRequestReachesTheVerifier(t *testing.T) {
 	}
 	if _, _, requested := status(manual); requested != nil {
 		t.Fatal("a manual verdict left the re-check waiting")
+	}
+
+	// A manual verdict set while a requested check runs is not overwritten.
+	if _, xerr := repo.RequestContactsVerification(ctx, f.org, []uuid.UUID{manual}); xerr != nil {
+		t.Fatalf("request: %v", xerr)
+	}
+	inFlight := candidate(manual)
+	if _, xerr := repo.SetContactsVerification(ctx, f.org, []uuid.UUID{manual}, models.ContactVerificationWrite{
+		Status: "invalid", Reason: "marked", Provider: "manual", Source: models.VerificationSourceManual,
+	}); xerr != nil {
+		t.Fatalf("set: %v", xerr)
+	}
+	_ = repo.UpdateContactVerification(ctx, manual, res, emailverify.StatusValid, inFlight.RequestedAt)
+	if s, _, _ := status(manual); s != "invalid" {
+		t.Fatalf("a check that was in flight overwrote the manual verdict with %q", s)
+	}
+
+	// A lapsed override falls back to what the row says the check answered,
+	// even when the rescore read an older check.
+	exec(`UPDATE contacts SET verification_status = 'valid', verification_check_status = 'invalid' WHERE id = $1`, paid)
+	if err := evidence.SetScore(ctx, paid, "valid", 40, "stale read", time.Time{}, false); err != nil {
+		t.Fatalf("set score: %v", err)
+	}
+	if s, _, _ := status(paid); s != "invalid" {
+		t.Fatalf("a non-decisive rescore wrote %q over the check's own verdict", s)
+	}
+
+	// Requests take at most half a batch while the backlog has work.
+	var queued []uuid.UUID
+	for i := 0; i < 3; i++ {
+		queued = append(queued, contact("valid", "provider", "millionverifier"))
+	}
+	fresh := contact("unknown", "", "")
+	exec(`UPDATE contacts SET verification_checked_at = NULL, verification_evidence_at = NULL WHERE id = $1`, fresh)
+	if _, xerr := repo.RequestContactsVerification(ctx, f.org, queued); xerr != nil {
+		t.Fatalf("request: %v", xerr)
+	}
+	got, xerr := repo.ListVerificationCandidates(ctx, 2)
+	if xerr != nil || len(got) != 2 {
+		t.Fatalf("batch = %v, %v", got, xerr)
+	}
+	if got[0].RequestedAt == nil || got[1].RequestedAt != nil {
+		t.Fatalf("a bulk re-verify took the whole batch from the backlog: %+v", got)
 	}
 
 	// Another workspace cannot queue checks on this one's contacts.

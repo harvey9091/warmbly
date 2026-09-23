@@ -73,7 +73,7 @@ func (e *Evidence) Rescore(ctx context.Context, contactID uuid.UUID) {
 	if err := e.repo.SetScore(ctx, contactID, string(scored.Status), scored.Confidence, reason, scored.LastPositiveAt, scored.Decisive); err != nil {
 		return
 	}
-	if scored.Decisive && scored.Status != verdict.Status && e.onChange != nil {
+	if scored.Decisive && scored.Status != verdict.Stored && e.onChange != nil {
 		e.onChange(ctx, contactID)
 	}
 }

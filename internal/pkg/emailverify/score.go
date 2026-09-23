@@ -115,10 +115,7 @@ func verdictBase(v Verdict) (int, string) {
 // the address is deliverable regardless of what a check said.
 const PositiveDecisiveScore = 20.0
 
-// ProviderOutranksEvidenceAfter is how much newer than every observation of
-// real mail a paid verifier's decisive verdict must be to stand over it:
-// mailboxes are closed, and a fresh answer about one outranks a stale sign of
-// life. Inside it, real mail still wins.
+// ProviderOutranksEvidenceAfter is how much newer than all real mail a paid verifier's verdict must be to stand over it.
 const ProviderOutranksEvidenceAfter = 30 * 24 * time.Hour
 
 // Score derives an address's status and confidence from its last verdict and

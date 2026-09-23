@@ -1,8 +1,5 @@
--- A member's re-verify is recorded beside the verdict it replaces, so the
--- current verdict (and every campaign routing on it) stands until the new
--- check lands. verification_check_status is what that check itself said,
--- before real mail to the address was weighed against it; '' reads as
--- verification_status for verdicts stored before it existed.
+-- A queued re-verify beside the verdict it replaces, and what the last check
+-- itself said before real mail was weighed in ('' for older verdicts).
 ALTER TABLE public.contacts
     ADD COLUMN IF NOT EXISTS verification_requested_at timestamptz,
     ADD COLUMN IF NOT EXISTS verification_check_status text NOT NULL DEFAULT '';
