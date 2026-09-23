@@ -944,8 +944,10 @@ func suggestMapping(headers []string, sample [][]string, shapes []importmap.Shap
 		}
 		out[i] = models.ContactImportColumnMapping{Index: i, Target: models.ContactImportTargetVerificationStatus, VerificationProvider: provider}
 	}
-	matchExistingCustomFields(out, headers, existingKeys)
+	// Email first: a custom field must never take the one column an import
+	// cannot go without.
 	matchEmailByValues(out, shapes)
+	matchExistingCustomFields(out, headers, existingKeys)
 	return out
 }
 

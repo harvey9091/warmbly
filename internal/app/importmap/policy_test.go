@@ -84,13 +84,18 @@ func TestInferAsksOnlyAboutUnmappedColumnsAndSendsNoValues(t *testing.T) {
 }
 
 func TestInferSendsNothingWhenTheHeaderRowIsData(t *testing.T) {
-	// A sheet with no header row: its first contact became the headers.
+	// A sheet with no header row: its first contact became the headers. The
+	// last has a blank address, so only the missing Email header gives it away.
 	for _, headers := range [][]string{
 		{"dana@acme.com", "Dana", "Reyes", "Acme BV"},
 		{"Email", "Dana", "2026-09-05", "Acme BV"},
+		{"", "Dana", "Reyes", "Acme BV"},
+		{"Column 1", "Dana", "Reyes", "Acme BV"},
 	} {
 		f := &fakeAsker{}
-		got, inferred := Infer(context.Background(), f, ignored(len(headers)), headers,
+		mapping := ignored(len(headers))
+		mapping[0].Target = models.ContactImportTargetEmail
+		got, inferred := Infer(context.Background(), f, mapping, headers,
 			[]Shape{ShapeEmail, ShapeText, ShapeText, ShapeText}, nil)
 		if f.calls != 0 || inferred != nil || got[1].Target != models.ContactImportTargetIgnore {
 			t.Fatalf("header row %q reached the judge", headers)
@@ -167,10 +172,20 @@ func TestInferAppliesConfidentAnswersAndCodeDecidesTheRest(t *testing.T) {
 	}
 }
 
+func TestInferNeedsAnEmailColumn(t *testing.T) {
+	f := &fakeAsker{}
+	Infer(context.Background(), f, ignored(2), []string{"Name", "Sector"}, []Shape{ShapeText, ShapeText}, nil)
+	if f.calls != 0 {
+		t.Fatalf("asked about a file with no Email column, whose header row cannot be told from a contact")
+	}
+}
+
 func TestInferSendsLongHeadersCapped(t *testing.T) {
 	long := "What is the primary reason your company is evaluating outreach tools this quarter, in a few words?"
 	f := &fakeAsker{}
-	Infer(context.Background(), f, ignored(2), []string{"Email", long}, []Shape{ShapeEmail, ShapeText}, nil)
+	mapping := ignored(2)
+	mapping[0].Target = models.ContactImportTargetEmail
+	Infer(context.Background(), f, mapping, []string{"Email", long}, []Shape{ShapeEmail, ShapeText}, nil)
 	q, ok := f.questions["column_2"]
 	if !ok {
 		t.Fatalf("a long header was not asked about")
@@ -228,7 +243,9 @@ func TestQuestionsStayWithinTheAPILimits(t *testing.T) {
 		shapes[i] = ShapeText
 	}
 	f := &fakeAsker{}
-	Infer(context.Background(), f, ignored(90), headers, shapes, keys)
+	mapping := ignored(91)
+	mapping[90].Target = models.ContactImportTargetEmail
+	Infer(context.Background(), f, mapping, append(headers, "Email"), append(shapes, ShapeEmail), keys)
 	if len(f.questions) != MaxQuestions {
 		t.Fatalf("asked %d questions, want %d", len(f.questions), MaxQuestions)
 	}

@@ -90,9 +90,7 @@ func Infer(
 	shapes []Shape,
 	existingKeys []string,
 ) ([]models.ContactImportColumnMapping, []int) {
-	// A header row holding an address, a date or a number is a data row, so
-	// sending it would send a contact.
-	if asker == nil || headerRowIsData(headers) {
+	if asker == nil || !headersAreNames(mapping, headers) {
 		return mapping, nil
 	}
 	taken := takenTargets(mapping)
@@ -230,14 +228,21 @@ func columnCriteria(options map[string]offer, holds Shape) map[string]string {
 	return out
 }
 
-// headerRowIsData reports whether any header cell is shaped like a value
-// rather than a name.
-func headerRowIsData(headers []string) bool {
+// headersAreNames reports whether the header row is headers rather than a
+// contact. No cell may be shaped like a value, and the Email column needs a
+// real header: in a contact's row that cell is its address or blank.
+func headersAreNames(mapping []models.ContactImportColumnMapping, headers []string) bool {
 	for _, h := range headers {
 		switch ShapeOf([]string{h}) {
 		case ShapeText, ShapeLongText, ShapeEmpty:
 		default:
-			return true
+			return false
+		}
+	}
+	for _, m := range mapping {
+		if m.Target == models.ContactImportTargetEmail && m.Index < len(headers) {
+			h := strings.TrimSpace(headers[m.Index])
+			return h != "" && !placeholderRe.MatchString(h)
 		}
 	}
 	return false

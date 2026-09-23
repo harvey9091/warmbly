@@ -81,6 +81,12 @@ func TestSuggestMappingFindsEmailByItsValues(t *testing.T) {
 		t.Fatalf("a column of addresses mapped to %q, want email", got[1].Target)
 	}
 
+	// An existing custom field of the same name does not take it.
+	got = SuggestMapping([]string{"Name", "Work contact"}, sample, []string{"Work contact"})
+	if got[1].Target != models.ContactImportTargetEmail {
+		t.Fatalf("a custom field took the only column of addresses: %+v", got[1])
+	}
+
 	// A named email column is never second-guessed by the values.
 	got = SuggestMapping([]string{"Email", "Backup"}, [][]string{{"a@x.com", "b@y.com"}}, nil)
 	if got[0].Target != models.ContactImportTargetEmail || got[1].Target != models.ContactImportTargetIgnore {
