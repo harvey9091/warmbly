@@ -57,7 +57,7 @@ Rotation chooses a mailbox for a lead's **first** email, and that mailbox sends 
 | Round-robin | Cycles in order: `A`, `B`, `C`, back to `A` |
 | Weighted | Sends more from healthier, higher-limit mailboxes |
 
-Whichever mode you pick, it decides which mailbox **starts** a lead. Every mailbox still stays inside its own daily cap and minimum gap, so a campaign's volume is the sum of its mailboxes' budgets as always.
+Whichever mode you pick, it decides which mailbox **starts** a lead. Every mailbox still stays inside its own daily cap and minimum gap, so a campaign's volume is the sum of its mailboxes' budgets as always. Rotation only chooses among mailboxes whose minimum gap has passed, and warmup mail counts toward that gap. A mailbox that just sent warmup sits out that turn and another one starts the lead. The campaign only waits when every mailbox is inside its gap.
 
 The Leads tab shows each lead's mailbox in its **Sender** column, and a contact's Activity tab shows it beside their progress. A lead has none until its first email goes out.
 
