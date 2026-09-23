@@ -15,7 +15,7 @@ import (
 // reads the open log hands those back.
 func TestLiveEngagementOriginReachesEverySurface(t *testing.T) {
 	handle, pool := liveContactDB(t)
-	requireSchemaVersion(t, pool, 199)
+	requireSchemaVersion(t, pool, 201)
 	f := newSharedOrgFixture(t, pool)
 	ctx := context.Background()
 	step := uuid.New()
@@ -133,7 +133,7 @@ func TestLiveEngagementOriginReachesEverySurface(t *testing.T) {
 // clicks after opens, and the walk records that it finished.
 func TestLiveOriginBackfillRereadsStoredRows(t *testing.T) {
 	_, pool := liveContactDB(t)
-	requireSchemaVersion(t, pool, 199)
+	requireSchemaVersion(t, pool, 201)
 	f := newSharedOrgFixture(t, pool)
 	ctx := context.Background()
 	step := uuid.New()
