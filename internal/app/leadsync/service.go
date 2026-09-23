@@ -103,6 +103,7 @@ func (s *service) Preview(ctx context.Context, orgID, connID uuid.UUID, sheetID,
 		sample = append(sample, padRow(values[i], width))
 	}
 
+	suggested, inferred := s.contacts.SuggestImportMapping(ctx, orgID, headers, sample)
 	return &models.ContactImportPreview{
 		Filename:         "google-sheets-sync.csv",
 		Format:           "csv",
@@ -110,7 +111,8 @@ func (s *service) Preview(ctx context.Context, orgID, connID uuid.UUID, sheetID,
 		Columns:          headers,
 		HasHeader:        true,
 		SampleRows:       sample,
-		SuggestedMapping: contact.SuggestMapping(headers, sample, s.existingCustomFieldKeys(ctx, orgID)),
+		SuggestedMapping: suggested,
+		InferredColumns:  inferred,
 	}, nil
 }
 
@@ -413,14 +415,4 @@ func padRow(row []string, n int) []string {
 	out := make([]string, n)
 	copy(out, row)
 	return out
-}
-
-// existingCustomFieldKeys is the workspace's custom-field keys for the
-// suggester. A failed read only costs the suggestion, never the preview.
-func (s *service) existingCustomFieldKeys(ctx context.Context, orgID uuid.UUID) []string {
-	keys, xerr := s.contacts.ListCustomFieldKeys(ctx, orgID)
-	if xerr != nil {
-		return nil
-	}
-	return keys
 }

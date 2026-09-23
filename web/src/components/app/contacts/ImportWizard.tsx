@@ -32,6 +32,7 @@ import {
     Loader2Icon,
     PlusIcon,
     ShieldCheckIcon,
+    SparklesIcon,
     UploadCloudIcon,
     XIcon,
 } from "lucide-react";
@@ -528,6 +529,13 @@ export function MapStep({
 
     const { data: existingKeys = [] } = useCustomFieldKeys();
 
+    // A column the judgment placed keeps its marker until the user changes it.
+    function isInferred(idx: number, m: ImportColumnMapping): boolean {
+        if (!preview.inferred_columns?.includes(idx)) return false;
+        const s = preview.suggested_mapping.find((x) => x.index === idx);
+        return !!s && s.target === m.target && (s.custom_key ?? "") === (m.custom_key ?? "");
+    }
+
     // Which columns write to each destination, so a row can say when another
     // column shares its field. Column numbers are 1-based, as on screen.
     const writers = new Map<string, number[]>();
@@ -637,6 +645,7 @@ export function MapStep({
                                             existingKeys={existingKeys}
                                             takenKeys={takenKeysFor(idx)}
                                             writers={writers.get(targetIdentity(m) ?? "") ?? []}
+                                            inferred={isInferred(idx, m)}
                                         />
                                         <AnimatePresence initial={false}>
                                             {m.target === "verification_status" && (
@@ -733,6 +742,7 @@ export function TargetPicker({
     existingKeys = [],
     takenKeys,
     writers = [],
+    inferred = false,
 }: {
     value: ImportColumnMapping;
     onChange: (next: ImportColumnMapping) => void;
@@ -744,6 +754,8 @@ export function TargetPicker({
     takenKeys?: Map<string, number>;
     /** Every column writing where this one does, in the order they are applied. */
     writers?: number[];
+    /** The suggestion came from what the header means, not what it says. */
+    inferred?: boolean;
 }) {
     const [open, setOpen] = React.useState(false);
     const [query, setQuery] = React.useState("");
@@ -892,6 +904,12 @@ export function TargetPicker({
                     />
                 )}
             </div>
+            {inferred && (
+                <p className="mt-1 text-[10.5px] text-sky-700 inline-flex items-center gap-1">
+                    <SparklesIcon className="w-3 h-3 shrink-0" />
+                    Matched by meaning. Check it.
+                </p>
+            )}
             <MappingNote
                 mapping={value}
                 existingKeys={existingKeys}

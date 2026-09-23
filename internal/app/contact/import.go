@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/app/importmap"
 	"github.com/warmbly/warmbly/internal/app/orgrisk"
 	"github.com/warmbly/warmbly/internal/email"
 	"github.com/warmbly/warmbly/internal/errx"
@@ -62,6 +63,7 @@ func (s *contactService) ImportPreview(ctx context.Context, orgID uuid.UUID, r i
 	}
 
 	totalRows := len(rows) - dataStart
+	suggested, inferred := s.SuggestImportMapping(ctx, orgID, headers, sample)
 
 	return &models.ContactImportPreview{
 		Filename:         filename,
@@ -70,8 +72,22 @@ func (s *contactService) ImportPreview(ctx context.Context, orgID uuid.UUID, r i
 		Columns:          headers,
 		HasHeader:        hasHeader,
 		SampleRows:       sample,
-		SuggestedMapping: SuggestMapping(headers, sample, s.existingCustomFieldKeys(ctx, orgID)),
+		SuggestedMapping: suggested,
+		InferredColumns:  inferred,
 	}, nil
+}
+
+// SuggestImportMapping is the mapping every importer's preview starts from:
+// the deterministic suggestion, then the TypeSafe judgment for the columns it
+// left unmapped when one is wired. inferred lists the columns the judgment
+// placed, so the mapper can ask for a second look at those.
+func (s *contactService) SuggestImportMapping(ctx context.Context, orgID uuid.UUID, headers []string, sample [][]string) ([]models.ContactImportColumnMapping, []int) {
+	keys := s.existingCustomFieldKeys(ctx, orgID)
+	suggested := SuggestMapping(headers, sample, keys)
+	if s.columnJudge == nil {
+		return suggested, nil
+	}
+	return importmap.Infer(ctx, s.columnJudge, suggested, headers, importmap.Shapes(len(headers), sample), keys)
 }
 
 // existingCustomFieldKeys is the workspace's custom-field keys for the
@@ -924,7 +940,26 @@ func SuggestMapping(headers []string, sample [][]string, existingKeys []string) 
 		out[i] = models.ContactImportColumnMapping{Index: i, Target: models.ContactImportTargetVerificationStatus, VerificationProvider: provider}
 	}
 	matchExistingCustomFields(out, headers, existingKeys)
+	matchEmailByValues(out, headers, sample)
 	return out
+}
+
+// matchEmailByValues maps the first column of addresses to Email when no
+// header named it, so a file with "Work contact" or no header row at all
+// still has the one column an import cannot go without.
+func matchEmailByValues(out []models.ContactImportColumnMapping, headers []string, sample [][]string) {
+	for _, m := range out {
+		if m.Target == models.ContactImportTargetEmail {
+			return
+		}
+	}
+	shapes := importmap.Shapes(len(headers), sample)
+	for i := range out {
+		if out[i].Target == models.ContactImportTargetIgnore && shapes[i] == importmap.ShapeEmail {
+			out[i] = models.ContactImportColumnMapping{Index: i, Target: models.ContactImportTargetEmail}
+			return
+		}
+	}
 }
 
 // matchExistingCustomFields maps each still-ignored column whose header names

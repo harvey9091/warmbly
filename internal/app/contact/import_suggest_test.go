@@ -65,3 +65,17 @@ func TestFoldCustomFieldKey(t *testing.T) {
 		}
 	}
 }
+
+func TestSuggestMappingFindsEmailByItsValues(t *testing.T) {
+	sample := [][]string{{"Dana", "dana@acme.com"}, {"Lee", "Lee <lee@beta.io>"}}
+	got := SuggestMapping([]string{"Name", "Work contact"}, sample, nil)
+	if got[1].Target != models.ContactImportTargetEmail {
+		t.Fatalf("a column of addresses mapped to %q, want email", got[1].Target)
+	}
+
+	// A named email column is never second-guessed by the values.
+	got = SuggestMapping([]string{"Email", "Backup"}, [][]string{{"a@x.com", "b@y.com"}}, nil)
+	if got[0].Target != models.ContactImportTargetEmail || got[1].Target != models.ContactImportTargetIgnore {
+		t.Fatalf("got %+v, want only the named column as email", got)
+	}
+}

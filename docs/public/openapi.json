@@ -25208,6 +25208,13 @@
             "items": {
               "$ref": "#/components/schemas/ContactImportColumnMapping"
             }
+          },
+          "inferred_columns": {
+            "type": "array",
+            "description": "Indexes whose suggestion came from the TypeSafe judgment of what the header means, rather than the header or the values. Omitted when none did.",
+            "items": {
+              "type": "integer"
+            }
           }
         }
       },

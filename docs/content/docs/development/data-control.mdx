@@ -83,9 +83,10 @@ Mail over a daily budget is deferred, never dropped: the provider cursor is held
 | Copy judgment | The key alone | The subject and body of a campaign step, at Advisor evaluation and on the editor's re-check | `copy_judgments`, keyed by a hash of the copy and never exported |
 | Warmup content lint | The key alone | A generated warmup thread before it enters the bank | Rejected threads are counted on the generation job; nothing else is kept |
 | Bounce classification | The key alone | The bounce reason text, only when it does not name the recipient | `deliverability_events.metadata` |
+| Import column mapping | The key alone | For an import or Google Sheets preview, only the columns no header matched: every column header (a header that looks like data, such as an address, goes as its column number), the kind of value each column holds (email addresses, dates, short text and so on, worked out on the instance), and the workspace's custom field names. Never a cell value | Nothing is stored; the answer only fills in the suggested mapping |
 | Form triage | A per-form switch | The submitted answers, labelled by field; never the visitor's address, agent or URL | `form_submissions.triage`, which travels with the Contacts group |
 
-See [Automatic inbox tagging](/guides/inbox-tagging/), [Advisor](/guides/advisor/), [Warmup](/guides/warmup/), [Deliverability](/guides/deliverability/) and [Forms](/guides/forms/).
+See [Automatic inbox tagging](/guides/inbox-tagging/), [Advisor](/guides/advisor/), [Warmup](/guides/warmup/), [Deliverability](/guides/deliverability/), [Contacts](/guides/contacts-crm/#mapping-into-your-custom-fields) and [Forms](/guides/forms/).
 
 ### Event history
 

@@ -27,6 +27,8 @@ The mapping menu lists the custom fields your workspace already has under **Your
 
 A column whose header names an existing field is mapped to it before you open the menu. The match ignores case, spaces, underscores, dashes and dots, so a `company url` column lands on your `company_url` field in its stored spelling instead of starting a second field. Only one column is matched to each field, and standard fields (Email, Company, and so on) are matched first.
 
+When the instance has TypeSafe configured, the columns no header matched are also placed by what their header means: `Job Title` onto your `Title` field, `Firmenname` onto Company, `Sector` onto `Industry`. Only a confident answer is applied, each field still goes to one column, and those rows are marked **Matched by meaning. Check it.** until you change them. What is sent is the column headers, the kind of value each column holds and your field names, never a cell; see [data control](/development/data-control/#typesafe-judgments). A column of addresses under any header, or none, is mapped to Email either way.
+
 Each custom mapping says what it will do: **Fills your existing field**, **Creates a new field**, or, when the name you typed differs from an existing field only in case or separators, **You already have `Industry`**, with **Use it** to switch to that field. **Keep N more as custom fields** uses the same matching, so the columns it claims land on your existing fields where it can.
 
 Two columns may fill the same field, which is how a `Phone` and a `Mobile` column become one number. Each row names the other column, and where both have a value the one further right is kept; a blank cell never overwrites the other column's value.

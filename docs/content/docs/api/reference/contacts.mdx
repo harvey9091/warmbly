@@ -377,7 +377,9 @@ Send the file as `multipart/form-data` with a `file` form field. Uploads are cap
 }
 ```
 
-`sample_rows` is capped at 20 rows. `suggested_mapping` is a default the client may override. A header that names one of the workspace's existing custom fields, ignoring case, spaces, underscores, dashes and dots, is suggested as `custom` with that field's stored spelling in `custom_key` (above, `industry` maps to the existing `Industry`). Each field is suggested for one column at most, standard fields are matched first, and a header that matches nothing is `ignore`. `GET /contacts/custom-fields` ([endpoints](/api/endpoints/#contacts)) lists the fields a mapping can target.
+`sample_rows` is capped at 20 rows. `suggested_mapping` is a default the client may override. A header that names one of the workspace's existing custom fields, ignoring case, spaces, underscores, dashes and dots, is suggested as `custom` with that field's stored spelling in `custom_key` (above, `industry` maps to the existing `Industry`). Each field is suggested for one column at most, standard fields are matched first, and a header that matches nothing is `ignore`. A column of email addresses is suggested as `email` whatever its header when no header named one. `GET /contacts/custom-fields` ([endpoints](/api/endpoints/#contacts)) lists the fields a mapping can target.
+
+On an instance with TypeSafe configured, the columns still `ignore` after that are placed by what their header means, and `inferred_columns` lists their indexes so a client can ask for a second look. Only the headers, the kind of value each column holds and the workspace's field names are sent, never a cell value. The field is omitted when no column was inferred.
 
 ## Commit an import
 
