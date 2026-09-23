@@ -166,3 +166,46 @@ func TestSearchRefused(t *testing.T) {
 type errNotIMAP struct{}
 
 func (errNotIMAP) Error() string { return "use of closed network connection" }
+
+// A refusal with no folder selected says nothing about dates: a warmup action
+// that selected a missing folder leaves the session like this, and the server
+// must not be switched to the scan for good over it.
+func TestSearchSinceRefusalWithoutSelectionIsNotSticky(t *testing.T) {
+	c, _ := interceptingServer(t, nil, seznamRefusal)
+	if err := c.Connect(); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if _, err := c.SearchSince(time.Now()); err == nil {
+		t.Fatal("a refused SEARCH with nothing selected returned no error")
+	}
+	if c.sinceRefused.Load() {
+		t.Error("a refusal with no folder selected switched the server to the INTERNALDATE scan")
+	}
+}
+
+// Without a UIDVALIDITY a recreated folder cannot be told apart, so the scan
+// is not kept.
+func TestSearchSinceByDateSkipsCacheWithoutUIDValidity(t *testing.T) {
+	c, _ := interceptingServer(t, nil, seznamRefusal)
+	if err := c.Connect(); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	since := time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC)
+	recent := putDated(t, c, since.AddDate(0, 0, 1))
+	if _, err := c.SelectForSync("INBOX"); err != nil {
+		t.Fatalf("SelectForSync: %v", err)
+	}
+	c.selection.Store(&selection{name: "INBOX", count: 1})
+	c.sinceRefused.Store(true)
+
+	got, err := c.SearchSince(since)
+	if err != nil {
+		t.Fatalf("SearchSince: %s", err.Message)
+	}
+	if !slices.Equal(got, []imap.UID{recent}) {
+		t.Fatalf("SearchSince = %v, want [%d]", got, recent)
+	}
+	if len(c.dateScans) != 0 {
+		t.Errorf("cached a scan for a folder with no UIDVALIDITY: %v", c.dateScans)
+	}
+}

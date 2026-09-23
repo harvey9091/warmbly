@@ -312,11 +312,12 @@ func (c *Client) Mailbox(mailbox string, uidvali, opts *imap.SelectOptions) erro
 // one to release. A failed SELECT leaves the session with no mailbox
 // selected (RFC 3501 6.3.1). The caller holds the lifecycle read lock.
 func (c *Client) selectMailbox(mailbox string, opts *imap.SelectOptions) (*imap.SelectData, error) {
+	// Cleared before the command is written, so a command pipelined behind
+	// this SELECT can never be credited to the previous selection.
+	c.selection.Store(nil)
 	data, err := c.client.Select(mailbox, opts).Wait()
 	c.selected.Store(err == nil)
-	if err != nil {
-		c.selection.Store(nil)
-	} else {
+	if err == nil {
 		c.selection.Store(&selection{name: mailbox, uidValidity: data.UIDValidity, count: data.NumMessages})
 	}
 	return data, err
@@ -400,9 +401,9 @@ func (c *Client) ReleaseMailbox() {
 		return
 	}
 	defer c.begin()()
+	c.selection.Store(nil)
 	if err := c.client.Unselect().Wait(); err == nil {
 		c.selected.Store(false)
-		c.selection.Store(nil)
 	}
 }
 
@@ -423,11 +424,15 @@ type Fetched struct {
 // searchSinceByDate), and may then still hold UIDs expunged since.
 func (c *Client) SearchSince(since time.Time) ([]imap.UID, *errx.MailError) {
 	if !c.sinceRefused.Load() {
+		sel := c.selection.Load()
 		uids, err := c.searchSince(since)
 		if err == nil {
 			return uids, nil
 		}
-		if !searchRefused(err) {
+		// Only a refusal against a folder that stayed selected is about the
+		// date: a concurrent SELECT of a missing folder leaves none, and the
+		// BAD that earns says nothing about SEARCH.
+		if sel == nil || c.selection.Load() != sel || !searchRefused(err) {
 			return nil, c.handleError(err)
 		}
 		c.sinceRefused.Store(true)

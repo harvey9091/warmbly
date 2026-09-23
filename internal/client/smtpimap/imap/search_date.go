@@ -65,8 +65,11 @@ func (c *Client) searchSinceByDate(since time.Time) ([]imap.UID, *errx.MailError
 	c.scanMu.Lock()
 	defer c.scanMu.Unlock()
 
+	// Without a UIDVALIDITY a recreated folder looks the same, so nothing is
+	// kept for it.
+	cacheable := sel != nil && sel.uidValidity != 0
 	scan := &dateScan{day: day, next: 1}
-	if sel != nil {
+	if cacheable {
 		scan.uidValidity = sel.uidValidity
 		if prev := c.dateScans[sel.name]; prev != nil && prev.uidValidity == sel.uidValidity && prev.day.Equal(day) {
 			scan = prev
@@ -78,7 +81,7 @@ func (c *Client) searchSinceByDate(since time.Time) ([]imap.UID, *errx.MailError
 		return nil, err
 	}
 	// A SELECT that landed mid-scan means the answer may be another folder's.
-	if sel == nil || c.selection.Load() != sel {
+	if !cacheable || c.selection.Load() != sel {
 		return append(slices.Clone(scan.uids), found...), nil
 	}
 	scan.uids = append(scan.uids, found...)
