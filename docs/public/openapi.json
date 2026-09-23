@@ -6005,7 +6005,7 @@
       "post": {
         "operationId": "campaigns_create_step",
         "summary": "Create a step",
-        "description": "Append a new empty sequence step created with defaults, then edited with PATCH. No request body. Scope WRITE_CAMPAIGNS, org permission manage_campaigns.",
+        "description": "Append a new sequence step. The body is optional and takes the same fields as the PATCH that updates a step, applied to the new step; without one the step is created with defaults. A body the update refuses creates nothing. Scope WRITE_CAMPAIGNS, org permission manage_campaigns.",
         "tags": [
           "campaigns"
         ],
@@ -6029,12 +6029,22 @@
           }
         ],
         "responses": {
-          "201": {
+          "200": {
             "description": "The created step.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CampaignStep"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not valid, or the update it describes is refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -6076,6 +6086,16 @@
                 "schema": {
                   "$ref": "#/components/schemas/Error"
                 }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignStepUpdate"
               }
             }
           }

@@ -257,10 +257,12 @@ report what would stop it. Nothing is sent.`,
 				Name: "test", Aliases: []string{"test-email"}, Short: "Send the campaign as a test to an address you name",
 				Method: http.MethodPost, Path: "/campaigns/{id}/test-email", Body: bodyRequired, Sends: true,
 				Args:    []argSpec{{Name: "id", Help: "The campaign's id"}},
-				Example: "  $ warmbly campaign test CAMPAIGN_ID --to you@example.com",
+				Example: "  $ warmbly campaign test CAMPAIGN_ID --mailbox MAILBOX_ID --to you@example.com",
 				Flag: []flagSpec{
-					{Name: "to", Help: "Where to send the test"},
-					{Name: "step", Help: "Which step to send", Kind: flagInt, Key: "step_id"},
+					{Name: "to", Help: "Where to send the test (required)", Key: "recipient"},
+					{Name: "mailbox", Help: "The mailbox to send it from (required)", Key: "account_id"},
+					{Name: "step", Help: "The step's id; the first step when omitted", Key: "step_id"},
+					{Name: "contact", Help: "Render the copy for this contact's id instead of a placeholder", Key: "contact_id"},
 				},
 				Success: "Test email sent.",
 			},
@@ -528,7 +530,7 @@ unsubscribe or a complaint from being undone by the next import.`,
 			{
 				Name: "add", Short: "Suppress an address or a domain",
 				Method: http.MethodPost, Path: "/suppressions", Body: bodyRequired,
-				Example: "  $ warmbly suppression add --input '{\"values\":[\"jane@example.com\"],\"reason\":\"manual\"}'",
+				Example: "  $ warmbly suppression add --input '{\"entries\":[{\"value\":\"jane@example.com\"},{\"value\":\"example.org\"}],\"reason\":\"manual\"}'",
 			},
 			{
 				Name: "remove", Aliases: []string{"rm"}, Short: "Lift a suppression",
@@ -709,7 +711,7 @@ while a folder was skipped is not brought back.`,
 				Args:    []argSpec{{Name: "id", Help: "The mailbox to send from"}},
 				Example: "  $ warmbly mailbox send MAILBOX_ID --to jane@example.com --subject Hello --body \"Hi Jane\"",
 				Flag: []flagSpec{
-					{Name: "to", Help: "Recipient address"},
+					{Name: "to", Help: "Recipient addresses", Kind: flagStrings},
 					{Name: "subject", Help: "Subject line"},
 					{Name: "body", Help: "Message body", Key: "body_html"},
 					{Name: "cc", Help: "CC addresses", Kind: flagStrings},
@@ -765,8 +767,9 @@ begin rather than being stopped the moment the mailbox looks ready.`,
 			},
 			{
 				Name: "warmup-appeal", Short: "Appeal a warmup pool block",
-				Method: http.MethodPost, Path: "/emails/{id}/warmup/appeal", Body: bodyOptional,
+				Method: http.MethodPost, Path: "/emails/{id}/warmup/appeal", Body: bodyRequired,
 				Args: []argSpec{{Name: "id", Help: "The mailbox's id"}},
+				Flag: []flagSpec{{Name: "reason", Help: "Why the block should be reviewed (required)"}},
 			},
 			{
 				Name: "tracking", Short: "The mailbox's tracking domain",
@@ -775,9 +778,9 @@ begin rather than being stopped the moment the mailbox looks ready.`,
 			},
 			{
 				Name: "set-tracking", Short: "Set the mailbox's tracking domain",
-				Method: http.MethodPatch, Path: "/emails/{id}/track", Body: bodyRequired,
+				Method: http.MethodPatch, Path: "/emails/{id}/track",
 				Args:    []argSpec{{Name: "id", Help: "The mailbox's id"}},
-				Flag:    []flagSpec{{Name: "domain", Help: "The tracking domain", Key: "tracking_domain"}},
+				Flag:    []flagSpec{{Name: "domain", Help: "The tracking domain; empty clears it", Query: true}},
 				Success: "Tracking domain set.",
 			},
 			{
@@ -859,13 +862,13 @@ which is the unified view.`,
 			{
 				Name: "read", Short: "Mark messages read",
 				Method: http.MethodPatch, Path: "/unibox/seen", Body: bodyRequired,
-				Example: "  $ warmbly inbox read --input '{\"ids\":[\"...\"],\"seen\":true}'",
+				Example: "  $ warmbly inbox read --input '{\"email_ids\":[\"...\"],\"seen\":true}'",
 				Success: "Marked.",
 			},
 			{
 				Name: "reply", Short: "Reply in a thread",
 				Method: http.MethodPost, Path: "/unibox/reply", Body: bodyRequired, Sends: true, Idempotent: true,
-				Example: "  $ warmbly inbox reply --input '{\"email_id\":\"...\",\"body_html\":\"<p>Thanks</p>\"}'",
+				Example: "  $ warmbly inbox reply --input '{\"email_account_id\":\"...\",\"to\":[\"jane@example.com\"],\"subject\":\"Re: Hello\",\"thread_id\":\"...\",\"body_html\":\"<p>Thanks</p>\"}'",
 				Success: "Reply sent.",
 			},
 			{
@@ -1135,17 +1138,19 @@ func automationSpec() resource {
 			{
 				Name: "create", Short: "Create an automation",
 				Method: http.MethodPost, Path: "/automations", Body: bodyRequired,
-				Flag:  []flagSpec{{Name: "name", Short: "n", Help: "Automation name"}},
-				Table: output.Table{Columns: automationColumns},
+				Long: `Create an automation from a JSON document: name, enabled, trigger_event
+and graph (one trigger node plus its actions). Build it in the dashboard and
+export it, or write it by hand; the API reference describes the graph.`,
+				Example: "  $ warmbly automation create --input @automation.json",
+				Table:   output.Table{Columns: automationColumns},
 			},
 			{
 				Name: "edit", Aliases: []string{"update"}, Short: "Change an automation",
 				Method: http.MethodPatch, Path: "/automations/{id}", Body: bodyRequired,
 				Args: []argSpec{{Name: "id", Help: "The automation's id"}},
-				Flag: []flagSpec{
-					{Name: "name", Short: "n", Help: "Automation name"},
-					{Name: "status", Help: "active or paused"},
-				},
+				Long: `Replace an automation with a JSON document of the same shape create takes.
+Every field is written, so start from ` + "`warmbly automation view <id> --json`" + `.`,
+				Example: "  $ warmbly automation edit AUTOMATION_ID --input @automation.json",
 				Success: "Automation updated.",
 			},
 			{
@@ -1242,7 +1247,7 @@ func formSpec() resource {
 			{
 				Name: "set-domain", Short: "Set the domain forms are served from",
 				Method: http.MethodPut, Path: "/forms/domain", Body: bodyRequired,
-				Flag:    []flagSpec{{Name: "domain", Help: "The custom forms domain"}},
+				Flag:    []flagSpec{{Name: "domain", Help: "The custom forms domain", Key: "forms_domain"}},
 				Success: "Forms domain set.",
 			},
 			{
@@ -1363,8 +1368,8 @@ func pipelineSpec() resource {
 				Method: http.MethodPost, Path: "/crm/pipelines/{id}/stages", Body: bodyRequired,
 				Args: []argSpec{{Name: "id", Help: "The pipeline's id"}},
 				Flag: []flagSpec{
-					{Name: "name", Short: "n", Help: "Stage name"},
-					{Name: "color", Help: "Stage colour"},
+					{Name: "name", Short: "n", Help: "Stage name (required)"},
+					{Name: "color", Help: "Stage colour, such as #0ea5e9 (required)"},
 				},
 			},
 			{
@@ -1421,7 +1426,7 @@ func taskSpec() resource {
 				Flag: []flagSpec{
 					{Name: "title", Short: "t", Help: "What needs doing"},
 					{Name: "contact", Help: "The contact it is about", Key: "contact_id"},
-					{Name: "due", Help: "When it is due (RFC 3339)", Key: "due_at"},
+					{Name: "due", Help: "When it is due (RFC 3339)", Key: "due_date"},
 				},
 				Table: output.Table{Columns: taskColumns},
 			},
@@ -1431,8 +1436,8 @@ func taskSpec() resource {
 				Args: []argSpec{{Name: "id", Help: "The task's id"}},
 				Flag: []flagSpec{
 					{Name: "title", Short: "t", Help: "What needs doing"},
-					{Name: "status", Help: "open or done"},
-					{Name: "due", Help: "When it is due (RFC 3339)", Key: "due_at"},
+					{Name: "status", Help: "pending, in_progress, completed or cancelled"},
+					{Name: "due", Help: "When it is due (RFC 3339)", Key: "due_date"},
 				},
 				Success: "Task updated.",
 			},
@@ -1565,8 +1570,9 @@ func advisorSpec() resource {
 			},
 			{
 				Name: "snooze", Short: "Snooze a recommendation",
-				Method: http.MethodPost, Path: "/advisor/recommendations/{id}/snooze", Body: bodyOptional,
+				Method: http.MethodPost, Path: "/advisor/recommendations/{id}/snooze", Body: bodyRequired,
 				Args:    []argSpec{{Name: "id", Help: "The recommendation's id"}},
+				Flag:    []flagSpec{{Name: "days", Help: "How many days, 1 to 90 (required)", Kind: flagInt}},
 				Success: "Recommendation snoozed.",
 			},
 			{
@@ -1614,8 +1620,11 @@ means updating the receiver at the same time.`,
 				Name: "edit", Aliases: []string{"update"}, Short: "Change a webhook endpoint",
 				Method: http.MethodPatch, Path: "/webhooks/{id}", Body: bodyRequired,
 				Args: []argSpec{{Name: "id", Help: "The endpoint's id"}},
+				Long: `Replace a webhook endpoint's settings. Every field is written: pass --url
+and --events each time, a description left out is cleared, and the endpoint is
+enabled unless --enabled=false is given.`,
 				Flag: []flagSpec{
-					{Name: "url", Help: "Where to POST events"},
+					{Name: "url", Help: "Where to POST events (required)"},
 					{Name: "description", Help: "What this endpoint is for"},
 					{Name: "events", Help: "Event types to subscribe to", Kind: flagStrings, Key: "event_types"},
 					{Name: "enabled", Help: "Whether it receives events", Kind: flagBool},
@@ -1799,6 +1808,7 @@ func oauthAppSpec() resource {
 				Flag: []flagSpec{
 					{Name: "name", Short: "n", Help: "Application name"},
 					{Name: "redirect-uris", Help: "Allowed redirect URIs", Kind: flagStrings, Key: "redirect_uris"},
+					{Name: "scopes", Help: "API permission bitmask the app may request (required; see the permissions reference)", Kind: flagInt},
 				},
 			},
 			{
@@ -2041,8 +2051,10 @@ connection stays in the dashboard. Everything after that is here.`,
 			},
 			{
 				Name: "push", Short: "Push data through a connection now",
-				Method: http.MethodPost, Path: "/integrations/connections/{id}/push", Body: bodyOptional,
-				Args: []argSpec{{Name: "id", Help: "The connection's id"}},
+				Method: http.MethodPost, Path: "/integrations/connections/{id}/push", Body: bodyRequired,
+				Args:    []argSpec{{Name: "id", Help: "The connection's id"}},
+				Example: "  $ warmbly integration push CONNECTION_ID --contacts CONTACT_ID,CONTACT_ID",
+				Flag:    []flagSpec{{Name: "contacts", Help: "Contact ids to push", Kind: flagStrings}},
 			},
 			{
 				Name: "disconnect", Aliases: []string{"rm"}, Short: "Disconnect an integration",

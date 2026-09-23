@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"errors"
+	"io"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -19,10 +21,27 @@ func (h *Handler) CreateSequence(c *gin.Context) {
 
 	id := c.Param("id")
 
+	// The body is optional: the same fields as PATCH, applied to the new step.
+	var data models.UpdateSequence
+	if err := c.ShouldBindJSON(&data); err != nil && !errors.Is(err, io.EOF) {
+		errx.Handle(c, errx.InvalidBody(err))
+		return
+	}
+
 	resp, err := h.SequenceService.Create(c.Request.Context(), orgID.String(), id)
 	if err != nil {
 		errx.Handle(c, err)
 		return
+	}
+	if data != (models.UpdateSequence{}) {
+		updated, uerr := h.SequenceService.Update(c.Request.Context(), orgID.String(), id, resp.ID.String(), &data)
+		if uerr != nil {
+			// A refused body leaves no blank step behind.
+			_ = h.SequenceService.Delete(c.Request.Context(), orgID.String(), id, resp.ID.String())
+			errx.Handle(c, uerr)
+			return
+		}
+		resp = updated
 	}
 
 	h.auditOrg(c, models.AuditActionCreate, models.AuditEntitySequence, &resp.ID, nil, map[string]string{"campaign_id": id})
