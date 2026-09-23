@@ -19,7 +19,19 @@ You must map at least one column to **Email**.
 | First name, Last name, Company, Phone | Standard identity fields |
 | Subscribed | `yes`, `true`, `1`, `subscribed` and their opposites (`no`, `false`, `0`, `unsubscribed`). Applies to new contacts and to existing ones you update; a value the importer cannot read fails only that row |
 | Categories | Category names, separated by commas or semicolons. Names you do not have yet are created, up to 100 new names per import |
-| Custom field | Anything else; you name it |
+| Custom field | Anything else: one of your existing custom fields, or a new one you name |
+
+### Mapping into your custom fields
+
+The mapping menu lists the custom fields your workspace already has under **Your custom fields**, most used first, with a search box at the top. Type to filter; type a name nobody has yet and the menu offers to create it. Choosing an existing field writes the column into it, so the values line up with the contacts you already have and every template, filter and segment that reads the field picks them up.
+
+A column whose header names an existing field is mapped to it before you open the menu. The match ignores case, spaces, underscores, dashes and dots, so a `company url` column lands on your `company_url` field in its stored spelling instead of starting a second field. Only one column is matched to each field, and standard fields (Email, Company, and so on) are matched first.
+
+When the instance has TypeSafe configured, the columns no header matched are also placed by what their header means: `Job Title` onto your `Title` field, `Firmenname` onto Company, `Sector` onto `Industry`. Only a confident answer is applied, each field still goes to one column, and those rows are marked **Matched by meaning. Check it.** until you change them. It picks names, Company, Phone and your custom fields only: Subscribed and Categories change who gets mail and which categories exist, so they are never guessed. What is sent is the column headers, the kind of value each column holds and your field names, never a cell, and nothing at all unless the first row is clearly headers (no address, date or number in it, and a named Email column); see [data control](/development/data-control/#typesafe-judgments). A column of addresses under any header, or none, is mapped to Email either way.
+
+Each custom mapping says what it will do: **Fills your existing field**, **Creates a new field**, or, when the name you typed differs from an existing field only in case or separators, **You already have `Industry`**, with **Use it** to switch to that field. **Keep N more as custom fields** uses the same matching, so the columns it claims land on your existing fields where it can.
+
+Two columns may fill the same field, which is how a `Phone` and a `Mobile` column become one number. Each row names the other column, and where both have a value the one further right is kept; a blank cell never overwrites the other column's value.
 
 <Callout type="info" title="Duplicates match on lowercased email">
 `Dana@Acme.com` and `dana@acme.com` are the same contact. Choose **Skip existing** (leave untouched), **Update existing** (merge new values in), or **Create duplicates** (force a new one, falling back to update if a uniqueness rule blocks it).
@@ -51,7 +63,7 @@ This is not address verification. It reads the addresses; verification asks the 
 
 ## Custom fields
 
-For anything beyond identity: industry, plan tier, account owner. Create them by mapping a column to "Use as custom field" during import, or on a contact's Details tab.
+For anything beyond identity: industry, plan tier, account owner. Create them by mapping a column to a new custom field during import, or on a contact's Details tab. A later import can map into the same field by picking it from the mapping menu (see [Mapping into your custom fields](#mapping-into-your-custom-fields)).
 
 They feed personalization, which is the main reason to get imports right.
 

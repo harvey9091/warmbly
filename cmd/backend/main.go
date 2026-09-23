@@ -1244,6 +1244,11 @@ func main() {
 		if aware, ok := contactService.(contact.WebhookAware); ok {
 			aware.WireWebhooks(webhookServiceForHandler)
 		}
+		// Import previews place the columns no header matched; headers and
+		// value kinds only, never a cell.
+		if aware, ok := contactService.(contact.ColumnJudgeAware); ok && typeSafeClient != nil {
+			aware.WireColumnJudge(typeSafeClient)
+		}
 		formRepository := repository.NewFormRepository(primaryDB)
 		formEventRepository := repository.NewFormEventRepository(primaryDB)
 		formService = form.NewService(formRepository)
