@@ -24540,6 +24540,29 @@
             ],
             "format": "date-time"
           },
+          "verification_source": {
+            "type": "string",
+            "enum": [
+              "",
+              "probe",
+              "provider",
+              "imported",
+              "manual"
+            ],
+            "description": "Who produced the verdict: the built-in check, a connected verification service, an imported result, or a teammate. Empty when never checked."
+          },
+          "verification_provider": {
+            "type": "string",
+            "description": "The verifier or imported vocabulary behind the verdict, such as builtin or millionverifier."
+          },
+          "verification_requested_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Set while a re-check a member asked for is waiting to run; the verdict stands until it lands."
+          },
           "esp_provider": {
             "type": "string",
             "description": "Recipient ESP derived from the domain: '' | gmail | outlook | other."

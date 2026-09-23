@@ -33,7 +33,10 @@ type Evidence struct {
 type Verdict struct {
 	Status Status
 	// Source is the contacts.verification_source value.
-	Source    string
+	Source string
+	// Provider is the contacts.verification_provider value, so a reason can
+	// name the verifier.
+	Provider  string
 	CheckedAt time.Time
 }
 
@@ -73,13 +76,19 @@ func verdictBase(v Verdict) (int, string) {
 	case "manual":
 		return 95, "marked by a teammate"
 	case "provider":
-		switch v.Status {
-		case StatusValid, StatusInvalid:
-			return 88, "checked by the verification service"
-		case StatusRisky:
-			return 55, "flagged by the verification service"
+		name := ProviderLabel(v.Provider)
+		if name == "" {
+			name = "the verification service"
 		}
-		return 30, "the verification service could not decide"
+		switch v.Status {
+		case StatusValid:
+			return 88, "verified deliverable with " + name
+		case StatusInvalid:
+			return 88, name + " reported the address undeliverable"
+		case StatusRisky:
+			return 55, "flagged risky by " + name
+		}
+		return 30, name + " could not decide"
 	case "imported":
 		switch v.Status {
 		case StatusValid, StatusInvalid:
@@ -106,15 +115,20 @@ func verdictBase(v Verdict) (int, string) {
 // the address is deliverable regardless of what a check said.
 const PositiveDecisiveScore = 20.0
 
+// ProviderOutranksEvidenceAfter is how much newer than all real mail a paid verifier's verdict must be to stand over it.
+const ProviderOutranksEvidenceAfter = 30 * 24 * time.Hour
+
 // Score derives an address's status and confidence from its last verdict and
 // the evidence ledger. Rules, in order:
 //
 //  1. A manual verdict wins outright.
-//  2. A bounce naming the recipient, newer than every positive observation,
+//  2. A paid verifier's valid or invalid verdict newer than every observation
+//     by ProviderOutranksEvidenceAfter stands.
+//  3. A bounce naming the recipient, newer than every positive observation,
 //     makes the address undeliverable.
-//  3. Enough positive evidence (a reply, a click, a human open, or repeated
+//  4. Enough positive evidence (a reply, a click, a human open, or repeated
 //     clean deliveries) makes it deliverable, whatever a probe said.
-//  4. Otherwise the verdict stands, with the evidence nudging confidence.
+//  5. Otherwise the verdict stands, with the evidence nudging confidence.
 //
 // Absence of engagement never appears here: nothing in the ledger says "did
 // not open", and Score has no input for it.
@@ -161,10 +175,18 @@ func Score(v Verdict, evidence []Evidence, now time.Time) Scored {
 	}
 	out.LastPositiveAt = lastPositive
 
+	lastSeen := lastPositive
+	if lastNegative.After(lastSeen) {
+		lastSeen = lastNegative
+	}
 	switch {
 	case v.Source == "manual":
 		out.Reasons = append([]string{baseReason}, reasons...)
 		out.Confidence = clamp(base + int(positive/4))
+		return out
+	case v.Source == "provider" && (v.Status == StatusValid || v.Status == StatusInvalid) &&
+		!lastSeen.IsZero() && v.CheckedAt.Sub(lastSeen) > ProviderOutranksEvidenceAfter:
+		out.Reasons = append([]string{baseReason, "real mail to it is older than this check (last " + humanAge(now.Sub(lastSeen)) + ")"}, reasons...)
 		return out
 	case !lastNegative.IsZero() && lastNegative.After(lastPositive):
 		out.Status = StatusInvalid

@@ -90,7 +90,7 @@ export default function OverviewTab({
             )}
 
             <Section title="Deliverability">
-                <VerificationCard detail={detail?.verification} loading={detailLoading} />
+                <VerificationCard contactId={contact.id} detail={detail?.verification} loading={detailLoading} />
             </Section>
 
             <Section title="Engagement">

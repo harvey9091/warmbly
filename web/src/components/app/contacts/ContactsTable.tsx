@@ -46,6 +46,7 @@ import useSearchContacts from "@/lib/api/hooks/app/contacts/useSearchContacts";
 import type SearchContacts from "@/lib/api/models/app/contacts/SearchContacts";
 import useDeleteContacts from "@/lib/api/hooks/app/contacts/useDeleteContacts";
 import { useRequestContactVerification } from "@/lib/api/hooks/app/contacts/useContactVerification";
+import { reverifyNotice } from "@/lib/api/client/app/contacts/verification";
 import { useBatchResearch } from "@/lib/api/hooks/app/contacts/useContactResearch";
 import useIntegrationConnections from "@/lib/api/hooks/app/integrations/useIntegrationConnections";
 import { usePushContacts } from "@/lib/api/hooks/app/integrations/usePushContacts";
@@ -470,12 +471,14 @@ export default function ContactsTable({
     function bulkVerify() {
         if (selectionCount === 0) return;
         confirm?.show(
-            `Re-verify ${selectionCount.toLocaleString()} ${selectionCount === 1 ? "address" : "addresses"}? Verdicts land in the background${
+            `Re-verify ${selectionCount.toLocaleString()} ${selectionCount === 1 ? "address" : "addresses"}? Current verdicts stand until the new ones land in the background${
                 selectionCount > 50 ? " over the next few minutes" : ""
             }.`,
             async () => {
                 const res = await verification.mutateAsync({ ...selection, action: "verify" });
-                toast.success(`Re-checking ${res.affected.toLocaleString()} ${res.affected === 1 ? "address" : "addresses"}`);
+                const notice = reverifyNotice(res, "address", "addresses");
+                if (notice.warn) toast(notice.text, { icon: "⚠️" });
+                else toast.success(notice.text);
                 clearSelection();
             },
         );

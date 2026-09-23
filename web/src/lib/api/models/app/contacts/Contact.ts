@@ -117,6 +117,9 @@ export default interface Contact {
     // How sure the platform is of the status, 0 to 100, scored from the last
     // check plus what real mail to the address showed.
     verification_confidence?: number;
+    // Set while a re-check a member asked for waits to run; the verdict
+    // above stands until it lands.
+    verification_requested_at?: string | null;
     is_catch_all?: boolean;
 
     // Present only in the campaign Leads view (single-campaign search). Drives

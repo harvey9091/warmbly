@@ -41,17 +41,21 @@ type ContactRepository interface {
 	// the outcome of a verify pass; ListUnverifiedContacts returns contacts that
 	// have never been conclusively checked (status 'unknown', never verified) so
 	// the batch scheduler can work them off a cap per tick.
-	UpdateContactVerification(ctx context.Context, contactID uuid.UUID, res emailverify.Result) *errx.Error
-	// ListVerificationCandidates returns contacts due for a check: never
-	// checked, or checked long enough ago that the verdict has aged out.
-	// Manual verdicts are never candidates. Oldest first.
+	// checkStatus is what the check said before evidence was applied, and
+	// requestedAt the member request it answers, if any.
+	UpdateContactVerification(ctx context.Context, contactID uuid.UUID, res emailverify.Result, checkStatus emailverify.Status, requestedAt *time.Time) *errx.Error
+	// ListVerificationCandidates returns contacts due for a check: those a
+	// member asked to re-check first, then never checked, or checked long
+	// enough ago that the verdict has aged out. Manual verdicts are only
+	// candidates on request. Oldest first.
 	ListVerificationCandidates(ctx context.Context, limit int) ([]VerificationCandidate, *errx.Error)
 	// SetContactsVerification stores one verdict on many of the org's contacts
 	// (a manual "mark deliverable"). Returns how many rows changed.
 	SetContactsVerification(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID, w models.ContactVerificationWrite) (int, *errx.Error)
-	// ResetContactsVerification clears the verdict so the scheduler checks the
-	// contacts again on its next pass. Returns how many rows changed.
-	ResetContactsVerification(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) (int, *errx.Error)
+	// RequestContactsVerification queues a re-check of the org's listed
+	// contacts ahead of the backlog, leaving their current verdict standing
+	// until it lands. Returns how many rows changed.
+	RequestContactsVerification(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) (int, *errx.Error)
 	// UndeliverableLeadIDs lists the campaign's leads verification refused.
 	UndeliverableLeadIDs(ctx context.Context, orgID, campaignID uuid.UUID) ([]uuid.UUID, *errx.Error)
 	// VerificationCounts is the org's contacts by verdict.
@@ -589,7 +593,7 @@ func (r *contactRepository) GetByID(ctx context.Context, contactID uuid.UUID) (*
 			c.custom_fields, c.subscribed, c.updated_at, c.created_at,
 			c.verification_status, c.verification_reason, c.is_catch_all, c.verification_checked_at,
 			c.verification_source, c.verification_provider, c.verification_sub_status, c.verification_confidence,
-			c.esp_provider, c.esp_resolved_at
+			c.verification_requested_at, c.esp_provider, c.esp_resolved_at
 		FROM contacts c
 		WHERE c.id = $1
 	`
@@ -601,7 +605,7 @@ func (r *contactRepository) GetByID(ctx context.Context, contactID uuid.UUID) (*
 		&contact.UpdatedAt, &contact.CreatedAt,
 		&contact.VerificationStatus, &contact.VerificationReason, &contact.IsCatchAll, &contact.VerificationCheckedAt,
 		&contact.VerificationSource, &contact.VerificationProvider, &contact.VerificationSubStatus, &contact.VerificationConfidence,
-		&contact.ESPProvider, &contact.ESPResolvedAt,
+		&contact.VerificationRequestedAt, &contact.ESPProvider, &contact.ESPResolvedAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -640,7 +644,7 @@ func (r *contactRepository) SetSubscribedByEmail(ctx context.Context, orgID uuid
 	return err
 }
 
-func (r *contactRepository) UpdateContactVerification(ctx context.Context, contactID uuid.UUID, res emailverify.Result) *errx.Error {
+func (r *contactRepository) UpdateContactVerification(ctx context.Context, contactID uuid.UUID, res emailverify.Result, checkStatus emailverify.Status, requestedAt *time.Time) *errx.Error {
 	status := string(res.Status)
 	if status == "" {
 		status = string(emailverify.StatusUnknown)
@@ -657,7 +661,12 @@ func (r *contactRepository) UpdateContactVerification(ctx context.Context, conta
 	if provider == emailverify.ProviderBuiltin {
 		source = models.VerificationSourceProbe
 	}
+	if checkStatus == "" {
+		checkStatus = emailverify.Status(status)
+	}
 
+	// Only the request this check answers is cleared, and a manual verdict set
+	// while it ran is not overwritten.
 	query := `
 		UPDATE contacts
 		SET verification_status = $2,
@@ -668,10 +677,15 @@ func (r *contactRepository) UpdateContactVerification(ctx context.Context, conta
 		    verification_provider = $7,
 		    verification_sub_status = $8,
 		    verification_confidence = $9,
+		    verification_check_status = $10,
+		    verification_requested_at = CASE
+		        WHEN verification_requested_at IS NOT DISTINCT FROM $11::timestamptz THEN NULL
+		        ELSE verification_requested_at END,
 		    updated_at = NOW()
 		WHERE id = $1
+		  AND (verification_source <> 'manual' OR ($11::timestamptz IS NOT NULL AND verification_requested_at IS NOT NULL))
 	`
-	params := []any{contactID, status, res.Reason, res.IsCatchAll, checkedAt, source, provider, string(res.SubStatus), res.Confidence}
+	params := []any{contactID, status, res.Reason, res.IsCatchAll, checkedAt, source, provider, string(res.SubStatus), res.Confidence, string(checkStatus), requestedAt}
 	cmd, err := r.DB.Exec(ctx, query, params...)
 	if err != nil {
 		db.CaptureError(err, query, params, "exec")
@@ -688,17 +702,17 @@ type VerificationCandidate struct {
 	ID             uuid.UUID
 	OrganizationID uuid.UUID
 	Email          string
-	// Requested is true when a member asked for this check (the verdict was
-	// reset), so it is worth spending a paid credit on even when the
-	// organization has none to spare.
-	Requested bool
+	// RequestedAt is the member request this check answers; nil for the
+	// scheduler's own backlog.
+	RequestedAt *time.Time
 }
 
 // ListVerificationCandidates returns up to `limit` contacts due for a check.
-// Never-checked contacts come first (a reset counts as never checked), then
-// verdicts older than their shelf life: an unknown verdict is retried after
-// config.VerificationUnknownRecheckDays, everything else after
-// config.VerificationRecheckDays. Manual verdicts are never re-checked.
+// A member's request comes first and is answered whatever the verdict, its
+// age or the evidence behind it: they asked. Then never-checked contacts,
+// then verdicts older than their shelf life: an unknown verdict is retried
+// after config.VerificationUnknownRecheckDays, everything else after
+// config.VerificationRecheckDays. Manual verdicts are never re-checked unasked.
 //
 // A built-in verdict that predates a connected verifier is reopened once, so
 // connecting one actually reaches the addresses it was connected for.
@@ -706,10 +720,27 @@ func (r *contactRepository) ListVerificationCandidates(ctx context.Context, limi
 	if limit <= 0 {
 		limit = 100
 	}
+	// Requests take at most half a batch first, so one workspace's bulk
+	// re-verify cannot hold every other workspace's new contacts back.
+	requestedQuery := `
+		SELECT c.id, c.organization_id, c.email, c.verification_requested_at
+		FROM contacts c
+		WHERE c.verification_requested_at IS NOT NULL
+		  AND c.organization_id IS NOT NULL
+		ORDER BY c.verification_requested_at ASC, c.id
+		LIMIT $1 OFFSET $2
+	`
+	out := make([]VerificationCandidate, 0, limit)
+	if xerr := r.scanVerificationCandidates(ctx, requestedQuery, []any{(limit + 1) / 2, 0}, &out); xerr != nil {
+		return nil, xerr
+	}
+	requested := len(out)
+
 	query := `
-		SELECT c.id, c.organization_id, c.email, c.verification_checked_at IS NULL
+		SELECT c.id, c.organization_id, c.email, c.verification_requested_at
 		FROM contacts c
 		WHERE c.organization_id IS NOT NULL
+		  AND c.verification_requested_at IS NULL
 		  AND c.verification_source <> 'manual'
 		  -- Real mail seen recently excuses the address from a check.
 		  AND (c.verification_evidence_at IS NULL OR c.verification_evidence_at < NOW() - make_interval(days => $4))
@@ -742,30 +773,41 @@ func (r *contactRepository) ListVerificationCandidates(ctx context.Context, limi
 		providers = append(providers, string(p))
 	}
 	params := []any{
-		limit, config.VerificationUnknownRecheckDays, config.VerificationRecheckDays,
+		limit - len(out), config.VerificationUnknownRecheckDays, config.VerificationRecheckDays,
 		config.VerificationEvidenceFreshDays, providers, emailverify.ProviderBuiltin,
 	}
+	if xerr := r.scanVerificationCandidates(ctx, query, params, &out); xerr != nil {
+		return nil, xerr
+	}
+	// Room the backlog left goes back to requests.
+	if len(out) < limit && requested == (limit+1)/2 {
+		if xerr := r.scanVerificationCandidates(ctx, requestedQuery, []any{limit - len(out), requested}, &out); xerr != nil {
+			return nil, xerr
+		}
+	}
+	return out, nil
+}
+
+func (r *contactRepository) scanVerificationCandidates(ctx context.Context, query string, params []any, out *[]VerificationCandidate) *errx.Error {
 	rows, err := r.DB.Query(ctx, query, params...)
 	if err != nil {
 		db.CaptureError(err, query, params, "query")
-		return nil, errx.InternalError()
+		return errx.InternalError()
 	}
 	defer rows.Close()
-
-	out := make([]VerificationCandidate, 0, limit)
 	for rows.Next() {
 		var c VerificationCandidate
-		if err := rows.Scan(&c.ID, &c.OrganizationID, &c.Email, &c.Requested); err != nil {
+		if err := rows.Scan(&c.ID, &c.OrganizationID, &c.Email, &c.RequestedAt); err != nil {
 			db.CaptureError(err, "", nil, "ListVerificationCandidates scan")
-			return nil, errx.InternalError()
+			return errx.InternalError()
 		}
-		out = append(out, c)
+		*out = append(*out, c)
 	}
 	if err := rows.Err(); err != nil {
 		db.CaptureError(err, "", nil, "ListVerificationCandidates rows")
-		return nil, errx.InternalError()
+		return errx.InternalError()
 	}
-	return out, nil
+	return nil
 }
 
 // SetContactsVerification writes one verdict onto the org's listed contacts.
@@ -782,6 +824,9 @@ func (r *contactRepository) SetContactsVerification(ctx context.Context, orgID u
 		    verification_source = $7,
 		    is_catch_all = ($4 = 'catch_all'),
 		    verification_checked_at = NOW(),
+		    verification_check_status = '',
+		    -- A verdict a member set answers any re-check still waiting.
+		    verification_requested_at = NULL,
 		    updated_at = NOW()
 		WHERE organization_id = $1 AND id = ANY($2)
 	`
@@ -794,21 +839,16 @@ func (r *contactRepository) SetContactsVerification(ctx context.Context, orgID u
 	return int(cmd.RowsAffected()), nil
 }
 
-// ResetContactsVerification returns the org's listed contacts to "never
-// checked" so the next scheduler pass picks them up first.
-func (r *contactRepository) ResetContactsVerification(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) (int, *errx.Error) {
+// RequestContactsVerification queues a re-check of the org's listed contacts.
+// The verdict is left in place, so campaigns keep routing on it until the
+// new one lands.
+func (r *contactRepository) RequestContactsVerification(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) (int, *errx.Error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
 	query := `
 		UPDATE contacts
-		SET verification_status = 'unknown',
-		    verification_sub_status = '',
-		    verification_reason = 'verification requested',
-		    verification_provider = '',
-		    verification_source = '',
-		    is_catch_all = false,
-		    verification_checked_at = NULL,
+		SET verification_requested_at = NOW(),
 		    updated_at = NOW()
 		WHERE organization_id = $1 AND id = ANY($2)
 	`
@@ -864,7 +904,7 @@ func (r *contactRepository) VerificationCounts(ctx context.Context, orgID uuid.U
 			COUNT(*) FILTER (WHERE verification_status = 'risky'),
 			COUNT(*) FILTER (WHERE verification_status = 'invalid'),
 			COUNT(*) FILTER (WHERE verification_status NOT IN ('valid','risky','invalid')),
-			COUNT(*) FILTER (WHERE verification_checked_at IS NULL)
+			COUNT(*) FILTER (WHERE verification_checked_at IS NULL OR verification_requested_at IS NOT NULL)
 		FROM contacts
 		WHERE organization_id = $1
 	`
@@ -1514,6 +1554,7 @@ func (r *contactRepository) Search(
 			c.custom_fields, c.subscribed, c.updated_at, c.created_at,
 			c.verification_status, c.verification_reason, c.is_catch_all, c.verification_checked_at,
 			c.verification_source, c.verification_provider, c.verification_sub_status, c.verification_confidence,
+			c.verification_requested_at,
 			COALESCE(
 				(
 					SELECT json_agg(json_build_object('id', cam.id, 'name', cam.name))
@@ -1599,6 +1640,7 @@ func (r *contactRepository) Search(
 			&c.UpdatedAt, &c.CreatedAt,
 			&c.VerificationStatus, &c.VerificationReason, &c.IsCatchAll, &c.VerificationCheckedAt,
 			&c.VerificationSource, &c.VerificationProvider, &c.VerificationSubStatus, &c.VerificationConfidence,
+			&c.VerificationRequestedAt,
 			&campaignsJSON, &categoriesJSON, &leadProgressJSON,
 			&sortValue,
 		); err != nil {
@@ -2205,6 +2247,7 @@ func (r *contactRepository) Update(ctx context.Context, userID, contactID string
 				"verification_provider = ''",
 				"is_catch_all = false",
 				"verification_checked_at = NULL",
+				"verification_check_status = ''",
 				"verification_confidence = 0",
 				"verification_evidence_at = NULL",
 				// The ledger the verdict is scored from is wiped below, and

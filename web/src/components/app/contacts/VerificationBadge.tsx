@@ -27,28 +27,35 @@ const SUB_LABEL: Record<string, string> = {
 };
 
 const SOURCE_LABEL: Record<string, string> = {
-    probe: "checked by Warmbly",
-    provider: "checked by a verification service",
+    probe: "checked by Warmbly's built-in check",
+    provider: "verified with a verification service",
     imported: "imported with the list",
     manual: "marked by a teammate",
 };
 
-export function verificationTitle(c: Pick<Contact, "verification_status" | "verification_sub_status" | "verification_source" | "verification_provider" | "verification_confidence">): string {
+// Who produced a verdict, in the words a member reads: "verified with
+// MillionVerifier". Only a verifier we have a name for is named; anything else
+// keeps the generic label rather than showing a raw identifier.
+export function verificationSourceLabel(source?: string, provider?: string, providerLabel?: string): string {
+    if (!source || !SOURCE_LABEL[source]) return "";
+    const name = providerLabel || PROVIDER_LABELS[provider as IntegrationProvider];
+    if (source === "provider" && name) return `verified with ${name}`;
+    if (source === "imported" && provider && provider !== "imported" && provider !== "builtin") {
+        return `imported from ${name || provider}`;
+    }
+    return SOURCE_LABEL[source];
+}
+
+type TitleFields = "verification_status" | "verification_sub_status" | "verification_source" | "verification_provider" | "verification_confidence" | "verification_requested_at";
+
+export function verificationTitle(c: Pick<Contact, TitleFields>): string {
     const status = c.verification_status ?? "unknown";
     const meta = META[status] ?? META.unknown;
     const parts: string[] = [c.verification_confidence ? `${meta.label} (${c.verification_confidence}% sure)` : meta.label];
     if (c.verification_sub_status && SUB_LABEL[c.verification_sub_status]) parts.push(SUB_LABEL[c.verification_sub_status]);
-    if (c.verification_source && SOURCE_LABEL[c.verification_source]) {
-        // Only a verifier we have a name for is named; anything else keeps the
-        // generic label rather than showing a raw identifier.
-        const providerName = PROVIDER_LABELS[c.verification_provider as IntegrationProvider];
-        const src = c.verification_source === "provider" && providerName
-            ? `checked by ${providerName}`
-            : c.verification_source === "imported" && c.verification_provider && c.verification_provider !== "imported"
-            ? `imported from ${c.verification_provider}`
-            : SOURCE_LABEL[c.verification_source];
-        parts.push(src);
-    }
+    const src = verificationSourceLabel(c.verification_source, c.verification_provider);
+    if (src) parts.push(src);
+    if (c.verification_requested_at) parts.push("re-check queued");
     return parts.join(" · ");
 }
 
@@ -56,13 +63,13 @@ export default function VerificationBadge({
     contact,
     className,
 }: {
-    contact: Pick<Contact, "verification_status" | "verification_sub_status" | "verification_source" | "verification_provider" | "verification_checked_at" | "verification_confidence">;
+    contact: Pick<Contact, TitleFields | "verification_checked_at">;
     className?: string;
 }) {
     const status = contact.verification_status ?? "unknown";
     const meta = META[status] ?? META.unknown;
     const Icon = meta.Icon;
-    const pending = status === "unknown" && !contact.verification_checked_at;
+    const pending = !!contact.verification_requested_at || (status === "unknown" && !contact.verification_checked_at);
     return (
         <AnimatePresence mode="popLayout" initial={false}>
             <motion.span
@@ -71,7 +78,7 @@ export default function VerificationBadge({
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.4, opacity: 0 }}
                 transition={{ type: "spring", duration: 0.35, bounce: 0.45 }}
-                title={pending ? "Verification queued" : verificationTitle(contact)}
+                title={pending && !contact.verification_checked_at ? "Verification queued" : verificationTitle(contact)}
                 aria-label={verificationTitle(contact)}
                 className={cn("inline-flex shrink-0", meta.tone, pending && "animate-[spin_3s_linear_infinite]", className)}
             >

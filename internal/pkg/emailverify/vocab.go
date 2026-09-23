@@ -153,6 +153,32 @@ var vocabProviderAliases = map[string]string{
 	"warmbly": ProviderBuiltin, "builtin": ProviderBuiltin,
 }
 
+// providerLabels are the names a member reads for each verifier.
+var providerLabels = map[string]string{
+	ProviderBuiltin:         "Warmbly's built-in check",
+	ProviderMillionVerifier: "MillionVerifier",
+	ProviderCleanMyList:     "CleanMyList",
+	"zerobounce":            "ZeroBounce",
+	"neverbounce":           "NeverBounce",
+	"bouncer":               "Bouncer",
+	"kickbox":               "Kickbox",
+	"emailable":             "Emailable",
+	"debounce":              "DeBounce",
+	"clearout":              "Clearout",
+	"emaillistverify":       "EmailListVerify",
+}
+
+// ProviderLabel is the display name of a verifier, or "" for one it does not know.
+func ProviderLabel(name string) string {
+	if l, ok := providerLabels[name]; ok {
+		return l
+	}
+	if k, ok := KnownVocabulary(name); ok {
+		return providerLabels[k]
+	}
+	return ""
+}
+
 func vocabKey(raw string) string {
 	k := strings.ToLower(strings.TrimSpace(raw))
 	return strings.NewReplacer(" ", "", "_", "", "-", "", ".", "").Replace(k)
