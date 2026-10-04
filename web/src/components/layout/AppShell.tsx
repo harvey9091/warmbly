@@ -90,7 +90,7 @@ export function AppShell() {
                         The inner corner is softened (rounded-tl-2xl) only on >=md, where
                         the sidebar sits beside it; on mobile the panel is
                         full-bleed with just a top hairline. */}
-                    <main className="app-shell-content flex-1 min-w-0 bg-background overflow-hidden border-t border-slate-200/70 md:rounded-tl-2xl md:border-l">
+                    <main className="wb-panel app-shell-content flex-1 min-w-0 bg-background overflow-hidden border-t border-slate-200/70 md:rounded-tl-2xl md:border-l">
                         {/* Dark theme only: a soft light from the top edge, laid over every page whatever it paints. */}
                         <div aria-hidden className="pointer-events-none relative z-20 hidden h-0 dark:block">
                             <div className="wb-panel-light absolute inset-x-0 top-0 h-[420px]" />
