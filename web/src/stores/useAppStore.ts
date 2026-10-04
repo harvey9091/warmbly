@@ -3,7 +3,7 @@ import { devtools, persist } from 'zustand/middleware'
 import { useShallow } from 'zustand/react/shallow'
 import { createUserSlice, type UserSlice } from './slices/userSlice'
 import { createOrganizationSlice, type OrganizationSlice } from './slices/organizationSlice'
-import { createUISlice, clampUniboxListWidth, clampUniboxRailWidth, sanitizeNavCollapsedSections, sanitizeUniboxRailFavorites, sanitizeUniboxRailHidden, sanitizeUniboxRailOrder, type UISlice } from './slices/uiSlice'
+import { createUISlice, clampUniboxListWidth, clampUniboxRailWidth, sanitizeNavCollapsedSections, sanitizeUniboxRailFavorites, sanitizeUniboxRailHidden, sanitizeUniboxRailOrder, clampAppearanceGlassOpacity, clampAppearanceGlassBlur, clampAppearanceBackgroundBlur, clampAppearanceBackgroundOpacity, sanitizeBackgroundPreset, sanitizeBackgroundImage, type UISlice } from './slices/uiSlice'
 import { createShortcutSlice, type ShortcutSlice } from './slices/shortcutSlice'
 import { createDataSlice, type DataSlice } from './slices/dataSlice'
 import { createRealtimeSlice, type RealtimeSlice } from './slices/realtimeSlice'
@@ -66,6 +66,12 @@ export const useAppStore = create<AppStore>()(
             // The theme lives under its own key, which index.html reads before first paint.
             theme: current.theme,
             resolvedTheme: current.resolvedTheme,
+            glassOpacity: clampAppearanceGlassOpacity(p.glassOpacity),
+            glassBlur: clampAppearanceGlassBlur(p.glassBlur),
+            backgroundPreset: sanitizeBackgroundPreset(p.backgroundPreset),
+            backgroundImage: sanitizeBackgroundImage(p.backgroundImage),
+            backgroundBlur: clampAppearanceBackgroundBlur(p.backgroundBlur),
+            backgroundOpacity: clampAppearanceBackgroundOpacity(p.backgroundOpacity),
           }
         },
         partialize: (state) => ({

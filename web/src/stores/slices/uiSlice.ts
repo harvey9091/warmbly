@@ -26,6 +26,36 @@ export const UNIBOX_LIST_DEFAULT_WIDTH = 360
 // A favorite's own name is a rail label, so it stays about as long as one.
 export const UNIBOX_RAIL_FAVORITE_NAME_MAX = 40
 
+export const clampAppearanceGlassOpacity = (v: unknown): number => {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return 88
+  return Math.round(Math.min(100, Math.max(60, v)))
+}
+
+export const clampAppearanceGlassBlur = (v: unknown): number => {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return 12
+  return Math.round(Math.min(40, Math.max(0, v)))
+}
+
+export const clampAppearanceBackgroundBlur = (v: unknown): number => {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return 0
+  return Math.round(Math.min(40, Math.max(0, v)))
+}
+
+export const clampAppearanceBackgroundOpacity = (v: unknown): number => {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return 100
+  return Math.round(Math.min(100, Math.max(0, v)))
+}
+
+export const sanitizeBackgroundPreset = (v: unknown): BackgroundPreset => {
+  if (v === 'gradient-1' || v === 'gradient-4' || v === 'gradient-5') return v
+  return 'default'
+}
+
+export const sanitizeBackgroundImage = (v: unknown): string => {
+  if (typeof v !== 'string') return ''
+  return v
+}
+
 // A scope pinned to the rail's Favorites section, with an optional name of its own.
 export interface UniboxRailFavorite {
   key: string
@@ -225,17 +255,17 @@ const getInitialAppearance = (): AppearanceState => {
     }
   }
   try {
-    const raw = localStorage.getItem('warmbly-appearance')
+    const raw = localStorage.getItem('warmbly-storage')
     if (raw) {
-      const parsed = JSON.parse(raw) as AppearanceState
+      const parsed = JSON.parse(raw) as Partial<AppearanceState>
       return {
-        glassmorphismEnabled: parsed.glassmorphismEnabled ?? false,
-        glassOpacity: Math.max(60, parsed.glassOpacity ?? 88),
-        glassBlur: parsed.glassBlur ?? 12,
-        backgroundPreset: parsed.backgroundPreset ?? 'default',
-        backgroundImage: parsed.backgroundImage ?? '',
-        backgroundBlur: parsed.backgroundBlur ?? 0,
-        backgroundOpacity: parsed.backgroundOpacity ?? 100,
+        glassmorphismEnabled: typeof parsed.glassmorphismEnabled === 'boolean' ? parsed.glassmorphismEnabled : false,
+        glassOpacity: typeof parsed.glassOpacity === 'number' && Number.isFinite(parsed.glassOpacity) ? Math.max(60, Math.min(100, parsed.glassOpacity)) : 88,
+        glassBlur: typeof parsed.glassBlur === 'number' && Number.isFinite(parsed.glassBlur) ? Math.max(0, Math.min(40, parsed.glassBlur)) : 12,
+        backgroundPreset: parsed.backgroundPreset === 'gradient-1' || parsed.backgroundPreset === 'gradient-4' || parsed.backgroundPreset === 'gradient-5' ? parsed.backgroundPreset : 'default',
+        backgroundImage: typeof parsed.backgroundImage === 'string' ? parsed.backgroundImage : '',
+        backgroundBlur: typeof parsed.backgroundBlur === 'number' && Number.isFinite(parsed.backgroundBlur) ? Math.max(0, Math.min(40, parsed.backgroundBlur)) : 0,
+        backgroundOpacity: typeof parsed.backgroundOpacity === 'number' && Number.isFinite(parsed.backgroundOpacity) ? Math.max(0, Math.min(100, parsed.backgroundOpacity)) : 100,
       }
     }
   } catch { /* ignore */ }
@@ -248,11 +278,6 @@ const getInitialAppearance = (): AppearanceState => {
     backgroundBlur: 0,
     backgroundOpacity: 100,
   }
-}
-
-const saveAppearance = (state: Pick<AppearanceState, 'glassmorphismEnabled' | 'glassOpacity' | 'glassBlur' | 'backgroundPreset' | 'backgroundImage' | 'backgroundBlur' | 'backgroundOpacity'>) => {
-  if (typeof window === 'undefined') return
-  localStorage.setItem('warmbly-appearance', JSON.stringify(state))
 }
 
 export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set, get) => ({
@@ -340,13 +365,6 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set, get) 
     const resolvedTheme = resolveTheme(theme)
     applyTheme(resolvedTheme, origin)
     set({ theme, resolvedTheme })
-    if (resolvedTheme === 'dark') {
-      const current = get()
-      if (!current.backgroundImage) {
-        current.setBackgroundImage('/backgrounds/bg-1.png')
-        current.setBackgroundPreset('default')
-      }
-    }
   },
   setResolvedTheme: (resolvedTheme, origin) => {
     applyTheme(resolvedTheme, origin)
@@ -355,50 +373,23 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set, get) 
 
   // Actions - Appearance
   setGlassmorphismEnabled: (glassmorphismEnabled) =>
-    set((state) => {
-      if (state.glassmorphismEnabled === glassmorphismEnabled) return state
-      const next = { ...state, glassmorphismEnabled }
-      saveAppearance(next)
-      return next
-    }),
-  setGlassOpacity: (glassOpacity) =>
-    set((state) => {
-      const next = Math.max(60, Math.min(100, glassOpacity))
-      if (state.glassOpacity === next) return state
-      const upd = { ...state, glassOpacity: next }
-      saveAppearance(upd)
-      return upd
-    }),
+    set((state) => (state.glassmorphismEnabled === glassmorphismEnabled ? state : { glassmorphismEnabled })),
+  setGlassOpacity: (glassOpacity) => {
+    const next = Math.max(60, Math.min(100, glassOpacity))
+    set((state) => (state.glassOpacity === next ? state : { glassOpacity: next }))
+  },
   setGlassBlur: (glassBlur) =>
-    set((state) => {
-      const next = { ...state, glassBlur }
-      saveAppearance(next)
-      return next
-    }),
+    set((state) => (state.glassBlur === glassBlur ? state : { glassBlur })),
   setBackgroundPreset: (backgroundPreset) =>
-    set((state) => {
-      const next = { ...state, backgroundPreset }
-      saveAppearance(next)
-      return next
-    }),
+    set((state) => (state.backgroundPreset === backgroundPreset ? state : { backgroundPreset })),
   setBackgroundImage: (backgroundImage) =>
-    set((state) => {
-      const next = { ...state, backgroundImage }
-      saveAppearance(next)
-      return next
-    }),
+    set((state) => (state.backgroundImage === backgroundImage ? state : { backgroundImage })),
   setBackgroundBlur: (backgroundBlur) =>
-    set((state) => {
-      const next = { ...state, backgroundBlur }
-      saveAppearance(next)
-      return next
-    }),
-  setBackgroundOpacity: (backgroundOpacity) =>
-    set((state) => {
-      const next = { ...state, backgroundOpacity }
-      saveAppearance(next)
-      return next
-    }),
+    set((state) => (state.backgroundBlur === backgroundBlur ? state : { backgroundBlur })),
+  setBackgroundOpacity: (backgroundOpacity) => {
+    const next = Math.max(0, Math.min(100, backgroundOpacity))
+    set((state) => (state.backgroundOpacity === next ? state : { backgroundOpacity: next }))
+  },
 
   // Actions - Modals
   setTagsModalOpen: (tagsModalOpen) =>
@@ -428,4 +419,4 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set, get) 
     set((state) =>
       state.uniboxContactRailOpen === uniboxContactRailOpen ? state : { uniboxContactRailOpen },
     ),
-})
+  })

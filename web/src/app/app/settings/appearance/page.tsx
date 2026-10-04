@@ -14,8 +14,6 @@ import {
 } from "../_components/SectionShell";
 import { DitherSlider } from "@/components/ui/dither";
 import { useAppStore } from "@/stores";
-import { usePermission } from "@/hooks/usePermission";
-import { NoAccess } from "@/components/layout/NoAccess";
 
 const THEME_OPTIONS = [
     { value: "light", label: "Light", icon: <SunIcon className="w-3.5 h-3.5 text-amber-500" /> },
@@ -30,26 +28,27 @@ const PRESET_OPTIONS = [
     { value: "gradient-5", label: "Monochrome" },
 ] as const;
 
-    const PRESET_BACKGROUNDS: Record<string, string> = {
-        "gradient-1": "linear-gradient(170deg, #f8fafc 0%, #e0f2fe 18%, #fef3c7 48%, #fde68a 78%, #fefce8 100%)",
-        "gradient-4": "linear-gradient(170deg, #f8fafc 0%, #e0f2fe 18%, #bfdbfe 48%, #93c5fd 78%, #dbeafe 100%)",
-        "gradient-5": "linear-gradient(170deg, #f8fafc 0%, #f1f5f9 25%, #e2e8f0 55%, #cbd5e1 100%)",
-    };
+const PRESET_BACKGROUNDS: Record<string, string> = {
+    "gradient-1": "linear-gradient(170deg, #f8fafc 0%, #e0f2fe 18%, #fef3c7 48%, #fde68a 78%, #fefce8 100%)",
+    "gradient-4": "linear-gradient(170deg, #f8fafc 0%, #e0f2fe 18%, #bfdbfe 48%, #93c5fd 78%, #dbeafe 100%)",
+    "gradient-5": "linear-gradient(170deg, #f8fafc 0%, #f1f5f9 25%, #e2e8f0 55%, #cbd5e1 100%)",
+};
 
-    const BUILTIN_BACKGROUNDS = [
-        { value: "bg-1", label: "BG1", src: "/backgrounds/bg-1.png" },
-        { value: "bg-2", label: "BG2", src: "/backgrounds/bg-2.png" },
-        { value: "bg-3", label: "BG3", src: "/backgrounds/bg-3.png" },
-        { value: "bg-4", label: "BG4", src: "/backgrounds/bg-4.png" },
-    ] as const;
+const BUILTIN_BACKGROUNDS = [
+    { value: "bg-1", label: "BG1", src: "/backgrounds/bg-1.png" },
+    { value: "bg-2", label: "BG2", src: "/backgrounds/bg-2.png" },
+    { value: "bg-3", label: "BG3", src: "/backgrounds/bg-3.png" },
+    { value: "bg-4", label: "BG4", src: "/backgrounds/bg-4.png" },
+] as const;
+
+const MAX_DATA_URL_BYTES = 200 * 1024
 
 export default function AppearanceSettingsPage() {
-    const canManage = usePermission("MANAGE_SETTINGS");
-    if (!canManage) return <NoAccess feature="Appearance" permissionLabel="Manage settings" />;
     return <AppearanceSettings />;
 }
 
 function AppearanceSettings() {
+    const theme = useAppStore((state) => state.theme);
     const resolvedTheme = useAppStore((state) => state.resolvedTheme);
     const setTheme = useAppStore((state) => state.setTheme);
     const glassmorphismEnabled = useAppStore((state) => state.glassmorphismEnabled);
@@ -95,9 +94,10 @@ function AppearanceSettings() {
                 <Row label="Appearance">
                     <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50/60 p-0.5">
                         {THEME_OPTIONS.map((opt) => {
-                            const active = resolvedTheme === opt.value;
+                            const active = theme === opt.value;
                             return (
                                 <button
+                                    type="button"
                                     key={opt.value}
                                     onClick={() => setTheme(opt.value)}
                                     className={cn(
@@ -162,6 +162,7 @@ function AppearanceSettings() {
                                 const active = backgroundPreset === preset.value && !hasCustomImage;
                                 return (
                                     <button
+                                        type="button"
                                         key={preset.value}
                                         onClick={() => {
                                             setBackgroundPreset(preset.value as typeof backgroundPreset);
@@ -206,6 +207,7 @@ function AppearanceSettings() {
                                 const isActive = backgroundImage === bg.src
                                 return (
                                     <button
+                                        type="button"
                                         key={bg.value}
                                         onClick={() => {
                                             setBackgroundImage(bg.src)
@@ -456,25 +458,36 @@ function BackgroundImageUploader({
         setError(null);
     }, [current]);
 
-    React.useEffect(() => {
-        return () => {
-            if (preview && preview !== current) URL.revokeObjectURL(preview);
-        };
-    }, [preview, current]);
+    function readFileAsDataURL(file: File): Promise<string> {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = () => resolve(reader.result as string)
+            reader.onerror = () => reject(reader.error)
+            reader.readAsDataURL(file)
+        })
+    }
 
-    function handleFile(file: File) {
-        setError(null);
+    async function handleFile(file: File) {
+        setError(null)
         if (!file.type.startsWith("image/")) {
-            setError("Please select an image file.");
-            return;
+            setError("Please select an image file.")
+            return
         }
         if (file.size > 10 * 1024 * 1024) {
-            setError("Image must be smaller than 10 MB.");
-            return;
+            setError("Image must be smaller than 10 MB.")
+            return
         }
-        const url = URL.createObjectURL(file);
-        setPreview(url);
-        onSelect(url);
+        try {
+            const dataUrl = await readFileAsDataURL(file)
+            if (dataUrl.length > MAX_DATA_URL_BYTES) {
+                setError("Image is too large. Use a smaller file for browser storage.")
+                return
+            }
+            setPreview(dataUrl)
+            onSelect(dataUrl)
+        } catch {
+            setError("Could not read this image.")
+        }
     }
 
     function onPicked(e: React.ChangeEvent<HTMLInputElement>) {
@@ -515,10 +528,9 @@ function BackgroundImageUploader({
                         <button
                             type="button"
                             onClick={() => {
-                                if (preview && preview !== current) URL.revokeObjectURL(preview);
-                                setPreview(null);
-                                setError(null);
-                                onClear();
+                                setPreview(null)
+                                setError(null)
+                                onClear()
                             }}
                             className="h-7 px-2.5 rounded-md text-[12px] text-slate-500 hover:text-red-700 hover:bg-red-50 transition-colors inline-flex items-center gap-1.5"
                         >
@@ -528,7 +540,8 @@ function BackgroundImageUploader({
                     </div>
                 </div>
             ) : (
-                <div
+                <button
+                    type="button"
                     onDragOver={(e) => {
                         e.preventDefault();
                         setDragging(true);
@@ -536,6 +549,12 @@ function BackgroundImageUploader({
                     onDragLeave={() => setDragging(false)}
                     onDrop={onDrop}
                     onClick={() => inputRef.current?.click()}
+                    onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault()
+                            inputRef.current?.click()
+                        }
+                    }}
                     className={cn(
                         "flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6 text-center cursor-pointer transition-colors",
                         dragging
@@ -549,7 +568,7 @@ function BackgroundImageUploader({
                         <div className="text-[11px] text-slate-400 mt-0.5">or click to browse</div>
                     </div>
                     <div className="text-[10px] text-slate-400">PNG, JPG, WebP up to 10 MB</div>
-                </div>
+                </button>
             )}
             {error && <div className="text-[11px] text-red-600">{error}</div>}
             <input
