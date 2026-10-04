@@ -164,7 +164,7 @@
 
   /* Sidebar selected nav item — force a light translucent surface and dark
      text so the active row stays readable in dark mode. */
-  .dark .glassmorphism-enabled .app-shell-nav a.bg-slate-200\/70 {
+  .glassmorphism-enabled .app-shell-nav a.bg-slate-200\/70 {
     background-color: rgba(255, 255, 255, 0.85);
     color: rgba(0, 0, 0, 0.85);
   }

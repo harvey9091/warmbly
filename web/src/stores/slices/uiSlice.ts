@@ -226,6 +226,7 @@ export interface UISlice {
   setBackgroundImage: (url: string) => void
   setBackgroundBlur: (blur: number) => void
   setBackgroundOpacity: (opacity: number) => void
+  resetAppearance: () => void
 
   // Actions - Modals
   setTagsModalOpen: (tagsModalOpen: boolean) => void
@@ -375,20 +376,28 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set, get) 
   setGlassmorphismEnabled: (glassmorphismEnabled) =>
     set((state) => (state.glassmorphismEnabled === glassmorphismEnabled ? state : { glassmorphismEnabled })),
   setGlassOpacity: (glassOpacity) => {
-    const next = Math.max(60, Math.min(100, glassOpacity))
+    const next = clampAppearanceGlassOpacity(glassOpacity)
     set((state) => (state.glassOpacity === next ? state : { glassOpacity: next }))
   },
-  setGlassBlur: (glassBlur) =>
-    set((state) => (state.glassBlur === glassBlur ? state : { glassBlur })),
+  setGlassBlur: (glassBlur) => {
+    const next = clampAppearanceGlassBlur(glassBlur)
+    set((state) => (state.glassBlur === next ? state : { glassBlur: next }))
+  },
   setBackgroundPreset: (backgroundPreset) =>
     set((state) => (state.backgroundPreset === backgroundPreset ? state : { backgroundPreset })),
   setBackgroundImage: (backgroundImage) =>
     set((state) => (state.backgroundImage === backgroundImage ? state : { backgroundImage })),
-  setBackgroundBlur: (backgroundBlur) =>
-    set((state) => (state.backgroundBlur === backgroundBlur ? state : { backgroundBlur })),
+  setBackgroundBlur: (backgroundBlur) => {
+    const next = clampAppearanceBackgroundBlur(backgroundBlur)
+    set((state) => (state.backgroundBlur === next ? state : { backgroundBlur: next }))
+  },
   setBackgroundOpacity: (backgroundOpacity) => {
-    const next = Math.max(0, Math.min(100, backgroundOpacity))
+    const next = clampAppearanceBackgroundOpacity(backgroundOpacity)
     set((state) => (state.backgroundOpacity === next ? state : { backgroundOpacity: next }))
+  },
+  resetAppearance: () => {
+    const defaults = getInitialAppearance()
+    set(defaults)
   },
 
   // Actions - Modals

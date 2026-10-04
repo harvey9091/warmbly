@@ -452,6 +452,7 @@ function BackgroundImageUploader({
     const [preview, setPreview] = React.useState<string | null>(current || null);
     const [dragging, setDragging] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
+    const uploadGenerationRef = React.useRef(0);
 
     React.useEffect(() => {
         setPreview(current || null);
@@ -468,6 +469,7 @@ function BackgroundImageUploader({
     }
 
     async function handleFile(file: File) {
+        const generation = ++uploadGenerationRef.current
         setError(null)
         if (!file.type.startsWith("image/")) {
             setError("Please select an image file.")
@@ -479,10 +481,12 @@ function BackgroundImageUploader({
         }
         try {
             const dataUrl = await readFileAsDataURL(file)
+            if (generation !== uploadGenerationRef.current) return
             if (dataUrl.length > MAX_DATA_URL_BYTES) {
                 setError("Image is too large. Use a smaller file for browser storage.")
                 return
             }
+            if (generation !== uploadGenerationRef.current) return
             setPreview(dataUrl)
             onSelect(dataUrl)
         } catch {
@@ -567,7 +571,7 @@ function BackgroundImageUploader({
                         <div className="text-[12px] text-slate-700 font-medium">Drop an image here</div>
                         <div className="text-[11px] text-slate-400 mt-0.5">or click to browse</div>
                     </div>
-                    <div className="text-[10px] text-slate-400">PNG, JPG, WebP up to 10 MB</div>
+                    <div className="text-[10px] text-slate-400">PNG, JPG, WebP — max 200 KB</div>
                 </button>
             )}
             {error && <div className="text-[11px] text-red-600">{error}</div>}
