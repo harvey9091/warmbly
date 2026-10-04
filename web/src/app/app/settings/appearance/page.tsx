@@ -4,22 +4,15 @@
 // the Zustand store; nothing is sent to the backend.
 
 import React from "react";
-import { CheckIcon, ImageIcon, TrashIcon, SunIcon, MoonIcon, MonitorIcon } from "lucide-react";
+import { CheckIcon, ImageIcon, TrashIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-    Row,
     Section,
     SectionShell,
     ToggleRow,
 } from "../_components/SectionShell";
 import { DitherSlider } from "@/components/ui/dither";
 import { useAppStore } from "@/stores";
-
-const THEME_OPTIONS = [
-    { value: "light", label: "Light", icon: <SunIcon className="w-3.5 h-3.5 text-amber-500" /> },
-    { value: "dark", label: "Dark", icon: <MoonIcon className="w-3.5 h-3.5 text-indigo-400" /> },
-    { value: "system", label: "System", icon: <MonitorIcon className="w-3.5 h-3.5 text-slate-500" /> },
-] as const;
 
 const PRESET_OPTIONS = [
     { value: "default", label: "Default" },
@@ -35,8 +28,8 @@ const PRESET_BACKGROUNDS: Record<string, string> = {
 };
 
 const BUILTIN_BACKGROUNDS = [
-    { value: "bg-2", label: "BG1", src: "/backgrounds/bg-2.png" },
-    { value: "bg-3", label: "BG2", src: "/backgrounds/bg-3.png" },
+    { value: "bg-2", label: "BG1", src: "/backgrounds/bg-2.webp" },
+    { value: "bg-3", label: "BG2", src: "/backgrounds/bg-3.webp" },
 ] as const;
 
 const MAX_DATA_URL_BYTES = 200 * 1024
@@ -46,9 +39,7 @@ export default function AppearanceSettingsPage() {
 }
 
 function AppearanceSettings() {
-    const theme = useAppStore((state) => state.theme);
     const resolvedTheme = useAppStore((state) => state.resolvedTheme);
-    const setTheme = useAppStore((state) => state.setTheme);
     const glassmorphismEnabled = useAppStore((state) => state.glassmorphismEnabled);
     const glassOpacity = useAppStore((state) => state.glassOpacity);
     const glassBlur = useAppStore((state) => state.glassBlur);
@@ -84,35 +75,6 @@ function AppearanceSettings() {
                     backgroundOpacity={backgroundOpacity}
                 />
             </div>
-
-            <Section
-                eyebrow="Theme"
-                description="Choose between light, dark, or follow your system preference."
-            >
-                <Row label="Appearance">
-                    <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50/60 p-0.5">
-                        {THEME_OPTIONS.map((opt) => {
-                            const active = theme === opt.value;
-                            return (
-                                <button
-                                    type="button"
-                                    key={opt.value}
-                                    onClick={() => setTheme(opt.value)}
-                                    className={cn(
-                                        "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-medium transition-all duration-200",
-                                        active
-                                            ? "bg-white text-slate-900 shadow-sm border border-slate-200/80"
-                                            : "text-slate-500 hover:text-slate-700 border border-transparent"
-                                    )}
-                                >
-                                    {opt.icon}
-                                    <span>{opt.label}</span>
-                                </button>
-                            );
-                        })}
-                    </div>
-                </Row>
-            </Section>
 
             <Section
                 eyebrow="Glassmorphism"
