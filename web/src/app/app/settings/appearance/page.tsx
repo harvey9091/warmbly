@@ -35,10 +35,8 @@ const PRESET_BACKGROUNDS: Record<string, string> = {
 };
 
 const BUILTIN_BACKGROUNDS = [
-    { value: "bg-1", label: "BG1", src: "/backgrounds/bg-1.png" },
-    { value: "bg-2", label: "BG2", src: "/backgrounds/bg-2.png" },
-    { value: "bg-3", label: "BG3", src: "/backgrounds/bg-3.png" },
-    { value: "bg-4", label: "BG4", src: "/backgrounds/bg-4.png" },
+    { value: "bg-2", label: "BG1", src: "/backgrounds/bg-2.png" },
+    { value: "bg-3", label: "BG2", src: "/backgrounds/bg-3.png" },
 ] as const;
 
 const MAX_DATA_URL_BYTES = 200 * 1024
