@@ -23,7 +23,7 @@ func (h *Handler) AdminSendOutreach(c *gin.Context) {
 
 	var req models.SendAdminOutreachRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 

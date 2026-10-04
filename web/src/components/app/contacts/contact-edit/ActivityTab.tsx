@@ -39,7 +39,6 @@ import {
     MousePointerClickIcon,
     OctagonXIcon,
     PauseIcon,
-    PlayIcon,
     ReplyIcon,
     SearchIcon,
     StickyNoteIcon,
@@ -51,18 +50,19 @@ import {
 import useContactTimeline from "@/lib/api/hooks/app/contacts/useContactTimeline";
 import useContactCampaignStates from "@/lib/api/hooks/app/contacts/useContactCampaignStates";
 import type ContactTimelineEvent from "@/lib/api/models/app/contacts/ContactTimelineEvent";
-import type {
-    ContactTimelineEventType,
-    EngagementOrigin,
-} from "@/lib/api/models/app/contacts/ContactTimelineEvent";
+import type { ContactTimelineEventType } from "@/lib/api/models/app/contacts/ContactTimelineEvent";
 import type ContactCampaignState from "@/lib/api/models/app/contacts/ContactCampaignState";
 import type {
     ContactCampaignStep,
     ContactNextAction,
 } from "@/lib/api/models/app/contacts/ContactCampaignState";
 import { holdSummary } from "@/lib/api/models/app/contacts/Contact";
-import type { LeadHold, LeadStatus } from "@/lib/api/models/app/contacts/Contact";
-import { usePauseLead, useResumeLead } from "@/lib/api/hooks/app/campaigns/useLeadHold";
+import type { LeadHold } from "@/lib/api/models/app/contacts/Contact";
+import LeadStatusPill from "@/components/app/contacts/LeadStatusPill";
+import { usePauseLead } from "@/lib/api/hooks/app/campaigns/useLeadHold";
+import { CC_RESUME_CONFIRM, leadCanBePaused } from "@/lib/leadHold";
+import { PauseLeadButton, ResumeLeadButton } from "@/components/app/contacts/LeadHoldButtons";
+import LeadCCBar from "./LeadCCBar";
 import toast from "react-hot-toast";
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
@@ -70,6 +70,8 @@ import { useWriteGuard } from "@/hooks/usePermission";
 import useClickOutside from "@/hooks/useClickOutside";
 import { useFlipAlignment } from "@/hooks/useFlipPlacement";
 import { fmtAbsolute, fmtRelative } from "./format";
+import OriginBadge from "@/components/app/engagement/OriginBadge";
+import { deviceLabel, hiddenReason, originPlace, originSummary, readerLabel } from "@/lib/engagementOrigin";
 
 type FilterId =
     | "all"
@@ -120,7 +122,7 @@ const LIFECYCLE_TYPES: ContactTimelineEventType[] = [
     ...CAMPAIGN_TYPES,
 ];
 
-export default function ActivityTab({ contactId }: { contactId: string }) {
+export default function ActivityTab({ contactId, contactName }: { contactId: string; contactName: string }) {
     const {
         events,
         isLoading,
@@ -192,7 +194,7 @@ export default function ActivityTab({ contactId }: { contactId: string }) {
 
     return (
         <div className="space-y-3">
-            <CampaignPanel contactId={contactId} />
+            <CampaignPanel contactId={contactId} contactName={contactName} />
 
             <SearchBar value={query} onChange={setQuery} />
 
@@ -263,7 +265,7 @@ export default function ActivityTab({ contactId }: { contactId: string }) {
 // Campaign panel
 // ---------------------------------------------------------------------------
 
-function CampaignPanel({ contactId }: { contactId: string }) {
+function CampaignPanel({ contactId, contactName }: { contactId: string; contactName: string }) {
     const { data, isLoading, error } = useContactCampaignStates(contactId);
     const states = data?.data ?? [];
 
@@ -284,14 +286,22 @@ function CampaignPanel({ contactId }: { contactId: string }) {
             </h2>
             <div className="space-y-2">
                 {states.map((s) => (
-                    <CampaignCard key={s.campaign_id} state={s} contactId={contactId} />
+                    <CampaignCard key={s.campaign_id} state={s} contactId={contactId} contactName={contactName} />
                 ))}
             </div>
         </section>
     );
 }
 
-function CampaignCard({ state, contactId }: { state: ContactCampaignState; contactId: string }) {
+function CampaignCard({
+    state,
+    contactId,
+    contactName,
+}: {
+    state: ContactCampaignState;
+    contactId: string;
+    contactName: string;
+}) {
     const [open, setOpen] = React.useState(false);
     const current = state.current_step;
 
@@ -370,7 +380,22 @@ function CampaignCard({ state, contactId }: { state: ContactCampaignState; conta
                 </div>
             </button>
 
-            {state.hold && <HoldBar campaignId={state.campaign_id} contactId={contactId} hold={state.hold} />}
+            {state.hold ? (
+                <HoldBar campaignId={state.campaign_id} contactId={contactId} hold={state.hold} />
+            ) : (
+                leadCanBePaused(state) && <PauseBar state={state} contactId={contactId} contactName={contactName} />
+            )}
+
+            {/* A lead reached in someone else's thread sends nothing to copy anyone on. */}
+            {state.hold?.source !== "cc" && (
+                <LeadCCBar
+                    campaignId={state.campaign_id}
+                    contactId={contactId}
+                    contactName={contactName}
+                    cc={state.cc ?? []}
+                    sending={!state.ended_reason && state.campaign_status !== "completed"}
+                />
+            )}
 
             <AnimatePresence initial={false}>
                 {open && (
@@ -411,10 +436,8 @@ function HoldBar({
     hold: LeadHold;
 }) {
     const write = useWriteGuard("MANAGE_CAMPAIGNS");
-    const resume = useResumeLead();
     const pause = usePauseLead();
-    const busy = resume.isPending || pause.isPending;
-
+    const [resuming, setResuming] = React.useState(false);
 
     async function run(p: Promise<unknown>, loading: string, success: string) {
         try {
@@ -431,27 +454,22 @@ function HoldBar({
                 {holdSummary(hold)}
             </span>
             <div className="ml-auto flex items-center gap-1 shrink-0">
-                <button
-                    type="button"
-                    disabled={busy}
-                    onClick={write.guard(() =>
-                        run(
-                            resume.mutateAsync({ campaignId, contactId }),
-                            "Resuming lead…",
-                            "Lead resumed",
-                        ),
-                    )}
-                    className="h-6 px-2 rounded-md bg-white border border-violet-200 text-[11px] font-medium text-violet-700 hover:bg-violet-100 inline-flex items-center gap-1 transition-colors disabled:opacity-60"
-                >
-                    <PlayIcon className="w-2.5 h-2.5" />
-                    Resume now
-                </button>
-                {hold.until && (
+                {write.allowed && (
+                    <ResumeLeadButton
+                        campaignId={campaignId}
+                        contactId={contactId}
+                        label={hold.source === "cc" ? "Send their own too" : "Resume now"}
+                        confirmText={hold.source === "cc" ? CC_RESUME_CONFIRM : undefined}
+                        disabled={pause.isPending}
+                        onBusyChange={setResuming}
+                    />
+                )}
+                {write.allowed && hold.until && (
                     <button
                         type="button"
-                        disabled={busy}
+                        disabled={pause.isPending || resuming}
                         title="Keep this lead paused with no end date. They stay subscribed and stay in the campaign."
-                        onClick={write.guard(() =>
+                        onClick={() =>
                             run(
                                 pause.mutateAsync({
                                     campaignId,
@@ -461,14 +479,37 @@ function HoldBar({
                                 }),
                                 "Stopping this lead…",
                                 "Paused until you resume it",
-                            ),
-                        )}
+                            )
+                        }
                         className="h-6 px-2 rounded-md border border-violet-200 text-[11px] text-violet-700 hover:bg-violet-100 transition-colors disabled:opacity-60"
                     >
                         Stop
                     </button>
                 )}
             </div>
+        </div>
+    );
+}
+
+// The strip a lead with a step still to send gets in place of the HoldBar.
+function PauseBar({
+    state,
+    contactId,
+    contactName,
+}: {
+    state: ContactCampaignState;
+    contactId: string;
+    contactName: string;
+}) {
+    const write = useWriteGuard("MANAGE_CAMPAIGNS");
+    if (!write.allowed) return null;
+    return (
+        <div className="px-3 py-1.5 border-t border-slate-100 flex items-center justify-end">
+            <PauseLeadButton
+                campaign={{ id: state.campaign_id, name: state.campaign_name }}
+                lead={{ id: contactId, name: contactName }}
+                label="Pause lead"
+            />
         </div>
     );
 }
@@ -662,28 +703,6 @@ function StepRow({ step, isNext }: { step: ContactCampaignStep; isNext: boolean 
     );
 }
 
-function LeadStatusPill({ status }: { status: LeadStatus }) {
-    const map: Record<LeadStatus, { label: string; cls: string }> = {
-        pending: { label: "Queued", cls: "bg-slate-100 text-slate-600" },
-        active: { label: "Processing", cls: "bg-sky-50 text-sky-700" },
-        completed: { label: "Done", cls: "bg-emerald-50 text-emerald-700" },
-        replied: { label: "Replied", cls: "bg-emerald-50 text-emerald-700" },
-        bounced: { label: "Bounced", cls: "bg-red-50 text-red-700" },
-        failed: { label: "Failed", cls: "bg-red-50 text-red-700" },
-        unsubscribed: { label: "Unsubscribed", cls: "bg-slate-100 text-slate-600" },
-        paused: { label: "Paused", cls: "bg-violet-50 text-violet-700" },
-        undeliverable: { label: "Undeliverable", cls: "bg-amber-50 text-amber-700" },
-    };
-    const m = map[status] ?? { label: status, cls: "bg-slate-100 text-slate-600" };
-    return (
-        <span
-            className={`inline-flex h-4 items-center px-1.5 rounded text-[10.5px] font-medium shrink-0 ${m.cls}`}
-        >
-            {m.label}
-        </span>
-    );
-}
-
 function campaignStatusLabel(status: string): string {
     switch (status) {
         case "paused":
@@ -770,7 +789,7 @@ function applyFilters(
                 e.link?.label,
                 e.link?.utm_content,
                 e.link?.utm_campaign,
-                e.origin?.client,
+                e.origin ? originSummary(e.origin, e.type === "email_clicked" ? "click" : "open") : "",
                 e.origin?.city,
                 e.origin?.country_code,
             ]
@@ -872,7 +891,7 @@ function DateRange({
 }) {
     const [open, setOpen] = React.useState(false);
     const ref = React.useRef<HTMLDivElement>(null);
-    useClickOutside(ref, () => setOpen(false));
+    useClickOutside(open, () => setOpen(false), ref);
     // The trigger wraps anywhere along the toolbar row, so the panel side is
     // measured, not fixed: a fixed right-0 clipped it against the drawer edge.
     const align = useFlipAlignment(ref, open, 256);
@@ -1143,7 +1162,7 @@ function detailsFor(e: ContactTimelineEvent): [string, React.ReactNode][] {
                 : e.email_account_email,
         );
     }
-    add("Category", e.category_title);
+    add("Label", e.category_title);
     add("Intent", e.intent);
     if (e.type === "deliverability" || e.type === "suppressed") {
         add("Type", e.source);
@@ -1225,10 +1244,16 @@ function detailsFor(e: ContactTimelineEvent): [string, React.ReactNode][] {
     }
     if (e.origin) {
         const o = e.origin;
-        add("Client", o.client);
-        add("Device", cap(o.device_type ?? ""));
+        const kind = e.type === "email_clicked" ? "click" : "open";
+        if (kind === "open") add("Read in", readerLabel(o, "open"));
+        add("Device", o.device_hidden ? hiddenReason(o) : deviceLabel(o));
         add("Operating system", o.os);
-        add("Browser", [o.browser, o.browser_version].filter(Boolean).join(" "));
+        if (kind === "click") {
+            // A mail app that made the request itself names no browser.
+            add("Opened in", o.client || [o.browser, o.browser_version].filter(Boolean).join(" "));
+        } else if (o.client_type !== "app") {
+            add("Browser", [o.browser, o.browser_version].filter(Boolean).join(" "));
+        }
         add("Location", [o.city, o.region, o.country_code].filter(Boolean).join(", "));
     }
     if (e.type === "email_opened" || e.type === "email_clicked") {
@@ -1278,17 +1303,6 @@ function MachineBadge({ reason }: { reason?: string | null }) {
 function cap(s: string): string {
     if (!s || s === "unknown") return "";
     return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-// "Gmail", or "Chrome on Windows", or "Mobile" when the user agent said
-// little; empty when it said nothing.
-function originLabel(o: EngagementOrigin): string {
-    if (o.client) return o.client;
-    const browser = [o.browser, o.browser_version ? o.browser_version.split(".")[0] : ""].filter(Boolean).join(" ");
-    if (browser && o.os) return `${browser} on ${o.os}`;
-    if (browser) return browser;
-    if (o.os) return o.os;
-    return cap(o.device_type ?? "");
 }
 
 function EventMeta({
@@ -1444,9 +1458,14 @@ function EventMeta({
             );
         }
         if (event.origin) {
-            const on = originLabel(event.origin);
-            if (on) parts.push(<span key="origin">{on}</span>);
-            const where = [event.origin.city, event.origin.country_code].filter(Boolean).join(", ");
+            parts.push(
+                <OriginBadge
+                    key="origin"
+                    origin={event.origin}
+                    kind={event.type === "email_clicked" ? "click" : "open"}
+                />,
+            );
+            const where = originPlace(event.origin);
             if (where) {
                 parts.push(
                     <span key="where">
@@ -1476,7 +1495,7 @@ function EventMeta({
     if (parts.length === 0) return null;
 
     return (
-        <div className="text-[11px] text-slate-500 mt-0.5 flex gap-1.5 flex-wrap">
+        <div className="text-[11px] text-slate-500 mt-0.5 flex gap-1.5 flex-wrap items-center">
             {parts.map((p, i) => (
                 <React.Fragment key={i}>
                     {p}
@@ -1536,10 +1555,12 @@ export function sourceLabel(source?: string | null): string {
             return "Imported from a file";
         case "sheet_sync":
             return "Synced from Google Sheets";
+        case "crm_sync":
+            return "CRM sync";
         case "api":
             return "Created via the API";
         case "ai_assistant":
-            return "Created by the AI assistant";
+            return "Created by Remie";
         case "form":
             return "Submitted a form";
         case "automation":
@@ -1589,9 +1610,9 @@ function visualFor(e: ContactTimelineEvent): {
         case "campaign_removed":
             return { Icon: MegaphoneIcon, label: "Removed from campaign" };
         case "category_added":
-            return { Icon: TagIcon, label: "Added to category" };
+            return { Icon: TagIcon, label: "Label added" };
         case "category_removed":
-            return { Icon: TagIcon, label: "Removed from category" };
+            return { Icon: TagIcon, label: "Label removed" };
         case "form_submitted":
             return { Icon: ClipboardListIcon, label: "Submitted a form" };
         case "page_hit":
@@ -1607,12 +1628,14 @@ function createdLabel(source?: string | null): string {
             return "Imported";
         case "sheet_sync":
             return "Synced from sheet";
+        case "crm_sync":
+            return "CRM sync";
         case "api":
             return "Created via API";
         case "campaign":
             return "Added from campaign";
         case "ai_assistant":
-            return "Created by AI assistant";
+            return "Created by Remie";
         case "form":
             return "Submitted a form";
         case "automation":

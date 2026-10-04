@@ -36,20 +36,27 @@ export interface CampaignDeliverability {
     band: DeliverabilityBand;
 }
 
+// One mail host family's seed placement: `provider` is the family id
+// (gmail, microsoft365, yahoo, ...) and `label` its display name.
 export interface ProviderPlacement {
     provider: string;
+    label?: string;
     samples: number;
     inbox: number;
     promotions: number;
     spam: number;
     other: number;
+    // Copies that never arrived within the detection window.
+    missing?: number;
     inbox_rate: number;
     spam_rate: number;
 }
 
-export interface WarmupDomainPlacement {
+// One recipient mail host's warmup placement: `provider` is the host id
+// (google_workspace, zoho, hostinger, ...) and `label` its display name.
+export interface WarmupHostPlacement {
     provider: string;
-    domain: string;
+    label: string;
     delivered: number;
     spam: number;
     inbox_rate: number;
@@ -57,8 +64,8 @@ export interface WarmupDomainPlacement {
 }
 
 export default interface DeliverabilityDashboard {
-    from: string;
-    to: string;
+    from: Date;
+    to: Date;
     events_total: number;
     bounce_count: number;
     complaint_count: number;
@@ -96,5 +103,5 @@ export default interface DeliverabilityDashboard {
     by_mailbox: MailboxDeliverability[];
     by_campaign: CampaignDeliverability[];
     by_provider: ProviderPlacement[];
-    warmup_placement: WarmupDomainPlacement[];
+    warmup_placement: WarmupHostPlacement[];
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/mailhost"
 )
 
 type AdvancedOutreachRepository interface {
@@ -42,6 +43,14 @@ type AdvancedOutreachRepository interface {
 	// DeleteSuppressionByEmail removes the address entry with the given source
 	// (the recipient's own resubscribe only undoes a recipient-made entry).
 	DeleteSuppressionByEmail(ctx context.Context, organizationID uuid.UUID, email string, source models.DeliverabilityEventType) (bool, error)
+	// ListUncheckedReplyOptOuts pages, across workspaces, the entries a reply
+	// opt-out wrote that have not been re-read under the current rules.
+	ListUncheckedReplyOptOuts(ctx context.Context, afterID uuid.UUID, limit int) ([]models.SuppressedRecipient, error)
+	// MarkReplyOptOutChecked records the re-read's outcome on the entry.
+	MarkReplyOptOutChecked(ctx context.Context, id uuid.UUID, outcome string) error
+	// DeleteReplyOptOut removes a reply opt-out only while it is still the
+	// row that was read: a newer unsubscribe rewrites it and is kept.
+	DeleteReplyOptOut(ctx context.Context, organizationID, id uuid.UUID, updatedAt time.Time) (bool, error)
 
 	CreateDeliverabilityEvent(ctx context.Context, event *models.DeliverabilityEvent) error
 	GetDeliverabilityDashboard(ctx context.Context, organizationID uuid.UUID, from, to time.Time) (*models.DeliverabilityDashboard, error)
@@ -559,6 +568,55 @@ func (r *advancedOutreachRepository) DeleteSuppressionByEmail(ctx context.Contex
 	return tag.RowsAffected() > 0, nil
 }
 
+// replyOptOutCheckKey marks an entry the reply opt-out recheck has read.
+const replyOptOutCheckKey = "reply_optout_recheck"
+
+func (r *advancedOutreachRepository) ListUncheckedReplyOptOuts(ctx context.Context, afterID uuid.UUID, limit int) ([]models.SuppressedRecipient, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT `+suppressedRecipientColumns+`
+		FROM suppressed_recipients
+		WHERE id > $1
+		  AND kind = 'email'
+		  AND source = $2
+		  AND metadata->>'via' = 'reply'
+		  AND (reason = 'asked to stop in a reply' OR reason LIKE 'asked to stop in a reply sent from %')
+		  AND metadata->>'`+replyOptOutCheckKey+`' IS NULL
+		ORDER BY id
+		LIMIT $3`, afterID, models.DeliverabilityEventUnsubscribe, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.SuppressedRecipient
+	for rows.Next() {
+		entry, err := scanSuppressedRecipient(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *entry)
+	}
+	return out, rows.Err()
+}
+
+func (r *advancedOutreachRepository) DeleteReplyOptOut(ctx context.Context, organizationID, id uuid.UUID, updatedAt time.Time) (bool, error) {
+	tag, err := r.db.Exec(ctx, `
+		DELETE FROM suppressed_recipients
+		WHERE organization_id = $1 AND id = $2
+		  AND metadata->>'via' = 'reply' AND updated_at = $3`, organizationID, id, updatedAt)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (r *advancedOutreachRepository) MarkReplyOptOutChecked(ctx context.Context, id uuid.UUID, outcome string) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE suppressed_recipients
+		SET metadata = metadata || jsonb_build_object('`+replyOptOutCheckKey+`', $2::text)
+		WHERE id = $1`, id, outcome)
+	return err
+}
+
 func (r *advancedOutreachRepository) CreateDeliverabilityEvent(ctx context.Context, event *models.DeliverabilityEvent) error {
 	metadata, err := marshalJSON(event.Metadata)
 	if err != nil {
@@ -686,7 +744,9 @@ func (r *advancedOutreachRepository) GetDeliverabilityDashboard(ctx context.Cont
 	placementQuery := `
 		SELECT pr.provider, pr.folder, COUNT(*)
 		FROM placement_results pr JOIN placement_tests pt ON pt.id = pr.test_id
-		WHERE pt.organization_id = $1 AND pr.detected_at >= $2 AND pr.detected_at <= $3 AND pr.folder <> 'pending'
+		WHERE pt.organization_id = $1 AND pr.detected_at >= $2 AND pr.detected_at <= $3
+		  AND pr.folder IN ('inbox', 'promotions', 'other', 'spam', 'missing')
+		  AND pt.origin <> 'remote'
 		GROUP BY pr.provider, pr.folder`
 	if rows, perr := r.db.Query(ctx, placementQuery, organizationID, from, to); perr == nil {
 		for rows.Next() {
@@ -696,7 +756,7 @@ func (r *advancedOutreachRepository) GetDeliverabilityDashboard(ctx context.Cont
 				placementTotal += n
 				p := byProvider[provider]
 				if p == nil {
-					p = &models.ProviderPlacement{Provider: provider}
+					p = &models.ProviderPlacement{Provider: provider, Label: mailhost.Host(provider).Label()}
 					byProvider[provider] = p
 				}
 				p.Samples += n
@@ -709,6 +769,8 @@ func (r *advancedOutreachRepository) GetDeliverabilityDashboard(ctx context.Cont
 					p.Inbox += n
 				case "promotions":
 					p.Promotions += n
+				case "missing":
+					p.Missing += n
 				default:
 					p.Other += n
 				}
@@ -739,69 +801,52 @@ func (r *advancedOutreachRepository) GetDeliverabilityDashboard(ctx context.Cont
 		spamRate = sr
 	}
 
-	out.WarmupPlacement = r.warmupPlacementByDomain(ctx, organizationID, from, to)
+	out.WarmupPlacement = r.warmupPlacementByHost(ctx, organizationID, from, to)
 
 	out.Band = models.DeliverabilityBand(out.BounceRate, out.ComplaintRate, spamRate)
 	out.Score = models.DeliverabilityScore(out.BounceRate, out.ComplaintRate, spamRate)
 	return out, nil
 }
 
-// warmupPlacementByDomain rolls the continuous warmup placement signal up per
-// recipient domain: delivered = verified warmup arrivals at partner mailboxes
-// (warmup_received), spam = the subset the recipient's provider filed into
-// junk (warmup_spam_reports, report_type=spam_placement). Org scope is the
-// sending account. Best-effort: an error returns an empty list.
-func (r *advancedOutreachRepository) warmupPlacementByDomain(ctx context.Context, orgID uuid.UUID, from, to time.Time) []models.WarmupDomainPlacement {
-	out := []models.WarmupDomainPlacement{}
-	byDomain := map[string]*models.WarmupDomainPlacement{}
-
-	deliveredQ := `
-		SELECT rcpt.provider, split_part(lower(rcpt.email), '@', 2), COUNT(*)
-		FROM warmup_received wr
-		JOIN email_accounts snd ON snd.id = wr.sender_account_id
-		JOIN email_accounts rcpt ON rcpt.id = wr.email_account_id
-		WHERE snd.organization_id = $1 AND wr.created_at >= $2 AND wr.created_at <= $3
+// warmupPlacementByHost rolls the continuous warmup placement signal up per
+// recipient mail host from the placement rollup: delivered is every verified
+// arrival, spam the subset the recipient's provider filed into junk. Org scope
+// is the sending account, and no recipient domain leaves the query: most
+// recipients belong to other workspaces. Best-effort: an error returns an empty list.
+func (r *advancedOutreachRepository) warmupPlacementByHost(ctx context.Context, orgID uuid.UUID, from, to time.Time) []models.WarmupHostPlacement {
+	out := []models.WarmupHostPlacement{}
+	const query = `
+		SELECT p.recipient_group, p.recipient_host, SUM(p.inbox + p.tabs + p.spam)::int, SUM(p.spam)::int
+		FROM warmup_placement_daily p
+		JOIN email_accounts snd ON snd.id = p.sender_account_id
+		WHERE snd.organization_id = $1 AND p.date >= $2::date AND p.date <= $3::date
 		GROUP BY 1, 2`
-	if rows, err := r.db.Query(ctx, deliveredQ, orgID, from, to); err == nil {
-		for rows.Next() {
-			var provider, domain string
-			var n int
-			if rows.Scan(&provider, &domain, &n) == nil && domain != "" {
-				byDomain[domain] = &models.WarmupDomainPlacement{Provider: provider, Domain: domain, Delivered: n}
-			}
-		}
-		rows.Close()
+	rows, err := r.db.Query(ctx, query, orgID, from, to)
+	if err != nil {
+		return out
 	}
-
-	spamQ := `
-		SELECT sr.recipient_provider, sr.recipient_domain, COUNT(*)
-		FROM warmup_spam_reports sr
-		JOIN email_accounts snd ON snd.id = sr.reported_account_id
-		WHERE snd.organization_id = $1 AND sr.report_type = 'spam_placement'
-		  AND sr.created_at >= $2 AND sr.created_at <= $3 AND sr.recipient_domain <> ''
-		GROUP BY 1, 2`
-	if rows, err := r.db.Query(ctx, spamQ, orgID, from, to); err == nil {
-		for rows.Next() {
-			var provider, domain string
-			var n int
-			if rows.Scan(&provider, &domain, &n) == nil {
-				p := byDomain[domain]
-				if p == nil {
-					p = &models.WarmupDomainPlacement{Provider: provider, Domain: domain}
-					byDomain[domain] = p
-				}
-				p.Spam += n
-				// A spam-flagged arrival can be reported without (or before) its
-				// warmup_received row; keep delivered >= spam so rates stay sane.
-				if p.Delivered < p.Spam {
-					p.Delivered = p.Spam
-				}
-			}
+	defer rows.Close()
+	byHost := map[string]*models.WarmupHostPlacement{}
+	for rows.Next() {
+		var group, host string
+		var delivered, spam int
+		if rows.Scan(&group, &host, &delivered, &spam) != nil || delivered == 0 {
+			continue
 		}
-		rows.Close()
+		key, label := host, mailhost.Host(host).Label()
+		if host == "" || label == "" {
+			// A receipt with no detected host is known only by its group.
+			key, label = group, models.WarmupRecipientGroupLabel(group)
+		}
+		p := byHost[key]
+		if p == nil {
+			p = &models.WarmupHostPlacement{Provider: key, Label: label}
+			byHost[key] = p
+		}
+		p.Delivered += delivered
+		p.Spam += spam
 	}
-
-	for _, p := range byDomain {
+	for _, p := range byHost {
 		p.InboxRate = models.Rate(p.Delivered-p.Spam, p.Delivered)
 		p.SpamRate = models.Rate(p.Spam, p.Delivered)
 		out = append(out, *p)
@@ -810,11 +855,8 @@ func (r *advancedOutreachRepository) warmupPlacementByDomain(ctx context.Context
 		if out[i].Delivered != out[j].Delivered {
 			return out[i].Delivered > out[j].Delivered
 		}
-		return out[i].Domain < out[j].Domain
+		return out[i].Provider < out[j].Provider
 	})
-	if len(out) > 25 {
-		out = out[:25]
-	}
 	return out
 }
 
@@ -916,6 +958,7 @@ func (r *advancedOutreachRepository) deliverabilityByCampaign(ctx context.Contex
 		SELECT ccp.campaign_id, COUNT(*)
 		FROM campaign_contact_progress ccp JOIN campaigns c ON c.id = ccp.campaign_id
 		WHERE c.organization_id=$1 AND ccp.sent_at IS NOT NULL AND ccp.sent_at >= $2 AND ccp.sent_at <= $3
+		  AND ` + progressIsEmailStep("ccp") + `
 		GROUP BY ccp.campaign_id`
 	if srows, serr := r.db.Query(ctx, sq, orgID, from, to); serr == nil {
 		for srows.Next() {

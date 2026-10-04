@@ -163,7 +163,7 @@ func (h *Handler) UniboxCompose(c *gin.Context) {
 
 	var req UniboxComposeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 

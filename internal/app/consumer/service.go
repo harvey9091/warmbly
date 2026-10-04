@@ -49,9 +49,14 @@ type JobsService struct {
 	CloudLink            CloudLinkVerifier
 	WarmupContentRepo    repository.WarmupContentRepository
 	WarmupEngagementRepo repository.WarmupEngagementRepository
-	WarmupService        warmupapp.Service
-	WorkerRepo           repository.WorkerRepository
-	FleetNodeRepo        repository.FleetNodeRepository
+	// WarmupPlacementRepo keeps each sender's daily placement history. Optional.
+	WarmupPlacementRepo repository.WarmupPlacementRepository
+	// PlacementRepo resolves placement test probes from worker send results.
+	// Optional.
+	PlacementRepo repository.PlacementRepository
+	WarmupService warmupapp.Service
+	WorkerRepo    repository.WorkerRepository
+	FleetNodeRepo repository.FleetNodeRepository
 	// LifecycleRepo moves mailboxes in and out of cold rotation. Nil disables
 	// the lifecycle rebalancer entirely.
 	LifecycleRepo repository.SendLifecycleRepository
@@ -62,6 +67,10 @@ type JobsService struct {
 	// Pub/Sub for real-time notifications to users
 	StreamingPublisher *pubsub.StreamingPublisher
 	AdvancedService    advanced.Service
+
+	// SlackInbox mirrors inbox arrivals into the workspace's Slack inbox
+	// channel. Optional; nil skips the mirror.
+	SlackInbox SlackInboxPoster
 
 	// InboxTagger classifies inbound mail into labels and a relevance score.
 	// Optional and nil by default: an instance with no TypeSafe key configured
@@ -130,6 +139,12 @@ const followUpSweepInterval = time.Hour
 // touched in three months is not one anybody is about to chase.
 const followUpSweepWindow = 90
 
+// followUpSweepBudget is how long one pass may page through a workspace before the next resumes it.
+const followUpSweepBudget = 2 * time.Minute
+
+// followUpSweepFresh caps how far back a pass checks threads changed since the last pass; older changes wait for the cycle.
+const followUpSweepFresh = 24 * time.Hour
+
 func (s *JobsService) sweepFollowUps(ctx context.Context) {
 	if s.InboxTagger == nil || s.EmailRepository == nil {
 		return
@@ -143,14 +158,17 @@ func (s *JobsService) sweepFollowUps(ctx context.Context) {
 			log.Warn().Err(err).Msg("follow-up sweep: could not list workspaces")
 		}
 		for _, orgID := range orgs {
-			since := time.Now().AddDate(0, 0, -followUpSweepWindow)
-			if p, serr := s.InboxTagger.SweepFollowUps(ctx, orgID, since, 0); serr != nil {
+			if p, serr := s.InboxTagger.SweepFollowUps(ctx, orgID, inboxtag.FollowUpSweep{
+				Since:  time.Now().AddDate(0, 0, -followUpSweepWindow),
+				Fresh:  followUpSweepFresh,
+				Budget: followUpSweepBudget,
+			}); serr != nil {
 				if ctx.Err() != nil {
 					return
 				}
 				log.Warn().Err(serr).Str("org_id", orgID.String()).Msg("follow-up sweep failed")
 			} else if p.Threads > 0 {
-				log.Debug().Str("org_id", orgID.String()).Int("threads", p.Threads).Msg("follow-up sweep")
+				log.Debug().Str("org_id", orgID.String()).Int("threads", p.Threads).Int("pages", p.Pages).Int("skipped", p.Skipped).Bool("cycle_complete", p.Complete).Msg("follow-up sweep")
 				if s.StreamingPublisher != nil {
 					s.StreamingPublisher.PublishEmailUpdated(ctx, &pubsub.EmailInboxEvent{OrgID: orgID.String()})
 				}

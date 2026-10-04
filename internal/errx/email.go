@@ -109,6 +109,8 @@ type MailError struct {
 	ResolvedAt    *time.Time             `json:"resolved_at"`
 
 	Message string `json:"message"`
+	// Recipient is the one address a per-recipient refusal was about.
+	Recipient string `json:"recipient,omitempty"`
 
 	// RetryAfter is provider guidance for transient throttles. It stays local
 	// to the worker; persisted error records should not depend on a stale delay.
@@ -165,6 +167,16 @@ var (
 			MailErrorWarning,
 			MailErrorCodeServerUnreachable,
 			fmt.Sprintf("The connection to the mail server could not be established (%s: %s). The server may be offline or blocking the connection.", stage, cause),
+			MailErrorResolveMethodRetry,
+		)
+	}
+	// ErrMailSMTPSEgressBlocked keeps the retryable code but says the block is
+	// the worker's network, so the customer is not sent to debug a healthy server.
+	ErrMailSMTPSEgressBlocked = func(addr string) *MailError {
+		return MError(
+			MailErrorWarning,
+			MailErrorCodeServerUnreachable,
+			fmt.Sprintf("Warmbly's sending network currently blocks outbound port 465, so it could not reach %s, and the server did not answer on port 587 either. The block is on the sending side, not on your mail server. Sending resumes on its own once the port is open; if your server can also accept submission on port 587 with STARTTLS, turning that on gets this mailbox sending now.", addr),
 			MailErrorResolveMethodRetry,
 		)
 	}

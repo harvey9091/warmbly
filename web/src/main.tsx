@@ -11,12 +11,13 @@ import "@fontsource/poppins/600.css";
 import "@fontsource/poppins/700.css";
 import RootAppLayout from './app/app/layout';
 import AddressesPage from './app/app/emails/page';
+import SendingDomainsPage from './app/app/emails/domains/page';
 import ContactsPage from './app/app/contacts/page';
 import FormsPage from './app/app/forms/page';
 import FormBuilderPage from './app/app/forms/[id]/page';
 import ContactsLayout from './app/app/contacts/layout';
 import SegmentsPage from './app/app/contacts/segments/page';
-import CategoriesPage from './app/app/contacts/categories/page';
+import LabelsPage from './app/app/contacts/labels/page';
 import SuppressionsPage from './app/app/contacts/suppressions/page';
 import SegmentPage from './app/app/contacts/segments/[id]/page';
 import CampaignsPage from './app/app/campaigns/page';
@@ -28,6 +29,9 @@ import CampaignSchedule from './app/app/campaigns/[id]/schedule/page';
 import CampaignSteps from './app/app/campaigns/[id]/steps/page';
 import AnalyticsPage from './app/app/analytics/page';
 import DeliverabilityPage from './app/app/deliverability/page';
+import PlacementPage from './app/app/placement/page';
+import PlacementTestPage from './app/app/placement/[id]/page';
+import PlacementBatchPage from './app/app/placement/batches/[id]/page';
 import PipelinesPage from './app/app/crm/pipelines/page';
 import DealsPage from './app/app/crm/deals/page';
 import TasksPage from './app/app/crm/tasks/page';
@@ -39,9 +43,13 @@ import WebhooksSettingsPage from './app/app/settings/webhooks/page';
 import OAuthLayout from './app/oauth/layout';
 import OAuthConsentPage from './app/oauth/authorize/page';
 import IntegrationsPage from './app/app/integrations/page';
+import HubSpotPage from './app/app/integrations/hubspot/page';
+import SalesforcePage from './app/app/integrations/salesforce/[id]/page';
 import AutomationsPage from './app/app/automations/page';
 import AutomationBuilderPage from './app/app/automations/[id]/page';
 import AuditPage from './app/app/audit/page';
+import SlackLinkPage from './app/app/slack/link/page';
+import AppDefault from './app/app/page';
 import SettingsLayout from './app/app/settings/layout';
 import ProfileSettingsPage from './app/app/settings/profile/page';
 import NotificationsSettingsPage from './app/app/settings/notifications/page';
@@ -68,6 +76,10 @@ import { Toaster } from '@/components/ui/toaster';
 
 import { initErrorReporting } from "@/lib/observability";
 import { initProductAnalytics } from "@/lib/productAnalytics";
+import { installDomMutationGuard } from "@/lib/domGuard";
+
+// Before the first render, so a translated page never commits unguarded.
+installDomMutationGuard();
 
 // Before the first render, so a boot failure is reported too.
 initErrorReporting();
@@ -96,6 +108,7 @@ import WarmblyCloudSettingsPage from './app/app/settings/warmbly-cloud/page';
 import SetupPage from './app/setup/page';
 import SSOCallbackPage from './app/auth/sso/page';
 import AppearanceSettingsPage from './app/app/settings/appearance/page';
+import shareDeep from './lib/helper/shareDeep';
 
 // React-Query defaults tuned for a dashboard. The library's
 // out-of-the-box behaviour treats every query as immediately stale
@@ -113,6 +126,8 @@ import AppearanceSettingsPage from './app/app/settings/appearance/page';
 //     comes back, do refresh once.
 //   - retry: 1 — react-query's default of 3 turns a 500ms backend
 //     hiccup into ~5s of stacked retries on the user.
+//   - structuralSharing: shareDeep — keeps equal revived Dates, so
+//     unchanged data keeps its identity across a refetch.
 const queryClient = new QueryClient({
     defaultOptions: {
         queries: {
@@ -121,6 +136,7 @@ const queryClient = new QueryClient({
             refetchOnWindowFocus: false,
             refetchOnReconnect: "always",
             retry: 1,
+            structuralSharing: shareDeep,
         },
         mutations: {
             retry: 0,
@@ -242,12 +258,16 @@ const router = createBrowserRouter([
         element: <RootAppLayout />,
         children: [
           {
+            // Keeps the query string, so /app?agent_session=… still opens the assistant.
             index: true,
-            element: <Navigate to="/app/emails" replace />,
+            element: <AppDefault />,
           },
           {
             path: "emails",
-            element: <AddressesPage />,
+            children: [
+              { index: true, element: <AddressesPage /> },
+              { path: "domains", element: <SendingDomainsPage /> },
+            ],
           },
           {
             path: "contacts",
@@ -261,7 +281,8 @@ const router = createBrowserRouter([
                   { path: ":id", element: <SegmentPage /> },
                 ],
               },
-              { path: "categories", element: <CategoriesPage /> },
+              { path: "labels", element: <LabelsPage /> },
+              { path: "categories", element: <Navigate to="/app/contacts/labels" replace /> },
               { path: "suppressions", element: <SuppressionsPage /> },
             ],
           },
@@ -316,6 +337,14 @@ const router = createBrowserRouter([
             element: <DeliverabilityPage />,
           },
           {
+            path: "placement",
+            children: [
+              { index: true, element: <PlacementPage /> },
+              { path: "batches/:id", element: <PlacementBatchPage /> },
+              { path: ":id", element: <PlacementTestPage /> },
+            ],
+          },
+          {
             path: "crm",
             children: [
               {
@@ -354,8 +383,19 @@ const router = createBrowserRouter([
             element: <Navigate to="/app/settings/oauth-apps" replace />,
           },
           {
-            path: "integrations",
+            // The store and every page in it (/connected, /category/:c, /:provider,
+            // /apps/:slug); one mounted page so search and drawers survive navigation.
+            path: "integrations/*",
             element: <IntegrationsPage />,
+            handle: { stableParams: ["*"] },
+          },
+          {
+            path: "integrations/hubspot",
+            element: <HubSpotPage />,
+          },
+          {
+            path: "integrations/salesforce/:id",
+            element: <SalesforcePage />,
           },
           {
             path: "automations",
@@ -368,6 +408,16 @@ const router = createBrowserRouter([
           {
             path: "audit",
             element: <AuditPage />,
+          },
+          {
+            // Where the Warmbly app in Slack sends a member to link their account.
+            path: "slack/link",
+            element: <SlackLinkPage />,
+          },
+          {
+            // The breadcrumb above the link page points here.
+            path: "slack",
+            element: <Navigate to="/app/integrations" replace />,
           },
           {
             path: "settings",

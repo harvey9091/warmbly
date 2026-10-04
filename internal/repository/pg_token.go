@@ -19,6 +19,10 @@ type TokenRepository interface {
 	GetSession(ctx context.Context, sessionID uuid.UUID) (*models.Session, *errx.Error)
 	ListSessionsByUser(ctx context.Context, userID uuid.UUID) ([]*models.Session, *errx.Error)
 	RefreshToken(ctx context.Context, sessionID uuid.UUID, oldRefreshNonce, refreshNonce, accessNonce string, issuedAt time.Time) *errx.Error
+	// RevokeOnRefreshReuse revokes the session when the presented refresh nonce
+	// is neither current nor the one rotated away from after raceSince, and
+	// reports whether it did.
+	RevokeOnRefreshReuse(ctx context.Context, sessionID uuid.UUID, presentedNonce string, raceSince time.Time) (bool, *errx.Error)
 	RevokeSession(ctx context.Context, tx pgx.Tx, sessionID uuid.UUID, revokedAt time.Time) *errx.Error
 	RevokeSessionByID(ctx context.Context, userID, sessionID uuid.UUID, revokedAt time.Time) (bool, *errx.Error)
 	ListOtherActiveSessionIDs(ctx context.Context, userID, exceptID uuid.UUID) ([]uuid.UUID, *errx.Error)
@@ -30,6 +34,7 @@ type TokenRepository interface {
 	// Organization switching
 	UpdateCurrentOrganization(ctx context.Context, sessionID uuid.UUID, orgID *uuid.UUID) *errx.Error
 	DefaultOrganization(ctx context.Context, userID uuid.UUID) (*uuid.UUID, *errx.Error)
+	ClearOrganization(ctx context.Context, userID, orgID uuid.UUID) ([]uuid.UUID, *errx.Error)
 }
 
 type tokenRepository struct {
@@ -260,7 +265,7 @@ func (r *tokenRepository) RefreshToken(ctx context.Context, sessionID uuid.UUID,
 	query := `
 		UPDATE sessions
 		SET last_refreshed_at = $5,
-		 access_nonce = $1, refresh_nonce = $2
+		 access_nonce = $1, refresh_nonce = $2, previous_refresh_nonce = $3
 		WHERE refresh_nonce = $3 AND id = $4
 	`
 
@@ -285,6 +290,26 @@ func (r *tokenRepository) RefreshToken(ctx context.Context, sessionID uuid.UUID,
 	}
 
 	return nil
+}
+
+func (r *tokenRepository) RevokeOnRefreshReuse(ctx context.Context, sessionID uuid.UUID, presentedNonce string, raceSince time.Time) (bool, *errx.Error) {
+	query := `
+		UPDATE sessions
+		SET revoked_at = now()
+		WHERE id = $1
+		  AND revoked_at IS NULL
+		  AND refresh_nonce IS DISTINCT FROM $2
+		  AND NOT (previous_refresh_nonce IS NOT DISTINCT FROM $2 AND last_refreshed_at > $3)
+	`
+
+	params := []any{sessionID, presentedNonce, raceSince}
+
+	cmd, err := r.DB.Exec(ctx, query, params...)
+	if err != nil {
+		db.CaptureError(err, query, params, "exec")
+		return false, errx.InternalError()
+	}
+	return cmd.RowsAffected() > 0, nil
 }
 
 func (r *tokenRepository) RevokeSession(ctx context.Context, tx pgx.Tx, sessionID uuid.UUID, revokedAt time.Time) *errx.Error {
@@ -403,6 +428,45 @@ func (r *tokenRepository) UpdateCurrentOrganization(ctx context.Context, session
 	}
 
 	return nil
+}
+
+// ClearOrganization deselects orgID on every live session of userID and returns every live session left
+// with none, so a cached copy of a row the organization's deletion already cleared is evicted too.
+func (r *tokenRepository) ClearOrganization(ctx context.Context, userID, orgID uuid.UUID) ([]uuid.UUID, *errx.Error) {
+	const query = `
+		WITH cleared AS (
+			UPDATE sessions
+			SET current_organization_id = NULL
+			WHERE user_id = $1 AND current_organization_id = $2 AND revoked_at IS NULL
+			RETURNING id
+		)
+		SELECT id FROM cleared
+		UNION
+		SELECT id FROM sessions
+		WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now() AND current_organization_id IS NULL
+	`
+	params := []any{userID, orgID}
+	rows, err := r.DB.Query(ctx, query, params...)
+	if err != nil {
+		db.CaptureError(err, query, params, "query")
+		return nil, errx.InternalError()
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			db.CaptureError(err, query, params, "scan")
+			return nil, errx.InternalError()
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		db.CaptureError(err, query, params, "rows")
+		return nil, errx.InternalError()
+	}
+	return ids, nil
 }
 
 // DefaultOrganization picks the workspace a new session starts in: the one the

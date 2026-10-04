@@ -2,6 +2,8 @@
 // models.EmailAccountStatus). Rich shape: health band, today's usage,
 // warmup status, and any active errors.
 
+import type { PlacementRate } from "./WarmupPlacement";
+
 export interface AccountHealth {
     status: "healthy" | "warning" | "error";
     score: number; // 0-100
@@ -15,7 +17,7 @@ export interface AccountError {
     title: string;
     message: string;
     action_required?: string;
-    created_at: string;
+    created_at: Date;
 }
 
 export interface AccountDailyUsage {
@@ -29,8 +31,8 @@ export interface AccountDailyUsage {
 export interface WarmupStatusInfo {
     enabled: boolean;
     paused: boolean;
-    paused_at?: string | null;
-    started_at: string;
+    paused_at?: Date | null;
+    started_at: Date;
     current_volume: number;
     target_volume: number;
     max_volume: number;
@@ -39,6 +41,23 @@ export interface WarmupStatusInfo {
     days_active: number;
     /** Present while a recent junk placement is holding the ramp. */
     ramp_hold?: WarmupRampHold;
+    /** Present while today's target is capped by the partners the mailbox can still reach. */
+    partner_limit?: WarmupPartnerLimit;
+    /** Present while the newest warmup send was refused and none has gone out since. */
+    send_failure?: WarmupSendFailure;
+}
+
+// Why a warmup send failed: the mail server's answer when it gave one.
+export interface WarmupSendFailure {
+    message: string;
+    at: string;
+}
+
+// A target held below the ramp because a mailbox never writes to the same
+// partner twice in a day.
+export interface WarmupPartnerLimit {
+    reachable: number;
+    ramp_target: number;
 }
 
 // Why the warmup ramp is not climbing. Present for the whole freeze;
@@ -47,19 +66,23 @@ export interface WarmupRampHold {
     placements: number;
     sends: number;
     volume_cut: boolean;
-    resumes_at: string;
+    resumes_at: Date;
 }
 
 // Warmup-pool reputation for this mailbox. Folded into health.score and also
 // surfaced in detail. Present only when the mailbox is in a warmup pool.
 export interface WarmupHealthInfo {
+    /** The pool the mailbox warms in. */
+    pool_type?: "premium" | "free";
+    /** "cloud" when Warmbly Cloud warms the mailbox and reported this standing. */
+    source?: "cloud";
     state: "healthy" | "watch" | "throttled" | "quarantined" | "blocked";
     score: number;
     /** @deprecated Always 0 since the warmup spam score was retired; read score and reason. */
     spam_score: number;
     reason?: string;
-    blocked_until?: string | null;
-    evaluated_at?: string | null;
+    blocked_until?: Date | null;
+    evaluated_at?: Date | null;
     /** Distinct warmup partners over the last 7 days: mailboxes, their domains, and the workspaces behind them. */
     partner_mailboxes_7d: number;
     partner_domains_7d: number;
@@ -74,7 +97,7 @@ export default interface AccountStatus {
     email: string;
     provider: string;
     status: string;
-    last_synced_at: string | null;
+    last_synced_at: Date | null;
     health: AccountHealth;
     errors: AccountError[];
     daily_usage: AccountDailyUsage;
@@ -84,6 +107,8 @@ export default interface AccountStatus {
     /** Present only when the mailbox is NOT in cold rotation. */
     send_lifecycle?: SendLifecycleState;
     warmup_health?: WarmupHealthInfo;
+    /** Where warmup mail landed over the trailing week; also caps health.score. Absent with no deliveries. */
+    warmup_placement?: PlacementRate;
     // True when the mailbox backs a live campaign — a low-volume health-check
     // warmup keeps running even if the user has warmup paused/off.
     in_campaign: boolean;
@@ -102,6 +127,6 @@ export type SendLifecycle = "active" | "resting" | "reserve";
 // Why a mailbox is not being offered cold sends.
 export interface SendLifecycleState {
     state: SendLifecycle;
-    since?: string;
+    since?: Date;
     reason?: string;
 }

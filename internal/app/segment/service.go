@@ -32,6 +32,7 @@ type Service interface {
 	Update(ctx context.Context, orgID, id uuid.UUID, in *models.SegmentWrite) (*models.Segment, *errx.Error)
 	Delete(ctx context.Context, orgID, id uuid.UUID) *errx.Error
 	Preview(ctx context.Context, orgID uuid.UUID, in *models.SegmentPreview) (int, *errx.Error)
+	CountAudience(ctx context.Context, orgID uuid.UUID, segmentIDs []string, campaignID *uuid.UUID) (int, *errx.Error)
 	SetMembers(ctx context.Context, orgID, id uuid.UUID, in *models.SegmentMembersWrite) (int, *errx.Error)
 	MemberModes(ctx context.Context, orgID, id uuid.UUID, contactIDs []string) (map[uuid.UUID]models.SegmentMemberMode, *errx.Error)
 	AddToCampaign(ctx context.Context, orgID uuid.UUID, actor string, id uuid.UUID, in *models.SegmentAddToCampaign) (*models.SegmentAddToCampaignResult, *errx.Error)
@@ -262,12 +263,33 @@ func (s *service) Preview(ctx context.Context, orgID uuid.UUID, in *models.Segme
 	return s.repo.Count(ctx, orgID, in.ID, in.Match, in.Conditions)
 }
 
-func parseContactIDs(raw []string) ([]uuid.UUID, *errx.Error) {
+// CountAudience counts a campaign audience: members of any of the segments,
+// plus the campaign's leads that no segment link enrolled, each once.
+func (s *service) CountAudience(ctx context.Context, orgID uuid.UUID, segmentIDs []string, campaignID *uuid.UUID) (int, *errx.Error) {
+	ids := make([]uuid.UUID, 0, len(segmentIDs))
+	for _, raw := range segmentIDs {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			return 0, errx.New(errx.BadRequest, "invalid segment id")
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) > 0 {
+		cond := []models.SegmentCondition{{Field: "segment", Operator: models.SegOpIn, Values: segmentIDs}}
+		if xerr := s.checkReferences(ctx, orgID, cond, nil); xerr != nil {
+			return 0, xerr
+		}
+	}
+	return s.repo.CountAudience(ctx, orgID, ids, campaignID)
+}
+
+func parseContactIDs(raw []string, max int) ([]uuid.UUID, *errx.Error) {
 	if len(raw) == 0 {
 		return nil, errx.New(errx.BadRequest, "no contacts provided")
 	}
-	if len(raw) > 1000 {
-		return nil, errx.New(errx.BadRequest, "at most 1000 contacts per request")
+	if len(raw) > max {
+		return nil, errx.NewWithIdentifier(errx.BadRequest, "too_many_contacts",
+			fmt.Sprintf("too many contacts, maximum is %d per request", max))
 	}
 	out := make([]uuid.UUID, 0, len(raw))
 	for _, r := range raw {
@@ -286,7 +308,9 @@ func (s *service) SetMembers(ctx context.Context, orgID, id uuid.UUID, in *model
 	default:
 		return 0, errx.New(errx.BadRequest, "mode must be include, exclude or auto")
 	}
-	ids, xerr := parseContactIDs(in.Contacts)
+	// The handler already bounded the selection by its shape; this is the
+	// ceiling for callers that pass ids straight in.
+	ids, xerr := parseContactIDs(in.Contacts, models.MaxContactBulkSelection)
 	if xerr != nil {
 		return 0, xerr
 	}
@@ -305,7 +329,7 @@ func (s *service) SetMembers(ctx context.Context, orgID, id uuid.UUID, in *model
 }
 
 func (s *service) MemberModes(ctx context.Context, orgID, id uuid.UUID, contactIDs []string) (map[uuid.UUID]models.SegmentMemberMode, *errx.Error) {
-	ids, xerr := parseContactIDs(contactIDs)
+	ids, xerr := parseContactIDs(contactIDs, models.MaxContactBatchIDs)
 	if xerr != nil {
 		return nil, xerr
 	}

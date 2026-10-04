@@ -20,6 +20,20 @@ type JobEventRemoveEmail struct {
 	UserID  uuid.UUID `json:"user_id" avro:"user_id"`
 	EmailID uuid.UUID `json:"email_id" avro:"email_id"`
 	ID      uuid.UUID `json:"id" avro:"id"`
+	// SkippedFolder is set when the message was found in a folder the owner
+	// excluded from sync: it still exists in the mailbox, so the removal is
+	// filing, not deletion.
+	SkippedFolder string `json:"skipped_folder,omitempty" avro:"skipped_folder"`
+}
+
+// JobEventWarmupRemovalChecked is where the worker found a warmup message
+// after the sync reported it removed.
+type JobEventWarmupRemovalChecked struct {
+	UserID       uuid.UUID `json:"user_id" avro:"user_id"`
+	EmailID      uuid.UUID `json:"email_id" avro:"email_id"`
+	RFCMessageID string    `json:"rfc_message_id" avro:"rfc_message_id"`
+	Outcome      string    `json:"outcome" avro:"outcome"`
+	Recheck      bool      `json:"recheck,omitempty" avro:"recheck"`
 }
 
 type JobEventFlags struct {
@@ -27,6 +41,25 @@ type JobEventFlags struct {
 	EmailID uuid.UUID `json:"email_id" avro:"email_id"`
 	ID      uuid.UUID `json:"id" avro:"id"`
 	Flags   []string  `json:"flags" avro:"flags"`
+}
+
+// JobEventFolderUpdate reports the canonical folder the provider now has a
+// message in. The consumer resolves it against provider_folder, so local filing
+// survives unless the provider itself moved the message.
+type JobEventFolderUpdate struct {
+	UserID  uuid.UUID `json:"user_id" avro:"user_id"`
+	EmailID uuid.UUID `json:"email_id" avro:"email_id"`
+	ID      uuid.UUID `json:"id" avro:"id"`
+	Folder  string    `json:"folder" avro:"folder"`
+	// Relayed answers a MESSAGE_FOLDER: the provider has the message in Folder
+	// because Warmbly put it there, so only provider_folder follows.
+	Relayed bool `json:"relayed,omitempty" avro:"relayed"`
+	// Where the move left the message, when its handle changed with it: the
+	// new Graph id, or the IMAP folder, UIDVALIDITY and UID.
+	ProviderID string `json:"provider_id,omitempty" avro:"provider_id"`
+	FolderPath string `json:"folder_path,omitempty" avro:"folder_path"`
+	Mailbox    uint32 `json:"mailbox,omitempty" avro:"mailbox"`
+	UID        uint32 `json:"uid,omitempty" avro:"uid"`
 }
 
 type JobEventEmailUpdate struct {

@@ -1,5 +1,5 @@
 // The campaign's entry delay picker: preset chips plus a custom amount + unit.
-// Rendered both on the Schedule tab and inside the flow canvas's trigger node,
+// Rendered in campaign Settings and inside the flow canvas's trigger node,
 // which edit the same campaigns.entry_delay_minutes value.
 import React from "react";
 import { NumberInput } from "@/components/ui/field";
@@ -33,13 +33,22 @@ export default function EntryDelayPicker({
     onChange,
     onCommit,
     disabled,
+    withoutImmediate = false,
 }: {
     value: number;
     onChange?: (minutes: number) => void;
     onCommit?: (minutes: number) => void;
     disabled?: boolean;
+    /** Drop the "Immediately" chip and keep a custom amount above zero, for a
+     *  parent that offers "no wait" as its own choice. */
+    withoutImmediate?: boolean;
 }) {
-    const isPreset = ENTRY_DELAY_PRESETS.some((p) => p.minutes === value);
+    const presets = React.useMemo(
+        () => (withoutImmediate ? ENTRY_DELAY_PRESETS.filter((p) => p.minutes > 0) : ENTRY_DELAY_PRESETS),
+        [withoutImmediate],
+    );
+    const floor = withoutImmediate ? 1 : 0;
+    const isPreset = presets.some((p) => p.minutes === value);
     // "Custom" stays open once chosen, even while the typed value happens to
     // land on a preset, so typing 2 -> 24 hours does not yank the row away.
     const [custom, setCustom] = React.useState(!isPreset);
@@ -55,8 +64,8 @@ export default function EntryDelayPicker({
         setDraft(splitEntryDelay(value));
         // The mode follows too: a Reset from a custom amount back to a preset
         // (or the other way) must not leave the picker showing the wrong row.
-        setCustom(!ENTRY_DELAY_PRESETS.some((p) => p.minutes === value));
-    }, [value]);
+        setCustom(!presets.some((p) => p.minutes === value));
+    }, [value, presets]);
 
     const emit = (minutes: number, settled: boolean) => {
         emitted.current = minutes;
@@ -74,7 +83,7 @@ export default function EntryDelayPicker({
     // minutes" to days shows the 90 it is actually worth instead of claiming 45.
     const editCustom = (amount: number, unit: EntryDelayUnit, settled: boolean) => {
         const max = ENTRY_DELAY_MAX_MINUTES / ENTRY_DELAY_UNIT_MINUTES[unit];
-        const bounded = Math.max(0, Math.min(max, Math.round(amount)));
+        const bounded = Math.max(floor, Math.min(max, Math.round(amount)));
         setDraft({ amount: bounded, unit });
         emit(bounded * ENTRY_DELAY_UNIT_MINUTES[unit], settled);
     };
@@ -89,7 +98,7 @@ export default function EntryDelayPicker({
     return (
         <div className="space-y-2">
             <div className="flex flex-wrap gap-1.5">
-                {ENTRY_DELAY_PRESETS.map((p) => (
+                {presets.map((p) => (
                     <button
                         key={p.minutes}
                         type="button"
@@ -111,7 +120,7 @@ export default function EntryDelayPicker({
                             value={draft.amount}
                             onChange={(v) => editCustom(v, draft.unit, false)}
                             onCommit={(v) => editCustom(v, draft.unit, true)}
-                            min={0}
+                            min={floor}
                             max={ENTRY_DELAY_MAX_MINUTES / ENTRY_DELAY_UNIT_MINUTES[draft.unit]}
                             step={1}
                             disabled={disabled}

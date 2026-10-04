@@ -10,6 +10,7 @@ import (
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/typesafe"
 	"github.com/warmbly/warmbly/internal/repository"
 	"github.com/warmbly/warmbly/internal/scheduler"
 )
@@ -37,7 +38,11 @@ type ContactService interface {
 
 	// ImportPreview parses an uploaded CSV/XLSX file and reports back
 	// the columns + first N rows + suggested mapping — no DB writes.
-	ImportPreview(ctx context.Context, file io.Reader, filename string) (*models.ContactImportPreview, *errx.Error)
+	ImportPreview(ctx context.Context, orgID uuid.UUID, file io.Reader, filename string) (*models.ContactImportPreview, *errx.Error)
+
+	// SuggestImportMapping suggests a column mapping for any importer's
+	// preview, and reports which columns the TypeSafe judgment placed.
+	SuggestImportMapping(ctx context.Context, orgID uuid.UUID, headers []string, sample [][]string) ([]models.ContactImportColumnMapping, []int)
 
 	// ValidateImportMapping reports whether a column mapping is usable:
 	// exactly the checks ImportCommit runs before it touches a row. Callers
@@ -54,6 +59,19 @@ type ContactService interface {
 	// result counts plus a list of rows that failed (with reasons).
 	ImportCommit(ctx context.Context, userID string, orgID uuid.UUID, file io.Reader, filename string, opts *models.ContactImportCommit) (*models.ContactImportResult, *errx.Error)
 
+	// ValidateImportOptions runs every check an import makes before it reads a
+	// row, so a background import is refused when it is started.
+	ValidateImportOptions(ctx context.Context, userID string, orgID uuid.UUID, opts *models.ContactImportCommit) *errx.Error
+	// BuildImportPreview describes already-parsed rows for the column mapper.
+	BuildImportPreview(ctx context.Context, orgID uuid.UUID, filename, format string, rows [][]string) (*models.ContactImportPreview, *errx.Error)
+	// AnalyzeImport reports what an import of rows would do under a mapping,
+	// without writing anything.
+	AnalyzeImport(ctx context.Context, userID string, orgID uuid.UUID, rows []ImportRow, mapping []models.ContactImportColumnMapping) (*models.ContactImportAnalysis, *errx.Error)
+	// RunImport applies an import to rows chunk by chunk, settling each chunk
+	// with sink (nil to only collect the result). prior are contacts an
+	// earlier run of the same import touched, so they still join its segments.
+	RunImport(ctx context.Context, userID string, orgID uuid.UUID, rows []ImportRow, opts *models.ContactImportCommit, sink ImportSink, prior []uuid.UUID) (*models.ContactImportResult, *errx.Error)
+
 	// ListCustomFieldKeys returns the org's distinct contact custom-field keys,
 	// frequency-ranked then alphabetical, capped at 200. Powers the dashboard
 	// variable picker's real-field suggestions.
@@ -68,6 +86,9 @@ type ContactService interface {
 	// no contact for that address — a "not a known contact" is a normal,
 	// non-error outcome used by the unibox CRM panel.
 	GetByEmail(ctx context.Context, orgID *uuid.UUID, email string) (*models.Contact, *errx.Error)
+
+	// LookupSender matches the address first, then the thread's campaign send.
+	LookupSender(ctx context.Context, orgID *uuid.UUID, email string, thread models.ContactLookupThread) (*models.ContactLookup, *errx.Error)
 
 	// ListSentEmails enumerates every send (or attempted send) we made
 	// to the contact, newest first.
@@ -144,6 +165,9 @@ type contactService struct {
 	explainer VerificationExplainer
 	// webhooks fans contact.created out; nil-safe (no events).
 	webhooks WebhookDispatcher
+	// columnJudge places import columns no header matched; nil leaves the
+	// suggestion deterministic.
+	columnJudge typesafe.Asker
 }
 
 // VerificationAware is implemented by the contact service so main can hand
@@ -165,6 +189,14 @@ func (s *contactService) WireOrgRisk(r orgrisk.Service) { s.orgRisk = r }
 
 // WireWebhooks attaches the event dispatcher behind contact.created.
 func (s *contactService) WireWebhooks(w WebhookDispatcher) { s.webhooks = w }
+
+// WireColumnJudge attaches the TypeSafe asker behind import column inference.
+func (s *contactService) WireColumnJudge(a typesafe.Asker) { s.columnJudge = a }
+
+// ColumnJudgeAware is the optional capability the caller uses to attach it.
+type ColumnJudgeAware interface {
+	WireColumnJudge(a typesafe.Asker)
+}
 
 // OrgRiskAware is the optional capability the caller uses to attach it.
 type OrgRiskAware interface {

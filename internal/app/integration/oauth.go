@@ -6,15 +6,18 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 
 	"golang.org/x/oauth2"
 
+	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/models"
 )
 
@@ -43,23 +46,24 @@ type oauthProvider struct {
 	provider models.IntegrationProvider
 	config   *oauth2.Config
 	scopes   []string
+	// optional scopes are requested but not required, so an account whose plan
+	// lacks one can still connect.
+	optional []string
 	usePKCE  bool
 	identify identifyFunc
+	// scopeSep overrides the space x/oauth2 joins scopes with (Slack wants commas).
+	scopeSep string
 }
 
 // NewOAuthManager builds the provider registry from environment variables. For
 // each provider it reads <PREFIX>_OAUTH_CLIENT_ID / <PREFIX>_OAUTH_CLIENT_SECRET
 // (e.g. HUBSPOT_OAUTH_CLIENT_ID). The shared redirect/callback URL comes from
-// INTEGRATIONS_OAUTH_REDIRECT_URL, else BACKEND_PUBLIC_URL + the callback path,
-// else a localhost default for dev.
+// INTEGRATIONS_OAUTH_REDIRECT_URL, else the backend's public URL
+// (config.BackendPublicURL) + the callback path.
 func NewOAuthManager() *OAuthManager {
 	redirect := strings.TrimSpace(os.Getenv("INTEGRATIONS_OAUTH_REDIRECT_URL"))
 	if redirect == "" {
-		base := strings.TrimRight(strings.TrimSpace(os.Getenv("BACKEND_PUBLIC_URL")), "/")
-		if base == "" {
-			base = "http://localhost:8080"
-		}
-		redirect = base + "/integrations/oauth/callback"
+		redirect = config.BackendPublicURL() + "/integrations/oauth/callback"
 	}
 
 	m := &OAuthManager{
@@ -87,12 +91,14 @@ func NewOAuthManager() *OAuthManager {
 	register(models.IntegrationHubSpot, "HUBSPOT", oauth2.Endpoint{
 		AuthURL:  "https://app.hubspot.com/oauth/authorize",
 		TokenURL: "https://api.hubapi.com/oauth/v1/token",
-	}, []string{"oauth", "crm.objects.contacts.read", "crm.objects.contacts.write"}, false, identifyHubSpot)
+	}, HubSpotRequiredScopes, false, identifyHubSpot)
+	m.providers[models.IntegrationHubSpot].optional = HubSpotOptionalScopes
 
 	register(models.IntegrationSlack, "SLACK", oauth2.Endpoint{
 		AuthURL:  "https://slack.com/oauth/v2/authorize",
 		TokenURL: "https://slack.com/api/oauth.v2.access",
-	}, []string{"chat:write", "channels:read", "groups:read"}, false, identifySlack)
+	}, SlackBotScopes, false, identifySlack)
+	m.providers[models.IntegrationSlack].scopeSep = ","
 
 	register(models.IntegrationGoogleSheets, "GOOGLE_SHEETS", oauth2.Endpoint{
 		AuthURL:  "https://accounts.google.com/o/oauth2/v2/auth",
@@ -110,10 +116,25 @@ func NewOAuthManager() *OAuthManager {
 	register(models.IntegrationSalesforce, "SALESFORCE", oauth2.Endpoint{
 		AuthURL:  "https://login.salesforce.com/services/oauth2/authorize",
 		TokenURL: "https://login.salesforce.com/services/oauth2/token",
-	}, []string{"api", "refresh_token"}, true, identifySalesforce)
+	}, []string{"api", "refresh_token", "id"}, true, identifySalesforce)
 
 	return m
 }
+
+// HubSpotRequiredScopes is what CRM mode needs: contacts, companies, deals,
+// owners, and the contact schema for the Warmbly property group.
+var HubSpotRequiredScopes = []string{
+	"oauth",
+	"crm.objects.contacts.read", "crm.objects.contacts.write",
+	"crm.objects.companies.read", "crm.objects.companies.write",
+	"crm.objects.deals.read", "crm.objects.deals.write",
+	"crm.objects.owners.read",
+	"crm.schemas.contacts.read", "crm.schemas.contacts.write",
+}
+
+// HubSpotOptionalScopes unlock list import and reading logged email bodies;
+// a portal without them still connects.
+var HubSpotOptionalScopes = []string{"crm.lists.read", "sales-email-read"}
 
 // SupportsOAuth reports whether the provider has an OAuth flow at all.
 func (m *OAuthManager) SupportsOAuth(p models.IntegrationProvider) bool {
@@ -127,6 +148,9 @@ func (m *OAuthManager) Configured(p models.IntegrationProvider) bool {
 	return ok && op.config != nil
 }
 
+// RedirectURL is the shared OAuth callback every provider redirects to.
+func (m *OAuthManager) RedirectURL() string { return m.redirectURL }
+
 // Scopes returns the requested scopes for a provider (empty if none/unknown).
 func (m *OAuthManager) Scopes(p models.IntegrationProvider) []string {
 	if op, ok := m.providers[p]; ok {
@@ -135,14 +159,66 @@ func (m *OAuthManager) Scopes(p models.IntegrationProvider) []string {
 	return nil
 }
 
+// configFor returns the provider's OAuth config, pointed at loginHost for a
+// provider whose authorization server varies per org (Salesforce sandboxes and
+// My Domains). An empty host keeps the registered endpoint.
+func (op *oauthProvider) configFor(loginHost string) *oauth2.Config {
+	if op.config == nil || loginHost == "" || op.provider != models.IntegrationSalesforce {
+		return op.config
+	}
+	cfg := *op.config
+	cfg.Endpoint = oauth2.Endpoint{
+		AuthURL:  "https://" + loginHost + "/services/oauth2/authorize",
+		TokenURL: "https://" + loginHost + "/services/oauth2/token",
+	}
+	return &cfg
+}
+
+// SalesforceLoginHost resolves "production", "sandbox" or a My Domain to the
+// host a Salesforce handshake runs against. Only Salesforce's own domains are
+// accepted: the token endpoint receives the client secret.
+func SalesforceLoginHost(in string) (string, error) {
+	v := strings.ToLower(strings.TrimSpace(in))
+	switch v {
+	case "", "production", "login.salesforce.com":
+		return "login.salesforce.com", nil
+	case "sandbox", "test.salesforce.com":
+		return "test.salesforce.com", nil
+	}
+	v = strings.TrimPrefix(strings.TrimPrefix(v, "https://"), "http://")
+	if i := strings.IndexAny(v, "/?#"); i >= 0 {
+		v = v[:i]
+	}
+	if !strings.HasSuffix(v, ".my.salesforce.com") || len(v) > 200 {
+		return "", errors.New("enter your My Domain, for example acme.my.salesforce.com")
+	}
+	for _, r := range v {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '.') {
+			return "", errors.New("enter your My Domain, for example acme.my.salesforce.com")
+		}
+	}
+	return v, nil
+}
+
 // AuthCodeURL builds the provider authorization URL. It returns the URL plus
 // the PKCE verifier to persist (empty when the provider doesn't use PKCE).
-func (m *OAuthManager) AuthCodeURL(p models.IntegrationProvider, state string) (authURL, verifier string, err error) {
+func (m *OAuthManager) AuthCodeURL(p models.IntegrationProvider, state, loginHost string) (authURL, verifier string, err error) {
 	op, ok := m.providers[p]
 	if !ok || op.config == nil {
 		return "", "", fmt.Errorf("oauth not configured for provider %s", p)
 	}
 	opts := []oauth2.AuthCodeOption{oauth2.AccessTypeOffline, oauth2.ApprovalForce}
+	if p == models.IntegrationSalesforce {
+		// Salesforce reuses a live browser session; asking for a login lets the
+		// member choose which org they authorize.
+		opts = []oauth2.AuthCodeOption{oauth2.SetAuthURLParam("prompt", "login consent")}
+	}
+	if op.scopeSep != "" && len(op.scopes) > 0 {
+		opts = append(opts, oauth2.SetAuthURLParam("scope", strings.Join(op.scopes, op.scopeSep)))
+	}
+	if len(op.optional) > 0 {
+		opts = append(opts, oauth2.SetAuthURLParam("optional_scope", strings.Join(op.optional, " ")))
+	}
 	if op.usePKCE {
 		verifier = randomURLToken(32)
 		sum := sha256.Sum256([]byte(verifier))
@@ -152,12 +228,12 @@ func (m *OAuthManager) AuthCodeURL(p models.IntegrationProvider, state string) (
 			oauth2.SetAuthURLParam("code_challenge_method", "S256"),
 		)
 	}
-	return op.config.AuthCodeURL(state, opts...), verifier, nil
+	return op.configFor(loginHost).AuthCodeURL(state, opts...), verifier, nil
 }
 
 // Exchange swaps an authorization code for tokens and resolves the connected
 // account identity.
-func (m *OAuthManager) Exchange(ctx context.Context, p models.IntegrationProvider, code, verifier string) (*models.IntegrationTokens, extAccount, error) {
+func (m *OAuthManager) Exchange(ctx context.Context, p models.IntegrationProvider, code, verifier, loginHost string) (*models.IntegrationTokens, extAccount, error) {
 	op, ok := m.providers[p]
 	if !ok || op.config == nil {
 		return nil, extAccount{}, fmt.Errorf("oauth not configured for provider %s", p)
@@ -166,7 +242,7 @@ func (m *OAuthManager) Exchange(ctx context.Context, p models.IntegrationProvide
 	if op.usePKCE && verifier != "" {
 		opts = append(opts, oauth2.SetAuthURLParam("code_verifier", verifier))
 	}
-	tok, err := op.config.Exchange(ctx, code, opts...)
+	tok, err := op.configFor(loginHost).Exchange(ctx, code, opts...)
 	if err != nil {
 		return nil, extAccount{}, fmt.Errorf("token exchange failed: %w", err)
 	}
@@ -199,26 +275,33 @@ func (m *OAuthManager) Exchange(ctx context.Context, p models.IntegrationProvide
 	// "instance_url" extra on the token. Capture it so action handlers know
 	// which host to call — the value is persisted in the connection's
 	// non-secret display fields by OAuthFinish.
-	if iu, ok := tok.Extra("instance_url").(string); ok {
+	if iu, ok := tok.Extra("instance_url").(string); ok && strings.HasPrefix(strings.TrimSpace(iu), "https://") {
 		acct.InstanceURL = strings.TrimRight(strings.TrimSpace(iu), "/")
+	}
+	if p == models.IntegrationHubSpot {
+		acct.UIDomain = hubspotUIDomain(ctx, m, tok.AccessToken)
+	}
+	if id, ok := tok.Extra("id").(string); ok {
+		acct.IdentityURL = strings.TrimSpace(id)
 	}
 	return tokens, acct, nil
 }
 
 // RefreshIfNeeded returns a valid access token for the connection, refreshing
-// via the stored refresh token when the access token is within 60s of expiry.
-// It reports whether the token was refreshed (so the caller can persist it).
-func (m *OAuthManager) RefreshIfNeeded(ctx context.Context, p models.IntegrationProvider, current models.IntegrationTokens) (models.IntegrationTokens, bool, error) {
+// via the stored refresh token when the access token is within 60s of expiry,
+// or whenever force is set (Salesforce issues no expiry, so a refused session
+// is the only signal). It reports whether the token was refreshed.
+func (m *OAuthManager) RefreshIfNeeded(ctx context.Context, p models.IntegrationProvider, current models.IntegrationTokens, force bool, loginHost string) (models.IntegrationTokens, bool, error) {
 	op, ok := m.providers[p]
 	if !ok || op.config == nil {
 		return current, false, fmt.Errorf("oauth not configured for provider %s", p)
 	}
 	stillValid := current.ExpiresAt == nil || time.Until(*current.ExpiresAt) > 60*time.Second
-	if stillValid || current.RefreshToken == "" {
+	if (stillValid && !force) || current.RefreshToken == "" {
 		return current, false, nil
 	}
 
-	src := op.config.TokenSource(ctx, &oauth2.Token{
+	src := op.configFor(loginHost).TokenSource(ctx, &oauth2.Token{
 		AccessToken:  current.AccessToken,
 		RefreshToken: current.RefreshToken,
 		Expiry:       time.Now().Add(-time.Minute),
@@ -239,6 +322,9 @@ func (m *OAuthManager) RefreshIfNeeded(ctx context.Context, p models.Integration
 		exp := tok.Expiry.UTC()
 		refreshed.ExpiresAt = &exp
 	}
+	if iu, ok := tok.Extra("instance_url").(string); ok && strings.HasPrefix(strings.TrimSpace(iu), "https://") {
+		refreshed.InstanceURL = strings.TrimRight(strings.TrimSpace(iu), "/")
+	}
 	return refreshed, true, nil
 }
 
@@ -249,6 +335,10 @@ type extAccount struct {
 	// InstanceURL is the provider-specific API host returned at token-exchange
 	// time (Salesforce's per-org domain). Empty for providers with a fixed host.
 	InstanceURL string
+	// UIDomain is the provider web app host for record links (HubSpot).
+	UIDomain string
+	// IdentityURL is Salesforce's /id/<org>/<user> URL for the connected user.
+	IdentityURL string
 }
 
 // --- identity resolvers -----------------------------------------------------
@@ -269,6 +359,18 @@ func identifyHubSpot(ctx context.Context, m *OAuthManager, tok *oauth2.Token) (s
 		name = out.User
 	}
 	return fmt.Sprintf("%d", out.HubID), name, out.Scopes, nil
+}
+
+// hubspotUIDomain resolves the web app host for the portal (app-eu1 for EU
+// data hosting), so record links open in the right region.
+func hubspotUIDomain(ctx context.Context, m *OAuthManager, token string) string {
+	var out struct {
+		UIDomain string `json:"uiDomain"`
+	}
+	if err := m.getJSON(ctx, "https://api.hubapi.com/account-info/v3/details", token, &out); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out.UIDomain)
 }
 
 func identifySlack(ctx context.Context, m *OAuthManager, tok *oauth2.Token) (string, string, []string, error) {
@@ -345,6 +447,36 @@ func identifySalesforce(ctx context.Context, m *OAuthManager, tok *oauth2.Token)
 }
 
 // --- helpers ----------------------------------------------------------------
+
+// Revoke asks a provider to invalidate a token at its revocation endpoint.
+func (m *OAuthManager) Revoke(ctx context.Context, endpoint, token string) error {
+	form := url.Values{"token": {token}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := m.http.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+// salesforceIdentityIDs pulls the org and user ids out of the identity URL
+// (https://login.salesforce.com/id/<org>/<user>).
+func salesforceIdentityIDs(identityURL string) (orgID, userID string) {
+	u, err := url.Parse(identityURL)
+	if err != nil {
+		return "", ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) >= 3 && parts[0] == "id" {
+		return parts[1], parts[2]
+	}
+	return "", ""
+}
 
 func (m *OAuthManager) getJSON(ctx context.Context, url, bearer string, dst any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

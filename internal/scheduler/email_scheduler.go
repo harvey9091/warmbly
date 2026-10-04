@@ -19,7 +19,7 @@ func (s *schedulerService) CalculateNextEmailTime(ctx context.Context, accountID
 		return time.Now(), nil
 	}
 
-	accountTZ := loadLocation(account.Timezone)
+	accountTZ := loadLocation(account.ClockTimezone())
 
 	// STEP 1.5: Resolve the mailbox's sending-behaviour profile. Smart send is
 	// a user-initiated email, so it follows the persona's WORKDAY (hours,
@@ -46,7 +46,7 @@ func (s *schedulerService) CalculateNextEmailTime(ctx context.Context, accountID
 
 	// STEP 3: Ensure within the mailbox's sending window — its own rolled
 	// workday when a profile is enabled, otherwise the historical 8am-8pm band.
-	candidateTime = s.snapEmailToWindow(bhv, candidateTime, account.Timezone)
+	candidateTime = s.snapEmailToWindow(bhv, candidateTime, account.ClockTimezone())
 
 	// STEP 4: Add jitter (±10 minutes)
 	jitter := randomJitter(-10, 10)
@@ -65,7 +65,7 @@ func (s *schedulerService) CalculateNextEmailTime(ctx context.Context, accountID
 	}
 
 	// STEP 7: Final window check after jitter and conflict resolution
-	return notBefore(s.snapEmailToWindow(bhv, candidateTime, account.Timezone)), nil
+	return notBefore(s.snapEmailToWindow(bhv, candidateTime, account.ClockTimezone())), nil
 }
 
 // snapEmailToWindow places a smart-send candidate inside the mailbox's rolled

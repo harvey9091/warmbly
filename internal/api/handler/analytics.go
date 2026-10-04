@@ -2,12 +2,16 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/api/middleware"
+	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
+	"github.com/warmbly/warmbly/internal/models"
 )
 
 // GetWarmupAnalytics gets warmup statistics for the selected organization.
@@ -57,8 +61,57 @@ func (h *Handler) GetWarmupAnalytics(c *gin.Context) {
 	c.JSON(http.StatusOK, analytics)
 }
 
+// GetWarmupPlacement reports where warmup mail landed (inbox, category tabs,
+// spam) per day and per recipient provider, for one mailbox or the workspace.
+// GET /analytics/warmup/placement
+func (h *Handler) GetWarmupPlacement(c *gin.Context) {
+	orgID := middleware.GetOrganizationID(c)
+	if orgID == nil {
+		errx.Handle(c, errx.New(errx.BadRequest, "no organization selected"))
+		return
+	}
+
+	var emailAccountID *uuid.UUID
+	if raw := c.Query("email_id"); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			errx.Handle(c, errx.New(errx.BadRequest, "email_id must be a UUID"))
+			return
+		}
+		emailAccountID = &id
+	}
+
+	now := time.Now().UTC()
+	to := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	if raw := c.Query("to"); raw != "" {
+		d, err := time.Parse("2006-01-02", raw)
+		if err != nil {
+			errx.Handle(c, errx.New(errx.BadRequest, "Invalid to date format (expected YYYY-MM-DD)"))
+			return
+		}
+		to = d
+	}
+	// The default window is the 30 days ending on to, whichever to is.
+	from := to.AddDate(0, 0, -29)
+	if raw := c.Query("from"); raw != "" {
+		d, err := time.Parse("2006-01-02", raw)
+		if err != nil {
+			errx.Handle(c, errx.New(errx.BadRequest, "Invalid from date format (expected YYYY-MM-DD)"))
+			return
+		}
+		from = d
+	}
+
+	report, xerr := h.AnalyticsService.GetWarmupPlacement(c.Request.Context(), *orgID, emailAccountID, from, to)
+	if xerr != nil {
+		errx.Handle(c, xerr)
+		return
+	}
+	c.JSON(http.StatusOK, report)
+}
+
 // GetCampaignAnalytics gets analytics for a specific campaign
-// GET /analytics/campaigns/:id
+// GET /analytics/campaigns/:id[?from=YYYY-MM-DD&to=YYYY-MM-DD]
 func (h *Handler) GetCampaignAnalytics(c *gin.Context) {
 	orgID := middleware.GetOrganizationID(c)
 	if orgID == nil {
@@ -73,13 +126,29 @@ func (h *Handler) GetCampaignAnalytics(c *gin.Context) {
 		return
 	}
 
-	analytics, xerr := h.AnalyticsService.GetCampaignAnalytics(c.Request.Context(), *orgID, campaignID)
+	period, xerr := optionalDayRange(c)
+	if xerr != nil {
+		errx.Handle(c, xerr)
+		return
+	}
+
+	analytics, xerr := h.AnalyticsService.GetCampaignAnalytics(c.Request.Context(), *orgID, campaignID, period)
 	if xerr != nil {
 		errx.Handle(c, xerr)
 		return
 	}
 
 	c.JSON(http.StatusOK, analytics)
+}
+
+// optionalDayRange reads from and to as whole days, both or neither; neither
+// is nil, which callers read as all time.
+func optionalDayRange(c *gin.Context) (*models.DateRange, *errx.Error) {
+	period, err := models.ParseDayRange(c.Query("from"), c.Query("to"))
+	if err != nil {
+		return nil, errx.New(errx.BadRequest, err.Error())
+	}
+	return period, nil
 }
 
 // GetCampaignDailyStats gets daily statistics for a campaign
@@ -128,7 +197,12 @@ func (h *Handler) GetCampaignDailyStats(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": stats})
 }
 
-// GetAllAccountStatuses gets status of all email accounts
+// GetAllAccountStatuses lists email account statuses, one bounded page at a
+// time. A page view asks only for the mailbox ids it shows (email_ids);
+// otherwise the opaque cursor walks the whole inventory. The per-mailbox reads
+// are batched across the page, so a page's cost does not grow with the total
+// inventory, and the overflow beyond the old 1000-row cap is reachable through
+// next_cursor instead of being silently dropped.
 // GET /analytics/accounts
 func (h *Handler) GetAllAccountStatuses(c *gin.Context) {
 	// Account lookups are org-scoped (emailRepo.Search filters on
@@ -139,13 +213,43 @@ func (h *Handler) GetAllAccountStatuses(c *gin.Context) {
 		return
 	}
 
-	statuses, xerr := h.AnalyticsService.GetAllAccountStatuses(c.Request.Context(), *orgID)
+	// email_ids scopes the page to a visible set; invalid or over-limit is a
+	// 400, never a silently truncated or ignored filter.
+	var emailIDs []uuid.UUID
+	if raw := strings.TrimSpace(c.Query("email_ids")); raw != "" {
+		parts := strings.Split(raw, ",")
+		if len(parts) > config.AccountStatusMaxIDs {
+			errx.JSON(c, errx.New(errx.BadRequest, "too many email_ids"))
+			return
+		}
+		emailIDs = make([]uuid.UUID, 0, len(parts))
+		for _, p := range parts {
+			id, err := uuid.Parse(strings.TrimSpace(p))
+			if err != nil {
+				errx.JSON(c, errx.New(errx.BadRequest, "invalid email_ids"))
+				return
+			}
+			emailIDs = append(emailIDs, id)
+		}
+	}
+
+	limit := config.AccountStatusLimitDefault
+	if raw := c.Query("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > config.AccountStatusLimitMax {
+			errx.JSON(c, errx.New(errx.BadRequest, "invalid limit"))
+			return
+		}
+		limit = n
+	}
+
+	result, xerr := h.AnalyticsService.GetAccountStatusesPage(c.Request.Context(), *orgID, emailIDs, c.Query("cursor"), int32(limit))
 	if xerr != nil {
 		errx.Handle(c, xerr)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": statuses})
+	c.JSON(http.StatusOK, gin.H{"data": result.Data, "pagination": result.Pagination})
 }
 
 // GetAccountStatus gets status of a specific email account
@@ -165,7 +269,7 @@ func (h *Handler) GetAccountStatus(c *gin.Context) {
 		return
 	}
 
-	status, xerr := h.AnalyticsService.GetAccountStatus(c.Request.Context(), *orgID, accountID)
+	status, xerr := h.AnalyticsService.GetAccountStatusDetail(c.Request.Context(), *orgID, accountID)
 	if xerr != nil {
 		errx.Handle(c, xerr)
 		return

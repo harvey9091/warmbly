@@ -12,6 +12,18 @@ export default interface Inbox {
     send_as_email: string;
     tags: string[];
     provider: string;
+    /** Detected mailbox host (google_workspace, microsoft365, zoho, ...); "" until known. */
+    mail_host?: string;
+    /** How the mailbox signs in: password, app_password, oauth or delegated; "" until known. */
+    auth_method?: string;
+    /** The administrator's grant a delegated mailbox connects through. */
+    domain_grant_id?: string | null;
+    /** The inbox vendor account this mailbox was imported from. */
+    vendor_connection_id?: string | null;
+    /** That vendor's id (inboxkit, zapmail, ...); absent when none. */
+    vendor?: string;
+    /** The mailbox's own profile photo from its provider or vendor; "" when none can be read. */
+    avatar_url?: string;
     status: string;
     last_synced_at: Date;
     last_id?: number | null;
@@ -20,6 +32,8 @@ export default interface Inbox {
     reply_to: string;
     /** SMTP/IMAP only: file a copy of each sent message in the mailbox Sent folder. */
     save_to_sent: boolean;
+    /** Archive, Delete and Move to inbox in the unibox move the message in the mailbox too. */
+    relay_folder_moves?: boolean;
     tracking_domain: string;
     tracking_domain_verified: boolean;
     tracking_domain_verified_at?: Date | null;
@@ -53,6 +67,11 @@ export default interface Inbox {
     warmup_start_time?: string;
     warmup_end_time?: string;
     warmup_days?: number;
+    /**
+     * The mailbox's own IANA zone, "" when it follows the workspace timezone.
+     * Its warmup hours and sending-behaviour workday are read in this zone.
+     */
+    timezone?: string;
     /**
      * Where warmup mail is filed in the mail client itself: "folder" moves it
      * into warmup_folder, "inbox" leaves it where the provider put it,

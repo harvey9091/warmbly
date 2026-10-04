@@ -72,6 +72,11 @@ var apiSpecs = []apiSpec{
 	{name: "campaign lead-hold", summary: "Whether one lead's flow is held", method: "GET", path: "/campaigns/{id}/leads/{child}/hold", child: "contact"},
 	{name: "campaign pause-lead", summary: "Hold one lead's flow until a date, or until resumed", method: "POST", path: "/campaigns/{id}/leads/{child}/pause", body: bodyOptional, child: "contact"},
 	{name: "campaign resume-lead", summary: "Lift one lead's hold now", method: "POST", path: "/campaigns/{id}/leads/{child}/resume", child: "contact"},
+	// Contacts copied on every email to one lead. --data carries
+	// {"contact_ids": ["<contact>", ...]}, at most two; [] copies nobody.
+	{name: "campaign lead-cc", summary: "Contacts copied on one lead's emails", method: "GET", path: "/campaigns/{id}/leads/{child}/cc", child: "contact"},
+	{name: "campaign set-lead-cc", summary: "Replace the contacts copied on one lead's emails", method: "PUT", path: "/campaigns/{id}/leads/{child}/cc", body: bodyRequired, child: "contact"},
+	{name: "campaign lead-cc-suggestions", summary: "The lead's likely colleagues to copy", method: "GET", path: "/campaigns/{id}/leads/{child}/cc/suggestions", child: "contact"},
 
 	// Contacts.
 	{name: "contact list", summary: "List or search contacts; --data carries the filter body", method: "POST", path: "/contacts/search", body: bodyOptional, query: []string{"limit", "cursor"}},
@@ -87,6 +92,11 @@ var apiSpecs = []apiSpec{
 	{name: "contact custom-fields", summary: "The distinct custom field keys in use", method: "GET", path: "/contacts/custom-fields"},
 	{name: "contact import-preview", summary: "Preview a bulk import without writing", method: "POST", path: "/contacts/import/preview", body: bodyRequired},
 	{name: "contact import-commit", summary: "Commit a previewed bulk import", method: "POST", path: "/contacts/import/commit", body: bodyRequired},
+	{name: "contact imports", summary: "Background imports, newest first", method: "GET", path: "/contacts/imports"},
+	{name: "contact import-status", summary: "A background import's progress and result", method: "GET", path: "/contacts/imports/{id}"},
+	{name: "contact import-analyze", summary: "What a draft import would do under a mapping", method: "POST", path: "/contacts/imports/{id}/analyze", body: bodyRequired},
+	{name: "contact import-start", summary: "Start a draft import", method: "POST", path: "/contacts/imports/{id}/start", body: bodyRequired},
+	{name: "contact import-cancel", summary: "Stop a background import", method: "POST", path: "/contacts/imports/{id}/cancel"},
 	{name: "contact export", summary: "Export contacts", method: "POST", path: "/contacts/export", body: bodyOptional},
 
 	// Suppression list.
@@ -100,7 +110,8 @@ var apiSpecs = []apiSpec{
 	{name: "mailbox update", summary: "Update mailbox settings (limits, tags, timezone, signature)", method: "PATCH", path: "/emails/{id}", body: bodyRequired},
 	{name: "mailbox delete", summary: "Disconnect a mailbox", method: "DELETE", path: "/emails/{id}"},
 	{name: "mailbox auth-check", summary: "Check the mailbox's SPF, DKIM and DMARC", method: "GET", path: "/emails/{id}/auth-check"},
-	{name: "mailbox sync", summary: "The mailbox's sync state and backfill progress", method: "GET", path: "/emails/{id}/sync"},
+	{name: "mailbox sync", summary: "The mailbox's sync state, backfill progress and skipped folders", method: "GET", path: "/emails/{id}/sync"},
+	{name: "mailbox skip-folders", summary: "Replace the folders an IMAP mailbox's sync leaves alone (body: {\"skip_folders\": [...]})", method: "PUT", path: "/emails/{id}/sync", body: bodyRequired},
 	{name: "mailbox identity", summary: "The addresses this mailbox may send as (Gmail only)", method: "GET", path: "/emails/{id}/identity"},
 	{name: "mailbox refresh-identity", summary: "Re-read the send-as addresses from the provider, optionally importing its signature", method: "POST", path: "/emails/{id}/identity/refresh", body: bodyOptional},
 	{name: "mailbox behavior", summary: "The mailbox's human-sending ranges", method: "GET", path: "/emails/{id}/behavior"},
@@ -135,8 +146,8 @@ var apiSpecs = []apiSpec{
 	{name: "analytics warmup", summary: "Warmup analytics", method: "GET", path: "/analytics/warmup"},
 	{name: "analytics accounts", summary: "Per-mailbox analytics", method: "GET", path: "/analytics/accounts"},
 	{name: "analytics account", summary: "One mailbox's analytics", method: "GET", path: "/analytics/accounts/{id}"},
-	{name: "analytics campaign", summary: "One campaign's analytics", method: "GET", path: "/analytics/campaigns/{id}"},
-	{name: "analytics campaign-daily", summary: "One campaign's daily series", method: "GET", path: "/analytics/campaigns/{id}/daily"},
+	{name: "analytics campaign", summary: "One campaign's analytics, all time or for the emails sent from..to", method: "GET", path: "/analytics/campaigns/{id}", query: []string{"from", "to"}},
+	{name: "analytics campaign-daily", summary: "One campaign's daily series", method: "GET", path: "/analytics/campaigns/{id}/daily", query: []string{"from", "to"}},
 	{name: "analytics campaign-hourly", summary: "One campaign's hourly series", method: "GET", path: "/analytics/campaigns/{id}/hourly"},
 	{name: "analytics usage", summary: "API and plan usage", method: "GET", path: "/analytics/usage"},
 	{name: "analytics audit-logs", summary: "The organization's audit trail", method: "GET", path: "/audit-logs", query: []string{"limit", "cursor"}},

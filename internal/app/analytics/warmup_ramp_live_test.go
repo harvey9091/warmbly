@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
+	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/pkg/encrypt"
 	"github.com/warmbly/warmbly/internal/repository"
 )
@@ -27,7 +28,10 @@ type rampFixture struct {
 	user    uuid.UUID
 	org     uuid.UUID
 	mailbox uuid.UUID
-	svc     AnalyticsService
+	// gmail is the recipient that files the placements: only a Google,
+	// Microsoft or Yahoo placement moves the ramp on its own.
+	gmail uuid.UUID
+	svc   AnalyticsService
 }
 
 func newRampFixture(t *testing.T, daysWarming, base, increase, max int) *rampFixture {
@@ -43,7 +47,7 @@ func newRampFixture(t *testing.T, daysWarming, base, increase, max int) *rampFix
 	}
 	t.Cleanup(func() { handle.Pool.Close() })
 
-	f := &rampFixture{pool: handle.Pool, user: uuid.New(), org: uuid.New(), mailbox: uuid.New()}
+	f := &rampFixture{pool: handle.Pool, user: uuid.New(), org: uuid.New(), mailbox: uuid.New(), gmail: uuid.New()}
 	exec := func(sql string, args ...any) {
 		t.Helper()
 		if _, err := f.pool.Exec(ctx, sql, args...); err != nil {
@@ -61,6 +65,10 @@ func newRampFixture(t *testing.T, daysWarming, base, increase, max int) *rampFix
 	              $5, $6, $7, $8)`,
 		f.mailbox, f.user, f.org, "ramp-"+f.mailbox.String()[:8]+"@test.local",
 		time.Now().Add(-time.Duration(daysWarming)*24*time.Hour), base, increase, max)
+	exec(`INSERT INTO email_accounts (id, user_id, organization_id, email, name, signature_plain,
+	          signature_html, provider, status, campaign_limit, min_wait_time, timezone)
+	      VALUES ($1, $2, $3, $4, 'Partner', '', '', 'gmail', 'active', 50, 600, 'UTC')`,
+		f.gmail, f.user, f.org, "ramp-"+f.gmail.String()[:8]+"@gmail.test")
 
 	t.Cleanup(func() {
 		c := context.Background()
@@ -72,6 +80,7 @@ func newRampFixture(t *testing.T, daysWarming, base, increase, max int) *rampFix
 			{`DELETE FROM warmup_statistics WHERE email_account_id = $1`, f.mailbox},
 			{`DELETE FROM campaigns WHERE organization_id = $1`, f.org},
 			{`DELETE FROM email_accounts WHERE id = $1`, f.mailbox},
+			{`DELETE FROM email_accounts WHERE id = $1`, f.gmail},
 			{`DELETE FROM organizations WHERE id = $1`, f.org},
 			{`DELETE FROM users WHERE id = $1`, f.user},
 		} {
@@ -99,8 +108,8 @@ func (f *rampFixture) placement(t *testing.T, hoursAgo int) {
 	t.Helper()
 	if _, err := f.pool.Exec(context.Background(),
 		`INSERT INTO warmup_spam_reports (id, reporter_account_id, reported_account_id, message_id, report_type, created_at)
-		 VALUES (gen_random_uuid(), $1, $1, $2, 'spam_placement', $3)`,
-		f.mailbox, "msg-"+uuid.New().String(),
+		 VALUES (gen_random_uuid(), $1, $2, $3, 'spam_placement', $4)`,
+		f.gmail, f.mailbox, "msg-"+uuid.New().String(),
 		time.Now().Add(-time.Duration(hoursAgo)*time.Hour)); err != nil {
 		t.Fatalf("record placement: %v", err)
 	}
@@ -164,6 +173,23 @@ func TestLiveRecentPlacementCutsTheTargetAndExplainsItself(t *testing.T) {
 	}
 }
 
+// A junk-folder landing at a small host's own filter reaches the health band at
+// a fifth of its weight but never holds or cuts the ramp by itself.
+func TestLiveSmallHostPlacementDoesNotHoldTheRamp(t *testing.T) {
+	f := newRampFixture(t, 10, 10, 1, 40)
+	if _, err := f.pool.Exec(context.Background(),
+		`INSERT INTO warmup_spam_reports (id, reporter_account_id, reported_account_id, message_id, report_type, created_at)
+		 VALUES (gen_random_uuid(), $1, $1, $2, 'spam_placement', NOW() - INTERVAL '2 hours')`,
+		f.mailbox, "msg-"+uuid.New().String()); err != nil {
+		t.Fatalf("record placement: %v", err)
+	}
+
+	target, held := f.status(t)
+	if held || target != 20 {
+		t.Errorf("target = %d, held = %v; want the unheld day-10 target of 20", target, held)
+	}
+}
+
 func TestLiveOldPlacementNoLongerCutsButStillShiftsTheRamp(t *testing.T) {
 	// A placement 8 days ago is outside both windows: no cut, no hold reported.
 	// The three frozen days are still subtracted, so the ramp sits below where
@@ -194,5 +220,69 @@ func TestLiveRampStillReportsAHoldAfterTheCutExpires(t *testing.T) {
 	// The cut is gone, so the target is the frozen ramp at full volume.
 	if target != 17 {
 		t.Errorf("target = %d, want the uncut frozen ramp of 17", target)
+	}
+}
+
+// A mailbox cannot send more than the partners it can reach, so the drawer
+// reports the scheduler's partner cap and says why.
+func TestLiveWarmupTargetIsCappedByReachablePartners(t *testing.T) {
+	f := newRampFixture(t, 10, 10, 1, 40)
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := f.pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("fixture %q: %v", sql[:min(60, len(sql))], err)
+		}
+	}
+	other := uuid.New()
+	t.Cleanup(func() {
+		c := context.Background()
+		for _, step := range []struct {
+			sql string
+			arg any
+		}{
+			{`DELETE FROM warmup_pool_participants WHERE email_account_id IN (SELECT id FROM email_accounts WHERE user_id = $1)`, f.user},
+			{`DELETE FROM email_accounts WHERE organization_id = $1`, other},
+			{`DELETE FROM organizations WHERE id = $1`, other},
+		} {
+			if _, err := f.pool.Exec(c, step.sql, step.arg); err != nil {
+				t.Errorf("cleanup %q: %v", step.sql, err)
+			}
+		}
+	})
+	exec(`INSERT INTO organizations (id, name, slug, owner_user_id) VALUES ($1, 'Ramp partners', $2, $3)`,
+		other, "ramp-p-"+other.String()[:8], f.user)
+	ids := []uuid.UUID{f.mailbox}
+	for i := 0; i < 3; i++ {
+		id := uuid.New()
+		exec(`INSERT INTO email_accounts (id, user_id, organization_id, email, name, signature_plain,
+		          signature_html, provider, status, campaign_limit, min_wait_time, timezone)
+		      VALUES ($1, $2, $3, $4, 'Partner', '', '', 'smtp_imap', 'active', 50, 600, 'UTC')`,
+			id, f.user, other, "ramp-p-"+id.String()[:8]+"@test.local")
+		ids = append(ids, id)
+	}
+	for _, id := range ids {
+		exec(`INSERT INTO warmup_pool_participants (pool_id, email_account_id, participant_role, health_state)
+		      VALUES ($1, $2, 'sender_receiver', 'healthy')`, models.WarmupPoolPremiumID, id)
+	}
+
+	if st, xerr := f.svc.GetAccountStatus(ctx, f.org, f.mailbox); xerr != nil {
+		t.Fatalf("account status: %v", xerr.Message)
+	} else if st.WarmupStatus == nil || st.WarmupStatus.PartnerLimit != nil {
+		t.Fatal("the list-shaped status paid for the pool-wide partner read")
+	}
+	st, xerr := f.svc.GetAccountStatusDetail(ctx, f.org, f.mailbox)
+	if xerr != nil {
+		t.Fatalf("account status: %v", xerr.Message)
+	}
+	ws := st.WarmupStatus
+	if ws == nil || ws.PartnerLimit == nil {
+		t.Fatal("a mailbox with 3 partners and a ramp of 20 reports no partner limit")
+	}
+	if ws.TargetVolume != 3 || ws.PartnerLimit.Reachable != 3 || ws.PartnerLimit.RampTarget != 20 {
+		t.Fatalf("target %d, limit %+v; want 3 of a ramp of 20", ws.TargetVolume, *ws.PartnerLimit)
+	}
+	if st.WarmupHealth == nil || st.WarmupHealth.PoolType != "premium" {
+		t.Fatalf("warmup health %+v does not name the premium pool", st.WarmupHealth)
 	}
 }

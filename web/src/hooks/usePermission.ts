@@ -18,7 +18,7 @@ export function checkPermission(key: PermissionKey): boolean {
     return orgHasPermission(useAppStore.getState().currentOrganization, key);
 }
 
-function orgHasPermission(
+export function orgHasPermission(
     org: { role?: string; permissions?: number } | null | undefined,
     key: PermissionKey,
 ): boolean {
@@ -57,6 +57,22 @@ export function showPermissionDenied(key: PermissionKey) {
         new CustomEvent("permission-denied", {
             detail: {
                 message: `You need the ${PERMISSION_LABELS[key]} permission to do that.`,
+            },
+        }),
+    );
+}
+
+// An admin action from a session that never presented a second factor. The
+// backend answers admin_mfa_required; raising it before the request gives the
+// same dialog without a round trip that is known to fail.
+export function showAdminMFARequired() {
+    if (typeof window === "undefined") return;
+    window.dispatchEvent(
+        new CustomEvent("permission-denied", {
+            detail: {
+                code: "admin_mfa_required",
+                message:
+                    "Administrative access requires two-factor authentication. Turn on 2FA or add a passkey under Settings > Security, then sign in again.",
             },
         }),
     );

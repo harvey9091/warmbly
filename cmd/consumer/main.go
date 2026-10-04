@@ -4,9 +4,11 @@ import (
 	"context"
 	"github.com/warmbly/warmbly/internal/app/cloudlink"
 	emailverifyapp "github.com/warmbly/warmbly/internal/app/emailverify"
+	"github.com/warmbly/warmbly/internal/app/slackapp"
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,12 +19,14 @@ import (
 	awsconf "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/app/advanced"
+	"github.com/warmbly/warmbly/internal/app/audit"
 	"github.com/warmbly/warmbly/internal/app/cipher"
 	jobs "github.com/warmbly/warmbly/internal/app/consumer"
 	"github.com/warmbly/warmbly/internal/app/contact"
 	"github.com/warmbly/warmbly/internal/app/credits"
 	"github.com/warmbly/warmbly/internal/app/creditwatch"
 	"github.com/warmbly/warmbly/internal/app/feature"
+	"github.com/warmbly/warmbly/internal/app/hubspot"
 	"github.com/warmbly/warmbly/internal/app/inboxagent"
 	"github.com/warmbly/warmbly/internal/app/inboxtag"
 	"github.com/warmbly/warmbly/internal/app/instancesettings"
@@ -31,6 +35,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/notification"
 	"github.com/warmbly/warmbly/internal/app/opsnotify"
 	"github.com/warmbly/warmbly/internal/app/replyclassify"
+	"github.com/warmbly/warmbly/internal/app/salesforce"
 	warmupapp "github.com/warmbly/warmbly/internal/app/warmup"
 	"github.com/warmbly/warmbly/internal/app/webhook"
 	workerapp "github.com/warmbly/warmbly/internal/app/worker"
@@ -236,6 +241,19 @@ func main() {
 	integrationRepoC := repository.NewIntegrationRepository(primaryDB.Pool)
 	integrationServiceC := integration.NewService(integrationRepoC, cipherService, integration.NewOAuthManager())
 	webhookService.WireDispatchSink(integrationServiceC.DispatchAny)
+	// Replies, opens and clicks are raised here, so the Salesforce outbox
+	// records them here too; the backend drains it. Automation upserts take
+	// the native path as well.
+	salesforceC := salesforce.NewService(salesforce.Deps{
+		Repo:         repository.NewSalesforceRepository(primaryDB.Pool),
+		Integrations: integrationServiceC,
+		Cipher:       cipherService,
+		Holds:        campaignProgressRepo,
+		Suppression:  advancedRepo,
+		Subscription: contactRepo,
+	})
+	integrationServiceC.SetSalesforce(salesforceC)
+	webhookService.WireRecordSink(salesforceC.Recorder().Record)
 	// AI automation nodes + reply-classifier Layer 3 run in THIS process (reply /
 	// warmup / bounce events dispatch here). Build the credit ledger + provider so
 	// the ai_step / ai_switch nodes can charge + call, and so the classifier's
@@ -312,6 +330,27 @@ func main() {
 		aware.WireSegments(repository.NewSegmentRepository(primaryDB))
 	}
 	advancedService.WireDispatcher(webhookService)
+
+	// HubSpot as the workspace CRM: replies and bounces dispatched here log to
+	// HubSpot, reply tasks reach it, and this process drains the CRM outbox and
+	// runs the pull that keeps the mirror current.
+	hubspotService := hubspot.New(hubspot.Deps{
+		Repo:         repository.NewCRMProviderRepository(primaryDB.Pool),
+		CRM:          crmRepo,
+		Tokens:       integrationServiceC,
+		Contacts:     contactRepo,
+		Holds:        campaignProgressRepo,
+		Suppress:     advancedRepo,
+		Realtime:     streamingPublisher,
+		Cache:        redisCache,
+		AppURL:       os.Getenv("APP_URL"),
+		ClientSecret: strings.TrimSpace(os.Getenv("HUBSPOT_OAUTH_CLIENT_SECRET")),
+	})
+	webhookService.WireRecordSink(hubspotService.OnEvent)
+	advancedService.WireCRMOutbox(hubspotService)
+	integrationServiceC.SetCRMModeCheck(hubspotService.Active)
+	go hubspotService.RunDrainer(ctx)
+	go hubspotService.RunPuller(ctx)
 	// Replies, bounces, opens and clicks teach verification what real mail
 	// showed about each address.
 	verificationEvidence := emailverifyapp.NewEvidence(repository.NewVerificationEvidenceRepository(primaryDB))
@@ -361,7 +400,8 @@ func main() {
 	} else {
 		log.Printf("Warning: notification email disabled, EMAIL_NAME/EMAIL_ADDRESS not set: %v", ecErr)
 	}
-	notificationService.WireDelivery(notifEmail, integrationServiceC, repository.NewUserRepostory(primaryDB, kmsClient), orgRepoConsumer)
+	slackRepoC := repository.NewSlackRepository(primaryDB)
+	notificationService.WireDelivery(notifEmail, slackapp.NewNotifier(integrationServiceC, slackRepoC), repository.NewUserRepostory(primaryDB, kmsClient), orgRepoConsumer)
 
 	// Operator alerts. The dead-worker detector runs in this process, and a
 	// stranded fleet is the operator's problem, not a tenant's. Reads the same
@@ -392,6 +432,8 @@ func main() {
 	advancedService.WireNotifier(notificationService)
 	// Reply pulses fire in THIS process too (inbox ingest classifies replies).
 	advancedService.WireRealtime(streamingPublisher)
+	// A lifted reply opt-out is recorded like a member lifting one by hand.
+	advancedService.WireAudit(audit.NewService(repository.NewAuditRepository(primaryDB.Pool), streamingPublisher))
 	// Inbox agent (M10): inbound human replies are ingested + classified in THIS
 	// process, so the agent that drafts a suggested reply must be wired here. It
 	// is paid + opt-in (checked inside) and self-detaches, so a slow model never
@@ -440,6 +482,7 @@ func main() {
 		tagCategories,
 		classify,
 	)
+	inboxTagger.WireSettings(advancedRepo)
 	if typeSafeClient != nil {
 		// The reply classifier's model layer and the inbox agent's gate both
 		// read the verdict the tagger stored moments earlier, so a reply is
@@ -464,6 +507,8 @@ func main() {
 		CloudLink:                   cloudlink.NewService(repository.NewCloudLinkRepository(primaryDB.Pool, credEncrypter), emailRepo, nil),
 		WarmupContentRepo:           repository.NewWarmupContentRepository(primaryDB.Pool),
 		WarmupEngagementRepo:        repository.NewWarmupEngagementRepository(primaryDB.Pool),
+		WarmupPlacementRepo:         repository.NewWarmupPlacementRepository(primaryDB),
+		PlacementRepo:               repository.NewPlacementRepository(primaryDB),
 		WarmupService:               warmupService,
 		WorkerRepo:                  workerRepo,
 		FleetNodeRepo:               repository.NewFleetNodeRepository(primaryDB),
@@ -486,6 +531,12 @@ func main() {
 		Evidence:                    verificationEvidence,
 	}
 
+	// Inbox arrivals are mirrored into the workspace's Slack inbox channel here.
+	jobsService.SlackInbox = slackapp.NewInboxPoster(slackapp.InboxDeps{
+		Integrations: integrationServiceC, Repo: slackRepoC, Redis: redisCache.Client,
+		Threads: uniboxRepo, Tasks: taskRepo, Campaigns: campaignRepo,
+		Users: repository.NewUserRepostory(primaryDB, kmsClient),
+	})
 	jobsService.InitEvents()
 
 	// Graceful shutdown
@@ -516,10 +567,21 @@ func main() {
 	// Deletes warmup mail past its retention window from the mailbox itself
 	// and prunes the per-message warmup records after theirs.
 	go jobsService.StartWarmupMailRetention(ctx)
+	// Searches the mailbox for deletion strikes recorded before removals were
+	// checked, withdrawing any whose message is still there.
+	go jobsService.StartWarmupTamperingRecheck(ctx)
+	// Attributes each warmup email moved to spam once the activity around it settles.
+	go jobsService.StartWarmupSpamMoveAttribution(ctx)
+	go jobsService.StartWarmupPlacementSweep(ctx)
 	go jobsService.StartPendingWarmupVerification(ctx)
 	// Re-offers inbound mail that reply processing never claimed, so a
 	// reply refused by a since-fixed check is still attributed to its lead.
 	go jobsService.StartIncomingReplyRepair(ctx)
+	go jobsService.StartReplyOptOutRecheck(ctx)
+
+	// Mirrors Warmbly Cloud's warmup verdicts onto the mailboxes it warms, so
+	// a cloud quarantine pauses their campaigns here too. No-op when unlinked.
+	go jobsService.StartCloudStandingSync(ctx, 5*time.Minute)
 
 	// Start dead worker detection (every 5 minutes)
 	go jobsService.StartDeadWorkerDetection(ctx, 5*time.Minute)

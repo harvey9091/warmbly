@@ -3,6 +3,7 @@ package wmail
 import (
 	"context"
 	"errors"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -81,15 +82,21 @@ type SendRequest struct {
 	// mailbox's own address. It is never set on a warmup send: warmup pairs
 	// on the mailbox address, so an alias there would break verification.
 	FromEmail string
+	// ReplyTo is the address the Reply-To header names, so a reply lands in
+	// another mailbox. Empty for no header; never set on a warmup send.
+	ReplyTo string
 }
 
 // buildSendHeaders assembles the outbound custom headers: the warmup
-// verification token (warmup sends) and RFC 8058 one-click unsubscribe headers
-// (campaign sends). Returns nil when there are none so callers can branch.
+// verification token (warmup sends), Reply-To, and RFC 8058 one-click
+// unsubscribe headers (campaign sends). Returns nil when there are none so callers can branch.
 func buildSendHeaders(req *SendRequest) map[string]string {
 	h := map[string]string{}
 	if req.WarmupToken != "" {
 		h[config.WarmupVerifyHeader] = req.WarmupToken
+	}
+	if rt := replyToHeader(req); rt != "" {
+		h["Reply-To"] = rt
 	}
 	if req.UnsubscribeURL != "" {
 		h["List-Unsubscribe"] = "<" + req.UnsubscribeURL + ">"
@@ -105,6 +112,23 @@ func buildSendHeaders(req *SendRequest) map[string]string {
 		return nil
 	}
 	return h
+}
+
+// replyToHeader is the Reply-To value for a send: one bare address, or empty
+// for a warmup send or anything that does not parse as exactly one address.
+func replyToHeader(req *SendRequest) string {
+	if req.IsWarmup {
+		return ""
+	}
+	raw := strings.TrimSpace(req.ReplyTo)
+	if raw == "" || strings.ContainsAny(raw, "\r\n") {
+		return ""
+	}
+	addr, err := mail.ParseAddress(raw)
+	if err != nil {
+		return ""
+	}
+	return addr.Address
 }
 
 // SendResult contains the result of a send operation
@@ -290,10 +314,33 @@ func (w *WMail) sendViaGmail(ctx context.Context, req *SendRequest, bodyHTML str
 	}
 
 	result.Success = true
-	result.MessageID = req.MessageID
+	result.MessageID = gmailSentMessageID(ctx, w.GoogleData.Client, req.TaskID.String(), gmailMsg.Id, req.MessageID)
 	result.ProviderMsgID = gmailMsg.Id
 	result.ThreadID = gmailMsg.ThreadId
 	return result
+}
+
+// gmailStamp reads the Message-ID a sent Gmail message carries.
+type gmailStamp interface {
+	SentMessageID(ctx context.Context, id string) (string, error)
+}
+
+// gmailSentMessageID reports the Message-ID Gmail stamped, as the Graph path
+// does, falling back to the minted one when the read fails. The send already
+// happened, so a failed read must never turn it into a failure.
+func gmailSentMessageID(ctx context.Context, client gmailStamp, taskID, gmailID, minted string) string {
+	if client == nil || gmailID == "" {
+		return minted
+	}
+	stamped, err := client.SentMessageID(ctx, gmailID)
+	if err != nil {
+		log.Warn().Str("task_id", taskID).Err(err).Msg("Gmail sent the message but its Message-ID could not be read; reporting the minted one")
+		return minted
+	}
+	if stamped == "" {
+		return minted
+	}
+	return stamped
 }
 
 // sendViaGraph sends an email through Microsoft Graph. Graph re-stamps the
@@ -540,5 +587,6 @@ func MailErrorToSendError(err *errx.MailError) *models.EmailSendError {
 		UserTitle:      userInfo.Title,
 		UserMessage:    userInfo.Message,
 		ActionRequired: userInfo.ActionRequired,
+		Recipient:      err.Recipient,
 	}
 }

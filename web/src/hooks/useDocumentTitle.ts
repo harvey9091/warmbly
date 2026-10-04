@@ -42,13 +42,15 @@ const ROUTE_TITLES: Record<string, string> = {
 
   // App
   "/app/emails": "Mailboxes",
+  "/app/emails/domains": "Sending domains",
   "/app/contacts": "Contacts",
   "/app/contacts/segments": "Segments",
-  "/app/contacts/categories": "Categories",
+  "/app/contacts/labels": "Labels",
   "/app/contacts/suppressions": "Suppression list",
   "/app/campaigns": "Campaigns",
   "/app/analytics": "Analytics",
   "/app/deliverability": "Deliverability",
+  "/app/placement": "Placement tests",
   "/app/crm/pipelines": "Pipelines",
   "/app/crm/deals": "Deals",
   "/app/crm/tasks": "Tasks",
@@ -59,7 +61,9 @@ const ROUTE_TITLES: Record<string, string> = {
   "/app/api-keys": "API keys",
   "/app/oauth-apps": "OAuth apps",
   "/app/integrations": "Integrations",
+  "/app/integrations/hubspot": "HubSpot",
   "/app/audit": "Audit log",
+  "/app/slack/link": "Link Slack",
   "/app/unibox": "Unibox",
 
   // Settings
@@ -97,6 +101,10 @@ const PARAM_ROUTES: ReadonlyArray<readonly [RegExp, string]> = [
   [/^\/app\/campaigns\/[^/]+\/steps$/, "Campaign steps"],
   [/^\/app\/campaigns\/[^/]+$/, "Campaign"],
   [/^\/app\/automations\/[^/]+$/, "Automation"],
+  [/^\/app\/integrations\/salesforce\/[^/]+$/, "Salesforce"],
+  [/^\/app\/integrations\/.+$/, "Integrations"],
+  [/^\/app\/placement\/batches\/[^/]+$/, "Placement batch"],
+  [/^\/app\/placement\/[^/]+$/, "Placement test"],
   [/^\/app\/forms\/[^/]+$/, "Form"],
   [/^\/app\/contacts\/segments\/[^/]+$/, "Segment"],
   [/^\/app\/unibox(\/.*)?$/, "Unibox"],

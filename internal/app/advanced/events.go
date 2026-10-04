@@ -2,6 +2,7 @@ package advanced
 
 import (
 	"context"
+	"net/url"
 	"time"
 
 	"github.com/google/uuid"
@@ -76,6 +77,7 @@ func (s *service) WireRealtime(p ReplyRealtimePublisher) {
 // wired post-construction in the consumer (where reply/bounce/complaint run).
 type Notifier interface {
 	Notify(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any)
+	NotifyAboutMessage(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, uniboxEmailID uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any)
 }
 
 // WireNotifier attaches the notification service after construction.
@@ -110,6 +112,21 @@ type InboxAgent interface {
 // called (the reply hook guards on a nil agent).
 func (s *service) WireInboxAgent(a InboxAgent) {
 	s.inboxAgent = a
+}
+
+// CRMOutbox carries CRM records written here (automation and reply tasks,
+// campaign deals) to a connected CRM. Nil when the workspace has none.
+type CRMOutbox interface {
+	EnqueuePush(ctx context.Context, orgID uuid.UUID, objectType string, localID uuid.UUID)
+}
+
+// WireCRMOutbox attaches the connected-CRM outbox after construction.
+func (s *service) WireCRMOutbox(o CRMOutbox) { s.crmOutbox = o }
+
+func (s *service) pushCRM(ctx context.Context, orgID uuid.UUID, objectType string, localID uuid.UUID) {
+	if s.crmOutbox != nil {
+		s.crmOutbox.EnqueuePush(ctx, orgID, objectType, localID)
+	}
 }
 
 // WireInboxTags attaches the inbox tagging verdict store after construction.
@@ -156,6 +173,20 @@ func (s *service) inboxTagActed(ctx context.Context, orgID uuid.UUID, messageID,
 	return false
 }
 
+// returnDateDoubted reports that inbox tagging read the away message's return
+// date as not the day the sender is back. No verdict means no doubt.
+func (s *service) returnDateDoubted(ctx context.Context, orgID uuid.UUID, messageID string, back time.Time) bool {
+	if s.inboxTags == nil || messageID == "" || orgID == uuid.Nil {
+		return false
+	}
+	res, err := s.inboxTags.GetByMessageID(ctx, orgID, messageID)
+	if err != nil {
+		log.Warn().Err(err).Str("message_id", messageID).Msg("out-of-office hold: inbox tag lookup failed; parsed date stands")
+		return false
+	}
+	return inboxtag.ReturnDateDoubted(res, back)
+}
+
 // notify raises an in-app notification off the hot path. It detaches from the
 // request context (the ingest call may return first) and is best-effort.
 func (s *service) notify(userID uuid.UUID, orgID *uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any) {
@@ -168,4 +199,25 @@ func (s *service) notify(userID uuid.UUID, orgID *uuid.UUID, category models.Not
 		defer cancel()
 		s.notifier.Notify(ctx, userID, orgID, category, title, body, link, meta)
 	}()
+}
+
+// notifyAboutMessage is notify for one unibox message, so the notification
+// leaves with the message and is read with it.
+func (s *service) notifyAboutMessage(userID uuid.UUID, orgID *uuid.UUID, uniboxEmailID uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any) {
+	if s.notifier == nil || userID == uuid.Nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		s.notifier.NotifyAboutMessage(ctx, userID, orgID, uniboxEmailID, category, title, body, link, meta)
+	}()
+}
+
+// UniboxThreadLink opens the conversation itself rather than the inbox.
+func UniboxThreadLink(threadID string) string {
+	if threadID == "" {
+		return "/app/unibox"
+	}
+	return "/app/unibox/all/" + url.PathEscape(threadID)
 }

@@ -7,6 +7,8 @@ The unified inbox (unibox) is the org-wide view of everything that lands in your
 
 The list, thread, overview, conversation-label, and snooze data is org-scoped, not per-user. Two members of the same organization see the same inbox, the same unread badge, the same threads, and the same conversation labels, whoever applied them. Snoozes are the one exception: they are attached to the calling user.
 
+The list, thread, message, overview, unread-count and conversation-label reads are bounded at 30 seconds, including any wait for a database connection; a read that runs past it is abandoned and answers with the standard `500` error body.
+
 ## List incoming mail
 
 `GET /unibox`
@@ -29,6 +31,7 @@ Returns the inbox list, collapsed to one row per thread (the newest message), wi
 | `email_ids` | query | string | Comma-separated mailbox UUIDs. A thread matches if it landed in any of them. Invalid UUIDs are dropped. |
 | `category_ids` | query | string | Comma-separated conversation-label UUIDs. A thread matches if it carries any of them. |
 | `uncategorized` | query | boolean | `true` returns only threads carrying no conversation labels. |
+| `automated` | query | boolean | `true` returns only conversations no person wrote in: security alerts, notifications, bounces and auto-replies, as judged by [automatic inbox tagging](/guides/inbox-tagging/). `false` leaves them out, which is how the dashboard's Inbox reads. Omit for both. A conversation counts as automated only while every message in it that is not yours was judged automated, so a reply brings it back. |
 
 The response is a `data` plus `pagination` envelope. Each row summarises the whole thread behind it (`message_count`, `has_unread`) plus the conversation's labels.
 
@@ -65,7 +68,7 @@ The response is a `data` plus `pagination` envelope. Each row summarises the who
 
 `GET /unibox/count`
 
-Returns the org-wide unread message count, optionally scoped to one mailbox. Backs the inbox badge. Auth: **Scope** `READ_UNIBOX` · **Org permission** `access_unibox`.
+Returns the number of unread conversations in the Inbox folder, optionally scoped to one mailbox. Snoozed conversations, automated conversations (see `automated` above) and mail in other folders (sent, drafts, archive, spam, trash) are not counted, so the number matches what the Inbox view lists as unread. Backs the inbox badge. Auth: **Scope** `READ_UNIBOX` · **Org permission** `access_unibox`.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
@@ -83,7 +86,7 @@ Returns the org-wide unread message count, optionally scoped to one mailbox. Bac
 
 `GET /unibox/overview`
 
-Rolls up the scope rail and top metric strip in one call: unread, today, week, snoozed, awaiting-reply, and pending-scheduled counts, plus per-folder, per-mailbox, per-tag, and per-conversation-label breakdowns. The `folders` array always lists all six canonical folders, zero-filled, in sidebar order; the headline counts exclude `spam` and `trash`. All counts are threads, not messages. Auth: **Scope** `READ_UNIBOX` · **Org permission** `access_unibox`.
+Rolls up the scope rail and top metric strip in one call: unread, today, week, snoozed, awaiting-reply, and pending-scheduled counts, plus per-folder, per-mailbox, per-tag, and per-conversation-label breakdowns. The `folders` array always lists all six canonical folders, zero-filled, in sidebar order; the headline counts exclude `spam` and `trash`. All counts are threads, not messages, except `scheduled_pending`, which counts the sends queued from the organization's mailboxes against the workspace cap in `scheduled_pending_max`. Automated conversations are counted in `automated` and `automated_unread` and left out of `unread`, `today`, `week`, the `inbox` folder and the per-mailbox and per-tag counts; `total` and the label counts still include them. Concurrent requests from the same organization share one computation, and its result is served for up to one second after it started (`generated_at` is when it started). Auth: **Scope** `READ_UNIBOX` · **Org permission** `access_unibox`.
 
 ### Response
 
@@ -95,8 +98,10 @@ Rolls up the scope rail and top metric strip in one call: unread, today, week, s
   "week": 88,
   "snoozed": 3,
   "awaiting_reply": 9,
+  "automated": 41,
+  "automated_unread": 6,
   "scheduled_pending": 2,
-  "scheduled_pending_max": 50,
+  "scheduled_pending_max": 10000,
   "folders": [
     { "folder": "inbox", "unread": 31, "total": 812 },
     { "folder": "sent", "unread": 0, "total": 402 },
@@ -151,7 +156,7 @@ Returns every message in a single conversation, oldest-first style message rows,
 | `cursor` | query | string | Opaque pagination cursor. |
 | `limit` | query | integer | Page size. Out-of-range values return `400`. |
 
-The response is a `data` plus `pagination` envelope. Each item is a full message (envelope plus body).
+The response is a `data` plus `pagination` envelope. Each item is a full message (envelope plus body). A message that answers an email sent from another workspace mailbox, as a reply in a [shared reply inbox](/guides/mailboxes/#a-shared-reply-inbox) does, carries that mailbox's id in `answers_mailbox_id`; the field is absent otherwise.
 
 ### Response
 
@@ -175,6 +180,7 @@ The response is a `data` plus `pagination` envelope. Each item is a full message
       "in_reply_to": ["<CA+prev@mail.acme.com>"],
       "reply_to": [],
       "to_addr": ["sales@yourco.com"],
+      "answers_mailbox_id": "5e11d0c4-0000-0000-0000-000000000003",
       "subject": "Re: Following up on pricing",
       "size": 18422,
       "internal_date": "2026-06-11T14:22:09Z",
@@ -198,7 +204,7 @@ The response is a `data` plus `pagination` envelope. Each item is a full message
 
 `GET /unibox/thread/labels`
 
-Returns the conversation labels (the workspace's categories) attached to a thread. Auth: **Scope** `READ_UNIBOX` · **Org permission** `access_unibox`.
+Returns the labels attached to a thread, drawn from the same workspace list as contact labels (managed through `/categories`). Auth: **Scope** `READ_UNIBOX` · **Org permission** `access_unibox`.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
@@ -220,14 +226,14 @@ The response wraps the labels in a `data` array.
 
 `PUT /unibox/thread/labels`
 
-Replaces the full conversation-label set on a thread, for the whole workspace. The body's `category_ids` is the desired set, so the call is idempotent and retries are naturally safe. Only the workspace's own categories are attached; an id belonging to another organization is dropped. Auth: **Scope** `WRITE_UNIBOX` · **Org permission** `access_unibox`.
+Replaces the full conversation-label set on a thread, for the whole workspace. The body's `category_ids` is the desired set, so the call is idempotent and retries are naturally safe. Only the workspace's own labels are attached; an id belonging to another organization is dropped. Auth: **Scope** `WRITE_UNIBOX` · **Org permission** `access_unibox`.
 
 ### Request body
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `thread_id` | string | Yes | The thread to label. |
-| `category_ids` | string[] | No | The full desired set of category UUIDs. An empty array clears all labels. |
+| `category_ids` | string[] | No | The full desired set of label UUIDs. An empty array clears all labels. |
 
 ```json
 {
@@ -256,15 +262,18 @@ Returns the resulting label set in a `data` array.
 
 `PATCH /unibox/seen`
 
-Marks messages as read or unread, org-wide: either an explicit batch of up to 500 ids, or a whole canonical folder at once. Send one of `email_ids` or `folder`; sending both returns `400`. Auth: **Scope** `WRITE_UNIBOX` · **Org permission** `access_unibox`.
+Marks messages as read or unread, org-wide: an explicit batch of up to 500 message ids, up to 500 conversations, or a whole canonical folder at once. `email_ids` and `thread_ids` can be sent together; `folder` cannot be combined with either and returns `400`. Auth: **Scope** `WRITE_UNIBOX` · **Org permission** `access_unibox`.
 
-The change is also carried out to the mailbox itself, so a message marked read here stops showing as unread in Gmail, Outlook or an IMAP mailbox. Opening a message with `GET /unibox/:id` marks it read the same way, relay included. Only messages whose state actually changed are relayed, and the relay is best-effort: it happens after the response, on the worker holding the mailbox, and a mailbox that is unplaced at that moment keeps its own read state until something changes it again. Unlike [filing a conversation](/guides/unibox/#filing-a-conversation), which stays inside Warmbly.
+Marking a conversation read reads every message in it. Marking one unread marks only its newest received message unread (one outside spam and trash when there is one). If it has no received message, its newest sent copy turns unread instead; otherwise sent copies stay read. Drafts are never marked unread. Explicit `email_ids` and `folder` sweeps never mark sent or draft copies unread.
+
+The change is also carried out to the mailbox itself, so a message marked read here stops showing as unread in Gmail, Outlook or an IMAP mailbox. Opening a message with `GET /unibox/:id` marks it read the same way, relay included. Only messages whose state actually changed are relayed, and the relay is best-effort: it happens after the response, on the worker holding the mailbox, and a mailbox that is unplaced at that moment keeps its own read state until something changes it again. [Filing a conversation](/guides/unibox/#filing-in-the-mailbox-too) is relayed the same way.
 
 ### Request body
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `email_ids` | string[] | No | Message UUIDs to update (max 500). |
+| `thread_ids` | string[] | No | Conversations to update (max 500). |
 | `folder` | string | No | Sweep every message in this folder instead of an id list: one of `inbox`, `sent`, `drafts`, `archive`, `spam`, `trash`. |
 | `seen` | boolean | No | `true` marks as read, `false` marks as unread. |
 
@@ -296,23 +305,24 @@ Echoes the request back.
 
 `POST /unibox/reply`
 
-Sends or schedules a reply from one of your mailboxes. The send is routed through the per-mailbox scheduler according to `send_mode`. Requires an active organization. Auth: **Scope** `WRITE_UNIBOX` · **Org permission** `access_unibox`.
+Sends or schedules a reply or a forward from any mailbox in the organization. The send is routed through the per-mailbox scheduler according to `send_mode`. Requires an active organization. Auth: **Scope** `WRITE_UNIBOX` · **Org permission** `access_unibox`.
 
 ### Request body
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `email_account_id` | string | Yes | UUID of the sending mailbox. |
+| `email_account_id` | string | Yes | UUID of the sending mailbox. Any active mailbox in the organization, not only the one holding the thread. |
 | `to` | string[] | Yes | Recipient addresses (at least one). |
 | `cc` | string[] | No | CC addresses. |
 | `bcc` | string[] | No | BCC addresses. |
 | `subject` | string | Yes | Subject line. |
 | `body_html` | string | No | HTML body. |
-| `body_plain` | string | No | Plain-text body. |
-| `in_reply_to` | string[] | No | Message-ID(s) this reply threads under. |
-| `thread_id` | string | No | Thread to thread the reply into. |
+| `body_plain` | string | No | Plain-text body. Leave it empty with `body_html` set and the plain-text part is rendered from the HTML, link destinations included. |
+| `in_reply_to` | string[] | No | Message-ID(s) this reply threads under. When omitted, the newest Message-ID in `thread_id` is used. |
+| `thread_id` | string | No | The conversation being answered. |
 | `send_mode` | string | No | `instant` (default), `smart` (next mailbox gap), or `scheduled` (use `scheduled_at`). |
 | `scheduled_at` | string | No | RFC 3339 timestamp. Required when `send_mode` is `scheduled`; must be in the future. |
+| `forward_message_id` | string | No | UUID of a stored message (the `id` from `GET /unibox/:id`) to forward. See [Forwarding a message](#forwarding-a-message). |
 
 ```json
 {
@@ -337,6 +347,35 @@ Sends or schedules a reply from one of your mailboxes. The send is routed throug
 ```
 
 Instant sends are held for the sender's undo window (5 to 120 seconds, default 30) before they actually leave, so `scheduled_at` is that far in the future. Within the window the send can still be cancelled with `DELETE /unibox/scheduled/:task_id`.
+
+Only Gmail has a provider thread handle, and it belongs to the mailbox that holds the thread. So the reply files into the Gmail thread `thread_id` names only when `email_account_id` holds a message in it; a mailbox that already replied into the conversation from outside continues the thread that reply started. Otherwise it goes out with the same In-Reply-To and References headers and the conversation's subject, which keeps it in the same conversation for the recipient, and starts a conversation of its own in the sending mailbox. The queued send still belongs to `thread_id`, so it is listed with that conversation's scheduled sends.
+
+### Forwarding a message
+
+Set `forward_message_id` to forward a message from the inbox. Warmbly attaches the stored message itself, so `body_html` and `body_plain` are an optional note and can be left empty. The message is copied when the request is accepted, so a scheduled forward still carries it if the original is later deleted. What goes out, in both the HTML and the plain-text part:
+
+1. your note, if any
+2. the sending mailbox's signature, when signature sync is on (a forward is signed even without a note)
+3. a `---------- Forwarded message ---------` block with the original From, Date, Subject, To and Cc lines, then the original body
+
+The Date line is written in the sending mailbox's time zone (its own, else the workspace's, else UTC). The original HTML keeps its formatting: its stylesheet is folded into inline styles and it is sanitized like a message opened in Unibox, so scripts, event handlers and Warmbly's own open-tracking pixels are dropped. When the original has only a text part, it is forwarded as text. Links in the forwarded message are never rewritten for click tracking; only your note is tracked, when the mailbox tracks direct mail. Forwarding one of your own tracked sends (from Sent, say) swaps its tracked links back to their real destinations, so the new recipient's clicks are not counted against the original send.
+
+Two limits:
+
+- attachments on the original are not forwarded
+- a message whose full body is not stored (the reader shows "Only a preview of this message is stored") is forwarded with that preview
+
+Forwarding discloses the message, so it takes `READ_UNIBOX` as well as `WRITE_UNIBOX` (for a dashboard session, the `access_unibox` permission covers both), and an API key restricted to certain mailboxes must be allowed the mailbox the message belongs to as well as the sending mailbox. Either missing answers `403`. A `forward_message_id` that names no message in the organization answers `404`.
+
+```json
+{
+  "email_account_id": "2a1b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+  "to": ["finance@acme.com"],
+  "subject": "Fwd: Following up on pricing",
+  "body_plain": "Can you take a look at this?",
+  "forward_message_id": "7f8e9d0c-1b2a-4c3d-9e8f-0a1b2c3d4e5f"
+}
+```
 
 ## List active snoozes
 
@@ -414,7 +453,7 @@ Un-snoozes a thread immediately. Idempotent: deleting a snooze that does not exi
 
 `GET /unibox/scheduled`
 
-Returns the outbound emails you have queued but not yet sent. Pass `thread_id` to scope to a single conversation (used to render queued replies inline); the response shape is identical either way. Auth: **Scope** `READ_UNIBOX` · **Org permission** `access_unibox`.
+Returns the outbound emails queued from the organization's mailboxes but not yet sent, whichever member queued them. An API key limited to certain mailboxes sees only their sends. Pass `thread_id` to scope to a single conversation (used to render queued replies inline); the response shape is identical either way. Auth: **Scope** `READ_UNIBOX` · **Org permission** `access_unibox`.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
@@ -447,7 +486,7 @@ The response wraps the items in a `data` array. Each item is a preview of the qu
 
 `DELETE /unibox/scheduled/:task_id`
 
-Cancels a pending scheduled send before it fires. The queued task is marked cancelled and short-circuits to a no-op when its run time arrives. Auth: **Scope** `WRITE_UNIBOX` · **Org permission** `access_unibox`.
+Cancels a pending scheduled send from any of the organization's mailboxes (for an API key limited to certain mailboxes, from those) before it fires. The queued task is marked cancelled and short-circuits to a no-op when its run time arrives. Auth: **Scope** `WRITE_UNIBOX` · **Org permission** `access_unibox`.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |

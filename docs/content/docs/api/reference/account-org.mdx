@@ -123,7 +123,7 @@ Same shape as `/auth/login`: `email`, `password`, `turnstile`.
 
 `POST /auth/register/confirm`
 
-Confirms the emailed code, creates the account and signs it in: the response is the same shape as a completed `/auth/login` (a `token` pair, or a `two_fa_required` challenge), so the client lands in the dashboard without a second sign-in. `/auth/register` itself returns that shape directly when the deployment does not require email verification.
+Confirms the emailed code, creates the account and signs it in: the response is the same shape as a completed `/auth/login` (a `token` pair, or a `two_fa_required` challenge), so the client lands in the dashboard without a second sign-in. `/auth/register` itself returns that shape directly when the deployment does not require email verification. An address that already has an account is refused with `409` `conflict` (see [error codes](/api/error-codes/#409-conflict)).
 
 Auth: public (not available to API keys).
 
@@ -167,6 +167,8 @@ Auth: public (not available to API keys).
 #### Response
 
 A new token pair, same shape as the login confirm success response (`access_token`, `access_token_expires_at`, `refresh_token`, `refresh_token_expires_at`).
+
+Every refresh rotates the pair: store the new refresh token and discard the old one. A refresh token that has already been exchanged is refused with `401`. If it is presented again more than two minutes after it was exchanged, it has been used twice, so the whole session is ended and every token issued to it stops working. Inside those two minutes it is treated as two callers refreshing at once and only that request is refused.
 
 ### Start password reset
 
@@ -375,9 +377,9 @@ Auth: Session only (not available to API keys).
 
 `GET /auth/me`
 
-Returns the signed-in user, including admin flags and the label registries (folders, tags, categories) the dashboard needs on initial load.
+Returns the signed-in user, including admin flags and the label registries (folders, tags, and the workspace labels returned as `categories`) the dashboard needs on initial load.
 
-The registries belong to the workspace, not to the caller: every member of an organization sees the same folders, tags and categories, whoever created them. They are read for the session's currently selected workspace, so switching workspaces changes what comes back.
+The registries belong to the workspace, not to the caller: every member of an organization sees the same folders, tags and labels, whoever created them. They are read for the session's currently selected workspace, so switching workspaces changes what comes back.
 
 Auth: Session only (not available to API keys).
 
@@ -541,6 +543,9 @@ Auth: Session only (not available to API keys).
     "billing_alert": { "enabled": true, "channels": { "in_app": true, "email": true, "slack": false, "push": true } },
     "team_activity": { "enabled": true, "channels": { "in_app": true, "email": false, "slack": false, "push": true } },
     "campaign_paused": { "enabled": true, "channels": { "in_app": true, "email": true, "slack": false, "push": true } },
+    "placement_finished": { "enabled": true, "channels": { "in_app": true, "email": false, "slack": false, "push": true } },
+    "placement_alert": { "enabled": true, "channels": { "in_app": true, "email": true, "slack": false, "push": true } },
+    "inbox_action_required": { "enabled": true, "channels": { "in_app": true, "email": true, "slack": false, "push": true } },
     "email_digest_minutes": 30
   }
 }
@@ -573,6 +578,9 @@ Auth: Session only (not available to API keys).
     "billing_alert": { "enabled": true, "channels": { "in_app": true, "email": true, "slack": false, "push": true } },
     "team_activity": { "enabled": true, "channels": { "in_app": true, "email": false, "slack": false, "push": true } },
     "campaign_paused": { "enabled": true, "channels": { "in_app": true, "email": true, "slack": false, "push": true } },
+    "placement_finished": { "enabled": true, "channels": { "in_app": true, "email": false, "slack": false, "push": true } },
+    "placement_alert": { "enabled": true, "channels": { "in_app": true, "email": true, "slack": false, "push": true } },
+    "inbox_action_required": { "enabled": true, "channels": { "in_app": true, "email": true, "slack": false, "push": true } },
     "email_digest_minutes": 30
   }
 }
@@ -994,7 +1002,7 @@ The organization is the workspace tenant. These endpoints handle creating and sw
 
 ### Get the workspace sending posture
 
-`GET /organizations/current/risk`
+`GET /organization/current/risk`
 
 Returns the workspace's abuse posture and, when it is restricted, why. Readable by any member: a workspace whose sending is limited should be able to see that it is.
 
@@ -1033,9 +1041,10 @@ Auth: Session only (not available to API keys).
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | 1 to 255 characters. |
+| `timezone` | string | no | Workspace timezone, an IANA name such as `America/New_York`. New campaigns start their schedule in it, and a mailbox with no timezone of its own reads its warmup hours and working hours in it. The dashboard sends the browser's zone. |
 
 ```json
-{ "name": "Acme Outbound" }
+{ "name": "Acme Outbound", "timezone": "America/New_York" }
 ```
 
 #### Response
@@ -1051,6 +1060,7 @@ The created organization object.
   "owner_user_id": "9c2a...",
   "presence_show_online": true,
   "presence_show_activity": true,
+  "timezone": "America/New_York",
   "created_at": "2026-06-12T09:00:00Z",
   "updated_at": "2026-06-12T09:00:00Z"
 }
@@ -1121,6 +1131,7 @@ Auth: Session only (not available to API keys).
   "owner_user_id": "9c2a...",
   "presence_show_online": true,
   "presence_show_activity": true,
+  "timezone": "America/New_York",
   "created_at": "2026-06-12T09:00:00Z",
   "updated_at": "2026-06-12T09:00:00Z",
   "limits": {
@@ -1144,7 +1155,7 @@ Auth: Session only (not available to API keys).
 
 `PATCH /organization/current`
 
-Updates the current organization (name, slug, presence privacy toggles). A presence privacy change re-gates connected sockets live.
+Updates the current organization (name, slug, timezone, presence privacy toggles). A presence privacy change re-gates connected sockets live.
 
 Auth: Session only (not available to API keys). **Org permission** `manage_settings`.
 
@@ -1156,10 +1167,12 @@ Auth: Session only (not available to API keys). **Org permission** `manage_setti
 | `slug` | string | no | New workspace slug. |
 | `presence_show_online` | boolean | no | When false the realtime service tracks no member (nobody appears online). |
 | `presence_show_activity` | boolean | no | When false online is still shown but viewing/editing detail is stripped. |
+| `timezone` | string | no | Workspace timezone, an IANA name. New campaigns default to it and mailboxes with no timezone of their own read their hours in it. Send an empty string to clear it, after which those fall back to UTC. |
 
 ```json
 {
   "name": "Acme Outbound",
+  "timezone": "America/New_York",
   "presence_show_activity": false
 }
 ```
@@ -1298,7 +1311,7 @@ The updated member object (same shape as a list-members entry).
 
 `DELETE /organization/members/:id`
 
-Removes a member from the organization.
+Removes a member from the organization. The member's sessions stop selecting it at once, so their next request that needs a workspace answers `400` until they switch to another one. Every OAuth app authorization the member granted in the workspace is revoked. API keys stay, because they belong to the workspace rather than to the member who created them.
 
 Auth: Session only (not available to API keys). **Org permission** `manage_team`.
 
@@ -1566,6 +1579,8 @@ Auth: Session only (not available to API keys). Requires a selected organization
 `POST /organization/:orgId/limit-requests`
 
 Submits a request to raise one of the organization's limits. The current effective value is captured server-side at submission time. Returns `201 Created`.
+
+A workspace without a plan that sends (a free workspace, or one on the Warmup plan) can only request `max_email_accounts`; any other field returns `400 bad_request`, because none of those limits applies until the workspace sends. A `daily_campaign_limit` request from a workspace whose daily sends are already unlimited also returns `400 bad_request`, since an approved value would impose a cap rather than raise one.
 
 Auth: Session only (not available to API keys).
 
@@ -1927,7 +1942,7 @@ Auth: Session only (not available to API keys). Requires a selected organization
 
 Creates a Stripe checkout session for a price and returns the redirect URL.
 
-Auth: Session only (not available to API keys). Requires a selected organization.
+Auth: Session only (not available to API keys). **Org permission** `manage_billing`.
 
 #### Request body
 
@@ -1994,7 +2009,7 @@ When invalid, `valid` is `false` and `reason` explains why.
 
 Creates a Stripe billing portal session for the organization's customer and returns the portal URL.
 
-Auth: Session only (not available to API keys). Requires a selected organization.
+Auth: Session only (not available to API keys). **Org permission** `manage_billing`.
 
 #### Request body
 
@@ -2018,7 +2033,7 @@ Auth: Session only (not available to API keys). Requires a selected organization
 
 Cancels the organization's subscription, either at period end or immediately.
 
-Auth: Session only (not available to API keys). Requires a selected organization.
+Auth: Session only (not available to API keys). **Org permission** `manage_billing`.
 
 #### Request body
 
@@ -2162,7 +2177,7 @@ Auth: any authenticated caller (JWT or API key).
 
 `GET /timezones`
 
-Returns the supported timezone identifiers (for campaign schedule windows and the like).
+Returns the timezone list the dashboard pickers offer, each with a display name carrying its current UTC offset. Any IANA name is accepted wherever a timezone is written (a campaign schedule, a mailbox, the workspace), so the list is a convenience rather than the set of valid values.
 
 Auth: any authenticated caller (JWT or API key).
 

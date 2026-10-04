@@ -54,7 +54,7 @@ func (h *Handler) AnalyzeTemplateContent(c *gin.Context) {
 
 	var req analyzeTemplateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	if len(req.Subject)+len(req.BodyHTML)+len(req.BodyPlain) > analyzeMaxLen {

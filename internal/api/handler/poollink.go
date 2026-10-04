@@ -27,7 +27,7 @@ func (h *Handler) PoolLinkStart(c *gin.Context) {
 	}
 	var req models.PoolLinkStartRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	res, xerr := h.PoolLinkService.StartCode(c.Request.Context(), req)
@@ -85,7 +85,7 @@ func (h *Handler) PoolLinkApproveCode(c *gin.Context) {
 		OrganizationID string `json:"organization_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	orgID, err := uuid.Parse(req.OrganizationID)
@@ -191,6 +191,9 @@ func (h *Handler) PoolLinkInstanceInfo(c *gin.Context) {
 		errx.JSON(c, xerr)
 		return
 	}
+	if h.SendingDomainService != nil {
+		info.Redirects = h.SendingDomainService.LinkedOffer(c.Request.Context(), inst.ID)
+	}
 	c.JSON(http.StatusOK, info)
 }
 
@@ -221,6 +224,20 @@ func (h *Handler) PoolLinkInstanceMailboxes(c *gin.Context) {
 	c.JSON(http.StatusOK, list)
 }
 
+func (h *Handler) PoolLinkInstanceStanding(c *gin.Context) {
+	inst := middleware.GetPoolLinkInstance(c)
+	if inst == nil {
+		errx.JSON(c, errx.ErrUnauthorized)
+		return
+	}
+	list, xerr := h.PoolLinkService.ListStanding(c.Request.Context(), inst)
+	if xerr != nil {
+		errx.JSON(c, xerr)
+		return
+	}
+	c.JSON(http.StatusOK, list)
+}
+
 func (h *Handler) PoolLinkEnroll(c *gin.Context) {
 	inst := middleware.GetPoolLinkInstance(c)
 	if inst == nil {
@@ -229,7 +246,7 @@ func (h *Handler) PoolLinkEnroll(c *gin.Context) {
 	}
 	var req models.PoolLinkEnrollRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	state, xerr := h.PoolLinkService.Enroll(c.Request.Context(), inst, req)
@@ -279,7 +296,7 @@ func (h *Handler) PoolLinkPatchMailbox(c *gin.Context) {
 	}
 	var patch models.PoolLinkMailboxPatch
 	if err := c.ShouldBindJSON(&patch); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	state, xerr := h.PoolLinkService.PatchMailbox(c.Request.Context(), inst, id, patch)
@@ -317,7 +334,7 @@ func (h *Handler) PoolLinkOAuthStart(c *gin.Context) {
 	}
 	var req models.PoolLinkOAuthStartRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	res, xerr := h.PoolLinkService.StartOAuth(c.Request.Context(), inst, req)
@@ -336,7 +353,7 @@ func (h *Handler) PoolLinkOAuthFinish(c *gin.Context) {
 	}
 	var req models.PoolLinkOAuthFinishRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	state, xerr := h.PoolLinkService.FinishOAuth(c.Request.Context(), inst, req.Session)
@@ -388,7 +405,7 @@ func (h *Handler) PoolLinkAdopt(c *gin.Context) {
 	}
 	var req models.PoolLinkAdoptRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	state, xerr := h.PoolLinkService.Adopt(c.Request.Context(), inst, req)
@@ -436,7 +453,7 @@ func (h *Handler) PoolLinkVerifyWarmupDelivery(c *gin.Context) {
 	}
 	var q models.PoolLinkWarmupDeliveryQuery
 	if err := c.ShouldBindJSON(&q); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	valid, xerr := h.PoolLinkService.VerifyWarmupDelivery(c.Request.Context(), inst, remoteID, q)

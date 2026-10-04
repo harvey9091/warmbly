@@ -16,6 +16,9 @@ import (
 	"github.com/warmbly/warmbly/internal/pkg/emsg"
 )
 
+// errMailboxNotLoaded is what an owner reads when the worker never connected the mailbox.
+const errMailboxNotLoaded = "The sending worker has not loaded this mailbox yet, so nothing was sent. A mail server the worker cannot reach, or one that refuses its login, keeps a mailbox from loading."
+
 func (w *WorkerService) HandleSendEmail(ctx context.Context, sendEmail models.SendEmail) error {
 	log.Info().
 		Str("task_id", sendEmail.TaskID.String()).
@@ -25,9 +28,7 @@ func (w *WorkerService) HandleSendEmail(ctx context.Context, sendEmail models.Se
 		Msg("Processing send email event")
 
 	// Get the email account from MailManager
-	w.mailManager.RLock()
-	mail, exists := w.mailManager.Emails[sendEmail.EmailID]
-	w.mailManager.RUnlock()
+	mail, exists := w.loadedMailbox(ctx, sendEmail.EmailID)
 
 	if !exists {
 		// The mailbox is not loaded here: it is still being added (its
@@ -35,8 +36,7 @@ func (w *WorkerService) HandleSendEmail(ctx context.Context, sendEmail models.Se
 		// the reconciler has not re-shipped it yet. Leave the send for
 		// redelivery a few times so a queued ADD_EMAIL gets processed first,
 		// then report the failure so the control plane retries the step.
-		err := fmt.Errorf("email account %s not found in worker", sendEmail.EmailID.String())
-		return w.failSend(ctx, sendEmail, err.Error(), true)
+		return w.failSend(ctx, sendEmail, errMailboxNotLoaded, true)
 	}
 
 	// Decrypt subject
@@ -86,6 +86,7 @@ func (w *WorkerService) HandleSendEmail(ctx context.Context, sendEmail models.Se
 		Attachments:    attachments,
 		FromName:       body.FromName,
 		FromEmail:      body.FromEmail,
+		ReplyTo:        body.ReplyTo,
 	})
 	w.recordSendLatency(time.Since(sendStart))
 	w.recordSendOutcome(result)
@@ -138,6 +139,7 @@ type sendBody struct {
 	Attachments []emsg.Attachment
 	FromName    string
 	FromEmail   string
+	ReplyTo     string
 }
 
 // fetchEmailBody fetches and decodes the email body from S3.
@@ -189,6 +191,7 @@ func (w *WorkerService) fetchEmailBody(ctx context.Context, orgID uuid.UUID, s3K
 		Attachments: blob.Attachments,
 		FromName:    blob.FromName,
 		FromEmail:   blob.FromEmail,
+		ReplyTo:     blob.ReplyTo,
 	}, nil
 }
 

@@ -31,6 +31,9 @@ type EmailSyncStateRepository interface {
 	// folder in the current UIDVALIDITY generation, keyed by UID. The IMAP
 	// drafts reconciliation uses it to find the rows the server expunged.
 	ListFolderMessages(ctx context.Context, userID, emailID uuid.UUID, folderPath string, uidValidity uint32) ([]StoredFolderMessage, error)
+	// ListProviderFolderMessages returns the newest rows the provider last
+	// placed in one of folders, for providers that key messages by id.
+	ListProviderFolderMessages(ctx context.Context, userID, emailID uuid.UUID, folders []string, limit int) ([]ProviderFolderMessage, error)
 }
 
 type pgEmailSyncStateRepository struct {
@@ -78,13 +81,7 @@ func (r *pgEmailSyncStateRepository) Put(ctx context.Context, userID, emailID uu
 		state.BackfillSince, state.BackfillStartedAt, state.BackfillCompletedAt,
 		state.ThrottledUntil, state.ThrottleReason, state.Deferred, state.LastSyncedAt,
 	); err != nil {
-		// The mailbox was deleted while its sync pass was in flight. Nothing
-		// can own this state and no retry changes that, so the relay is done
-		// rather than failed; returned as an error it was reported and
-		// redelivered for as long as the worker kept relaying.
-		if isForeignKeyViolation(err) {
-			return nil
-		}
+		// A deleted mailbox refuses this as a foreign-key violation; the consumer evicts it.
 		return fmt.Errorf("email_sync_state: put: %w", err)
 	}
 	if state.LastSyncedAt != nil {
@@ -145,14 +142,23 @@ func (r *pgEmailSyncStateRepository) IsOwnConversation(ctx context.Context, user
 	if len(ids) == 0 && threadID == "" {
 		return false, nil
 	}
-	// Three sources, cheapest first: campaign and reply sends record their
-	// Message-ID on tasks; IMAP maps sent-folder mail by RFC id; Gmail and
-	// Graph key the map by provider id, so for them the stored unibox thread
-	// is what links a reply back to the mailbox's own message.
+	// Four sources, cheapest first: campaign and reply sends record their
+	// Message-ID on tasks, and a workspace send whose Reply-To named this
+	// mailbox counts as its own; IMAP maps sent-folder mail by RFC id; Gmail
+	// and Graph key the map by provider id, so for them the stored unibox
+	// thread is what links a reply back to the mailbox's own message.
 	const q = `
 		SELECT EXISTS (
 			SELECT 1 FROM tasks
 			WHERE email_account_id = $2 AND cardinality($3::text[]) > 0 AND message_id = ANY($3)
+		) OR EXISTS (
+			SELECT 1
+			FROM tasks t
+			JOIN email_accounts sender ON sender.id = t.email_account_id
+			JOIN email_accounts here ON here.id = $2 AND here.organization_id = sender.organization_id
+			WHERE cardinality($3::text[]) > 0 AND t.message_id = ANY($3)
+			  AND t.reply_to <> ''
+			  AND lower(t.reply_to) IN (lower(here.email), lower(COALESCE(NULLIF(here.send_as_email, ''), here.email)))
 		) OR EXISTS (
 			SELECT 1 FROM email_message_map
 			WHERE user_id = $1 AND email_id = $2 AND cardinality($3::text[]) > 0 AND message_id = ANY($3)
@@ -190,6 +196,34 @@ func (r *pgEmailSyncStateRepository) ListFolderMessages(ctx context.Context, use
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("email_sync_state: list folder messages: %w", err)
+	}
+	return out, nil
+}
+
+func (r *pgEmailSyncStateRepository) ListProviderFolderMessages(ctx context.Context, userID, emailID uuid.UUID, folders []string, limit int) ([]ProviderFolderMessage, error) {
+	const q = `
+		SELECT id, gmail_id, provider_folder, internal_date
+		FROM unibox_emails
+		WHERE user_id = $1 AND email_id = $2 AND provider_folder = ANY($3) AND gmail_id <> ''
+		ORDER BY internal_date DESC
+		LIMIT $4
+	`
+	rows, err := r.db.Query(ctx, q, userID, emailID, folders, limit)
+	if err != nil {
+		return nil, fmt.Errorf("email_sync_state: list provider folder messages: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]ProviderFolderMessage, 0)
+	for rows.Next() {
+		var m ProviderFolderMessage
+		if err := rows.Scan(&m.ID, &m.ProviderID, &m.ProviderFolder, &m.InternalDate); err != nil {
+			return nil, fmt.Errorf("email_sync_state: scan provider folder message: %w", err)
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("email_sync_state: list provider folder messages: %w", err)
 	}
 	return out, nil
 }

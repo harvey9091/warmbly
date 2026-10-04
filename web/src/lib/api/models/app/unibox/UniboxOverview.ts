@@ -41,12 +41,15 @@ export default interface UniboxOverview {
   week: number;
   snoozed: number;
   awaiting_reply: number;
+  /** Conversations no person wrote in; left out of unread, today, week, Inbox, mailbox and tag counts. */
+  automated: number;
+  automated_unread: number;
   /** Threads with a pending inbox-agent draft awaiting human review. */
   awaiting_agent_draft: number;
-  /** Pending outbound email tasks queued by the user. */
+  /** Pending outbound email tasks queued from the workspace's mailboxes. */
   scheduled_pending: number;
   /**
-   * Hard cap on how many pending scheduled sends one user can queue
+   * Hard cap on how many pending scheduled sends one workspace can queue
    * at once. Each pending send occupies a Cloud Tasks queue slot the
    * platform pays for, so the cap protects against runaway abuse.
    * Dashboard renders `scheduled_pending / scheduled_pending_max` so
@@ -57,7 +60,7 @@ export default interface UniboxOverview {
   mailboxes: UniboxMailboxOverview[];
   tags: UniboxTagOverview[];
   categories: UniboxCategoryOverview[];
-  generated_at: string;
-  window_today_start: string;
-  window_week_start: string;
+  generated_at: Date;
+  window_today_start: Date;
+  window_week_start: Date;
 }

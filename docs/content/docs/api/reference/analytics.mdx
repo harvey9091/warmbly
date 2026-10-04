@@ -46,7 +46,18 @@ Returns the main dashboard overview for the active organization: aggregate stats
       "campaign_name": "Q2 outbound",
       "contact_email": "lead@example.com",
       "contact_id": "c0ffee00-0000-0000-0000-000000000002",
-      "timestamp": "2026-06-11T14:02:11Z"
+      "timestamp": "2026-06-11T14:02:11Z",
+      "sender_id": "5e11d0c4-0000-0000-0000-000000000003",
+      "sender_email": "alex@yourco.com"
+    },
+    {
+      "type": "opened",
+      "campaign_id": "b1f2c3d4-0000-0000-0000-000000000001",
+      "campaign_name": "Q2 outbound",
+      "contact_email": "lead@example.com",
+      "contact_id": "c0ffee00-0000-0000-0000-000000000002",
+      "timestamp": "2026-06-11T13:40:02Z",
+      "origin": { "client": "Apple Mail", "client_type": "app", "device_type": "mobile", "os": "iOS", "country_code": "US", "city": "Austin" }
     }
   ],
   "top_campaigns": [
@@ -72,11 +83,15 @@ Returns the main dashboard overview for the active organization: aggregate stats
 }
 ```
 
+An `opened` or `clicked` entry in `recent_activity` carries `origin` when the person's first open or click on that step was logged: the same client, device and location object a [contact timeline](/api/reference/contacts/#list-a-contacts-timeline) event carries.
+
+Every entry names the mailbox the step was sent from in `sender_id` and `sender_email` (its send-as alias when it has one). A reply credits that mailbox even when it landed in the [shared reply inbox](/guides/mailboxes/#a-shared-reply-inbox) the sender's reply-to names.
+
 ## Get deliverability dashboard
 
 `GET /analytics/deliverability`
 
-Returns the organization's deliverability posture for a time window: bounce, complaint, open, click, and reply counts and rates, suppression and dead-letter pressure, reply-intent breakdown, seed inbox-placement (overall and per recipient provider), warmup-derived placement per recipient domain, an overall health band and a `0-100` composite score (both from the documented thresholds), a daily timeseries, and per-mailbox and per-campaign breakdowns. Requires an organization context. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
+Returns the organization's deliverability posture for a time window: bounce, complaint, open, click, and reply counts and rates, suppression and dead-letter pressure, reply-intent breakdown, seed inbox-placement (overall and per recipient provider), warmup-derived placement per recipient mail host, an overall health band and a `0-100` composite score (both from the documented thresholds), a daily timeseries, and per-mailbox and per-campaign breakdowns. Requires an organization context. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
@@ -154,19 +169,21 @@ Returns the organization's deliverability posture for a time window: bounce, com
   "by_provider": [
     {
       "provider": "gmail",
+      "label": "Gmail",
       "samples": 24,
-      "inbox": 22,
+      "inbox": 21,
       "promotions": 1,
       "spam": 1,
       "other": 0,
-      "inbox_rate": 91.67,
+      "missing": 1,
+      "inbox_rate": 87.5,
       "spam_rate": 4.17
     }
   ],
   "warmup_placement": [
     {
-      "provider": "outlook",
-      "domain": "outlook.com",
+      "provider": "microsoft365",
+      "label": "Microsoft 365",
       "delivered": 132,
       "spam": 6,
       "inbox_rate": 95.45,
@@ -178,7 +195,7 @@ Returns the organization's deliverability posture for a time window: bounce, com
 
 The `intent_*` counters and `reply_count` are two different things and do not add up to each other. `reply_count` counts `reply` deliverability events, which are the ones a provider or your own integration reports to [record an event](/api/reference/deliverability-ops/). The `intent_*` counters are the replies Warmbly classified as they arrived in a connected mailbox, one per reply, including the machine ones: a vacation notice lands in `intent_out_of_office` and an autoresponder, ticket acknowledgement or bounce notice in `intent_automated`. A workspace that reports no reply events sees `reply_count` at zero with intents counted normally.
 
-`spam_placement_rate` and `inbox_placement_rate` are omitted when there are no seed samples in the window. `by_provider` rolls the same seed samples up per recipient provider; `warmup_placement` is the continuous warmup signal per recipient domain, where `delivered` counts verified warmup arrivals and `spam` the subset the recipient's provider filed into junk. `score` starts at `100` and subtracts saturating penalties for bounce rate (up to `40` points, maxed at `10%`), complaint rate (up to `30` points, maxed at `0.30%`), and spam placement (up to `40` points, maxed at `40%`).
+`spam_placement_rate` and `inbox_placement_rate` are omitted when there are no seed samples in the window. Seed samples are the copies of the workspace's [placement tests](/api/reference/placement/) that got a verdict in the window: `inbox`, `promotions`, `other` (another Gmail tab), `spam`, or `missing` (never arrived); copies that failed to send or were cancelled are not samples. `by_provider` rolls the same samples up per seed's provider family, where `provider` is the family id (`gmail`, `google_workspace`, `microsoft365`, `outlook`, `yahoo` and so on) and `label` its display name, and the rates are percentages of `samples`; `warmup_placement` is the continuous warmup signal per recipient mail host, where `provider` is the host id (`google_workspace`, `microsoft365`, `zoho`, `hostinger`, `other` and so on, or the provider group `google`, `microsoft`, `yahoo` or `other` for an arrival whose host was not detected), `label` its display name, `delivered` counts verified warmup arrivals and `spam` the subset the recipient's provider filed into junk. Warmup recipients are mostly other workspaces' mailboxes, so no recipient address or domain is reported. `score` starts at `100` and subtracts saturating penalties for bounce rate (up to `40` points, maxed at `10%`), complaint rate (up to `30` points, maxed at `0.30%`), and spam placement (up to `40` points, maxed at `40%`).
 
 ## Get warmup analytics
 
@@ -223,15 +240,86 @@ Results are scoped to the selected workspace, so every member with access sees t
 
 `email_account_id` is the zero UUID when no `email_id` filter is supplied.
 
+## Get warmup placement
+
+`GET /analytics/warmup/placement`
+
+Returns where warmup mail landed in partners' mailboxes over a date range: the primary inbox, a Gmail category tab (Promotions, Updates, Social or Forums), or spam. Counts are per UTC day, per recipient provider, and, on the workspace report, per mailbox. Requires an organization context. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
+
+Every figure is measured, not estimated: a delivery is counted when the recipient's own sync finds the warmup email and records the folder it arrived in. `rescued` counts spam placements the recipient's mailbox was told to move back to the inbox; the move itself is not confirmed back, so it is the rescues requested, not a verified count. `unconfirmed` counts completed sends more than 24 hours old that no recipient has reported seeing, bucketed on the day they were sent; a provider filter cannot split it, so it is only reported unfiltered.
+
+`rate` is the headline deliverability figure the dashboard shows next to each mailbox: `inbox_rate` is inbox plus tabs over what was delivered in the trailing 7 UTC days, and stays `null` until `min_sample` (`20`) deliveries are in. `scope` is always `major`: the rate is taken over Google, Microsoft and Yahoo recipients only, the providers that filter on sender reputation. A mailbox whose warmup mail reached only other hosts has no rate (`delivered` `0`, `band` `none`). Other hosts are always in `summary`, `daily` and `providers`, and `other_delivered` and `other_inbox_rate` give their share of the same window (`0` and `null` with none). `band` is `good` at `90` or above, `fair` from `80`, `poor` below `80`, `collecting` below the sample floor and `none` with no deliveries. Each day's `rolling_inbox_rate` is the trailing 7-day figure at the same three providers ending on that day; the day's counts cover every host, so filter by provider to read one. Rates are percentages with two decimals.
+
+Recipient providers are grouped as `google` (Gmail and Google Workspace), `microsoft` (Outlook.com and Microsoft 365), `yahoo` (Yahoo and AOL) and `other`; each group lists its `hosts`, where an empty `host` means the recipient's host was not detected yet.
+
+| Parameter | In | Type | Description |
+| --- | --- | --- | --- |
+| `from` | query | string | Optional. Range start (`YYYY-MM-DD`). Defaults to 29 days before `to`. |
+| `to` | query | string | Optional. Range end (`YYYY-MM-DD`). Defaults to today (UTC). |
+| `email_id` | query | string (uuid) | Optional. Limit to one email account in the workspace. Omit for the workspace report, which adds `mailboxes`. |
+
+A range longer than 366 days, `from` after `to`, a malformed date or an invalid `email_id` returns `400`; an `email_id` outside the workspace returns `404`.
+
+### Response
+
+```json
+{
+  "email_account_id": "a0a1a2a3-0000-0000-0000-000000000003",
+  "date_range": { "from": "2026-06-01T00:00:00Z", "to": "2026-06-30T00:00:00Z" },
+  "summary": {
+    "sent": 820, "delivered": 791, "inbox": 702, "tabs": 41, "spam": 48,
+    "rescued": 44, "unconfirmed": 12, "inbox_rate": 93.93, "spam_rate": 6.07
+  },
+  "rate": {
+    "window_days": 7, "min_sample": 20, "scope": "major", "delivered": 196, "inbox": 180, "tabs": 9, "spam": 7,
+    "inbox_rate": 96.43, "band": "good"
+  },
+  "daily": [
+    {
+      "date": "2026-06-30",
+      "sent": 30, "delivered": 29, "inbox": 27, "tabs": 1, "spam": 1, "rescued": 1, "unconfirmed": 0,
+      "inbox_rate": 96.55, "spam_rate": 3.45, "rolling_inbox_rate": 96.43,
+      "groups": [
+        { "group": "google", "inbox": 15, "tabs": 1, "spam": 0, "rescued": 0 },
+        { "group": "microsoft", "inbox": 12, "tabs": 0, "spam": 1, "rescued": 1 }
+      ]
+    }
+  ],
+  "providers": [
+    {
+      "group": "google",
+      "sent": 0, "delivered": 402, "inbox": 351, "tabs": 41, "spam": 10, "rescued": 9, "unconfirmed": 0,
+      "inbox_rate": 97.51, "spam_rate": 2.49,
+      "hosts": [
+        { "host": "google_workspace", "sent": 0, "delivered": 310, "inbox": 271, "tabs": 33, "spam": 6, "rescued": 6, "unconfirmed": 0, "inbox_rate": 98.06, "spam_rate": 1.94 },
+        { "host": "gmail", "sent": 0, "delivered": 92, "inbox": 80, "tabs": 8, "spam": 4, "rescued": 3, "unconfirmed": 0, "inbox_rate": 95.65, "spam_rate": 4.35 }
+      ]
+    }
+  ]
+}
+```
+
+The workspace report (no `email_id`) omits `email_account_id` and adds `mailboxes`, one row per mailbox with activity in the range, ordered worst `rate.inbox_rate` first, then mailboxes still collecting. Each row carries the window counts, its own `rate`, and `daily_inbox_rate`, one entry per day of the range (`null` on a day with no deliveries).
+
+Placement history is kept for the life of the mailbox, like warmup volume history, and moves with a workspace export. Deliveries recorded before this report existed, and any arrival the live count missed, are counted by a background pass from the receipts still on file within minutes; those read as inbox or spam only, with category tabs and rescues as `0`.
+
 ## Get campaign analytics
 
 `GET /analytics/campaigns/:id`
 
-Returns a single campaign's performance summary plus per-sequence-step stats. `total_contacts` counts enrolled leads, and `emails_pending` is the remaining planned email-step sends across those leads. The campaign must belong to the selected workspace. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
+Returns a single campaign's performance summary plus per-sequence-step stats, for the campaign's whole history or for the emails sent in a date range. `total_contacts` counts enrolled leads, and `emails_pending` is the remaining planned email-step sends across those leads. The campaign must belong to the selected workspace. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
 | `id` | path | string (uuid) | Campaign id. |
+| `from` | query | string | Optional. First day of the period (`YYYY-MM-DD`, UTC). Requires `to`. |
+| `to` | query | string | Optional. Last day of the period (`YYYY-MM-DD`, UTC), included. Requires `from`. |
+
+Leave out both `from` and `to` for the campaign's whole history. Supplying only one of them, a date in another format, or a `from` after `to` returns `400` with code `bad_request`.
+
+A period is a send cohort: it selects the emails sent on its days, from the start of `from` to the end of `to` in UTC, and counts every open, click, reply and bounce those emails earned, whenever it arrived. An email sent on September 5 that is replied to on September 10 counts in a September 1 to 7 period; a reply that arrives on September 3 to an email sent in August does not. That keeps each rate's numerator and denominator the same emails. The period scopes `emails_sent`, the open, click, reply and bounce counts and rates, every row in `steps` and every bucket in `engagement` (an open or click counts when the email it answers was sent in the period). `total_contacts` and `emails_pending` describe the campaign as it stands now and are the same whatever the period.
+
+`date_range` is the period the figures cover, as midnight UTC on its first and last day: the `from` and `to` you sent, or for the whole history the day of the campaign's first send (its creation day before anything is sent) through today.
 
 ### Response
 
@@ -240,7 +328,7 @@ Returns a single campaign's performance summary plus per-sequence-step stats. `t
   "campaign_id": "b1f2c3d4-0000-0000-0000-000000000001",
   "name": "Q2 outbound",
   "status": "active",
-  "date_range": { "from": "0001-01-01T00:00:00Z", "to": "0001-01-01T00:00:00Z" },
+  "date_range": { "from": "2026-05-04T00:00:00Z", "to": "2026-06-12T00:00:00Z" },
   "summary": {
     "total_contacts": 500,
     "emails_sent": 820,
@@ -278,14 +366,17 @@ Returns a single campaign's performance summary plus per-sequence-step stats. `t
   "engagement": {
     "countries": [{ "key": "US", "opens": 120, "clicks": 31 }, { "key": "DE", "opens": 44, "clicks": 9 }],
     "clients": [{ "key": "Gmail", "opens": 98, "clicks": 20 }, { "key": "Outlook", "opens": 51, "clicks": 12 }],
-    "devices": [{ "key": "desktop", "opens": 140, "clicks": 37 }, { "key": "mobile", "opens": 24, "clicks": 3 }]
+    "devices": [{ "key": "desktop", "opens": 140, "clicks": 37 }, { "key": "mobile", "opens": 24, "clicks": 3 }],
+    "surfaces": [{ "key": "hidden", "opens": 98, "clicks": 0 }, { "key": "desktop_app", "opens": 51, "clicks": 12 }, { "key": "mobile", "opens": 0, "clicks": 3 }]
   }
 }
 ```
 
-`engagement` groups the campaign's human opens and clicks by country (ISO code), mail client or browser, and device type (`desktop`, `mobile`, `tablet`), counting distinct contacts per bucket; a click counts as an open. Each list holds the busiest eight; an empty `key` is unknown. Country needs the GeoLite2 database on the consumer, otherwise every country row is unknown.
+`engagement` groups the campaign's human opens and clicks by country (ISO code), mail client, device type (`desktop`, `mobile`, `tablet`) and surface, counting distinct contacts per bucket. A `clients` key is the mail client (`Gmail`, `Apple Mail`, `Outlook`), `Webmail in <browser>` for an open read in a browser that named no client, or for a click the browser the link opened in. `surfaces` joins device and app or webmail: `mobile_app`, `desktop_app`, `tablet_app`, `webmail`, the bare device type when neither is known (a click, unless a mail app made the request itself), and `hidden` when a mailbox provider's image proxy fetched the email and the device cannot be known. Each list holds the busiest eight; an empty `key` is unknown. Country needs the GeoLite2 database on the consumer, otherwise every country row is unknown.
 
-`unique_opens`, `opens`, `total_opens` and every open rate count a person's opens only. `machine_opens` is the separate count of steps whose only open came from an automated fetcher (UA-less clients, known scanner networks, and opens inside the instance's automated-open window, which starts when the step is dispatched to a worker); it is not part of the open counts. The stripped WebKit signature shared by Apple MPP and Outlook image loading is an Apple-prefetch signal only inside that window; by itself it does not prove automation. A person's later open on a machine-opened step moves it from `machine_opens` into the open count. `machine_clicks` counts the contacts whose only clicks on a step were automated (a security gateway walking the links); those are not part of `unique_clicks` or `total_clicks`, which only ever count a person's click.
+`unique_opens`, `opens`, `total_opens` and every open rate count a person's opens only. `machine_opens` is the separate count of steps whose only open came from an automated fetcher (UA-less clients, known scanner networks, and opens inside the instance's automated-open window, which starts when the step is dispatched to a worker); it is not part of the open counts. Apple Mail Privacy Protection's relay (a user agent of just `Mozilla/5.0`) and the stripped WebKit signature Mail on a Mac and the new Outlook for Windows share are counted as a prefetch only inside that window; by themselves they do not prove automation. A person's later open on a machine-opened step moves it from `machine_opens` into the open count. `machine_clicks` counts the contacts whose only clicks on a step were automated (a security gateway walking the links); those are not part of `unique_clicks` or `total_clicks`, which only ever count a person's click.
+
+`steps` lists the campaign's email steps in sequence order, the order the steps list returns them. `position` is the step's 1-based number among those email steps, the `N` the canvas shows as `Email N`. It is not the step's own `position` field: action steps are not counted and a deleted step leaves no gap. Match a row to its step by `step_id`.
 
 Each entry in `steps` carries that step's own rates: `open_rate`, `click_rate`, `reply_rate` and `bounce_rate` are percentages of that step's `emails_sent`, not of the campaign's, so a follow-up that reached a tenth of the contacts still compares against the first touch. They are `0` while the step has sent nothing. `machine_opens` and `machine_clicks` follow the same rules as their summary counterparts, scoped to the step.
 
@@ -298,8 +389,10 @@ Returns per-day send, open, click, and reply counts for one campaign over a date
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
 | `id` | path | string (uuid) | Campaign id. |
-| `from` | query | string | Required. Range start (`YYYY-MM-DD`). |
-| `to` | query | string | Required. Range end (`YYYY-MM-DD`). |
+| `from` | query | string | Required. First day (`YYYY-MM-DD`, UTC). |
+| `to` | query | string | Required. Last day (`YYYY-MM-DD`, UTC), included. |
+
+Each row is one UTC day with at least one send, and its opens, clicks and replies are those earned by that day's sends, whenever they arrived. The rows for a period add up to the [campaign analytics](#get-campaign-analytics) for the same `from` and `to`.
 
 ### Response
 
@@ -323,11 +416,11 @@ Returns per-hour stats for one campaign on a single day. The campaign must belon
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
 | `id` | path | string (uuid) | Campaign id. |
-| `date` | query | string | Day to report (`YYYY-MM-DD`). Defaults to today. |
+| `date` | query | string | Day to report (`YYYY-MM-DD`, UTC). Defaults to today. |
 
 ### Response
 
-The series is returned under a `data` envelope, with the resolved `date` echoed back. Each item's `hour` is `0`-`23`.
+The series is returned under a `data` envelope, with the resolved `date` echoed back. Each item's `hour` is the UTC hour, `0`-`23`, so a day's rows add up to that day's row in the [daily stats](#get-campaign-daily-stats).
 
 ```json
 {
@@ -348,8 +441,10 @@ Returns side-by-side performance for up to 10 campaigns over a date range. Every
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
 | `ids` | query | string | Required. Comma-separated campaign UUIDs. Invalid entries are dropped; the list is capped at 10. At least one valid id is required. |
-| `from` | query | string | Required. Range start (`YYYY-MM-DD`). |
-| `to` | query | string | Required. Range end (`YYYY-MM-DD`). |
+| `from` | query | string | Required. First day (`YYYY-MM-DD`, UTC). |
+| `to` | query | string | Required. Last day (`YYYY-MM-DD`, UTC), included. |
+
+Each campaign's figures are the emails it sent from the start of `from` to the end of `to`, with every open, click, reply and bounce they earned, the same send cohort as [campaign analytics](#get-campaign-analytics) for that period.
 
 ### Response
 
@@ -388,11 +483,19 @@ Returns side-by-side performance for up to 10 campaigns over a date range. Every
 
 `GET /analytics/accounts`
 
-Returns the health and usage status of every email account in the selected workspace. The request fails if any account's status cannot be calculated, so clients never receive a silently incomplete list. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
+Returns the health and usage status of email accounts in the selected workspace, one bounded page at a time. The per-mailbox reads are batched across the page, so a page's cost does not grow with the size of the whole inventory. The request fails if a page's usage read cannot be completed, so clients never receive a silently incomplete page. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
+
+### Query parameters
+
+| Parameter | In | Type | Description |
+| --- | --- | --- | --- |
+| `email_ids` | query | string | Comma-separated mailbox UUIDs to return the status of (up to 200). Use this to ask only for the mailboxes a page shows. A foreign-workspace id matches nothing. Invalid or over-limit returns `400`. |
+| `limit` | query | integer | Page size when walking the whole inventory, `1`-`1000`, default `1000`. Invalid returns `400`. Ignored in spirit when `email_ids` is set, since that set is already bounded. |
+| `cursor` | query | string | Opaque keyset cursor from a previous response's `pagination.next_cursor`. Invalid returns `400`. |
 
 ### Response
 
-The list is returned under a `data` envelope (no cursor; all of the caller's accounts are included). Each item has the same shape as [get account status](#get-account-status).
+Returned under the standard `data` plus `pagination` envelope. `pagination.next_cursor` is an opaque token for the next page, or `null` on the last page. Each item in `data` has the same shape as [get account status](#get-account-status). A workspace with more mailboxes than one page follows `next_cursor` to reach the rest, rather than having the overflow silently dropped.
 
 ```json
 {
@@ -414,7 +517,12 @@ The list is returned under a `data` envelope (no cursor; all of the caller's acc
       },
       "in_campaign": true
     }
-  ]
+  ],
+  "pagination": {
+    "total": 1,
+    "next_cursor": null,
+    "has_more": false
+  }
 }
 ```
 
@@ -422,7 +530,7 @@ The list is returned under a `data` envelope (no cursor; all of the caller's acc
 
 `GET /analytics/accounts/:id`
 
-Returns the detailed status for one email account: a combined health score (folding in warmup-pool reputation), active errors, today's UTC usage, warmup status, and warmup-pool health. The account must belong to the selected workspace. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
+Returns the detailed status for one email account: a combined health score (folding in warmup-pool reputation and measured warmup placement), active errors, today's UTC usage, warmup status, warmup-pool health, and the trailing warmup inbox rate. The account must belong to the selected workspace. Auth: **Scope** `READ_ANALYTICS` · **Org permission** `view_analytics`.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
@@ -480,11 +588,24 @@ Returns the detailed status for one email account: a combined health score (fold
     "senders_7d": 8,
     "evaluated_at": "2026-06-12T06:00:00Z"
   },
+  "warmup_placement": {
+    "window_days": 7,
+    "min_sample": 20,
+    "scope": "major",
+    "delivered": 142,
+    "inbox": 126,
+    "tabs": 5,
+    "spam": 11,
+    "inbox_rate": 92.25,
+    "band": "good"
+  },
   "in_campaign": true
 }
 ```
 
 `warmup_status` is present only when warmup has ever been enabled; `warmup_health` is present only when the mailbox is in a warmup pool. `in_campaign` reports whether the mailbox currently backs a live campaign.
+
+`warmup_placement` is the mailbox's measured warmup inbox rate over the trailing 7 UTC days, the same figure [Get warmup placement](#get-warmup-placement) reports as `rate`, and is absent when nothing was delivered in that window. Once `inbox_rate` is present, `health.score` is capped at it (rounded down), so a mailbox landing any mail in spam no longer reads `100`, and a rate below `90` also sets `health.status` to at least `warning` with an issue naming the rate.
 
 `daily_usage.warmup_sent` and `campaign_sent` both count sends the mailbox completed on that date, which is what the caps are enforced against, so neither can read above the target in force.
 

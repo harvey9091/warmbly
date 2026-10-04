@@ -4,9 +4,10 @@ import type DailyStats from "./DailyStats"
 // the backend models.CampaignAnalytics. The previous flat shape (total_sent…)
 // never matched the wire body, so every field read came back undefined.
 
+// Whole UTC days sent as RFC3339 instants, which Request revives into Dates.
 export interface DateRange {
-    from: string
-    to: string
+    from: Date
+    to: Date
 }
 
 export interface CampaignSummary {
@@ -33,6 +34,7 @@ export interface CampaignSummary {
 export interface SequenceStats {
     step_id: string
     name: string
+    // 1-based among the campaign's email steps in canvas order, the N of "Email N".
     position: number
     emails_sent: number
     opens: number
@@ -63,12 +65,17 @@ export interface CampaignEngagementBreakdown {
     countries: EngagementBucket[]
     clients: EngagementBucket[]
     devices: EngagementBucket[]
+    // Device and app-or-webmail together: mobile_app, desktop_app, tablet_app,
+    // webmail, mobile, desktop, tablet, or hidden (a provider's image proxy).
+    surfaces?: EngagementBucket[]
 }
 
 export default interface CampaignAnalytics {
     campaign_id: string
     name: string
     status: string
+    // The UTC days the figures cover: the requested from/to, or for all time
+    // the first send's day (creation before one) through today.
     date_range: DateRange
     summary: CampaignSummary
     steps: SequenceStats[]

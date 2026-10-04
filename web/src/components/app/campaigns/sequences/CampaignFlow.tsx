@@ -98,7 +98,7 @@ import buildError from "@/lib/helper/buildError";
 import EntryDelayPicker from "@/components/app/campaigns/schedule/EntryDelayPicker";
 import { entryDelayLabel } from "@/components/app/campaigns/schedule/entryDelay";
 import StepEmailArms from "./StepEmailArms";
-import { conversationSubjectFor } from "./threading";
+import { conversationOpenerFor, conversationSubjectFor } from "./threading";
 import CategoryPicker from "@/components/app/contacts/CategoryPicker";
 import { SegmentMultiPicker } from "@/components/app/segments/SegmentPickers";
 import type { ActionKV, AITagRef, SequenceAction, SequenceActionType } from "@/lib/api/models/app/campaigns/sequences/Action";
@@ -107,6 +107,7 @@ import { triggerLabel } from "@/lib/api/models/app/automations/meta";
 import TaskTypePicker from "@/components/app/crm/TaskTypePicker";
 import AssigneeTeamPicker, { type AssigneeValue } from "@/components/app/crm/AssigneeTeamPicker";
 import DealStagePicker from "@/components/app/crm/DealStagePicker";
+import { HubSpotActionNote } from "@/components/app/crm/hubspotCrm";
 
 // Personalization tokens available in templated copy. Mirrors SequenceView's
 // VARIABLES so a deal name can use the same {{.FirstName}}/{{.Company}} tokens
@@ -444,8 +445,8 @@ function IfNode({ data, selected }: NodeProps) {
 
 // TriggerNode — where every contact enters the flow, and the one place on the
 // canvas that shows (and sets) how long their FIRST email waits after they
-// entered. It edits campaigns.entry_delay_minutes, the same value the Schedule
-// tab writes, so the two can never disagree. Self-contained on purpose: it reads
+// entered. It edits campaigns.entry_delay_minutes, the same value campaign
+// Settings > First email writes, so the two can never disagree. Self-contained on purpose: it reads
 // the campaign itself rather than taking the delay through node data, which keeps
 // the layout effect from re-running on every save.
 function TriggerNode({ data }: NodeProps) {
@@ -549,11 +550,11 @@ function StopNode() {
 
 // Per-type chrome for action nodes (icon + label + accent).
 const ACTION_META: Record<string, { label: string; Icon: typeof ClockIcon; tint: string }> = {
-    add_tag: { label: "Add tag", Icon: TagIcon, tint: "text-emerald-600" },
-    remove_tag: { label: "Remove tag", Icon: TagIcon, tint: "text-amber-600" },
+    add_tag: { label: "Add label", Icon: TagIcon, tint: "text-emerald-600" },
+    remove_tag: { label: "Remove label", Icon: TagIcon, tint: "text-amber-600" },
     add_to_segment: { label: "Add to segment", Icon: LayersIcon, tint: "text-emerald-600" },
     remove_from_segment: { label: "Remove from segment", Icon: LayersIcon, tint: "text-amber-600" },
-    label_email: { label: "Label email", Icon: TagsIcon, tint: "text-fuchsia-600" },
+    label_email: { label: "Label conversation", Icon: TagsIcon, tint: "text-fuchsia-600" },
     create_task: { label: "Create task", Icon: CheckSquareIcon, tint: "text-violet-600" },
     create_deal: { label: "Create deal", Icon: HandshakeIcon, tint: "text-emerald-600" },
     move_deal_stage: { label: "Move deal stage", Icon: ArrowRightLeftIcon, tint: "text-sky-600" },
@@ -569,9 +570,9 @@ function actionSummary(a?: SequenceAction | null): string {
     if (!a) return "Not configured";
     switch (a.type) {
         case "add_tag":
-            return a.category_id ? "Add a tag" : "Pick a tag…";
+            return a.category_id ? "Add a label" : "Pick a label…";
         case "remove_tag":
-            return a.category_id ? "Remove a tag" : "Pick a tag…";
+            return a.category_id ? "Remove a label" : "Pick a label…";
         case "add_to_segment":
             return a.segment_id ? "Pin into a segment" : "Pick a segment…";
         case "remove_from_segment":
@@ -928,9 +929,9 @@ function ConvergeEdge({
                         className="nodrag nopan pointer-events-none absolute rounded border px-1 py-px text-[10px]"
                         style={{
                             transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
-                            borderColor: (labelBgStyle as { stroke?: string } | undefined)?.stroke ?? "#e2e8f0",
-                            background: (labelBgStyle as { fill?: string } | undefined)?.fill ?? "#fff",
-                            color: (labelStyle as { fill?: string } | undefined)?.fill ?? "#475569",
+                            borderColor: (labelBgStyle as { stroke?: string } | undefined)?.stroke ?? "light-dark(#e2e8f0, #2e2f34)",
+                            background: (labelBgStyle as { fill?: string } | undefined)?.fill ?? "light-dark(#fff, #1a1b1e)",
+                            color: (labelStyle as { fill?: string } | undefined)?.fill ?? "light-dark(#475569, #b4bac3)",
                         }}
                     >
                         {label}
@@ -1538,7 +1539,7 @@ export default function CampaignFlow({ campaignId }: { campaignId: string }) {
         const ifMeta: Record<string, IfMeta> = {};
         const flowEdges: Edge[] = [];
         const edgeStyle = (cond: boolean) =>
-            cond ? { stroke: "#0ea5e9", strokeWidth: 2 } : { stroke: "#94a3b8" };
+            cond ? { stroke: "var(--wb-edge-sky)", strokeWidth: 2 } : { stroke: "var(--wb-edge-muted)" };
 
         sequences.forEach((s) => {
             const branches = ordered(s.conditions?.branches ?? []);
@@ -1561,9 +1562,9 @@ export default function CampaignFlow({ campaignId }: { campaignId: string }) {
                     target: b.target_step_id ?? STOP_ID,
                     label: wt ? `${name} · ${wt}` : name,
                     reconnectable: true,
-                    style: { stroke: "#a855f7", strokeWidth: 2 },
-                    labelStyle: { fill: "#7e22ce", fontSize: 10 },
-                    labelBgStyle: { fill: "#fff", stroke: "#e9d5ff" },
+                    style: { stroke: "var(--wb-edge-violet)", strokeWidth: 2 },
+                    labelStyle: { fill: "light-dark(#7e22ce, #d8b4fe)", fontSize: 10 },
+                    labelBgStyle: { fill: "light-dark(#fff, #1a1b1e)", stroke: "light-dark(#e9d5ff, rgb(168 85 247 / 0.4))" },
                     labelBgPadding: [5, 3],
                     labelBgBorderRadius: 5,
                     data: { sourceId: s.id, branchId: b.branch_id },
@@ -1606,8 +1607,8 @@ export default function CampaignFlow({ campaignId }: { campaignId: string }) {
                         target: nid,
                         label: "else",
                         style: edgeStyle(false),
-                        labelStyle: { fill: "#94a3b8", fontSize: 10 },
-                        labelBgStyle: { fill: "#fff", stroke: "#e2e8f0" },
+                        labelStyle: { fill: "light-dark(#94a3b8, #62666d)", fontSize: 10 },
+                        labelBgStyle: { fill: "light-dark(#fff, #1a1b1e)", stroke: "light-dark(#e2e8f0, #2e2f34)" },
                         labelBgPadding: [4, 2],
                         labelBgBorderRadius: 5,
                         data: { sourceId: s.id, branchId: b.branch_id },
@@ -1638,8 +1639,8 @@ export default function CampaignFlow({ campaignId }: { campaignId: string }) {
                         label: wt || undefined,
                         reconnectable: true,
                         style: edgeStyle(true),
-                        labelStyle: { fill: "#0369a1", fontSize: 10 },
-                        labelBgStyle: { fill: "#fff", stroke: "#bae6fd" },
+                        labelStyle: { fill: "light-dark(#0369a1, #7dd3fc)", fontSize: 10 },
+                        labelBgStyle: { fill: "light-dark(#fff, #1a1b1e)", stroke: "light-dark(#bae6fd, rgb(56 189 248 / 0.35))" },
                         labelBgPadding: [5, 3],
                         labelBgBorderRadius: 5,
                         data: { sourceId: s.id, branchId: b.branch_id },
@@ -1660,8 +1661,8 @@ export default function CampaignFlow({ campaignId }: { campaignId: string }) {
                         label: wt ? `else · ${wt}` : "else",
                         reconnectable: true,
                         style: edgeStyle(false),
-                        labelStyle: { fill: "#475569", fontSize: 10 },
-                        labelBgStyle: { fill: "#fff", stroke: "#e2e8f0" },
+                        labelStyle: { fill: "light-dark(#475569, #b4bac3)", fontSize: 10 },
+                        labelBgStyle: { fill: "light-dark(#fff, #1a1b1e)", stroke: "light-dark(#e2e8f0, #2e2f34)" },
                         labelBgPadding: [5, 3],
                         labelBgBorderRadius: 5,
                         data: { sourceId: s.id, branchId: uncond.branch_id },
@@ -1676,8 +1677,8 @@ export default function CampaignFlow({ campaignId }: { campaignId: string }) {
                         label: wt || undefined,
                         reconnectable: true,
                         style: edgeStyle(false),
-                        labelStyle: { fill: "#475569", fontSize: 10 },
-                        labelBgStyle: { fill: "#fff", stroke: "#e2e8f0" },
+                        labelStyle: { fill: "light-dark(#475569, #b4bac3)", fontSize: 10 },
+                        labelBgStyle: { fill: "light-dark(#fff, #1a1b1e)", stroke: "light-dark(#e2e8f0, #2e2f34)" },
                         labelBgPadding: [5, 3],
                         labelBgBorderRadius: 5,
                         data: { sourceId: s.id, branchId: uncond.branch_id },
@@ -1708,7 +1709,7 @@ export default function CampaignFlow({ campaignId }: { campaignId: string }) {
                 target: sequences[0].id,
                 deletable: false,
                 reconnectable: false,
-                style: { stroke: "#c4b5fd", strokeWidth: 2 },
+                style: { stroke: "var(--wb-edge-violet-soft)", strokeWidth: 2 },
             });
         }
 
@@ -1747,7 +1748,7 @@ export default function CampaignFlow({ campaignId }: { campaignId: string }) {
                     type: MarkerType.ArrowClosed,
                     width: 16,
                     height: 16,
-                    color: (e.style as { stroke?: string } | undefined)?.stroke ?? "#94a3b8",
+                    color: (e.style as { stroke?: string } | undefined)?.stroke ?? "var(--wb-edge-muted)",
                 },
             };
         });
@@ -2040,7 +2041,7 @@ export default function CampaignFlow({ campaignId }: { campaignId: string }) {
                 fitView
                 proOptions={{ hideAttribution: true }}
             >
-                <Background color="#e9eef5" gap={24} size={1} />
+                <Background color="light-dark(#e9eef5, #25262a)" gap={24} size={1} />
                 <Controls showInteractive={false} />
                 <CanvasSelections selections={live.selections} />
                 <CanvasCursors cursors={live.cursors} />
@@ -2223,6 +2224,7 @@ export default function CampaignFlow({ campaignId }: { campaignId: string }) {
                                 sequence={editStep}
                                 index={editIndex}
                                 conversationSubject={conversationSubjectFor(sequences, editIndex)}
+                                conversationOpener={conversationOpenerFor(sequences, editIndex)}
                             />
                         )}
                     </div>
@@ -2612,11 +2614,11 @@ function ConnectionEditor({
 // bottom dot unconnected (shows "Ends here") or routing a branch to Stop. That
 // keeps the cleaner Stop/"Ends here" visual instead of a configurable end node.
 const ADD_ACTION_OPTIONS: { type: SequenceActionType; label: string }[] = [
-    { type: "add_tag", label: "Add tag" },
-    { type: "remove_tag", label: "Remove tag" },
+    { type: "add_tag", label: "Add label" },
+    { type: "remove_tag", label: "Remove label" },
     { type: "add_to_segment", label: "Add to segment" },
     { type: "remove_from_segment", label: "Remove from segment" },
-    { type: "label_email", label: "Label email" },
+    { type: "label_email", label: "Label conversation" },
     { type: "create_task", label: "Create task" },
     { type: "create_deal", label: "Create deal" },
     { type: "move_deal_stage", label: "Move deal stage" },
@@ -2743,7 +2745,7 @@ function AddNodeMenu({
 }) {
     const [open, setOpen] = React.useState(false);
     const ref = React.useRef<HTMLDivElement>(null);
-    useClickOutside(ref, () => setOpen(false));
+    useClickOutside(open, () => setOpen(false), ref);
     return (
         <div ref={ref} className="relative inline-flex">
             {/* Primary click = add an email step (the default, common case). */}
@@ -3052,15 +3054,14 @@ function ActionConfigFields({
         <>
             {(action.type === "add_tag" || action.type === "remove_tag") && (
                 <div>
-                    <Label>{action.type === "add_tag" ? "Tag to add" : "Tag to remove"}</Label>
+                    <Label>{action.type === "add_tag" ? "Label to add" : "Label to remove"}</Label>
                     <CategoryPicker
                         value={action.category_id ? [action.category_id] : []}
                         onChange={(ids) =>
                             setAction((a) => ({ ...a, category_id: ids.length ? ids[ids.length - 1] : null }))
                         }
-                        placeholder="Pick a tag…"
+                        placeholder="Pick a label…"
                     />
-                    <p className="mt-1.5 text-[11px] text-slate-400">Tags are your contact categories.</p>
                 </div>
             )}
 
@@ -3106,6 +3107,9 @@ function ActionConfigFields({
 
             {action.type === "create_task" && (
                 <div className="space-y-4">
+                    <HubSpotActionNote className="max-w-[420px]">
+                        The task is created in HubSpot with a HubSpot task type. A member needs a HubSpot owner to be assigned.
+                    </HubSpotActionNote>
                     <div>
                         <Label>Task title</Label>
                         <TextInput
@@ -3174,6 +3178,11 @@ function ActionConfigFields({
 
             {(action.type === "create_deal" || action.type === "move_deal_stage") && (
                 <div className="space-y-4">
+                    <HubSpotActionNote className="max-w-[420px]">
+                        {action.type === "create_deal"
+                            ? "The deal is created in HubSpot, in the pipeline and deal stage you pick."
+                            : "The deal moves in HubSpot too. Pipelines and deal stages are HubSpot's."}
+                    </HubSpotActionNote>
                     <div>
                         <Label>{action.type === "create_deal" ? "Create the deal in" : "Move the deal to"}</Label>
                         <DealStagePicker
@@ -3475,7 +3484,7 @@ function TagPoolField({
             <p className="mt-1.5 text-[11px] text-slate-400">
                 {value.length
                     ? "The agent chooses among these for each contact."
-                    : "Empty, so the agent may use any of your tags for each contact."}
+                    : "Empty, so the agent may use any of your labels for each contact."}
             </p>
         </div>
     );
@@ -3512,7 +3521,7 @@ function AIStepFields({
                     value={action.ai_instruction ?? ""}
                     onChange={(e) => setAction((a) => ({ ...a, ai_instruction: e.target.value }))}
                     rows={3}
-                    placeholder="Read the reply. If they ask about pricing, tag them 'pricing' and create a follow-up task."
+                    placeholder="Read the reply. If they ask about pricing, label them 'pricing' and create a follow-up task."
                     className="w-full resize-y rounded-md border border-slate-200 px-2.5 py-1.5 text-[12.5px] text-slate-700 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100"
                 />
             </div>
@@ -3549,10 +3558,10 @@ function AIStepFields({
                                         <TagPoolField
                                             label={
                                                 id === "add_tag"
-                                                    ? "Tags the agent can add"
+                                                    ? "Labels the agent can add"
                                                     : id === "remove_tag"
-                                                      ? "Tags the agent can remove"
-                                                      : "Labels the agent can apply"
+                                                      ? "Labels the agent can remove"
+                                                      : "Conversation labels the agent can apply"
                                             }
                                             value={action[CAMPAIGN_AI_POOL_KEY[id]!] ?? []}
                                             onChange={(refs) =>
@@ -3578,7 +3587,7 @@ function AIStepFields({
                         >
                             {action.ai_allow_create_tags && <CheckIcon className="w-3 h-3" />}
                         </span>
-                        Let the agent create a new tag/label when none fits
+                        Let the agent create a new label when none fits
                     </button>
                 )}
                 <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
@@ -3779,7 +3788,7 @@ function SwitchStepFields({
 
             <p className="rounded-md bg-slate-50 px-2.5 py-2 text-[11px] leading-relaxed text-slate-600 ring-1 ring-slate-200">
                 Every case gets its own dot on the node — drag each dot to the step that path leads to, and the bottom
-                dot is the “otherwise” fallback for contacts no case matched. Put normal action steps (tag, deal, task…)
+                dot is the “otherwise” fallback for contacts no case matched. Put normal action steps (label, deal, task…)
                 on a path to make things happen for the contacts routed down it.
             </p>
         </div>
@@ -3834,7 +3843,7 @@ function AIContextToggle({
 function DealNameVariableMenu({ onPick }: { onPick: (token: string) => void }) {
     const [open, setOpen] = React.useState(false);
     const ref = React.useRef<HTMLDivElement>(null);
-    useClickOutside(ref, () => setOpen(false));
+    useClickOutside(open, () => setOpen(false), ref);
     return (
         <div ref={ref} className="relative">
             <button
@@ -3874,7 +3883,7 @@ const DEAL_CURRENCIES = ["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF", "SEK",
 function CurrencyPicker({ value, onChange }: { value: string; onChange: (c: string) => void }) {
     const [open, setOpen] = React.useState(false);
     const ref = React.useRef<HTMLDivElement>(null);
-    useClickOutside(ref, () => setOpen(false));
+    useClickOutside(open, () => setOpen(false), ref);
     return (
         <div ref={ref} className="relative inline-flex">
             <button

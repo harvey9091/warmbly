@@ -42,7 +42,7 @@ func (h *Handler) PasskeyRegisterFinish(c *gin.Context) {
 
 	var req passkeyRegisterFinishRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 	if len(req.Credential) == 0 {
@@ -79,7 +79,7 @@ type passkeyLoginFinishRequest struct {
 func (h *Handler) PasskeyLoginFinish(c *gin.Context) {
 	var req passkeyLoginFinishRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 	if req.Session == "" || len(req.Credential) == 0 {
@@ -133,7 +133,7 @@ func (h *Handler) PasskeyRenameCredential(c *gin.Context) {
 
 	var req passkeyRenameRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 

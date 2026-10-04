@@ -11,6 +11,7 @@
 //	make sandbox              # seed + simulate (foreground)
 //	go run ./cmd/sandbox -seed-only
 //	go run ./cmd/sandbox -simulate-only
+//	go run ./cmd/sandbox -vendors-only   # just the mock inbox vendor API
 //
 // Documented at docs.warmbly.com/development/sandbox/.
 package main
@@ -19,6 +20,7 @@ import (
 	"context"
 	"flag"
 	"log"
+	"net/http"
 	"os/signal"
 	"syscall"
 	"time"
@@ -31,12 +33,17 @@ import (
 func main() {
 	seedOnly := flag.Bool("seed-only", false, "seed the sandbox org and exit")
 	simulateOnly := flag.Bool("simulate-only", false, "skip seeding, run only the simulator")
+	vendorsOnly := flag.Bool("vendors-only", false, "run only the mock inbox vendor API")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	cfg := sandbox.FromEnv()
+	if *vendorsOnly {
+		serveVendors(ctx, cfg)
+		return
+	}
 
 	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -60,7 +67,21 @@ func main() {
 		return
 	}
 
+	go serveVendors(ctx, cfg)
 	if err := sandbox.Simulate(ctx, pool, cfg); err != nil {
 		log.Fatalf("simulate: %v", err)
+	}
+}
+
+// serveVendors runs the mock inbox vendor API until ctx ends.
+func serveVendors(ctx context.Context, cfg sandbox.Config) {
+	srv := &http.Server{Addr: cfg.VendorAddr, Handler: sandbox.NewVendorMock(cfg), ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		<-ctx.Done()
+		_ = srv.Close()
+	}()
+	log.Printf("mock inbox vendors on http://%s (inboxkit, mailforge); set MAILVENDOR_SANDBOX_URL on the backend", cfg.VendorAddr)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Printf("mock inbox vendors: %v", err)
 	}
 }

@@ -30,32 +30,27 @@ func NewTagCategoryStore(db *pgxpool.Pool) *TagCategoryStore {
 // tagColors gives each family a colour so the labels read as a set in the
 // inbox rather than a pile of identical chips. Anything unlisted gets slate.
 var tagColors = map[string]string{
-	"bounce-hard":           "#b91c1c",
-	"bounce-soft":           "#c2410c",
-	"auto-reply-ooo":        "#a16207",
-	"auto-reply-ticket":     "#a16207",
-	"human-reply":           "#0284c7",
-	"cold-inbound":          "#7c3aed",
-	"notification":          "#64748b",
-	"internal":              "#475569",
-	"agreed":                "#15803d",
-	"wants-info":            "#0284c7",
-	"wants-pricing":         "#0d9488",
-	"not-now":               "#a16207",
-	"not-interested":        "#9f1239",
-	"wrong-person":          "#7c3aed",
-	"opt-out":               "#b91c1c",
-	"unclear":               "#64748b",
-	"needs-review":          "#c2410c",
-	"requests-removal":      "#b91c1c",
-	"legal-threat":          "#b91c1c",
-	"asks-for-call":         "#15803d",
-	"needs-human-judgement": "#a16207",
+	"Bounced":         "#b91c1c",
+	"Out of office":   "#a16207",
+	"Auto-reply":      "#a16207",
+	"Notification":    "#64748b",
+	"Action required": "#dc2626",
+	"Sales pitch":     "#7c3aed",
+	"Interested":      "#15803d",
+	"Meeting":         "#15803d",
+	"Pricing":         "#0d9488",
+	"Question":        "#0284c7",
+	"Update":          "#0284c7",
+	"Not now":         "#a16207",
+	"Not interested":  "#9f1239",
+	"Wrong person":    "#7c3aed",
+	"Unsubscribe":     "#b91c1c",
+	"Legal threat":    "#b91c1c",
+	"Needs review":    "#c2410c",
 	// Follow-up states, warm to cold as the silence lengthens.
-	"ball-in-our-court": "#be123c",
-	"awaiting-reply":    "#64748b",
-	"follow-up-due":     "#c2410c",
-	"going-cold":        "#a21caf",
+	"Needs reply": "#be123c",
+	"Follow up":   "#c2410c",
+	"Gone quiet":  "#a21caf",
 }
 
 const defaultTagColor = "#64748b"
@@ -65,7 +60,7 @@ const defaultTagColor = "#64748b"
 //
 // Matched on title, case-insensitively, so a category a person already created
 // by hand is adopted rather than duplicated: a workspace that already has an
-// "agreed" label keeps using it.
+// "Interested" label keeps using it.
 func (s *TagCategoryStore) EnsureCategory(ctx context.Context, orgID uuid.UUID, slug string) (uuid.UUID, error) {
 	key := orgID.String() + "/" + slug
 
@@ -240,4 +235,26 @@ func (s *TagCategoryStore) SyncExclusiveLabels(ctx context.Context, orgID uuid.U
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// RemoveAutoLabels takes automatic labels off a thread when no stored verdict
+// in it still carries them. Only rows with no applier are removed, so a label
+// a person applied by hand stays.
+func (s *TagCategoryStore) RemoveAutoLabels(ctx context.Context, orgID uuid.UUID, threadID string, slugs []string) error {
+	if threadID == "" || len(slugs) == 0 {
+		return nil
+	}
+	_, err := s.db.Exec(ctx, `
+		DELETE FROM unibox_thread_labels l
+		USING categories c
+		WHERE l.organization_id = $1 AND l.thread_id = $2 AND l.user_id IS NULL
+		  AND c.id = l.category_id AND c.organization_id = $1
+		  AND LOWER(c.title) IN (SELECT LOWER(x) FROM unnest($3::text[]) AS x)
+		  AND NOT EXISTS (
+		        SELECT 1 FROM inbox_tag_results r, unnest(r.labels) AS kept
+		        WHERE r.organization_id = $1 AND r.thread_id = $2
+		          AND r.status = 'complete' AND LOWER(kept) = LOWER(c.title)
+		      )
+	`, orgID, threadID, slugs)
+	return err
 }

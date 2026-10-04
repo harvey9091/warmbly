@@ -51,7 +51,14 @@ const (
 	gateBudget    = "budget"
 	gateHours     = "hours"
 	gateNoWorkday = "no_working_day"
+	// gateNoWorker is a mailbox no heartbeating worker holds: a send handed to
+	// it is refused before it leaves.
+	gateNoWorker = "no_worker"
 )
+
+// workerRecheck is when a mailbox without a live worker is looked at again:
+// the worker reconciler places or moves it on this cadence.
+const workerRecheck = 5 * time.Minute
 
 // campaignPass holds everything about the mailbox pool that one scheduling pass
 // resolves once: the batch lookups, and the per-mailbox reads memoized so the
@@ -69,6 +76,15 @@ type campaignPass struct {
 
 	sentToday map[uuid.UUID]int
 	health    map[uuid.UUID]healthRead
+	// workerLive is each worker's liveness, read once per pass.
+	workerLive map[uuid.UUID]bool
+	// lastSends is each mailbox's min-gap clock (warmup included), read once
+	// per mailbox per pass; lastSendsRead marks which were read.
+	lastSends     map[uuid.UUID]time.Time
+	lastSendsRead map[uuid.UUID]bool
+	// gapDraws is each mailbox's gap drawn by gapClearCandidates, reused by
+	// placement so the filter and the send enforce the same gap.
+	gapDraws map[uuid.UUID]int
 }
 
 // healthRead is one mailbox's warmup health, as the gate reads it.
@@ -93,6 +109,7 @@ func (s *schedulerService) newCampaignPass(ctx context.Context, campaign *models
 		risk:            s.orgRiskState(ctx, campaign.OrganizationID),
 		sentToday:       map[uuid.UUID]int{},
 		health:          map[uuid.UUID]healthRead{},
+		workerLive:      map[uuid.UUID]bool{},
 	}
 }
 
@@ -180,6 +197,27 @@ func (s *schedulerService) sentTodayFor(ctx context.Context, p *campaignPass, id
 	return n, nil
 }
 
+// workerReachable reports whether the mailbox is held by a heartbeating
+// worker. An unreadable liveness is taken as reachable: the send path makes
+// the same check and refuses, so failing open costs one pass, not a campaign.
+func (s *schedulerService) workerReachable(ctx context.Context, p *campaignPass, acct models.Email) bool {
+	if s.workers == nil {
+		return true
+	}
+	if acct.WorkerID == nil {
+		return false
+	}
+	if live, ok := p.workerLive[*acct.WorkerID]; ok {
+		return live
+	}
+	live, err := s.workers.IsWorkerLive(ctx, *acct.WorkerID)
+	if err != nil {
+		live = true
+	}
+	p.workerLive[*acct.WorkerID] = live
+	return live
+}
+
 // healthFor is the mailbox's warmup health, read once per pass. An unreadable
 // state is "unknown" and gates nothing, exactly as the inline read it replaces.
 func (s *schedulerService) healthFor(ctx context.Context, p *campaignPass, id uuid.UUID) healthRead {
@@ -233,6 +271,13 @@ func (s *schedulerService) gateFor(ctx context.Context, p *campaignPass, acct mo
 			remaining = int(float64(remaining) * adjustmentFor(h.state).volumeMultiplier)
 		}
 	}
+	// No worker can take the send, so picking the mailbox would only fail the
+	// hand-off. Paced: the worker reconciler places it again within minutes,
+	// and a lead bound to it waits rather than changing address. After the
+	// standing gates, which say more about the mailbox and move its leads.
+	if !s.workerReachable(ctx, p, acct) {
+		return mailboxGate{reason: gateNoWorker, paced: true, reopensAt: time.Now().Add(workerRecheck)}, 0
+	}
 	if remaining <= 0 {
 		return mailboxGate{reason: gateBudget, paced: true}, 0
 	}
@@ -274,7 +319,7 @@ func (s *schedulerService) windowFor(ctx context.Context, p *campaignPass, acct 
 		}
 		return &openAt, bhv.Loc, remaining, mailboxGate{}
 	}
-	if acct.Timezone == "" || acct.Timezone == p.campaign.Timezone {
+	if acct.Timezone == "" || acct.Timezone == p.campaign.ClockTimezone() {
 		return nil, nil, remaining, mailboxGate{}
 	}
 	loc := loadLocation(acct.Timezone)
@@ -357,4 +402,51 @@ func pickBound(candidates []AccountCandidate, acct *models.Email) *AccountCandid
 		}
 	}
 	return nil
+}
+
+// gapClearCandidates returns the candidates whose min gap has elapsed (warmup
+// sends count), so one mailbox that just sent does not defer the whole
+// campaign while another is free. Empty when none is clear.
+func (s *schedulerService) gapClearCandidates(ctx context.Context, pass *campaignPass, candidates []AccountCandidate) []AccountCandidate {
+	if pass.lastSendsRead == nil {
+		pass.lastSends, pass.lastSendsRead = map[uuid.UUID]time.Time{}, map[uuid.UUID]bool{}
+	}
+	if pass.gapDraws == nil {
+		pass.gapDraws = map[uuid.UUID]int{}
+	}
+	ids := make([]uuid.UUID, 0, len(candidates))
+	for i := range candidates {
+		if !pass.lastSendsRead[candidates[i].Account.ID] {
+			ids = append(ids, candidates[i].Account.ID)
+		}
+	}
+	if len(ids) > 0 {
+		sends, err := s.taskRepo.GetLastEmailTimes(ctx, ids)
+		if err != nil {
+			return nil
+		}
+		for _, id := range ids {
+			pass.lastSendsRead[id] = true
+		}
+		for id, at := range sends {
+			pass.lastSends[id] = at
+		}
+	}
+	now := time.Now()
+	clear := make([]AccountCandidate, 0, len(candidates))
+	for _, c := range candidates {
+		if c.OpenAt != nil && c.OpenAt.After(now) {
+			continue
+		}
+		gap, ok := pass.gapDraws[c.Account.ID]
+		if !ok {
+			gap = s.behaviorGap(c.Behavior, now, c.Account.MinWaitTime)
+			pass.gapDraws[c.Account.ID] = gap
+		}
+		last, sent := pass.lastSends[c.Account.ID]
+		if !sent || !last.Add(time.Duration(gap)*time.Second).After(now) {
+			clear = append(clear, c)
+		}
+	}
+	return clear
 }

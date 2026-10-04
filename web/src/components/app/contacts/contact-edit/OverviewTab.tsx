@@ -2,9 +2,12 @@
 //
 // Composition:
 //   - Suppression card (only when suppressed)
+//   - HubSpot card (HubSpot mode): owner, lifecycle stage, lead status
+//   - Salesforce record (only when a Salesforce connection exists)
 //   - Engagement: six flat stat tiles with a thin ratio bar where
 //     a ratio over Sent makes sense
 //   - Latest activity rail
+//   - How they read: the clients and devices a person's opens came from
 //   - Profile rows for the fields not already in the panel header
 
 import {
@@ -29,6 +32,11 @@ import { fmtAbsolute, fmtRelative } from "./format";
 import { sourceLabel } from "./ActivityTab";
 import { ContactSegmentsSection } from "./ContactSegmentsSection";
 import VerificationCard from "./VerificationCard";
+import OriginBadge from "@/components/app/engagement/OriginBadge";
+import { labelInk } from "@/lib/utils";
+import HubSpotContactCard from "@/components/app/crm/HubSpotContactCard";
+import useCrmProvider from "@/hooks/useCrmProvider";
+import SalesforceContactCard from "@/components/app/integrations/SalesforceContactCard";
 
 export default function OverviewTab({
     contact,
@@ -45,6 +53,7 @@ export default function OverviewTab({
     const confirm = useConfirm();
     const write = useWriteGuard("MANAGE_CONTACTS");
     const removeSuppression = useRemoveSuppression();
+    const { isHubSpot } = useCrmProvider();
 
     function askLift() {
         if (!supp) return;
@@ -89,8 +98,11 @@ export default function OverviewTab({
                 </div>
             )}
 
+            {isHubSpot && <HubSpotContactCard contactId={contact.id} density="drawer" showProperties={false} />}
+            <SalesforceContactCard contactId={contact.id} />
+
             <Section title="Deliverability">
-                <VerificationCard detail={detail?.verification} loading={detailLoading} />
+                <VerificationCard contactId={contact.id} detail={detail?.verification} loading={detailLoading} />
             </Section>
 
             <Section title="Engagement">
@@ -180,6 +192,27 @@ export default function OverviewTab({
                 </div>
             </Section>
 
+            {(eng?.reads_on?.length ?? 0) > 0 && (
+                <Section title="How they read">
+                    <div className="rounded-md border border-slate-200 bg-white overflow-hidden">
+                        {eng!.reads_on!.map((r, i) => (
+                            <div
+                                key={i}
+                                className="flex items-center gap-2 px-3 py-1.5 border-b last:border-b-0 border-slate-100"
+                            >
+                                <OriginBadge origin={r} className="text-[11.5px] text-slate-700 flex-1" />
+                                <div
+                                    className="text-[11.5px] tabular-nums text-slate-500 shrink-0"
+                                    title={fmtAbsolute(r.last_opened_at)}
+                                >
+                                    {r.opens === 1 ? "1 open" : `${r.opens} opens`} · {fmtRelative(r.last_opened_at)}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </Section>
+            )}
+
             <Section title="Profile">
                 <div className="rounded-md border border-slate-200 bg-white overflow-hidden">
                     <ProfileRow
@@ -188,7 +221,7 @@ export default function OverviewTab({
                     />
                     <ProfileRow label="Phone" value={contact.phone || "—"} />
                     <ProfileRow
-                        label="Categories"
+                        label="Labels"
                         value={
                             contact.categories.length > 0 ? (
                                 <span className="flex flex-wrap gap-1 justify-end">
@@ -198,7 +231,7 @@ export default function OverviewTab({
                                             className="inline-flex h-4 items-center px-1.5 rounded text-[10.5px] font-medium"
                                             style={{
                                                 backgroundColor: `${c.color}1a`,
-                                                color: c.color,
+                                                color: labelInk(c.color),
                                             }}
                                         >
                                             {c.title}
@@ -342,7 +375,7 @@ function LatestRow({
     icon,
 }: {
     label: string;
-    ts?: string | null;
+    ts?: Date | string | null;
     icon: React.ReactNode;
 }) {
     return (

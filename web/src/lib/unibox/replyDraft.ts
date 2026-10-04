@@ -6,6 +6,10 @@ export interface ReplySeed {
     bcc: string[];
     subject: string;
     body: string;
+    /** Present only while the reply is in HTML mode. */
+    body_html?: string;
+    /** The sending mailbox when the draft chose one; absent means the thread's own. */
+    email_account_id?: string;
 }
 
 export function replyDraftKey(userId: string, orgId: string, threadId: string, messageId: string, mode: ReplyMode): string {
@@ -28,6 +32,10 @@ export function loadReplyDraft(key: string): ReplySeed | null {
             bcc: recipients(d.bcc),
             subject: typeof d.subject === "string" ? d.subject : "",
             body: d.body,
+            ...(typeof d.body_html === "string" && d.body_html ? { body_html: d.body_html } : {}),
+            ...(typeof d.email_account_id === "string" && d.email_account_id
+                ? { email_account_id: d.email_account_id }
+                : {}),
         };
     } catch {
         return null;

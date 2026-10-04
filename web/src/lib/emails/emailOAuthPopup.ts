@@ -66,7 +66,8 @@ export function openEmailOAuthPopup(authUrl: string, expectedState: string): Pro
             if (event.origin && !allowedCallbackOrigins().includes(event.origin)) return;
             const data = event.data as EmailOAuthCallbackMessage | undefined;
             if (!data || data.type !== "email_oauth_callback") return;
-            if (data.state !== expectedState) return;
+            // An admin grant state never belongs to a mailbox re-authorization.
+            if (data.state !== expectedState || data.state.startsWith("mac_") || data.state.startsWith("gac_")) return;
             settled = true;
             cleanup();
             try {

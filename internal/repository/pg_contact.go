@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -28,6 +29,8 @@ type ContactRepository interface {
 	Add(ctx context.Context, userID string, orgID uuid.UUID, contacts []models.AddContact) ([]models.Contact, *errx.Error)
 	GetByID(ctx context.Context, contactID uuid.UUID) (*models.Contact, *errx.Error)
 	GetByEmailAndOrganization(ctx context.Context, organizationID uuid.UUID, email string) (*models.Contact, *errx.Error)
+	// GetByThreadAndOrganization is the lead of the campaign send a unibox thread answers; (nil, nil) when none.
+	GetByThreadAndOrganization(ctx context.Context, organizationID uuid.UUID, thread models.ContactLookupThread) (*models.Contact, *errx.Error)
 	// GetByIDsAndOrganization fetches the org's contacts for a set of IDs. Used
 	// by the synchronous "push to CRM" action so a member can only push contacts
 	// that belong to their organization. Foreign/missing IDs are omitted.
@@ -41,26 +44,41 @@ type ContactRepository interface {
 	// the outcome of a verify pass; ListUnverifiedContacts returns contacts that
 	// have never been conclusively checked (status 'unknown', never verified) so
 	// the batch scheduler can work them off a cap per tick.
-	UpdateContactVerification(ctx context.Context, contactID uuid.UUID, res emailverify.Result) *errx.Error
-	// ListVerificationCandidates returns contacts due for a check: never
-	// checked, or checked long enough ago that the verdict has aged out.
-	// Manual verdicts are never candidates. Oldest first.
+	// checkStatus is what the check said before evidence was applied, and
+	// requestedAt the member request it answers, if any.
+	UpdateContactVerification(ctx context.Context, contactID uuid.UUID, res emailverify.Result, checkStatus emailverify.Status, requestedAt *time.Time) *errx.Error
+	// ListVerificationCandidates returns contacts due for a check: those a
+	// member asked to re-check first, then never checked, or checked long
+	// enough ago that the verdict has aged out. Manual verdicts are only
+	// candidates on request. Oldest first.
 	ListVerificationCandidates(ctx context.Context, limit int) ([]VerificationCandidate, *errx.Error)
 	// SetContactsVerification stores one verdict on many of the org's contacts
 	// (a manual "mark deliverable"). Returns how many rows changed.
 	SetContactsVerification(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID, w models.ContactVerificationWrite) (int, *errx.Error)
-	// ResetContactsVerification clears the verdict so the scheduler checks the
-	// contacts again on its next pass. Returns how many rows changed.
-	ResetContactsVerification(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) (int, *errx.Error)
+	// RequestContactsVerification queues a re-check of the org's listed
+	// contacts ahead of the backlog, leaving their current verdict standing
+	// until it lands. Returns how many rows changed.
+	RequestContactsVerification(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) (int, *errx.Error)
 	// UndeliverableLeadIDs lists the campaign's leads verification refused.
 	UndeliverableLeadIDs(ctx context.Context, orgID, campaignID uuid.UUID) ([]uuid.UUID, *errx.Error)
 	// VerificationCounts is the org's contacts by verdict.
 	VerificationCounts(ctx context.Context, orgID uuid.UUID) (models.ContactVerificationCounts, *errx.Error)
-	// SetContactESP caches the recipient ESP/provider resolved from the contact's
-	// domain (control-plane only, no MX dial). Best-effort: a failure should not
-	// block sending.
-	SetContactESP(ctx context.Context, contactID uuid.UUID, provider string) error
+	// ListMailHostPending returns contacts whose inbox host the provider sweep
+	// has not detected, never-checked first. Instance-wide: control plane only.
+	ListMailHostPending(ctx context.Context, limit int) ([]ContactMailHostPending, error)
+	// SetContactMailHosts stores the sweep's results and returns the
+	// organizations whose contacts changed.
+	SetContactMailHosts(ctx context.Context, results []ContactMailHostResult) ([]uuid.UUID, error)
 	GetByEmailsAndUser(ctx context.Context, userID uuid.UUID, emails []string) (map[string]models.Contact, *errx.Error)
+	// ImportLookup resolves an import's addresses: the workspace's contact for
+	// each it already has, and the ones the importing member holds as a
+	// contact in another workspace, which the per-member unique index keeps
+	// from being created here.
+	ImportLookup(ctx context.Context, orgID, userID uuid.UUID, emails []string) (map[string]uuid.UUID, map[string]bool, *errx.Error)
+	// ImportUpdate enriches existing contacts from imported rows in one
+	// transaction: non-empty values win, blanks never erase. found[i] is false
+	// when rows[i]'s contact is no longer in the workspace.
+	ImportUpdate(ctx context.Context, orgID uuid.UUID, rows []ContactImportUpdate) ([]bool, *errx.Error)
 	// ResolveCategoryNames maps category titles (as typed in an imported file)
 	// to the workspace's category IDs, creating the ones that don't exist yet.
 	// Keys of the returned map are the lowercased titles.
@@ -349,6 +367,9 @@ func (r *contactRepository) Add(ctx context.Context, userID string, orgID uuid.U
 			  is_catch_all = CASE WHEN $13::text <> '' THEN ($14::text = 'catch_all') ELSE contacts.is_catch_all END,
 			  verification_checked_at = CASE WHEN $13::text <> '' THEN NOW() ELSE contacts.verification_checked_at END,
 			  updated_at = NOW()
+			 -- The unique index is per member, so the row it names can sit in
+			 -- another workspace the member belongs to; only this one is written.
+			 WHERE contacts.organization_id = EXCLUDED.organization_id
 			 -- xmax = 0 only on a fresh row: the source is first-touch, so an
 			 -- upsert that hit an existing contact is not a creation.
 			 RETURNING id, first_name, last_name, email, company, phone, custom_fields, subscribed, updated_at, created_at, (xmax = 0)`,
@@ -375,6 +396,10 @@ func (r *contactRepository) Add(ctx context.Context, userID string, orgID uuid.U
 			&ncon.Phone, &ncon.CustomFields, &ncon.Subscribed, &ncon.UpdatedAt, &ncon.CreatedAt, &inserted,
 		); err != nil {
 			br.Close()
+			// The address is this member's contact in another workspace.
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, errx.ErrContactEmailTaken
+			}
 			db.CaptureError(err, "", nil, "batch queryrow")
 			return nil, errx.InternalError()
 		}
@@ -589,7 +614,7 @@ func (r *contactRepository) GetByID(ctx context.Context, contactID uuid.UUID) (*
 			c.custom_fields, c.subscribed, c.updated_at, c.created_at,
 			c.verification_status, c.verification_reason, c.is_catch_all, c.verification_checked_at,
 			c.verification_source, c.verification_provider, c.verification_sub_status, c.verification_confidence,
-			c.esp_provider, c.esp_resolved_at
+			c.verification_requested_at, c.mail_host, c.esp_provider, c.esp_resolved_at
 		FROM contacts c
 		WHERE c.id = $1
 	`
@@ -601,7 +626,7 @@ func (r *contactRepository) GetByID(ctx context.Context, contactID uuid.UUID) (*
 		&contact.UpdatedAt, &contact.CreatedAt,
 		&contact.VerificationStatus, &contact.VerificationReason, &contact.IsCatchAll, &contact.VerificationCheckedAt,
 		&contact.VerificationSource, &contact.VerificationProvider, &contact.VerificationSubStatus, &contact.VerificationConfidence,
-		&contact.ESPProvider, &contact.ESPResolvedAt,
+		&contact.VerificationRequestedAt, &contact.MailHost, &contact.ESPProvider, &contact.ESPResolvedAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -616,17 +641,97 @@ func (r *contactRepository) GetByID(ctx context.Context, contactID uuid.UUID) (*
 	return &contact, nil
 }
 
-// SetContactESP caches the recipient ESP/provider on the contact row. It is a
-// single keyed UPDATE and intentionally tolerant: callers treat any error as a
-// best-effort cache miss and fall back to deriving the provider on the fly.
-func (r *contactRepository) SetContactESP(ctx context.Context, contactID uuid.UUID, provider string) error {
+// ContactMailHostPending is one contact the provider sweep has to look at.
+type ContactMailHostPending struct {
+	ID    uuid.UUID
+	Email string
+}
+
+// ContactMailHostResult is the sweep's answer for one contact. Email is the
+// address it was resolved for, so an address changed meanwhile is left alone.
+type ContactMailHostResult struct {
+	ID       uuid.UUID
+	Email    string
+	MailHost string
+	ESP      string
+	// Transient marks a lookup that failed and should be retried soon.
+	Transient bool
+}
+
+func (r *contactRepository) ListMailHostPending(ctx context.Context, limit int) ([]ContactMailHostPending, error) {
 	query := `
-		UPDATE contacts
-		SET esp_provider = $2, esp_resolved_at = NOW()
-		WHERE id = $1
+		SELECT id, email
+		FROM contacts
+		WHERE mail_host = ''
+		  AND (esp_resolved_at IS NULL OR esp_resolved_at < NOW() - make_interval(days => $2))
+		ORDER BY esp_resolved_at NULLS FIRST
+		LIMIT $1
 	`
-	_, err := r.DB.Exec(ctx, query, contactID, provider)
-	return err
+	rows, err := r.DB.Query(ctx, query, limit, config.ContactMailHostRecheckDays)
+	if err != nil {
+		db.CaptureError(err, query, []any{limit}, "query")
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ContactMailHostPending
+	for rows.Next() {
+		var p ContactMailHostPending
+		if err := rows.Scan(&p.ID, &p.Email); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (r *contactRepository) SetContactMailHosts(ctx context.Context, results []ContactMailHostResult) ([]uuid.UUID, error) {
+	if len(results) == 0 {
+		return nil, nil
+	}
+	ids := make([]uuid.UUID, len(results))
+	emails := make([]string, len(results))
+	hosts := make([]string, len(results))
+	esps := make([]string, len(results))
+	transient := make([]bool, len(results))
+	for i, res := range results {
+		ids[i], emails[i], hosts[i], esps[i], transient[i] = res.ID, res.Email, res.MailHost, res.ESP, res.Transient
+	}
+	// A transient failure is stamped as checked long enough ago that the
+	// pending read offers it again after the retry delay, not the recheck window.
+	query := `
+		WITH u AS (
+			SELECT * FROM unnest($1::uuid[], $2::text[], $3::text[], $4::text[], $5::bool[])
+				AS t(id, email, mail_host, esp, transient)
+		), changed AS (
+			UPDATE contacts c
+			SET mail_host = u.mail_host,
+			    esp_provider = u.esp,
+			    esp_resolved_at = CASE WHEN u.transient
+			        THEN NOW() - make_interval(days => $6) + make_interval(mins => $7)
+			        ELSE NOW() END
+			FROM u
+			WHERE c.id = u.id AND c.email = u.email AND c.mail_host = ''
+			RETURNING c.organization_id, (u.mail_host <> '') AS found
+		)
+		SELECT DISTINCT organization_id FROM changed
+		WHERE found AND organization_id IS NOT NULL
+	`
+	args := []any{ids, emails, hosts, esps, transient, config.ContactMailHostRecheckDays, config.ContactMailHostRetryMinutes}
+	rows, err := r.DB.Query(ctx, query, args...)
+	if err != nil {
+		db.CaptureError(err, query, nil, "query")
+		return nil, err
+	}
+	defer rows.Close()
+	var orgs []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		orgs = append(orgs, id)
+	}
+	return orgs, rows.Err()
 }
 
 // UpdateContactVerification stores the outcome of a verification pass on the
@@ -640,7 +745,7 @@ func (r *contactRepository) SetSubscribedByEmail(ctx context.Context, orgID uuid
 	return err
 }
 
-func (r *contactRepository) UpdateContactVerification(ctx context.Context, contactID uuid.UUID, res emailverify.Result) *errx.Error {
+func (r *contactRepository) UpdateContactVerification(ctx context.Context, contactID uuid.UUID, res emailverify.Result, checkStatus emailverify.Status, requestedAt *time.Time) *errx.Error {
 	status := string(res.Status)
 	if status == "" {
 		status = string(emailverify.StatusUnknown)
@@ -657,7 +762,12 @@ func (r *contactRepository) UpdateContactVerification(ctx context.Context, conta
 	if provider == emailverify.ProviderBuiltin {
 		source = models.VerificationSourceProbe
 	}
+	if checkStatus == "" {
+		checkStatus = emailverify.Status(status)
+	}
 
+	// Only the request this check answers is cleared, and a manual verdict set
+	// while it ran is not overwritten.
 	query := `
 		UPDATE contacts
 		SET verification_status = $2,
@@ -668,10 +778,15 @@ func (r *contactRepository) UpdateContactVerification(ctx context.Context, conta
 		    verification_provider = $7,
 		    verification_sub_status = $8,
 		    verification_confidence = $9,
+		    verification_check_status = $10,
+		    verification_requested_at = CASE
+		        WHEN verification_requested_at IS NOT DISTINCT FROM $11::timestamptz THEN NULL
+		        ELSE verification_requested_at END,
 		    updated_at = NOW()
 		WHERE id = $1
+		  AND (verification_source <> 'manual' OR ($11::timestamptz IS NOT NULL AND verification_requested_at IS NOT NULL))
 	`
-	params := []any{contactID, status, res.Reason, res.IsCatchAll, checkedAt, source, provider, string(res.SubStatus), res.Confidence}
+	params := []any{contactID, status, res.Reason, res.IsCatchAll, checkedAt, source, provider, string(res.SubStatus), res.Confidence, string(checkStatus), requestedAt}
 	cmd, err := r.DB.Exec(ctx, query, params...)
 	if err != nil {
 		db.CaptureError(err, query, params, "exec")
@@ -688,17 +803,17 @@ type VerificationCandidate struct {
 	ID             uuid.UUID
 	OrganizationID uuid.UUID
 	Email          string
-	// Requested is true when a member asked for this check (the verdict was
-	// reset), so it is worth spending a paid credit on even when the
-	// organization has none to spare.
-	Requested bool
+	// RequestedAt is the member request this check answers; nil for the
+	// scheduler's own backlog.
+	RequestedAt *time.Time
 }
 
 // ListVerificationCandidates returns up to `limit` contacts due for a check.
-// Never-checked contacts come first (a reset counts as never checked), then
-// verdicts older than their shelf life: an unknown verdict is retried after
-// config.VerificationUnknownRecheckDays, everything else after
-// config.VerificationRecheckDays. Manual verdicts are never re-checked.
+// A member's request comes first and is answered whatever the verdict, its
+// age or the evidence behind it: they asked. Then never-checked contacts,
+// then verdicts older than their shelf life: an unknown verdict is retried
+// after config.VerificationUnknownRecheckDays, everything else after
+// config.VerificationRecheckDays. Manual verdicts are never re-checked unasked.
 //
 // A built-in verdict that predates a connected verifier is reopened once, so
 // connecting one actually reaches the addresses it was connected for.
@@ -706,10 +821,27 @@ func (r *contactRepository) ListVerificationCandidates(ctx context.Context, limi
 	if limit <= 0 {
 		limit = 100
 	}
+	// Requests take at most half a batch first, so one workspace's bulk
+	// re-verify cannot hold every other workspace's new contacts back.
+	requestedQuery := `
+		SELECT c.id, c.organization_id, c.email, c.verification_requested_at
+		FROM contacts c
+		WHERE c.verification_requested_at IS NOT NULL
+		  AND c.organization_id IS NOT NULL
+		ORDER BY c.verification_requested_at ASC, c.id
+		LIMIT $1 OFFSET $2
+	`
+	out := make([]VerificationCandidate, 0, limit)
+	if xerr := r.scanVerificationCandidates(ctx, requestedQuery, []any{(limit + 1) / 2, 0}, &out); xerr != nil {
+		return nil, xerr
+	}
+	requested := len(out)
+
 	query := `
-		SELECT c.id, c.organization_id, c.email, c.verification_checked_at IS NULL
+		SELECT c.id, c.organization_id, c.email, c.verification_requested_at
 		FROM contacts c
 		WHERE c.organization_id IS NOT NULL
+		  AND c.verification_requested_at IS NULL
 		  AND c.verification_source <> 'manual'
 		  -- Real mail seen recently excuses the address from a check.
 		  AND (c.verification_evidence_at IS NULL OR c.verification_evidence_at < NOW() - make_interval(days => $4))
@@ -742,30 +874,41 @@ func (r *contactRepository) ListVerificationCandidates(ctx context.Context, limi
 		providers = append(providers, string(p))
 	}
 	params := []any{
-		limit, config.VerificationUnknownRecheckDays, config.VerificationRecheckDays,
+		limit - len(out), config.VerificationUnknownRecheckDays, config.VerificationRecheckDays,
 		config.VerificationEvidenceFreshDays, providers, emailverify.ProviderBuiltin,
 	}
+	if xerr := r.scanVerificationCandidates(ctx, query, params, &out); xerr != nil {
+		return nil, xerr
+	}
+	// Room the backlog left goes back to requests.
+	if len(out) < limit && requested == (limit+1)/2 {
+		if xerr := r.scanVerificationCandidates(ctx, requestedQuery, []any{limit - len(out), requested}, &out); xerr != nil {
+			return nil, xerr
+		}
+	}
+	return out, nil
+}
+
+func (r *contactRepository) scanVerificationCandidates(ctx context.Context, query string, params []any, out *[]VerificationCandidate) *errx.Error {
 	rows, err := r.DB.Query(ctx, query, params...)
 	if err != nil {
 		db.CaptureError(err, query, params, "query")
-		return nil, errx.InternalError()
+		return errx.InternalError()
 	}
 	defer rows.Close()
-
-	out := make([]VerificationCandidate, 0, limit)
 	for rows.Next() {
 		var c VerificationCandidate
-		if err := rows.Scan(&c.ID, &c.OrganizationID, &c.Email, &c.Requested); err != nil {
+		if err := rows.Scan(&c.ID, &c.OrganizationID, &c.Email, &c.RequestedAt); err != nil {
 			db.CaptureError(err, "", nil, "ListVerificationCandidates scan")
-			return nil, errx.InternalError()
+			return errx.InternalError()
 		}
-		out = append(out, c)
+		*out = append(*out, c)
 	}
 	if err := rows.Err(); err != nil {
 		db.CaptureError(err, "", nil, "ListVerificationCandidates rows")
-		return nil, errx.InternalError()
+		return errx.InternalError()
 	}
-	return out, nil
+	return nil
 }
 
 // SetContactsVerification writes one verdict onto the org's listed contacts.
@@ -782,6 +925,9 @@ func (r *contactRepository) SetContactsVerification(ctx context.Context, orgID u
 		    verification_source = $7,
 		    is_catch_all = ($4 = 'catch_all'),
 		    verification_checked_at = NOW(),
+		    verification_check_status = '',
+		    -- A verdict a member set answers any re-check still waiting.
+		    verification_requested_at = NULL,
 		    updated_at = NOW()
 		WHERE organization_id = $1 AND id = ANY($2)
 	`
@@ -794,21 +940,16 @@ func (r *contactRepository) SetContactsVerification(ctx context.Context, orgID u
 	return int(cmd.RowsAffected()), nil
 }
 
-// ResetContactsVerification returns the org's listed contacts to "never
-// checked" so the next scheduler pass picks them up first.
-func (r *contactRepository) ResetContactsVerification(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) (int, *errx.Error) {
+// RequestContactsVerification queues a re-check of the org's listed contacts.
+// The verdict is left in place, so campaigns keep routing on it until the
+// new one lands.
+func (r *contactRepository) RequestContactsVerification(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) (int, *errx.Error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
 	query := `
 		UPDATE contacts
-		SET verification_status = 'unknown',
-		    verification_sub_status = '',
-		    verification_reason = 'verification requested',
-		    verification_provider = '',
-		    verification_source = '',
-		    is_catch_all = false,
-		    verification_checked_at = NULL,
+		SET verification_requested_at = NOW(),
 		    updated_at = NOW()
 		WHERE organization_id = $1 AND id = ANY($2)
 	`
@@ -864,7 +1005,7 @@ func (r *contactRepository) VerificationCounts(ctx context.Context, orgID uuid.U
 			COUNT(*) FILTER (WHERE verification_status = 'risky'),
 			COUNT(*) FILTER (WHERE verification_status = 'invalid'),
 			COUNT(*) FILTER (WHERE verification_status NOT IN ('valid','risky','invalid')),
-			COUNT(*) FILTER (WHERE verification_checked_at IS NULL)
+			COUNT(*) FILTER (WHERE verification_checked_at IS NULL OR verification_requested_at IS NOT NULL)
 		FROM contacts
 		WHERE organization_id = $1
 	`
@@ -875,20 +1016,13 @@ func (r *contactRepository) VerificationCounts(ctx context.Context, orgID uuid.U
 	return c, nil
 }
 
-func (r *contactRepository) GetByEmailAndOrganization(ctx context.Context, organizationID uuid.UUID, email string) (*models.Contact, *errx.Error) {
-	query := `
-		SELECT
-			c.id, c.first_name, c.last_name, c.email, c.company, c.phone,
-			c.custom_fields, c.subscribed, c.updated_at, c.created_at
-		FROM contacts c
-		WHERE c.organization_id = $1
-		  AND LOWER(c.email) = LOWER($2)
-		ORDER BY c.updated_at DESC
-		LIMIT 1
-	`
+// lookupContactColumns and scanLookupContact are the payload both sender lookups return.
+const lookupContactColumns = `c.id, c.first_name, c.last_name, c.email, c.company, c.phone,
+			c.custom_fields, c.subscribed, c.updated_at, c.created_at`
 
+func (r *contactRepository) scanLookupContact(ctx context.Context, query string, args ...any) (*models.Contact, *errx.Error) {
 	var contact models.Contact
-	err := r.DB.QueryRow(ctx, query, organizationID, strings.TrimSpace(email)).Scan(
+	err := r.DB.QueryRow(ctx, query, args...).Scan(
 		&contact.ID, &contact.FirstName, &contact.LastName, &contact.Email,
 		&contact.Company, &contact.Phone, &contact.CustomFields, &contact.Subscribed,
 		&contact.UpdatedAt, &contact.CreatedAt,
@@ -897,12 +1031,74 @@ func (r *contactRepository) GetByEmailAndOrganization(ctx context.Context, organ
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
-		db.CaptureError(err, query, []any{organizationID, email}, "queryrow")
+		db.CaptureError(err, query, args, "queryrow")
 		return nil, errx.InternalError()
 	}
 	contact.Campaigns = []models.MiniCampaign{}
 	contact.Categories = []models.MiniCategory{}
 	return &contact, nil
+}
+
+func (r *contactRepository) GetByEmailAndOrganization(ctx context.Context, organizationID uuid.UUID, email string) (*models.Contact, *errx.Error) {
+	query := `
+		SELECT ` + lookupContactColumns + `
+		FROM contacts c
+		WHERE c.organization_id = $1
+		  AND LOWER(c.email) = LOWER($2)
+		ORDER BY c.updated_at DESC
+		LIMIT 1
+	`
+	return r.scanLookupContact(ctx, query, organizationID, strings.TrimSpace(email))
+}
+
+func (r *contactRepository) GetByThreadAndOrganization(ctx context.Context, organizationID uuid.UUID, thread models.ContactLookupThread) (*models.Contact, *errx.Error) {
+	threadID := strings.TrimSpace(thread.ID)
+	if threadID == "" {
+		return nil, nil
+	}
+	allowed := thread.AllowedAccounts
+	if allowed == nil {
+		allowed = []uuid.UUID{}
+	}
+	// A Message-ID may name a send from any workspace mailbox; the Gmail thread handle only one holding the thread.
+	query := `
+		WITH msgs AS (
+			SELECT ue.email_id, ue.message_id, ue.in_reply_to
+			FROM unibox_emails ue
+			JOIN email_accounts ea ON ea.id = ue.email_id
+			WHERE ea.organization_id = $1 AND ue.thread_id = $2
+			  AND ($3::uuid IS NULL OR ue.email_id = $3)
+			  AND (cardinality($4::uuid[]) = 0 OR ue.email_id = ANY($4))
+		),
+		ids AS (
+			SELECT DISTINCT x FROM (
+				SELECT BTRIM(message_id, '<> ') AS x FROM msgs
+				UNION ALL
+				SELECT BTRIM(ref, '<> ') FROM msgs, unnest(COALESCE(msgs.in_reply_to, '{}')) AS ref
+			) raw
+			WHERE x <> ''
+		),
+		matched AS (
+			SELECT t.id, 0 AS rank, t.created_at
+			FROM tasks t
+			WHERE t.task_type = 'campaign' AND t.message_id <> ''
+			  AND t.message_id IN (SELECT x FROM ids UNION ALL SELECT '<' || x || '>' FROM ids)
+			  AND t.email_account_id IN (SELECT id FROM email_accounts WHERE organization_id = $1)
+			UNION ALL
+			SELECT t.id, 1 AS rank, t.created_at
+			FROM tasks t
+			WHERE t.task_type = 'campaign' AND t.thread_id = $2
+			  AND t.email_account_id IN (SELECT email_id FROM msgs)
+		)
+		SELECT ` + lookupContactColumns + `
+		FROM matched m
+		JOIN campaign_tasks ct ON ct.task_id = m.id
+		JOIN contacts c ON c.id = ct.contact_id
+		WHERE c.organization_id = $1
+		ORDER BY m.rank, m.created_at DESC
+		LIMIT 1
+	`
+	return r.scanLookupContact(ctx, query, organizationID, threadID, thread.AccountID, allowed)
 }
 
 func (r *contactRepository) OwnerUserID(ctx context.Context, organizationID, contactID uuid.UUID) (*uuid.UUID, error) {
@@ -1040,6 +1236,8 @@ var contactSorts = map[string]contactSort{
 	"created_at":     {expr: "c.created_at", kind: sortTimestamp},
 	"updated_at":     {expr: "c.updated_at", kind: sortTimestamp},
 	"campaign_count": {expr: "COALESCE(cl.campaign_count,0)", kind: sortNumber},
+	// Contacts the provider sweep has not reached sort after every known host.
+	"mail_host": {expr: "NULLIF(c.mail_host, '')", kind: sortText, nullable: true},
 }
 
 // resolveContactSort turns a request's sort_by into the column the list orders
@@ -1172,6 +1370,11 @@ func (r *contactRepository) buildContactFilter(ctx context.Context, orgID string
 	if filters.VerificationStatus != "" {
 		whereClauses = append(whereClauses, fmt.Sprintf("c.verification_status = $%d", argIndex))
 		args = append(args, filters.VerificationStatus)
+		argIndex++
+	}
+	if len(filters.MailHosts) > 0 {
+		whereClauses = append(whereClauses, fmt.Sprintf("c.mail_host = ANY($%d)", argIndex))
+		args = append(args, filters.MailHosts)
 		argIndex++
 	}
 
@@ -1310,6 +1513,14 @@ func (r *contactRepository) buildContactFilter(ctx context.Context, orgID string
 	}, nil
 }
 
+// leadRowJSON is the campaign_leads half of a Leads-list row: the fields read
+// together because they come from one lead row.
+type leadRowJSON struct {
+	Sender *string                 `json:"sender"`
+	CC     []models.CampaignLeadCC `json:"cc"`
+	Hold   *models.LeadHold        `json:"hold"`
+}
+
 func (r *contactRepository) Search(
 	ctx context.Context,
 	orgID string,
@@ -1412,7 +1623,7 @@ func (r *contactRepository) Search(
 	if singleCampaignPlaceholder != "" {
 		leadProgressSelect = fmt.Sprintf(`(
 			SELECT json_build_object(
-				'sent',    COUNT(*) FILTER (WHERE p.sent_at IS NOT NULL),
+				'sent',    COUNT(*) FILTER (WHERE p.sent_at IS NOT NULL AND `+progressIsEmailStep("p")+`),
 				-- Human opens only; automated fetches (Apple MPP prefetch, UA-less
 				-- clients) are counted apart so they never read as engagement.
 				'opened',  COUNT(*) FILTER (WHERE p.opened_at IS NOT NULL AND NOT p.opened_machine),
@@ -1447,6 +1658,8 @@ func (r *contactRepository) Search(
 				'lead', (
 					SELECT json_build_object(
 						'sender', (SELECT ea.email FROM email_accounts ea WHERE ea.id = hl.email_account_id),
+						-- Contacts copied on every email to this lead.
+						'cc', %[5]s,
 						'hold', CASE WHEN %[4]s THEN json_build_object(
 							'since', hl.paused_at, 'until', hl.paused_until,
 							'reason', COALESCE(hl.pause_reason, ''), 'source', COALESCE(hl.pause_source, '')
@@ -1486,7 +1699,7 @@ func (r *contactRepository) Search(
 			)
 			FROM campaign_contact_progress p
 			WHERE p.campaign_id = %[1]s AND p.contact_id = c.id
-		)`, singleCampaignPlaceholder, config.CampaignSendMaxAttempts, undeliverableClause(singleCampaignPlaceholder), liveHold("hl"))
+		)`, singleCampaignPlaceholder, config.CampaignSendMaxAttempts, undeliverableClause(singleCampaignPlaceholder), liveHold("hl"), leadCCJSONSQL(singleCampaignPlaceholder))
 	}
 
 	// campaign_count is only ever read by the min/max filters and the
@@ -1514,6 +1727,7 @@ func (r *contactRepository) Search(
 			c.custom_fields, c.subscribed, c.updated_at, c.created_at,
 			c.verification_status, c.verification_reason, c.is_catch_all, c.verification_checked_at,
 			c.verification_source, c.verification_provider, c.verification_sub_status, c.verification_confidence,
+			c.verification_requested_at, c.mail_host, c.esp_provider,
 			COALESCE(
 				(
 					SELECT json_agg(json_build_object('id', cam.id, 'name', cam.name))
@@ -1599,6 +1813,7 @@ func (r *contactRepository) Search(
 			&c.UpdatedAt, &c.CreatedAt,
 			&c.VerificationStatus, &c.VerificationReason, &c.IsCatchAll, &c.VerificationCheckedAt,
 			&c.VerificationSource, &c.VerificationProvider, &c.VerificationSubStatus, &c.VerificationConfidence,
+			&c.VerificationRequestedAt, &c.MailHost, &c.ESPProvider,
 			&campaignsJSON, &categoriesJSON, &leadProgressJSON,
 			&sortValue,
 		); err != nil {
@@ -1623,10 +1838,7 @@ func (r *contactRepository) Search(
 				Step       *string    `json:"step"`
 				// The lead row's own fields, read together because they come
 				// from one campaign_leads row.
-				Lead *struct {
-					Sender *string          `json:"sender"`
-					Hold   *models.LeadHold `json:"hold"`
-				} `json:"lead"`
+				Lead *leadRowJSON `json:"lead"`
 
 				Undeliverable bool `json:"undeliverable"`
 			}
@@ -1638,10 +1850,7 @@ func (r *contactRepository) Search(
 			// which the outer query already excludes.
 			lead := lp.Lead
 			if lead == nil {
-				lead = &struct {
-					Sender *string          `json:"sender"`
-					Hold   *models.LeadHold `json:"hold"`
-				}{}
+				lead = &leadRowJSON{}
 			}
 			status := models.LeadStatusPending
 			switch {
@@ -1683,6 +1892,7 @@ func (r *contactRepository) Search(
 			c.CampaignLead = &models.ContactCampaignProgress{
 				Status:         status,
 				Hold:           lead.Hold,
+				CC:             lead.CC,
 				Sender:         sender,
 				Sent:           lp.Sent,
 				Opened:         lp.Opened,
@@ -1923,7 +2133,11 @@ func leadStatusClause(status, cp string) string {
 			cp, col,
 		)
 	}
-	sent, replied, bounced := has("sent_at"), has("replied_at"), has("bounced_at")
+	sent := fmt.Sprintf(
+		"EXISTS (SELECT 1 FROM campaign_contact_progress p WHERE p.campaign_id = %s AND p.contact_id = c.id AND p.sent_at IS NOT NULL AND %s)",
+		cp, progressIsEmailStep("p"),
+	)
+	replied, bounced := has("replied_at"), has("bounced_at")
 	// failed: a step the mailbox could not send after every retry (sent_at was
 	// walked back and the attempt cap is spent).
 	failed := fmt.Sprintf(
@@ -1934,7 +2148,7 @@ func leadStatusClause(status, cp string) string {
 	// allSent: every email step of the campaign has been sent to this contact.
 	allSent := fmt.Sprintf(
 		"((SELECT COUNT(*) FROM sequences st WHERE st.campaign_id = %[1]s AND st.kind = 'email') > 0 "+
-			"AND (SELECT COUNT(*) FROM campaign_contact_progress p WHERE p.campaign_id = %[1]s AND p.contact_id = c.id AND p.sent_at IS NOT NULL) "+
+			"AND (SELECT COUNT(*) FROM campaign_contact_progress p WHERE p.campaign_id = %[1]s AND p.contact_id = c.id AND p.sent_at IS NOT NULL AND "+progressIsEmailStep("p")+") "+
 			">= (SELECT COUNT(*) FROM sequences st WHERE st.campaign_id = %[1]s AND st.kind = 'email'))",
 		cp,
 	)
@@ -2000,7 +2214,7 @@ func leadEngagementClause(engagement, cp string) string {
 			cp, cond,
 		)
 	}
-	sent := has("p.sent_at IS NOT NULL")
+	sent := has("p.sent_at IS NOT NULL AND " + progressIsEmailStep("p"))
 	opened := has("p.opened_at IS NOT NULL AND NOT p.opened_machine")
 	clicked := has("p.clicked_at IS NOT NULL")
 	replied := has("p.replied_at IS NOT NULL")
@@ -2047,28 +2261,33 @@ func (r *contactRepository) CampaignLeadCounts(ctx context.Context, orgID, campa
 			COUNT(*) FILTER (WHERE COALESCE(pr.has_sent, false)) AS contacted,
 			COUNT(*) FILTER (WHERE COALESCE(pr.has_opened, false)) AS opened,
 			COUNT(*) FILTER (WHERE COALESCE(pr.has_clicked, false)) AS clicked,
-			COUNT(*) FILTER (WHERE COALESCE(pr.has_replied, false)) AS replied_any
+			COUNT(*) FILTER (WHERE COALESCE(pr.has_replied, false)) AS replied_any,
+			COUNT(*) FILTER (WHERE c.esp_provider = 'gmail') AS provider_gmail,
+			COUNT(*) FILTER (WHERE c.esp_provider = 'outlook') AS provider_outlook,
+			COUNT(*) FILTER (WHERE c.esp_provider = 'other' OR (c.esp_provider = '' AND c.esp_resolved_at IS NOT NULL)) AS provider_other,
+			COUNT(*) FILTER (WHERE c.esp_provider = '' AND c.esp_resolved_at IS NULL) AS provider_undetected
 		FROM campaign_leads cl
 		JOIN contacts c ON c.id = cl.contact_id AND c.organization_id = $2
 		CROSS JOIN (SELECT COUNT(*) AS total_steps FROM sequences st WHERE st.campaign_id = $1 AND st.kind = 'email') ts
 		LEFT JOIN LATERAL (
 			SELECT
-				bool_or(p.sent_at IS NOT NULL)    AS has_sent,
+				bool_or(p.sent_at IS NOT NULL AND %[5]s) AS has_sent,
 				bool_or(p.replied_at IS NOT NULL) AS has_replied,
 				bool_or(p.bounced_at IS NOT NULL) AS has_bounced,
 				bool_or(p.opened_at IS NOT NULL AND NOT p.opened_machine) AS has_opened,
 				bool_or(p.clicked_at IS NOT NULL) AS has_clicked,
 				bool_or(p.sent_at IS NULL AND p.failed_at IS NOT NULL AND p.send_attempts >= $3) AS has_failed,
-				COUNT(*) FILTER (WHERE p.sent_at IS NOT NULL) AS sent_steps
+				COUNT(*) FILTER (WHERE p.sent_at IS NOT NULL AND %[5]s) AS sent_steps
 			FROM campaign_contact_progress p
 			WHERE p.campaign_id = cl.campaign_id AND p.contact_id = cl.contact_id
 		) pr ON true
 		WHERE cl.campaign_id = $1
-	`, done, live, undeliverableClause("$1"), held)
+	`, done, live, undeliverableClause("$1"), held, progressIsEmailStep("p"))
 	out := &models.CampaignLeadCounts{}
 	if err := r.DB.QueryRow(ctx, query, campaignID, orgID, config.CampaignSendMaxAttempts).Scan(
 		&out.Total, &out.Unsubscribed, &out.Bounced, &out.Replied, &out.Failed, &out.Completed, &out.Paused, &out.Processing, &out.Undeliverable, &out.Queued,
 		&out.Contacted, &out.Opened, &out.Clicked, &out.RepliedAny,
+		&out.Providers.Google, &out.Providers.Microsoft, &out.Providers.Other, &out.Providers.Undetected,
 	); err != nil {
 		if err == pgx.ErrNoRows {
 			return out, nil
@@ -2205,6 +2424,7 @@ func (r *contactRepository) Update(ctx context.Context, userID, contactID string
 				"verification_provider = ''",
 				"is_catch_all = false",
 				"verification_checked_at = NULL",
+				"verification_check_status = ''",
 				"verification_confidence = 0",
 				"verification_evidence_at = NULL",
 				// The ledger the verdict is scored from is wiped below, and
@@ -2214,10 +2434,9 @@ func (r *contactRepository) Update(ctx context.Context, userID, contactID string
 				// the next pass and hand the new address a verdict it never
 				// earned.
 				"verification_evidence_reset_at = NOW()",
-				// esp_provider is derived from the address domain and cached
-				// forever: the scheduler only fills it when it is empty, so a
-				// gmail-to-outlook correction would keep routing ESP-matched
-				// sends by the old provider.
+				// The inbox host belongs to the old domain; clearing it puts
+				// the contact back in front of the provider sweep.
+				"mail_host = ''",
 				"esp_provider = ''",
 				"esp_resolved_at = NULL",
 			)
@@ -2941,8 +3160,16 @@ func (r *contactRepository) Delete(ctx context.Context, userID string, orgID uui
 // otherwise mint a category per row.
 const MaxImportCategoryNames = 100
 
-func (r *contactRepository) ResolveCategoryNames(ctx context.Context, orgID, userID uuid.UUID, names []string) (map[string]uuid.UUID, *errx.Error) {
-	out := make(map[string]uuid.UUID, len(names))
+// ValidateImportCategoryNames runs ResolveCategoryNames' checks without
+// writing, so an import can be refused before it starts.
+func ValidateImportCategoryNames(names []string) *errx.Error {
+	_, _, xerr := importCategoryNames(names)
+	return xerr
+}
+
+// importCategoryNames dedupes titles case-insensitively, returning the
+// lowered titles in order and each one's first spelling.
+func importCategoryNames(names []string) ([]string, map[string]string, *errx.Error) {
 	wanted := make([]string, 0, len(names))
 	seen := make(map[string]string, len(names)) // lowered -> original casing
 	for _, raw := range names {
@@ -2951,8 +3178,8 @@ func (r *contactRepository) ResolveCategoryNames(ctx context.Context, orgID, use
 			continue
 		}
 		if len(title) > 50 {
-			return nil, errx.New(errx.BadRequest,
-				"category name "+strconv.Quote(title)+" is longer than 50 characters")
+			return nil, nil, errx.New(errx.BadRequest,
+				"label name "+strconv.Quote(title)+" is longer than 50 characters")
 		}
 		lower := strings.ToLower(title)
 		if _, dup := seen[lower]; dup {
@@ -2961,13 +3188,22 @@ func (r *contactRepository) ResolveCategoryNames(ctx context.Context, orgID, use
 		seen[lower] = title
 		wanted = append(wanted, lower)
 	}
-	if len(wanted) == 0 {
-		return out, nil
-	}
 	if len(wanted) > MaxImportCategoryNames {
-		return nil, errx.New(errx.BadRequest, fmt.Sprintf(
+		return nil, nil, errx.New(errx.BadRequest, fmt.Sprintf(
 			"the categories column has %d distinct values; at most %d can be created in one import",
 			len(wanted), MaxImportCategoryNames))
+	}
+	return wanted, seen, nil
+}
+
+func (r *contactRepository) ResolveCategoryNames(ctx context.Context, orgID, userID uuid.UUID, names []string) (map[string]uuid.UUID, *errx.Error) {
+	out := make(map[string]uuid.UUID, len(names))
+	wanted, seen, xerr := importCategoryNames(names)
+	if xerr != nil {
+		return nil, xerr
+	}
+	if len(wanted) == 0 {
+		return out, nil
 	}
 
 	// Ordered, and the first match wins: the migration that made this registry
@@ -3077,6 +3313,140 @@ func (r *contactRepository) GetByEmailsAndUser(ctx context.Context, userID uuid.
 		out[strings.ToLower(c.Email)] = c
 	}
 	return out, nil
+}
+
+func (r *contactRepository) ImportLookup(ctx context.Context, orgID, userID uuid.UUID, emails []string) (map[string]uuid.UUID, map[string]bool, *errx.Error) {
+	existing := make(map[string]uuid.UUID, len(emails))
+	elsewhere := map[string]bool{}
+	norm := make([]string, 0, len(emails))
+	for _, e := range emails {
+		if e = strings.ToLower(strings.TrimSpace(e)); e != "" {
+			norm = append(norm, e)
+		}
+	}
+	if len(norm) == 0 {
+		return existing, elsewhere, nil
+	}
+	// The workspace's own contact wins; of two members' copies of one address
+	// the importer's, then the oldest, so reruns resolve to the same row.
+	query := `
+		SELECT DISTINCT ON (LOWER(email)) LOWER(email), id, organization_id = $1
+		FROM contacts
+		WHERE LOWER(email) = ANY($3::text[]) AND (organization_id = $1 OR user_id = $2)
+		ORDER BY LOWER(email), (organization_id = $1) DESC, (user_id = $2) DESC, created_at ASC, id ASC`
+	rows, err := r.DB.Query(ctx, query, orgID, userID, norm)
+	if err != nil {
+		db.CaptureError(err, query, nil, "ImportLookup query")
+		return nil, nil, errx.InternalError()
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var addr string
+		var id uuid.UUID
+		var here bool
+		if err := rows.Scan(&addr, &id, &here); err != nil {
+			db.CaptureError(err, query, nil, "ImportLookup scan")
+			return nil, nil, errx.InternalError()
+		}
+		if here {
+			existing[addr] = id
+		} else {
+			elsewhere[addr] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		db.CaptureError(err, query, nil, "ImportLookup rows")
+		return nil, nil, errx.InternalError()
+	}
+	return existing, elsewhere, nil
+}
+
+// ContactImportUpdate is one imported row applied to an existing contact.
+type ContactImportUpdate struct {
+	ID      uuid.UUID
+	Contact models.AddContact
+}
+
+func (r *contactRepository) ImportUpdate(ctx context.Context, orgID uuid.UUID, rows []ContactImportUpdate) ([]bool, *errx.Error) {
+	found := make([]bool, len(rows))
+	if len(rows) == 0 {
+		return found, nil
+	}
+	batch := &pgx.Batch{}
+	for _, row := range rows {
+		c := row.Contact
+		fields := c.CustomFields
+		if fields == nil {
+			fields = map[string]string{}
+		}
+		fields, xerr := normalizeCustomFields(fields)
+		if xerr != nil {
+			return nil, xerr
+		}
+		// The same bound Add holds a new contact to.
+		if data, err := json.Marshal(c); err != nil {
+			return nil, errx.ErrContactSerialize
+		} else if len(data) > config.MaxContactSize {
+			return nil, errx.ErrContactSize
+		}
+		v, xerr := verificationFromRequest(c.VerificationStatus, c.VerificationProvider)
+		if xerr != nil {
+			return nil, xerr
+		}
+		var vStatus, vSub, vReason, vProvider string
+		if v != nil {
+			vStatus, vSub, vReason, vProvider = v.Status, v.SubStatus, v.Reason, v.Provider
+		}
+		batch.Queue(`
+			UPDATE contacts SET
+			  first_name = COALESCE(NULLIF($3, ''), first_name),
+			  last_name = COALESCE(NULLIF($4, ''), last_name),
+			  company = COALESCE(NULLIF($5, ''), company),
+			  phone = COALESCE(NULLIF($6, ''), phone),
+			  custom_fields = custom_fields || $7::jsonb,
+			  subscribed = COALESCE($8::boolean, subscribed),
+			  verification_status = CASE WHEN $9::text <> '' THEN $9 ELSE verification_status END,
+			  verification_sub_status = CASE WHEN $9::text <> '' THEN $10 ELSE verification_sub_status END,
+			  verification_reason = CASE WHEN $9::text <> '' THEN $11 ELSE verification_reason END,
+			  verification_provider = CASE WHEN $9::text <> '' THEN $12 ELSE verification_provider END,
+			  verification_source = CASE WHEN $9::text <> '' THEN 'imported' ELSE verification_source END,
+			  is_catch_all = CASE WHEN $9::text <> '' THEN ($10::text = 'catch_all') ELSE is_catch_all END,
+			  verification_checked_at = CASE WHEN $9::text <> '' THEN NOW() ELSE verification_checked_at END,
+			  updated_at = NOW()
+			WHERE id = $1 AND organization_id = $2`,
+			row.ID, orgID,
+			strings.TrimSpace(c.FirstName), strings.TrimSpace(c.LastName),
+			strings.TrimSpace(c.Company), strings.TrimSpace(c.Phone),
+			fields, c.Subscribed,
+			vStatus, vSub, vReason, vProvider,
+		)
+	}
+
+	tx, err := r.DB.Begin(ctx)
+	if err != nil {
+		db.CaptureError(err, "", nil, "begin")
+		return nil, errx.InternalError()
+	}
+	defer tx.Rollback(ctx)
+	br := tx.SendBatch(ctx, batch)
+	for i := range rows {
+		tag, err := br.Exec()
+		if err != nil {
+			br.Close()
+			db.CaptureError(err, "", nil, "ImportUpdate exec")
+			return nil, errx.InternalError()
+		}
+		found[i] = tag.RowsAffected() > 0
+	}
+	if err := br.Close(); err != nil {
+		db.CaptureError(err, "", nil, "ImportUpdate close")
+		return nil, errx.InternalError()
+	}
+	if err := tx.Commit(ctx); err != nil {
+		db.CaptureError(err, "", nil, "ImportUpdate commit")
+		return nil, errx.InternalError()
+	}
+	return found, nil
 }
 
 // ExportAll fetches every contact matching the given selection so it
@@ -3263,13 +3633,13 @@ func (r *contactRepository) GetDetail(ctx context.Context, userID uuid.UUID, org
 	//    open is a delivery signal, not engagement, here as in analytics.
 	engQuery := `
 		SELECT
-			COUNT(*) FILTER (WHERE sent_at    IS NOT NULL) AS sent,
+			COUNT(*) FILTER (WHERE sent_at    IS NOT NULL AND ` + progressIsEmailStep("p") + `) AS sent,
 			COUNT(*) FILTER (WHERE opened_at  IS NOT NULL AND NOT opened_machine) AS opened,
 			COUNT(*) FILTER (WHERE clicked_at IS NOT NULL) AS clicked,
 			COUNT(*) FILTER (WHERE replied_at IS NOT NULL) AS replied,
 			COUNT(*) FILTER (WHERE bounced_at IS NOT NULL) AS bounced,
-			MAX(sent_at), MAX(opened_at) FILTER (WHERE NOT opened_machine), MAX(clicked_at), MAX(replied_at), MAX(bounced_at)
-		FROM campaign_contact_progress
+			MAX(sent_at) FILTER (WHERE ` + progressIsEmailStep("p") + `), MAX(opened_at) FILTER (WHERE NOT opened_machine), MAX(clicked_at), MAX(replied_at), MAX(bounced_at)
+		FROM campaign_contact_progress p
 		WHERE contact_id = $1
 	`
 	if err := r.DB.QueryRow(ctx, engQuery, contactID).Scan(
@@ -3286,6 +3656,40 @@ func (r *contactRepository) GetDetail(ctx context.Context, userID uuid.UUID, org
 
 	// 3. Org-scoped extras. Only run when we have an org id.
 	if orgID != nil {
+		// How the contact reads: a person's opens grouped by client and
+		// device. Opens with nothing known about them are left out.
+		readsQuery := `
+			SELECT o.client, o.client_type, o.device_hidden, o.device_type, o.os, o.browser,
+			       COUNT(*), MAX(o.opened_at)
+			FROM email_opens o
+			JOIN campaigns cam ON cam.id = o.campaign_id
+			WHERE o.contact_id = $1 AND cam.organization_id = $2 AND NOT o.machine
+			  AND (o.client <> '' OR o.device_hidden OR o.device_type <> '')
+			GROUP BY 1, 2, 3, 4, 5, 6
+			ORDER BY MAX(o.opened_at) DESC
+			LIMIT 4
+		`
+		rrows, qerr := r.DB.Query(ctx, readsQuery, contactID, *orgID)
+		if qerr != nil {
+			db.CaptureError(qerr, readsQuery, []any{contactID, *orgID}, "GetDetail reads on")
+			return nil, errx.InternalError()
+		}
+		for rrows.Next() {
+			var ro models.ContactReadingOrigin
+			if err := rrows.Scan(&ro.Client, &ro.ClientType, &ro.DeviceHidden, &ro.DeviceType, &ro.OS, &ro.Browser,
+				&ro.Opens, &ro.LastOpenedAt); err != nil {
+				rrows.Close()
+				db.CaptureError(err, "", nil, "GetDetail reads on scan")
+				return nil, errx.InternalError()
+			}
+			detail.Engagement.ReadsOn = append(detail.Engagement.ReadsOn, ro)
+		}
+		rrows.Close()
+		if rerr := rrows.Err(); rerr != nil {
+			db.CaptureError(rerr, readsQuery, nil, "GetDetail reads on rows")
+			return nil, errx.InternalError()
+		}
+
 		// Complaints don't live in campaign_contact_progress — they
 		// arrive via deliverability_events. Count rows of type
 		// "complaint" pointing at this contact (either by contact_id
@@ -3417,7 +3821,8 @@ func (r *contactRepository) ListSentEmails(ctx context.Context, orgID, contactID
 	var nextCursor *string
 	if len(out) > limit {
 		hasMore = true
-		nextCursor = paging.EncodeUUID(out[limit].TaskID)
+		// The last row returned: the next page starts strictly below it.
+		nextCursor = paging.EncodeUUID(out[limit-1].TaskID)
 		out = out[:limit]
 	}
 
@@ -3627,6 +4032,7 @@ func (r *contactRepository) ListTimeline(ctx context.Context, orgID, contactID u
 	clickQuery := `
 		SELECT lc.id, lc.task_id, lc.clicked_at, lc.destination, lc.label, lc.user_agent, lc.machine, lc.machine_reason,
 		       lc.client, lc.device_type, lc.os, lc.browser, lc.browser_version, lc.country_code, lc.region, lc.city,
+		       lc.client_type, lc.device_hidden,
 		       cam.id, cam.name,
 		       seq.id, seq.name, seq.subject,
 		       ea.id, ea.email, ea.name
@@ -3662,6 +4068,7 @@ func (r *contactRepository) ListTimeline(ctx context.Context, orgID, contactID u
 			&link.ID, &taskID, &at, &link.URL, &link.Label, &link.UserAgent, &machine, &reason,
 			&origin.Client, &origin.DeviceType, &origin.OS, &origin.Browser, &origin.BrowserVersion,
 			&origin.CountryCode, &origin.Region, &origin.City,
+			&origin.ClientType, &origin.DeviceHidden,
 			&campID, &campName,
 			&seqID, &seqName, &seqSubject,
 			&eaID, &eaEmail, &eaName,
@@ -3710,6 +4117,7 @@ func (r *contactRepository) ListTimeline(ctx context.Context, orgID, contactID u
 	openQuery := `
 		SELECT o.id, o.task_id, o.opened_at, o.user_agent, o.machine, o.machine_reason,
 		       o.client, o.device_type, o.os, o.browser, o.browser_version, o.country_code, o.region, o.city,
+		       o.client_type, o.device_hidden,
 		       cam.id, cam.name,
 		       seq.id, seq.name, seq.subject,
 		       ea.id, ea.email, ea.name
@@ -3744,6 +4152,7 @@ func (r *contactRepository) ListTimeline(ctx context.Context, orgID, contactID u
 			&id, &taskID, &at, &userAgent, &machine, &reason,
 			&origin.Client, &origin.DeviceType, &origin.OS, &origin.Browser, &origin.BrowserVersion,
 			&origin.CountryCode, &origin.Region, &origin.City,
+			&origin.ClientType, &origin.DeviceHidden,
 			&campID, &campName,
 			&seqID, &seqName, &seqSubject,
 			&eaID, &eaEmail, &eaName,

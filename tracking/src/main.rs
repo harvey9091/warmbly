@@ -12,8 +12,10 @@ mod nats;
 mod observability;
 mod posthog;
 mod producer;
+mod redirects;
 mod scanners;
 mod unsubscribe;
+mod unsubscribe_i18n;
 
 use axum::{
     extract::DefaultBodyLimit,
@@ -31,8 +33,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::config::Config;
 use crate::handlers::{
-    health, track_click, track_open, track_page_hit, tracking_js, unsubscribe_page,
-    unsubscribe_submit, unsubscribe_undo, AppState,
+    health, not_found, redirect_first, track_click, track_open, track_page_hit, tracking_js,
+    unsubscribe_page, unsubscribe_submit, unsubscribe_undo, AppState,
 };
 use crate::observability::report_error;
 use crate::producer::Producer;
@@ -149,6 +151,12 @@ async fn main() {
             "/unsubscribe/:token/resubscribe",
             post(unsubscribe_undo).layer(DefaultBodyLimit::max(unsubscribe::MAX_BODY_BYTES)),
         )
+        .fallback(not_found)
+        // A sending domain pointed here for its redirect answers only with it.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            redirect_first,
+        ))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)

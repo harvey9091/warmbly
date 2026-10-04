@@ -151,6 +151,26 @@ export interface InstanceSettings {
         enforce_domain_auth: boolean;
         auth_grace_hours: number;
     };
+    // Inbox placement tests. The monthly allowances count tests on the
+    // instance and cloud panels only, and a self-hosted instance does not
+    // meter at all. Zero or negative on write resolves to the default, except
+    // credits_per_test, where zero turns paid tests off.
+    placement: {
+        tests_per_month_trial: number;
+        tests_per_month_paid: number;
+        seeds_per_test: number;
+        spacing_seconds: number;
+        /** Credits a test past the monthly allowance costs; 0 turns paid tests off. */
+        credits_per_test: number;
+        /** Most senders one placement batch may hold. */
+        batch_senders_max: number;
+        /** A workspace's batch senders sending probes at the same time. */
+        batch_sender_concurrency: number;
+        /** Batch senders sending at once across every workspace. */
+        batch_instance_concurrency: number;
+        /** Senders one batch starts per minute. */
+        batch_starts_per_minute: number;
+    };
     // Operator notification channels. Targets and secrets are redacted on
     // read: a chat webhook URL is a bearer credential, so the server returns a
     // recognisable preview and treats the preview (or an empty string) as

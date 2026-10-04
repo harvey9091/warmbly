@@ -16,7 +16,9 @@ import {
     RotationRampSection,
 } from "@/components/app/campaigns/preferences/CampaignEmails";
 import CampaignContactOrder from "@/components/app/campaigns/preferences/CampaignContactOrder";
+import { FirstEmailSection } from "@/components/app/campaigns/preferences/CampaignFirstEmail";
 import { GuardrailsSection } from "@/components/app/campaigns/preferences/CampaignGuardrails";
+import { PlacementMonitorSection } from "@/components/app/campaigns/preferences/CampaignPlacementMonitor";
 import { guardrailValidationError } from "@/lib/helper/guardrail";
 import CampaignFolderField from "@/components/app/campaigns/CampaignFolderField";
 import CampaignDangerZone from "@/components/app/campaigns/preferences/CampaignDangerZone";
@@ -59,6 +61,16 @@ const SECTIONS = [
         id: "guardrails",
         label: "Auto-pause",
         description: "Stop this campaign automatically when its bounce, complaint, or reply rate leaves the band you set.",
+    },
+    {
+        id: "placement",
+        label: "Placement monitor",
+        description: "Test where this campaign's first email lands on a schedule, and get told when it slips.",
+    },
+    {
+        id: "first-email",
+        label: "First email",
+        description: "When a new contact gets their first email after joining this campaign.",
     },
     {
         id: "leadflow",
@@ -222,6 +234,11 @@ export default function CampaignPreferences() {
             ...(newData.ramp_increment !== campaign.ramp_increment && { ramp_increment: newData.ramp_increment }),
             ...(newData.ramp_ceiling !== campaign.ramp_ceiling && { ramp_ceiling: newData.ramp_ceiling }),
 
+            // First email timing
+            ...(newData.entry_delay_minutes !== campaign.entry_delay_minutes && {
+                entry_delay_minutes: newData.entry_delay_minutes,
+            }),
+
             // ESP matching + new-lead throttle
             ...(newData.esp_match_mode !== campaign.esp_match_mode && { esp_match_mode: newData.esp_match_mode }),
             ...(newData.max_new_leads_per_day !== campaign.max_new_leads_per_day && {
@@ -371,6 +388,10 @@ export default function CampaignPreferences() {
                         explicitAccounts={explicitAccounts}
                     />
                 );
+            case "placement":
+                return <PlacementMonitorSection campaignId={campaign.id} />;
+            case "first-email":
+                return <FirstEmailSection newCampaign={newData} setNewCampaign={setNewData} />;
             case "leadflow":
                 return <LeadFlowSection newCampaign={newData} setNewCampaign={setNewData} />;
             case "ccbcc":

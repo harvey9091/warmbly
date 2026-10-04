@@ -4,6 +4,8 @@
 // Cloud side:        GET/POST /pool-link/*    (the /connect approval page and
 //                    the workspace's linked instances)
 
+import type { WarmupPartnerLimit, WarmupSendFailure } from "@/lib/api/models/app/analytics/AccountStatus";
+
 export type PoolLinkCodeStatus = "pending" | "approved" | "claimed" | "denied";
 
 export interface PoolLinkOrgInfo {
@@ -28,6 +30,8 @@ export interface PoolLinkPlan {
     /** null when unlimited */
     mailbox_limit: number | null;
     enrolled: number;
+    /** Mailboxes with warmup on and not paused; older servers do not send it. */
+    warming?: number;
     price_usd: number;
     /** The cloud's billing page with the warmup plan checkout open; only on the free tier. */
     upgrade_url?: string;
@@ -47,10 +51,20 @@ export interface PoolLinkOffer {
     currency: string;
 }
 
+/** Root redirects Warmbly Cloud serves for this linked instance. */
+export interface PoolLinkRedirectOffer {
+    available: boolean;
+    host?: string;
+    limit: number;
+    used: number;
+}
+
 export interface PoolLinkInstanceInfo {
     instance: PoolLinkInstance;
     organization: PoolLinkOrgInfo;
     plan: PoolLinkPlan;
+    /** Absent from a Cloud that does not serve redirects. */
+    redirects?: PoolLinkRedirectOffer | null;
 }
 
 export interface PoolLinkCode {
@@ -86,6 +100,9 @@ export interface PoolLinkWarmupStatus {
     max_volume: number;
     reply_rate: number;
     days_active: number;
+    /** Older clouds do not send these. */
+    partner_limit?: WarmupPartnerLimit;
+    send_failure?: WarmupSendFailure;
 }
 
 export interface PoolLinkWarmupHealth {

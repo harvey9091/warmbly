@@ -15,6 +15,7 @@ import useCustomFieldKeys from "@/lib/api/hooks/app/contacts/useCustomFieldKeys"
 import { useAnchoredFloating } from "@/hooks/useAnchoredFloating";
 import { STANDARD_VARS, buildToken, cleanFieldName, isStandardKey } from "@/lib/templateVars";
 import { markJustInserted, consumeJustInserted, freshId } from "./justInserted";
+import useClickOutside from "@/hooks/useClickOutside";
 
 interface ConditionalAttrs {
     expr: string; // the condition after `{{if `, e.g. `.Company` or `eq .Industry "SaaS"`
@@ -323,25 +324,7 @@ function ConditionalBuilder({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [field, op, value, raw, thenText, elseText, showElse, rawMode]);
 
-    React.useEffect(() => {
-        const onDown = (e: MouseEvent | TouchEvent) => {
-            if (!localRef.current?.contains(e.target as Node)) onClose();
-        };
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === "Escape") {
-                e.stopPropagation();
-                onClose();
-            }
-        };
-        document.addEventListener("mousedown", onDown, true);
-        document.addEventListener("touchstart", onDown, true);
-        document.addEventListener("keydown", onKey, true);
-        return () => {
-            document.removeEventListener("mousedown", onDown, true);
-            document.removeEventListener("touchstart", onDown, true);
-            document.removeEventListener("keydown", onKey, true);
-        };
-    }, [onClose]);
+    useClickOutside(true, onClose, localRef);
 
     const fields = [
         ...STANDARD_VARS.map((v) => v.key),
@@ -361,7 +344,7 @@ function ConditionalBuilder({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.1 }}
-            className="z-[60] w-[320px] overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-[0_16px_40px_-14px_rgba(15,23,42,0.28)]"
+            className="z-[150] w-[320px] overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-[0_16px_40px_-14px_rgba(15,23,42,0.28)]"
         >
             <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2">
                 <span className="flex size-6 items-center justify-center rounded-md bg-slate-100 text-slate-600">

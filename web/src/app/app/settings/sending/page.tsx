@@ -38,6 +38,8 @@ import {
 } from "@/lib/api/models/app/outreach/OutreachSettings";
 import { TextInput } from "@/components/ui/field";
 import { Link } from "react-router-dom";
+import TaggingQuestions from "./TaggingQuestions";
+import LanguagePicker from "./LanguagePicker";
 
 const UNSUB_MODES: SelectOption[] = [
     { value: "text", label: "Reply to opt out (text line)" },
@@ -420,6 +422,55 @@ function SendingSettings() {
                                 onChange={(on) => patchInboxTagging({ suppress_on_removal_request: on })}
                             />
                         </Row>
+                    </>
+                )}
+            </Section>
+
+            <Section
+                eyebrow="Automated mail"
+                description="Automatic inbox tagging moves mail nobody wrote, like receipts, sign-in codes, newsletters and bounces, out of the inbox into the Automated view. Mail that keeps a mailbox running should not go with it."
+            >
+                {isLoading || !draft ? (
+                    <div className="h-7 w-40 rounded bg-slate-100 animate-pulse" />
+                ) : (
+                    <Row
+                        label="Keep mail that needs action in the inbox"
+                        description="Each notification is also asked whether it needs someone to act: a failed payment, a suspended or restricted account, a suspicious sign-in, a sending limit, or a service about to expire. The ones that do stay in the inbox labelled Action required, and members who manage mailboxes are notified. A notification recognised by its sender alone costs one small classifier call for this."
+                    >
+                        <Toggle
+                            on={tagging.action_required_in_inbox}
+                            onChange={(on) => patchInboxTagging({ action_required_in_inbox: on })}
+                        />
+                    </Row>
+                )}
+            </Section>
+
+            <Section
+                eyebrow="Tagging languages and questions"
+                description="Tune automatic inbox tagging to your own mail. Languages and questions only change how tagging reads a message; they never change a message's kind, intent or relevance on their own."
+            >
+                {isLoading || !draft ? (
+                    <div className="h-7 w-40 rounded bg-slate-100 animate-pulse" />
+                ) : (
+                    <>
+                        <Row
+                            label="Tagging languages"
+                            description="Tagging reads English, German, French, Spanish, Italian and Dutch replies out of the box. Add the languages your mail arrives in and tagging also cuts their quoted history and recognises their away messages and bounce notices before asking, and tells the classifier what to expect. Nothing about a language is used until you add it."
+                            align="start"
+                        >
+                            <LanguagePicker
+                                value={tagging.languages ?? []}
+                                onChange={(languages) => patchInboxTagging({ languages })}
+                            />
+                        </Row>
+                        <Row
+                            label="Your questions"
+                            description="Ask something the built-in labels do not. Each question files a label of its own and can hold, stop or open a task, like the switches above, and rides in the same call as the built-in questions."
+                        />
+                        <TaggingQuestions
+                            value={tagging.questions ?? []}
+                            onChange={(questions) => patchInboxTagging({ questions })}
+                        />
                     </>
                 )}
             </Section>

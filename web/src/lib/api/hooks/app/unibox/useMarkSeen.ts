@@ -13,8 +13,9 @@ interface MarkSeenInput {
     folder?: string;
     seen?: boolean;
     /**
-     * Conversations to flip. The open list is patched in place, and the server
-     * flips every message in each, which a list row could not name.
+     * Conversations to flip. The open list is patched in place. Read covers
+     * every message in each; unread only the newest received one, which the
+     * server picks, so the lists and threads are re-read once it answers.
      */
     threadIds?: string[];
 }
@@ -65,7 +66,8 @@ export default function useMarkSeen() {
                           },
             );
 
-            for (const threadId of threadIds ?? []) {
+            // Which message turns unread is the server's call; onSuccess re-reads.
+            for (const threadId of seen ? threadIds ?? [] : []) {
                 queryClient.setQueriesData<UniboxThread>(
                     { queryKey: ["unibox", "thread", threadId] },
                     (old) =>
@@ -85,11 +87,19 @@ export default function useMarkSeen() {
         onError: () => {
             queryClient.invalidateQueries({ queryKey: ["unibox"] });
         },
-        onSuccess: (_data, { folder }) => {
-            // A folder sweep touches rows we have no ids for, so that one still
-            // has to re-read the list.
+        onSuccess: (_data, { folder, seen = true }) => {
+            // Reading a message reads its reply notification server side.
+            if (seen) queryClient.invalidateQueries({ queryKey: ["notifications", "feed"] });
+            // A folder sweep touches rows we have no ids for, and unread skips
+            // sent copies a row may be showing, so both re-read the lists.
             if (folder) queryClient.invalidateQueries({ queryKey: ["unibox"] });
-            else {
+            else if (!seen) {
+                // A body GET marks the message read server-side.
+                queryClient.invalidateQueries({
+                    queryKey: ["unibox"],
+                    predicate: (query) => query.queryKey[1] !== "email",
+                });
+            } else {
                 queryClient.invalidateQueries({ queryKey: ["unibox", "overview"] });
                 queryClient.invalidateQueries({ queryKey: ["unibox", "unseen-count"] });
             }

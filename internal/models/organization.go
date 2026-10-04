@@ -48,6 +48,11 @@ type Organization struct {
 	// history); admin-controlled (manage_settings).
 	AssistantSharedHistory bool `json:"assistant_shared_history"`
 
+	// Timezone is the workspace's IANA zone: the default a new campaign's
+	// schedule is created in, and the clock a mailbox with no timezone of its
+	// own keeps its warmup hours and working hours in. Empty means not set.
+	Timezone string `json:"timezone"`
+
 	// Joined data
 	Owner *User `json:"owner,omitempty"`
 }
@@ -154,6 +159,8 @@ const (
 // CreateOrganizationRequest represents the request to create a new organization
 type CreateOrganizationRequest struct {
 	Name string `json:"name" binding:"required"`
+	// Timezone is the workspace timezone, an IANA name. Optional.
+	Timezone string `json:"timezone,omitempty"`
 }
 
 // UpdateOrganizationRequest represents the request to update an organization
@@ -173,6 +180,9 @@ type UpdateOrganizationRequest struct {
 	// AssistantSharedHistory toggles workspace-shared assistant conversations
 	// (manage_settings).
 	AssistantSharedHistory *bool `json:"assistant_shared_history,omitempty"`
+	// Timezone is the workspace timezone (manage_settings). An IANA name;
+	// empty string clears it.
+	Timezone *string `json:"timezone,omitempty"`
 }
 
 // InviteMemberRequest represents the request to invite a new member

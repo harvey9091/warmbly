@@ -151,7 +151,7 @@ func (h *Handler) AdminCreateTester(c *gin.Context) {
 		if orgName == "" {
 			orgName = "Tester workspace"
 		}
-		org, oerr := h.OrganizationService.Create(c.Request.Context(), created.ID, orgName)
+		org, oerr := h.OrganizationService.Create(c.Request.Context(), created.ID, orgName, "")
 		if oerr != nil {
 			h.undoHalfMadeTester(c, created.ID, oerr)
 			return

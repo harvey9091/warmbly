@@ -33,6 +33,10 @@ vi.mock("@/hooks/PresenceProvider", () => ({
 vi.mock("@/components/app/presence/ResourceViewers", () => ({ default: () => null }));
 vi.mock("@/components/app/integrations/BookACallButton", () => ({ default: () => null }));
 vi.mock("@/components/app/meetings/NewMeetingDialog", () => ({ default: () => null }));
+// jsdom has no layout, so the tab strip's scroll handling has nothing to measure.
+vi.mock("@/components/ui/scroll-strip", () => ({
+    default: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
 
 // The tabs are covered separately; this is about the panel chrome. The Details
 // stand-in is the only way into the draft, so it exposes one edit.
@@ -65,6 +69,9 @@ vi.mock("./contact-edit/DetailsTab", () => ({
                 onClick={() => setCustomFields((prev) => [...prev, { name: "", value: "half typed" }])}
             >
                 add field
+            </button>
+            <button type="button" onClick={() => setCustomFields((prev) => prev.filter((f) => f.name !== "industry"))}>
+                drop industry
             </button>
             <ul>
                 {customFields.map((f, i) => (
@@ -204,5 +211,29 @@ describe("saving the contact 360 panel", () => {
         await waitFor(() => expect(requested.length).toBe(1));
         expect(requested[0].url).toBe("/contacts/contact-1");
         expect(requested[0].data).toEqual({ categories: ["cat-2"] });
+    });
+
+    // The save is a diff, so a teammate's field that arrives mid-edit must not
+    // be sent as a removal.
+    it("keeps a custom field a teammate added while the user edited", async () => {
+        const first = contact({ custom_fields: { industry: "Freight" } });
+        const { rerender } = render(<Panel contacts={[first]} />);
+        fireEvent.click(screen.getByText("drop industry"));
+        rerender(<Panel contacts={[contact({ custom_fields: { industry: "Freight", tier: "A" } })]} />);
+        fireEvent.click(screen.getByText("Save changes"));
+
+        await waitFor(() => expect(requested.length).toBe(1));
+        expect(requested[0].data).toEqual({ custom_fields: { industry: "" } });
+    });
+
+    // The server merges custom_fields, so a field that is simply left out is
+    // kept; removing one has to send it empty.
+    it("sends a removed custom field as empty so the server drops it", async () => {
+        render(<Panel contacts={[contact({ custom_fields: { industry: "Freight", tier: "A" } })]} />);
+        fireEvent.click(screen.getByText("drop industry"));
+        fireEvent.click(screen.getByText("Save changes"));
+
+        await waitFor(() => expect(requested.length).toBe(1));
+        expect(requested[0].data).toEqual({ custom_fields: { industry: "" } });
     });
 });

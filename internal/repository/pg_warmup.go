@@ -92,6 +92,9 @@ type WarmupReceived struct {
 	// RetiredAt is when the retention sweep sent the deletion for this
 	// message. A removal observed after that is the platform's own.
 	RetiredAt *time.Time
+	// LandedSpam is set when the message arrived in the spam folder, so a
+	// spam label on it is the provider's filter, not the owner.
+	LandedSpam bool
 }
 
 // WarmupMailToRetire is one warmup message whose retention window has passed,
@@ -132,8 +135,9 @@ type WarmupRepository interface {
 	BlockFromPool(ctx context.Context, accountID uuid.UUID, reason string) error
 	// GetHealthState returns the account's warmup health state plus its
 	// blocked_until, so non-warmup callers (e.g. the campaign scheduler) can
-	// gate cold sends on warmup health without needing a pool type. Returns
-	// ("healthy", nil) when the account is in no pool.
+	// gate cold sends on warmup health without needing a pool type. A mailbox
+	// Warmbly Cloud warms reads the standing the cloud last reported. Returns
+	// ("healthy", nil) when the account has neither.
 	GetHealthState(ctx context.Context, accountID uuid.UUID) (models.WarmupHealthState, *time.Time, error)
 	// GetHealthStates is GetHealthState for a pool in one read. A mailbox in
 	// no pool is healthy, as the single read reports it.
@@ -143,6 +147,12 @@ type WarmupRepository interface {
 	GetParticipantHealth(ctx context.Context, accountID uuid.UUID, poolType string) (*models.WarmupParticipantHealth, error)
 	// GetParticipantHealthForAccount returns the participant row whatever pool it is in.
 	GetParticipantHealthForAccount(ctx context.Context, accountID uuid.UUID) (*models.WarmupParticipantHealth, error)
+	// GetParticipantHealthForAccounts is the batched form: one pool row per
+	// mailbox in the set, keyed by account id.
+	GetParticipantHealthForAccounts(ctx context.Context, accountIDs []uuid.UUID) (map[uuid.UUID]*models.WarmupParticipantHealth, error)
+	// GetCloudStanding is the standing Warmbly Cloud last reported for a
+	// mailbox it warms; nil for any other mailbox.
+	GetCloudStanding(ctx context.Context, accountID uuid.UUID) (*models.WarmupHealthInfo, error)
 	// UpdateParticipantHealth returns the row as written, or nil when the
 	// review-required hold kept it (or the mailbox is in no pool). PoolType is
 	// not on the returned row; the caller has it.
@@ -161,9 +171,10 @@ type WarmupRepository interface {
 	// StampColdRampStart records a mailbox's first cold send. Idempotent: a
 	// mailbox that already has an anchor keeps it.
 	StampColdRampStart(ctx context.Context, accountID uuid.UUID) error
-	// SpamPlacementsSince lists when this sender's warmup mail was found in a
-	// recipient's junk folder. The ramp subtracts a freeze window per
-	// placement, so it needs all of them, not just the newest.
+	// SpamPlacementsSince lists when this sender's warmup mail was found in the
+	// junk folder of a Google, Microsoft or Yahoo recipient; another host's
+	// junk folder is never held against a sender. The ramp subtracts a freeze
+	// window per placement, so it needs all of them, not just the newest.
 	SpamPlacementsSince(ctx context.Context, accountID uuid.UUID, since time.Time) ([]time.Time, error)
 	SumWarmupSentSince(ctx context.Context, accountID uuid.UUID, since time.Time) (int, error)
 
@@ -179,16 +190,18 @@ type WarmupRepository interface {
 	IncrementReplyCount(ctx context.Context, accountID uuid.UUID, date time.Time) error
 	// FailWarmupSend atomically records the failure and refunds its daily counters.
 	FailWarmupSend(ctx context.Context, accountID, taskID uuid.UUID, date time.Time, title, message string) error
+	// LastWarmupSendFailure is the newest warmup send the worker could not deliver since `since`, when no later send was confirmed delivered.
+	LastWarmupSendFailure(ctx context.Context, accountID uuid.UUID, since time.Time) (*models.WarmupSendFailure, error)
 	GetWarmupStatistics(ctx context.Context, accountID uuid.UUID, from, to time.Time) ([]WarmupStatistic, error)
 	GetOrCreateDailyStats(ctx context.Context, accountID uuid.UUID, date time.Time, targetVolume int) (*WarmupStatistic, error)
 
 	// Pool-wide placement analytics (admin overview)
 	PoolSpamPlacementRate(ctx context.Context, since time.Time) (float64, error)
 	PoolSpamPlacementsByProvider(ctx context.Context, since time.Time) (map[string]int, error)
-	// SenderPlacementByProvider is one SENDER's record keyed by who RUNS the
-	// recipient's mail, not how that mailbox connects: email_accounts.provider
-	// collapses every custom host into smtp_imap.
-	SenderPlacementByProvider(ctx context.Context, senderAccountID uuid.UUID, since time.Time) (map[string]ProviderPlacementStat, error)
+	// SenderPlacementByHost is one SENDER's verified placement keyed by the
+	// recipient's mail host (mailhost.Host), not by how that mailbox connects
+	// or its domain: a custom domain can be run by anyone.
+	SenderPlacementByHost(ctx context.Context, senderAccountID uuid.UUID, since time.Time) (map[string]HostPlacementStat, error)
 
 	// Warmup token management
 	CreateWarmupToken(ctx context.Context, token *models.WarmupToken) error
@@ -218,8 +231,8 @@ type WarmupRepository interface {
 	GetRecentPartnerCounts(ctx context.Context, accountID uuid.UUID, since time.Time) (map[uuid.UUID]int, error)
 	GetLatestReplyCandidate(ctx context.Context, senderAccountID, recipientAccountID uuid.UUID) (*WarmupReplyCandidate, error)
 
-	// GetPoolParticipantProviders maps each participant to the provider that
-	// runs its mail, in the same vocabulary as SenderPlacementByProvider.
+	// GetPoolParticipantProviders maps each participant to its provider bucket
+	// (models.ClassifyProvider on the address).
 	GetPoolParticipantProviders(ctx context.Context, poolType string, excludeBlocked bool) (map[uuid.UUID]string, error)
 	// WarmupPartnerCandidates is everyone a sender may be paired with: its own
 	// tier, plus proven free mailboxes when a premium tier is thin. The
@@ -231,10 +244,40 @@ type WarmupRepository interface {
 
 	// Tampering protection: track delivered warmup mail so a later deletion or
 	// spam-flag can be attributed, and count "harm" events per mailbox.
-	RecordWarmupReceived(ctx context.Context, accountID, internalID uuid.UUID, messageID string, senderAccountID uuid.UUID) error
+	RecordWarmupReceived(ctx context.Context, accountID, internalID uuid.UUID, messageID string, senderAccountID uuid.UUID, landedSpam bool) error
 	GetWarmupReceived(ctx context.Context, accountID, internalID uuid.UUID) (*WarmupReceived, error)
+	// Spam moves after arrival are held and attributed on the activity around them.
+	RecordWarmupSpamMove(ctx context.Context, m WarmupSpamMove) (bool, error)
+	ListSettledWarmupSpamMoves(ctx context.Context, settledBefore time.Time, limit int) ([]WarmupSpamMove, error)
+	WarmupSpamMoveEvidence(ctx context.Context, m WarmupSpamMove) (WarmupSpamMoveEvidence, error)
+	ClaimWarmupSpamMove(ctx context.Context, accountID uuid.UUID, messageID string, lease time.Duration) (bool, error)
+	FixWarmupSpamMoveVerdict(ctx context.Context, accountID uuid.UUID, messageID, verdict string, signals []string) (bool, error)
+	CompleteWarmupSpamMove(ctx context.Context, accountID uuid.UUID, messageID string) error
+	CorrelatedOwnerSpamMoves(ctx context.Context, senderID, exceptAccountID uuid.UUID, at time.Time) ([]WarmupSpamMove, error)
+	ReattributeOwnerSpamMoves(ctx context.Context, senderID, exceptAccountID uuid.UUID, at time.Time) error
+	RecordOwnerActivity(ctx context.Context, accountID uuid.UUID, at time.Time) error
 	RecordWarmupTampering(ctx context.Context, accountID uuid.UUID, messageID, kind string) (bool, error)
 	CountWarmupTamperingSince(ctx context.Context, accountID uuid.UUID, since time.Time) (int, error)
+	// WithdrawWarmupTampering deletes a strike the mailbox did not earn,
+	// reporting whether there was one.
+	WithdrawWarmupTampering(ctx context.Context, accountID uuid.UUID, messageID, kind string) (bool, error)
+	HasWarmupTampering(ctx context.Context, accountID uuid.UUID, messageID, kind string) (bool, error)
+	// CountWarmupTamperingBetween is the strikes a hold decided at `to` read,
+	// less one message; byAddress counts every mailbox sharing the address.
+	CountWarmupTamperingBetween(ctx context.Context, accountID uuid.UUID, from, to time.Time, excludeMessageID string, byAddress bool) (deletions, spamFlags int, err error)
+	// WarmupReceiptRetired reports whether retention has retired the receipt.
+	WarmupReceiptRetired(ctx context.Context, accountID uuid.UUID, messageID string) (bool, error)
+	// ListUnverifiedDeletions is pre-search deletion strikes nobody asked
+	// about within retryAfter, on active mailboxes with a worker.
+	ListUnverifiedDeletions(ctx context.Context, since time.Time, retryAfter time.Duration, limit int) ([]WarmupTamperingToVerify, error)
+	MarkTamperingVerifyRequested(ctx context.Context, accountID uuid.UUID, messageID string) error
+	MarkTamperingVerified(ctx context.Context, accountID uuid.UUID, messageID, kind string) error
+	// GetWarmupHold is the pool row's standing, else the address's ledger row
+	// when no mailbox with the address is in a pool; nil when neither exists.
+	GetWarmupHold(ctx context.Context, accountID uuid.UUID) (*WarmupHold, error)
+	// ReviseWarmupHold replaces the hold read by GetWarmupHold if it is
+	// unchanged; a state that holds nothing clears it.
+	ReviseWarmupHold(ctx context.Context, accountID uuid.UUID, hold *WarmupHold, state models.WarmupHealthState, until *time.Time, newReason string) (bool, error)
 
 	// Retention: warmup mail is deleted from the mailbox once its window has
 	// passed, the platform's own copy of the body with it, and the
@@ -461,17 +504,10 @@ func (r *warmupRepository) GetHealthStates(ctx context.Context, accountIDs []uui
 		return out, nil
 	}
 	query := `
-		SELECT DISTINCT ON (email_account_id) email_account_id, health_state, blocked_until
-		FROM warmup_pool_participants
-		WHERE email_account_id = ANY($1)
-		ORDER BY email_account_id, CASE health_state
-			WHEN 'blocked' THEN 5
-			WHEN 'quarantined' THEN 4
-			WHEN 'throttled' THEN 3
-			WHEN 'watch' THEN 2
-			WHEN 'healthy' THEN 1
-			ELSE 0
-		END DESC
+		SELECT a.id, h.health_state, h.blocked_until
+		  FROM unnest($1::uuid[]) AS a(id)
+		  CROSS JOIN LATERAL (` + warmupStandingSQL("a.id") + `
+		  ) h
 	`
 	rows, err := r.db.Query(ctx, query, accountIDs)
 	if err != nil {
@@ -493,20 +529,8 @@ func (r *warmupRepository) GetHealthStates(ctx context.Context, accountIDs []uui
 // GetHealthState returns the account's warmup health state and blocked_until without the
 // caller naming a pool. The ordering keeps the worst state winning.
 func (r *warmupRepository) GetHealthState(ctx context.Context, accountID uuid.UUID) (models.WarmupHealthState, *time.Time, error) {
-	query := `
-		SELECT health_state, blocked_until
-		FROM warmup_pool_participants
-		WHERE email_account_id = $1
-		ORDER BY CASE health_state
-			WHEN 'blocked' THEN 5
-			WHEN 'quarantined' THEN 4
-			WHEN 'throttled' THEN 3
-			WHEN 'watch' THEN 2
-			WHEN 'healthy' THEN 1
-			ELSE 0
-		END DESC
-		LIMIT 1
-	`
+	query := `SELECT health_state, blocked_until FROM (` + warmupStandingSQL("$1::uuid") + `
+	) h`
 	var state string
 	var blockedUntil *time.Time
 	err := r.db.QueryRow(ctx, query, accountID).Scan(&state, &blockedUntil)
@@ -614,10 +638,52 @@ const participantHealthColumns = `
 const participantHealthSelect = participantHealthColumns + `
 		WHERE wpp.email_account_id = $1`
 
+func (r *warmupRepository) GetCloudStanding(ctx context.Context, accountID uuid.UUID) (*models.WarmupHealthInfo, error) {
+	m, err := scanCloudLinkMailbox(r.db.QueryRow(ctx,
+		`SELECT `+cloudLinkMailboxColumns+` FROM cloud_link_mailboxes WHERE email_account_id = $1`, accountID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return m.Standing, nil
+}
+
 // GetParticipantHealthForAccount returns the participant row from whichever pool the mailbox
 // is in. Exact because a mailbox is in at most one (migration 000097).
 func (r *warmupRepository) GetParticipantHealthForAccount(ctx context.Context, accountID uuid.UUID) (*models.WarmupParticipantHealth, error) {
 	return r.scanParticipantHealth(r.db.QueryRow(ctx, participantHealthSelect, accountID))
+}
+
+// GetParticipantHealthForAccounts is the batched form of
+// GetParticipantHealthForAccount: the single pool row for each mailbox in the
+// set, keyed by account id, in one query. A mailbox in no pool is absent.
+func (r *warmupRepository) GetParticipantHealthForAccounts(ctx context.Context, accountIDs []uuid.UUID) (map[uuid.UUID]*models.WarmupParticipantHealth, error) {
+	out := make(map[uuid.UUID]*models.WarmupParticipantHealth, len(accountIDs))
+	if len(accountIDs) == 0 {
+		return out, nil
+	}
+
+	query := participantHealthColumns + `
+			WHERE wpp.email_account_id = ANY($1::uuid[])`
+
+	rows, err := r.db.Query(ctx, query, accountIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		h, err := r.scanParticipantHealth(rows)
+		if err != nil {
+			return nil, err
+		}
+		if h != nil {
+			out[h.EmailAccountID] = h
+		}
+	}
+	return out, rows.Err()
 }
 
 func (r *warmupRepository) GetParticipantHealth(ctx context.Context, accountID uuid.UUID, poolType string) (*models.WarmupParticipantHealth, error) {
@@ -704,7 +770,9 @@ func (r *warmupRepository) UpdateParticipantHealth(ctx context.Context, accountI
 		SET
 			health_state = eff.state,
 			blocked_until = eff.until,
+			-- Only a quarantine or block takes a mailbox out of the pool; a throttle's term is not one.
 			blocked_at = CASE
+				WHEN eff.state NOT IN ('quarantined', 'blocked') THEN NULL
 				WHEN eff.until IS NOT NULL AND (p.blocked_at IS NULL OR p.blocked_until IS DISTINCT FROM eff.until) THEN NOW()
 				WHEN eff.until IS NULL AND p.blocked_until IS NOT NULL THEN NULL
 				ELSE p.blocked_at
@@ -749,8 +817,9 @@ func (r *warmupRepository) ListParticipantHealth(ctx context.Context) ([]models.
 	return out, rows.Err()
 }
 
-// HealthMetricCounts runs the four aggregates as one statement; each keeps
-// its own predicate so the (type, created_at) indexes still serve it.
+// HealthMetricCounts runs the aggregates as one statement; each keeps its own
+// predicate so the (type, created_at) indexes still serve it. Placement is read
+// through the sender's verified receipts, so its rate is over deliveries.
 func (r *warmupRepository) HealthMetricCounts(ctx context.Context, accountID uuid.UUID, since7d, since30d time.Time) (models.WarmupHealthCounts, error) {
 	query := `
 		SELECT
@@ -771,13 +840,17 @@ func (r *warmupRepository) HealthMetricCounts(ctx context.Context, accountID uui
 			(SELECT COUNT(*) FILTER (WHERE kind = 'deletion') FROM warmup_tampering_events
 			  WHERE email_account_id = $1 AND created_at >= $2),
 			(SELECT COUNT(*) FILTER (WHERE kind = 'spam_flag') FROM warmup_tampering_events
-			  WHERE email_account_id = $1 AND created_at >= $2)
+			  WHERE email_account_id = $1 AND created_at >= $2),
+			placed.major, placed.major_spam, placed.other, placed.other_spam
+		FROM (` + placementEvidenceSQL("$1", "$2") + `) placed
 	`
 	var c models.WarmupHealthCounts
+	p := &c.Placement
 	err := r.db.QueryRow(ctx, query, accountID, since7d, since30d).Scan(
 		&c.SentLast7d, &c.SpamPlacementsLast7d, &c.UserComplaintsLast7d,
 		&c.ComplaintsLast30d, &c.BouncesLast30d, &c.DeliveredLast30d,
-		&c.DeletionsLast7d, &c.SpamFlagsLast7d)
+		&c.DeletionsLast7d, &c.SpamFlagsLast7d,
+		&p.MajorDelivered, &p.MajorSpam, &p.OtherDelivered, &p.OtherSpam)
 	return c, err
 }
 
@@ -832,10 +905,11 @@ func (r *warmupRepository) ColdRampStateForAccounts(ctx context.Context, account
 
 	placementRows, err := r.db.Query(ctx, `
 		SELECT reported_account_id, created_at
-		FROM warmup_spam_reports
+		FROM warmup_spam_reports sr
 		WHERE reported_account_id = ANY($1::uuid[])
 		  AND report_type = 'spam_placement'
 		  AND created_at >= $2
+		  AND `+majorRecipientSQL+`
 		ORDER BY created_at
 	`, accountIDs, since)
 	if err != nil {
@@ -867,10 +941,11 @@ func (r *warmupRepository) StampColdRampStart(ctx context.Context, accountID uui
 func (r *warmupRepository) SpamPlacementsSince(ctx context.Context, accountID uuid.UUID, since time.Time) ([]time.Time, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT created_at
-		FROM warmup_spam_reports
+		FROM warmup_spam_reports sr
 		WHERE reported_account_id = $1
 		  AND report_type = 'spam_placement'
 		  AND created_at >= $2
+		  AND `+majorRecipientSQL+`
 		ORDER BY created_at
 	`, accountID, since)
 	if err != nil {
@@ -981,6 +1056,38 @@ func (r *warmupRepository) FailWarmupSend(ctx context.Context, accountID, taskID
 	return tx.Commit(ctx)
 }
 
+func (r *warmupRepository) LastWarmupSendFailure(ctx context.Context, accountID uuid.UUID, since time.Time) (*models.WarmupSendFailure, error) {
+	// Only failures the worker answered with (status failed); a dead-lettered
+	// dispatch is the platform's own problem and says nothing about the server.
+	f := &models.WarmupSendFailure{}
+	err := r.db.QueryRow(ctx, `
+		SELECT tf.message, t.updated_at
+		FROM tasks t
+		JOIN task_failures tf ON tf.task_id = t.id
+		WHERE t.email_account_id = $1
+		  AND t.task_type = 'warmup'
+		  AND t.status = 'failed'
+		  AND t.updated_at >= $2
+		  AND NOT EXISTS (
+		      SELECT 1 FROM tasks c
+		      JOIN warmup_tokens wt ON wt.task_id = c.id AND wt.sent_message_id <> ''
+		      WHERE c.email_account_id = $1
+		        AND c.task_type = 'warmup'
+		        AND c.status = 'completed'
+		        AND c.completed_at > t.updated_at
+		  )
+		ORDER BY t.updated_at DESC
+		LIMIT 1
+	`, accountID, since).Scan(&f.Message, &f.At)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
 // PoolSpamPlacementRate returns the pool-wide warmup spam-placement rate (%)
 // over the window: spam_placement events divided by total warmup sends. This is
 // the number surfaced as avg_spam_placement_rate in the admin health summary.
@@ -1032,79 +1139,45 @@ func (r *warmupRepository) PoolSpamPlacementsByProvider(ctx context.Context, sin
 	return out, rows.Err()
 }
 
-// ProviderPlacementStat is a sender's warmup record against one recipient
-// provider: how many it sent, and how many of those were filtered into junk.
-type ProviderPlacementStat struct {
-	Sends      int
-	Placements int
+// HostPlacementStat is a sender's warmup record at one recipient mail host:
+// how many arrivals were verified there, and how many of those landed in junk.
+type HostPlacementStat struct {
+	Delivered int
+	Spam      int
 }
 
-// Rate is the share of sends that landed in junk, 0 when nothing was sent.
-func (p ProviderPlacementStat) Rate() float64 {
-	if p.Sends <= 0 {
+// Rate is the share of deliveries that landed in junk, 0 when nothing arrived.
+func (p HostPlacementStat) Rate() float64 {
+	if p.Delivered <= 0 {
 		return 0
 	}
-	return float64(p.Placements) / float64(p.Sends)
+	return float64(p.Spam) / float64(p.Delivered)
 }
 
-func (r *warmupRepository) SenderPlacementByProvider(ctx context.Context, senderAccountID uuid.UUID, since time.Time) (map[string]ProviderPlacementStat, error) {
-	out := make(map[string]ProviderPlacementStat)
-
-	// Only sends that actually completed. A token is written before the send
-	// goes out, so counting every token would put failed sends in the
-	// denominator and understate the provider's junk rate.
-	sendRows, err := r.db.Query(ctx, `
-		SELECT lower(split_part(ea.email, '@', 2)), COUNT(*)
-		FROM warmup_tokens wt
-		JOIN email_accounts ea ON ea.id = wt.recipient_account_id
-		JOIN tasks t ON t.id = wt.task_id AND t.status = 'completed'
-		WHERE wt.sender_account_id = $1 AND wt.created_at >= $2
+func (r *warmupRepository) SenderPlacementByHost(ctx context.Context, senderAccountID uuid.UUID, since time.Time) (map[string]HostPlacementStat, error) {
+	// Read from the rollup the placement dashboard reads, so the selector and
+	// the charts cannot disagree. A row with no host is unattributable.
+	rows, err := r.db.Query(ctx, `
+		SELECT recipient_host, SUM(inbox + tabs + spam)::int, SUM(spam)::int
+		FROM warmup_placement_daily
+		WHERE sender_account_id = $1 AND date >= ($2::timestamptz AT TIME ZONE 'UTC')::date
+		  AND recipient_host <> ''
 		GROUP BY 1
 	`, senderAccountID, since)
 	if err != nil {
 		return nil, err
 	}
-	defer sendRows.Close()
-	for sendRows.Next() {
-		var domain string
-		var n int
-		if err := sendRows.Scan(&domain, &n); err != nil {
+	defer rows.Close()
+	out := make(map[string]HostPlacementStat)
+	for rows.Next() {
+		var host string
+		var stat HostPlacementStat
+		if err := rows.Scan(&host, &stat.Delivered, &stat.Spam); err != nil {
 			return nil, err
 		}
-		key := string(models.ClassifyProvider(domain))
-		stat := out[key]
-		stat.Sends += n
-		out[key] = stat
+		out[host] = stat
 	}
-	if err := sendRows.Err(); err != nil {
-		return nil, err
-	}
-
-	// A blank domain is unattributable and the send side never produces one, so
-	// counting it would demote every custom-domain partner for nobody's failure.
-	placementRows, err := r.db.Query(ctx, `
-		SELECT recipient_domain, COUNT(*)
-		FROM warmup_spam_reports
-		WHERE reported_account_id = $1 AND report_type = 'spam_placement' AND created_at >= $2
-		  AND recipient_domain <> ''
-		GROUP BY 1
-	`, senderAccountID, since)
-	if err != nil {
-		return nil, err
-	}
-	defer placementRows.Close()
-	for placementRows.Next() {
-		var domain string
-		var n int
-		if err := placementRows.Scan(&domain, &n); err != nil {
-			return nil, err
-		}
-		key := string(models.ClassifyProvider(domain))
-		stat := out[key]
-		stat.Placements += n
-		out[key] = stat
-	}
-	return out, placementRows.Err()
+	return out, rows.Err()
 }
 
 // The inbound cap's three numbers as SQL literals, so the rule that decides
@@ -1145,23 +1218,31 @@ const partnerProvenSQL = `
 		  AND o.risk_state NOT IN ('restricted', 'suspended')`
 
 // partnerCandidateSelectPrefix and partnerCandidateSelectSuffix wrap a
-// candidate set in the reciprocity counts the draw reads (what each candidate
-// sent and received over the last seven days) and apply the inbound cap: a
+// candidate set in the counts the draw reads (what each candidate sent,
+// received and filed as spam over the last seven days) and apply the inbound cap: a
 // candidate that has already received, or been dispatched, its day's share is
 // not offered. The cap is decided here, before any count or sample is taken
 // from the set, so a thin tier is sized on who can still receive. Aggregated
 // once per set rather than per row, so a pool of thousands costs a few index
-// scans, not thousands. The fragments are constants; nothing from a request
-// is spliced in.
-var (
-	partnerCandidateSelectPrefix = `
+// scans, not thousands. The fragments are built from constants; nothing from a
+// request is spliced in.
+const partnerCandidateSelectPrefix = `
 		WITH cand AS (`
-	partnerCandidateSelectSuffix = `),
+
+// partnerCandidateSelectSuffix closes the wrapper with the inbound cap scaled
+// to sharePercent, which is how a free sender leaves part of every inbox's day
+// to paying senders. Built once per share by the two vars below.
+func partnerCandidateSelectSuffix(sharePercent int) string {
+	return `),
 		recv AS (
 			SELECT wr.email_account_id,
 			       COUNT(*) AS week,
-			       COUNT(*) FILTER (WHERE wr.created_at >= date_trunc('day', NOW())) AS today
+			       COUNT(*) FILTER (WHERE wr.created_at >= date_trunc('day', NOW())) AS today,
+			       COUNT(sr.id) AS junk
 			FROM warmup_received wr
+			LEFT JOIN warmup_spam_reports sr
+			  ON sr.reporter_account_id = wr.email_account_id AND sr.message_id = wr.message_id
+			 AND sr.report_type = 'spam_placement' AND wr.message_id <> ''
 			WHERE wr.created_at >= NOW() - interval '7 days'
 			  AND wr.email_account_id IN (SELECT id FROM cand)
 			GROUP BY wr.email_account_id
@@ -1181,49 +1262,84 @@ var (
 			  AND wt.recipient_account_id IN (SELECT id FROM cand)
 			GROUP BY wt.recipient_account_id
 		)
-		SELECT cand.id, cand.email, cand.organization_id,
-		       COALESCE(sent.week, 0), COALESCE(recv.week, 0)
+		SELECT cand.id, cand.email, cand.organization_id, cand.provider, cand.mail_host,
+		       COALESCE(sent.week, 0), COALESCE(recv.week, 0), COALESCE(recv.junk, 0)
 		FROM cand
 		LEFT JOIN recv ON recv.email_account_id = cand.id
 		LEFT JOIN sent ON sent.sender_account_id = cand.id
 		LEFT JOIN inflight ON inflight.recipient_account_id = cand.id
 		WHERE GREATEST(COALESCE(recv.today, 0), COALESCE(inflight.today, 0))
-		      < LEAST(GREATEST(((COALESCE(sent.week, 0) + 6) / 7) * ` + inboundDailyMultipleSQL + `, ` + inboundDailyFloorSQL + `), ` + inboundDailyCeilingSQL + `)`
+		      < LEAST(GREATEST(((COALESCE(sent.week, 0) + 6) / 7) * ` + inboundDailyMultipleSQL + `, ` + inboundDailyFloorSQL + `), ` + inboundDailyCeilingSQL + `) * ` + strconv.Itoa(sharePercent) + ` / 100`
+}
+
+// A paying sender may fill all of an inbox's daily cap; a free sender stops
+// short, so the rest of every inbox's day stays open to the premium tier.
+var (
+	premiumCandidateSuffix = partnerCandidateSelectSuffix(100)
+	freeCandidateSuffix    = partnerCandidateSelectSuffix(config.WarmupFreeInboundSharePercent)
 )
 
+func candidateSuffixFor(poolType string) string {
+	if poolType == string(models.WarmupPoolPremium) {
+		return premiumCandidateSuffix
+	}
+	return freeCandidateSuffix
+}
+
+// borrowQualitySQL ranks a borrowed free mailbox: a Google or Microsoft
+// mailbox first, then a seasoned member, then one actively sending (the tail
+// adds 1 for that), so each outranks everything after it.
+const borrowQualitySQL = `
+		       (CASE WHEN ea.provider IN ('gmail', 'outlook') THEN 4 ELSE 0 END
+		        + CASE WHEN wpp.joined_at <= NOW() - make_interval(days => $5) THEN 2 ELSE 0 END) AS quality`
+
 // WarmupPartnerCandidates is everyone the sender may be paired with right now.
-// Its own tier always; a thin premium tier adds proven free mailboxes; a proven
-// free mailbox adds the paying mailboxes that wrote to it recently. Every set
-// is already filtered by the inbound cap, so the scheduler and the selector
+// Its own tier always; a premium tier with too few partners outside the
+// sender's workspace adds the best proven free mailboxes; a proven free
+// mailbox adds the paying mailboxes that wrote to it recently. Every set is
+// already filtered by the inbound cap, so the scheduler and the selector
 // agree on who can still receive today.
 func (r *warmupRepository) WarmupPartnerCandidates(ctx context.Context, poolType string, senderID uuid.UUID) ([]models.WarmupPartnerCandidate, error) {
+	var senderOrg *uuid.UUID
+	var senderMax int
+	err := r.db.QueryRow(ctx, `SELECT organization_id, warmup_max FROM email_accounts WHERE id = $1`, senderID).
+		Scan(&senderOrg, &senderMax)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	suffix := candidateSuffixFor(poolType)
+
 	own, err := r.queryPartnerCandidates(ctx, `
-		SELECT wpp.email_account_id AS id, ea.email, ea.organization_id
+		SELECT wpp.email_account_id AS id, ea.email, ea.organization_id, ea.provider::text AS provider, ea.mail_host
 		FROM warmup_pool_participants wpp
 		JOIN warmup_pools wp ON wpp.pool_id = wp.id
 		JOIN email_accounts ea ON ea.id = wpp.email_account_id
 		WHERE wp.pool_type = $1
 		  AND wpp.email_account_id <> $2
 		  AND `+partnerEligibleSQL,
-		"", poolType, models.WarmupPartnerOwnTier, poolType, senderID)
+		suffix, "", poolType, models.WarmupPartnerOwnTier, poolType, senderID)
 	if err != nil {
 		return nil, err
 	}
 
-	if borrowFrom, ok := models.WarmupPoolBorrowsFrom(poolType); ok && len(own) < config.WarmupPoolTierFallbackFloor {
-		// A random sample bounds the cost and spreads the borrowing. It is
-		// drawn after the cap, so a capped mailbox never uses up a slot.
+	// Siblings do not count: mail between one workspace's own mailboxes
+	// builds nothing, so a customer with many mailboxes must still borrow.
+	floor := max(config.WarmupPoolTierFallbackFloor, senderMax)
+	if borrowFrom, ok := models.WarmupPoolBorrowsFrom(poolType); ok && outsideWorkspace(own, senderOrg) < floor {
+		// Best first, random within a rank, so the borrowing spreads. Drawn
+		// after the cap, so a capped mailbox never uses up a slot.
 		borrowed, err := r.queryPartnerCandidates(ctx, `
-			SELECT wpp.email_account_id AS id, ea.email, ea.organization_id
+			SELECT wpp.email_account_id AS id, ea.email, ea.organization_id, ea.provider::text AS provider, ea.mail_host,`+borrowQualitySQL+`
 			FROM warmup_pool_participants wpp
 			JOIN warmup_pools wp ON wpp.pool_id = wp.id
 			JOIN email_accounts ea ON ea.id = wpp.email_account_id
 			JOIN organizations o ON o.id = ea.organization_id
 			WHERE wp.pool_type = $1
+			  AND ea.organization_id IS DISTINCT FROM $4
 			  AND `+partnerEligibleSQL+`
 			  AND `+partnerProvenSQL,
-			` ORDER BY random() LIMIT $3`,
-			borrowFrom, models.WarmupPartnerBorrowed, borrowFrom, config.WarmupPoolFallbackMinAgeDays, config.WarmupPoolTierFallbackFloor)
+			suffix, ` ORDER BY cand.quality + (COALESCE(sent.week, 0) > 0)::int DESC, random() LIMIT $3`,
+			borrowFrom, models.WarmupPartnerBorrowed, borrowFrom, config.WarmupPoolFallbackMinAgeDays, floor, senderOrg, config.WarmupPoolBorrowSeasonedDays)
 		if err != nil {
 			return nil, err
 		}
@@ -1235,7 +1351,7 @@ func (r *warmupRepository) WarmupPartnerCandidates(ctx context.Context, poolType
 		// the window, and only while the sender itself is proven: a mailbox on
 		// watch keeps warming in its own tier but stops calling on paying ones.
 		returns, err := r.queryPartnerCandidates(ctx, `
-			SELECT wpp.email_account_id AS id, ea.email, ea.organization_id
+			SELECT wpp.email_account_id AS id, ea.email, ea.organization_id, ea.provider::text AS provider, ea.mail_host
 			FROM warmup_pool_participants wpp
 			JOIN warmup_pools wp ON wpp.pool_id = wp.id
 			JOIN email_accounts ea ON ea.id = wpp.email_account_id
@@ -1258,7 +1374,7 @@ func (r *warmupRepository) WarmupPartnerCandidates(ctx context.Context, poolType
 			        AND ea.status = 'active'
 			        AND `+partnerProvenSQL+`
 			  )`,
-			"", returnTo, models.WarmupPartnerReturn, returnTo, config.WarmupPoolFallbackMinAgeDays, senderID, config.WarmupPoolReturnVisitDays, poolType)
+			suffix, "", returnTo, models.WarmupPartnerReturn, returnTo, config.WarmupPoolFallbackMinAgeDays, senderID, config.WarmupPoolReturnVisitDays, poolType)
 		if err != nil {
 			return nil, err
 		}
@@ -1267,11 +1383,23 @@ func (r *warmupRepository) WarmupPartnerCandidates(ctx context.Context, poolType
 	return own, nil
 }
 
+// outsideWorkspace counts the candidates that belong to another workspace.
+// An unknown owner on either side counts as outside, as the selector does.
+func outsideWorkspace(cands []models.WarmupPartnerCandidate, org *uuid.UUID) int {
+	n := 0
+	for _, c := range cands {
+		if org == nil || c.OrganizationID == nil || *c.OrganizationID != *org {
+			n++
+		}
+	}
+	return n
+}
+
 // queryPartnerCandidates runs one candidate set through the reciprocity and
 // cap wrapper. tail is appended after the cap, so an ORDER BY or LIMIT there
 // samples only mailboxes that can still receive.
-func (r *warmupRepository) queryPartnerCandidates(ctx context.Context, candidateSQL, tail string, poolType string, origin models.WarmupPartnerOrigin, args ...any) ([]models.WarmupPartnerCandidate, error) {
-	rows, err := r.db.Query(ctx, partnerCandidateSelectPrefix+candidateSQL+partnerCandidateSelectSuffix+tail, args...)
+func (r *warmupRepository) queryPartnerCandidates(ctx context.Context, candidateSQL, suffix, tail string, poolType string, origin models.WarmupPartnerOrigin, args ...any) ([]models.WarmupPartnerCandidate, error) {
+	rows, err := r.db.Query(ctx, partnerCandidateSelectPrefix+candidateSQL+suffix+tail, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1279,7 +1407,7 @@ func (r *warmupRepository) queryPartnerCandidates(ctx context.Context, candidate
 	var out []models.WarmupPartnerCandidate
 	for rows.Next() {
 		c := models.WarmupPartnerCandidate{PoolType: poolType, Origin: origin}
-		if err := rows.Scan(&c.ID, &c.Email, &c.OrganizationID, &c.Sent7d, &c.Received7d); err != nil {
+		if err := rows.Scan(&c.ID, &c.Email, &c.OrganizationID, &c.Provider, &c.MailHost, &c.Sent7d, &c.Received7d, &c.Junked7d); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -1557,6 +1685,18 @@ func (r *warmupRepository) IsWarmupDelivery(ctx context.Context, accountID uuid.
 		      AND lower(ea.email) = lower($3) AND lower(btrim(wt.subject)) = lower($4)
 		      AND wt.sent_message_id = '' AND wt.expires_at > NOW()
 		      AND t.status IN ('active', 'completed', 'dead_lettered')
+		  ) OR EXISTS (
+		    -- A live arrival from the sender of a send not yet confirmed: its
+		    -- subject may not survive delivery, the confirmed id will. The
+		    -- historical sweep passes no subject and is never held.
+		    SELECT 1 FROM warmup_tokens wt
+		    JOIN email_accounts ea ON ea.id = wt.sender_account_id
+		    JOIN tasks t ON t.id = wt.task_id
+		    WHERE wt.recipient_account_id = $1 AND $3 <> '' AND $4 <> ''
+		      AND lower(ea.email) = lower($3)
+		      AND wt.sent_message_id = '' AND wt.consumed_at IS NULL
+		      AND wt.created_at > NOW() - INTERVAL '30 minutes'
+		      AND t.status IN ('active', 'completed')
 		  )`
 	// One snapshot ensures a send confirmation cannot fall between known and pending checks.
 	var known, pending bool
@@ -1689,13 +1829,13 @@ func (r *warmupRepository) GetRecentPartnerCounts(ctx context.Context, accountID
 
 // RecordWarmupReceived stores a delivered warmup email keyed by recipient +
 // internal message id. Idempotent on re-delivery of the same message.
-func (r *warmupRepository) RecordWarmupReceived(ctx context.Context, accountID, internalID uuid.UUID, messageID string, senderAccountID uuid.UUID) error {
+func (r *warmupRepository) RecordWarmupReceived(ctx context.Context, accountID, internalID uuid.UUID, messageID string, senderAccountID uuid.UUID, landedSpam bool) error {
 	query := `
-		INSERT INTO warmup_received (email_account_id, internal_id, message_id, sender_account_id)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO warmup_received (email_account_id, internal_id, message_id, sender_account_id, landed_spam)
+		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (email_account_id, internal_id) DO NOTHING
 	`
-	_, err := r.db.Exec(ctx, query, accountID, internalID, messageID, senderAccountID)
+	_, err := r.db.Exec(ctx, query, accountID, internalID, messageID, senderAccountID, landedSpam)
 	return err
 }
 
@@ -1703,13 +1843,13 @@ func (r *warmupRepository) RecordWarmupReceived(ctx context.Context, accountID, 
 // message id. Returns nil when the message was not a warmup email.
 func (r *warmupRepository) GetWarmupReceived(ctx context.Context, accountID, internalID uuid.UUID) (*WarmupReceived, error) {
 	query := `
-		SELECT email_account_id, internal_id, message_id, sender_account_id, created_at, retired_at
+		SELECT email_account_id, internal_id, message_id, sender_account_id, created_at, retired_at, landed_spam
 		FROM warmup_received
 		WHERE email_account_id = $1 AND internal_id = $2
 	`
 	var w WarmupReceived
 	err := r.db.QueryRow(ctx, query, accountID, internalID).Scan(
-		&w.EmailAccountID, &w.InternalID, &w.MessageID, &w.SenderAccountID, &w.CreatedAt, &w.RetiredAt,
+		&w.EmailAccountID, &w.InternalID, &w.MessageID, &w.SenderAccountID, &w.CreatedAt, &w.RetiredAt, &w.LandedSpam,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -1819,16 +1959,26 @@ func (r *warmupRepository) RetireWarmupSentCopy(ctx context.Context, token uuid.
 // removal seen later is still recognised as warmup rather than tampering.
 func (r *warmupRepository) PruneWarmupEventsBefore(ctx context.Context, before time.Time) (int64, error) {
 	var total int64
-	for _, q := range []string{
-		`DELETE FROM warmup_tampering_events WHERE created_at < $1`,
-		`DELETE FROM warmup_spam_reports WHERE created_at < $1`,
-		`DELETE FROM warmup_received WHERE created_at < $1 AND retired_at IS NOT NULL`,
-		`DELETE FROM warmup_tokens
+	// Each statement gets only the arguments it references; pgx refuses an extra one.
+	for _, st := range []struct {
+		query string
+		args  []any
+	}{
+		{`DELETE FROM warmup_tampering_events
+		 WHERE created_at < LEAST($1, NOW() - make_interval(days => ` + strconv.Itoa(config.WarmupTamperingKeepDays) + `))`, []any{before}},
+		{`DELETE FROM warmup_spam_reports WHERE created_at < $1`, []any{before}},
+		{`DELETE FROM warmup_spam_moves
+		 WHERE decided_at IS NOT NULL
+		   AND observed_at < LEAST($1, NOW() - make_interval(days => ` + strconv.Itoa(config.WarmupTamperingKeepDays) + `))`, []any{before}},
+		{`DELETE FROM mailbox_owner_activity
+		 WHERE bucket < NOW() - make_interval(days => ` + strconv.Itoa(config.WarmupOwnerActivityKeepDays) + `)`, nil},
+		{`DELETE FROM warmup_received WHERE created_at < $1 AND retired_at IS NOT NULL`, []any{before}},
+		{`DELETE FROM warmup_tokens
 		 WHERE created_at < $1
 		   AND (sent_message_id = '' OR sent_retired_at IS NOT NULL
-		        OR sender_account_id IN (SELECT id FROM email_accounts WHERE provider = 'smtp_imap'))`,
+		        OR sender_account_id IN (SELECT id FROM email_accounts WHERE provider = 'smtp_imap'))`, []any{before}},
 	} {
-		cmd, err := r.db.Exec(ctx, q, before)
+		cmd, err := r.db.Exec(ctx, st.query, st.args...)
 		if err != nil {
 			return total, err
 		}
@@ -1846,6 +1996,192 @@ func (r *warmupRepository) RecordWarmupTampering(ctx context.Context, accountID 
 		ON CONFLICT (email_account_id, message_id, kind) DO NOTHING
 	`
 	cmd, err := r.db.Exec(ctx, query, accountID, messageID, kind)
+	if err != nil {
+		return false, err
+	}
+	return cmd.RowsAffected() > 0, nil
+}
+
+func (r *warmupRepository) WithdrawWarmupTampering(ctx context.Context, accountID uuid.UUID, messageID, kind string) (bool, error) {
+	cmd, err := r.db.Exec(ctx, `
+		DELETE FROM warmup_tampering_events
+		WHERE email_account_id = $1 AND message_id = $2 AND kind = $3`,
+		accountID, messageID, kind)
+	if err != nil {
+		return false, err
+	}
+	return cmd.RowsAffected() > 0, nil
+}
+
+func (r *warmupRepository) HasWarmupTampering(ctx context.Context, accountID uuid.UUID, messageID, kind string) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM warmup_tampering_events
+		              WHERE email_account_id = $1 AND message_id = $2 AND kind = $3)`,
+		accountID, messageID, kind).Scan(&exists)
+	return exists, err
+}
+
+func (r *warmupRepository) CountWarmupTamperingBetween(ctx context.Context, accountID uuid.UUID, from, to time.Time, excludeMessageID string, byAddress bool) (int, int, error) {
+	var deletions, spamFlags int
+	err := r.db.QueryRow(ctx, `
+		SELECT COUNT(*) FILTER (WHERE kind = 'deletion'), COUNT(*) FILTER (WHERE kind = 'spam_flag')
+		FROM warmup_tampering_events
+		WHERE email_account_id IN (
+		        SELECT $1::uuid
+		        UNION
+		        SELECT sib.id FROM email_accounts me
+		        JOIN email_accounts sib ON sib.organization_id = me.organization_id
+		         AND lower(btrim(sib.email)) = lower(btrim(me.email))
+		        WHERE me.id = $1 AND $5::bool)
+		  AND created_at >= $2 AND created_at <= $3
+		  AND message_id <> $4`,
+		accountID, from, to, excludeMessageID, byAddress).Scan(&deletions, &spamFlags)
+	return deletions, spamFlags, err
+}
+
+func (r *warmupRepository) WarmupReceiptRetired(ctx context.Context, accountID uuid.UUID, messageID string) (bool, error) {
+	var retired bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM warmup_received
+		              WHERE email_account_id = $1 AND message_id = $2 AND retired_at IS NOT NULL)`,
+		accountID, messageID).Scan(&retired)
+	return retired, err
+}
+
+// WarmupTamperingToVerify is one unverified deletion strike and where to ask.
+type WarmupTamperingToVerify struct {
+	EmailAccountID uuid.UUID
+	UserID         uuid.UUID
+	WorkerID       uuid.UUID
+	MessageID      string
+}
+
+func (r *warmupRepository) ListUnverifiedDeletions(ctx context.Context, since time.Time, retryAfter time.Duration, limit int) ([]WarmupTamperingToVerify, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT t.email_account_id, ea.user_id, ea.worker_id, t.message_id
+		FROM warmup_tampering_events t
+		JOIN email_accounts ea ON ea.id = t.email_account_id
+		WHERE t.verified_at IS NULL
+		  AND t.kind = 'deletion'
+		  AND t.created_at >= $1
+		  AND (t.verify_requested_at IS NULL OR t.verify_requested_at < NOW() - make_interval(secs => $2))
+		  AND t.message_id <> ''
+		  AND ea.status = 'active'
+		  AND ea.worker_id IS NOT NULL
+		ORDER BY t.created_at
+		LIMIT $3`, since, retryAfter.Seconds(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []WarmupTamperingToVerify
+	for rows.Next() {
+		var v WarmupTamperingToVerify
+		if err := rows.Scan(&v.EmailAccountID, &v.UserID, &v.WorkerID, &v.MessageID); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (r *warmupRepository) MarkTamperingVerifyRequested(ctx context.Context, accountID uuid.UUID, messageID string) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE warmup_tampering_events SET verify_requested_at = NOW()
+		WHERE email_account_id = $1 AND message_id = $2 AND kind = 'deletion' AND verified_at IS NULL`,
+		accountID, messageID)
+	return err
+}
+
+func (r *warmupRepository) MarkTamperingVerified(ctx context.Context, accountID uuid.UUID, messageID, kind string) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE warmup_tampering_events SET verified_at = NOW()
+		WHERE email_account_id = $1 AND message_id = $2 AND kind = $3 AND verified_at IS NULL`,
+		accountID, messageID, kind)
+	return err
+}
+
+// WarmupHold is a mailbox's standing as a pool row or ledger row holds it.
+type WarmupHold struct {
+	State        models.WarmupHealthState
+	BlockedAt    *time.Time
+	BlockedUntil *time.Time
+	Reason       string
+	// InPool is false when the standing is only on the ledger.
+	InPool bool
+}
+
+// noSiblingInPoolSQL is true when no mailbox sharing $1's address is in a
+// pool, which is when the ledger is the standing.
+const noSiblingInPoolSQL = `NOT EXISTS (
+	SELECT 1 FROM warmup_pool_participants p
+	JOIN email_accounts sib ON sib.id = p.email_account_id
+	WHERE sib.organization_id = a.organization_id AND lower(btrim(sib.email)) = lower(btrim(a.email)))`
+
+func (r *warmupRepository) GetWarmupHold(ctx context.Context, accountID uuid.UUID) (*WarmupHold, error) {
+	var h WarmupHold
+	var state string
+	err := r.db.QueryRow(ctx, `
+		SELECT health_state, blocked_at, blocked_until, COALESCE(blocked_reason, ''), true
+		FROM warmup_pool_participants WHERE email_account_id = $1
+		UNION ALL
+		SELECT l.health_state, l.blocked_at, l.blocked_until, COALESCE(l.blocked_reason, ''), false
+		FROM warmup_reputation_ledger l
+		JOIN email_accounts a ON a.organization_id = l.organization_id AND lower(btrim(a.email)) = l.email
+		WHERE a.id = $1 AND `+noSiblingInPoolSQL+`
+		LIMIT 1`, accountID).Scan(&state, &h.BlockedAt, &h.BlockedUntil, &h.Reason, &h.InPool)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	h.State = models.WarmupHealthState(state)
+	return &h, nil
+}
+
+func (r *warmupRepository) ReviseWarmupHold(ctx context.Context, accountID uuid.UUID, hold *WarmupHold, state models.WarmupHealthState, until *time.Time, newReason string) (bool, error) {
+	if hold == nil || hold.BlockedUntil == nil {
+		return false, nil
+	}
+	held := state == models.WarmupHealthQuarantined || state == models.WarmupHealthBlocked
+	if !held {
+		until, newReason = nil, ""
+	}
+	if hold.InPool {
+		cmd, err := r.db.Exec(ctx, `
+			UPDATE warmup_pool_participants
+			SET health_state = $4::text,
+			    blocked_until = $5::timestamptz,
+			    blocked_reason = NULLIF($6::text, ''),
+			    blocked_at = CASE WHEN $5::timestamptz IS NULL THEN NULL ELSE blocked_at END
+			WHERE email_account_id = $1 AND blocked_reason = $2 AND blocked_until = $3`,
+			accountID, hold.Reason, *hold.BlockedUntil, string(state), until, newReason)
+		if err != nil {
+			return false, err
+		}
+		return cmd.RowsAffected() > 0, nil
+	}
+	var sqlText string
+	args := []any{accountID, hold.Reason, *hold.BlockedUntil}
+	if held {
+		sqlText = `
+			UPDATE warmup_reputation_ledger l
+			SET health_state = $4::text, blocked_until = $5::timestamptz, blocked_reason = $6::text,
+			    standing_until = GREATEST($5::timestamptz, NOW())
+			FROM email_accounts a
+			WHERE a.id = $1 AND l.organization_id = a.organization_id AND l.email = lower(btrim(a.email))
+			  AND l.blocked_reason = $2 AND l.blocked_until = $3 AND ` + noSiblingInPoolSQL
+		args = append(args, string(state), until, newReason)
+	} else {
+		sqlText = `
+			DELETE FROM warmup_reputation_ledger l
+			USING email_accounts a
+			WHERE a.id = $1 AND l.organization_id = a.organization_id AND l.email = lower(btrim(a.email))
+			  AND l.blocked_reason = $2 AND l.blocked_until = $3 AND ` + noSiblingInPoolSQL
+	}
+	cmd, err := r.db.Exec(ctx, sqlText, args...)
 	if err != nil {
 		return false, err
 	}

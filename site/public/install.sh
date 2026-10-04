@@ -1304,6 +1304,8 @@ name: warmbly
 
 x-app: &app
   restart: unless-stopped
+  # Time for a connect or send in flight to finish before an update stops it.
+  stop_grace_period: 60s
   env_file: [.env]
 
 services:
@@ -1973,6 +1975,8 @@ wiz_access() {
         note "TRUSTED_PROXIES is the one setting that is silently wrong on every"
         note "proxied install: without it every request looks like it came from the"
         note "proxy, so per-IP rate limits and click deduplication stop working."
+        note "Domains a workspace points here later (tracking hosts, root redirects)"
+        note "go to the tracking port too, with the original Host header."
         say ""
         ask "Public dashboard URL" "https://$HOSTNAME_ANSWER"
         WARMBLY_APP_URL=$ANSWER

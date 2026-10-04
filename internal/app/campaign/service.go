@@ -22,11 +22,11 @@ type CampaignService interface {
 	Create(ctx context.Context, userID string, orgID *uuid.UUID, data *models.CreateCampaign) (*models.Campaign, *errx.Error)
 	// Get loads one of orgID's campaigns; any other id is not found.
 	Get(ctx context.Context, orgID, id string) (*models.Campaign, *errx.Error)
-	Search(ctx context.Context, userID, query, cursor, folder, status, kind, limit string) (*models.CampaignsResult, *errx.Error)
+	Search(ctx context.Context, userID, query, cursor, folder, status, limit string) (*models.CampaignsResult, *errx.Error)
 	Overview(ctx context.Context, orgID string) (*models.CampaignsOverview, *errx.Error)
 	// Estimate projects how many contacts a set of segments reaches and how
 	// many sending days a mailbox pool needs under the per-mailbox caps.
-	// Read-only; the wizard shows it before a one-time email is created.
+	// Read-only; the new-campaign flow shows it as its launch plan.
 	Estimate(ctx context.Context, orgID uuid.UUID, in *models.CampaignEstimate) (*models.CampaignEstimateResult, *errx.Error)
 	// SendPlan is today's sending plan for one of orgID's campaigns: what
 	// will go out today and every limit that decided it, derived through the
@@ -35,6 +35,11 @@ type CampaignService interface {
 	// WorkspaceCapacity is what the workspace's active mailboxes can send
 	// today between them, under the same clamps. Read-only.
 	WorkspaceCapacity(ctx context.Context, orgID uuid.UUID) (*models.WorkspaceSendCapacity, *errx.Error)
+	// StartSendPlanSnapshotter runs the background loop that re-walks every
+	// active campaign's send plan on an interval and stores it, so SendPlan
+	// serves a stored snapshot instead of computing on the request. A no-op
+	// without the snapshot store or a planner.
+	StartSendPlanSnapshotter(ctx context.Context, interval time.Duration)
 	Update(ctx context.Context, orgID, id string, data *models.UpdateCampaign) (*models.Campaign, *errx.Error)
 	// Delete removes an organization's campaign outright. A running campaign
 	// is stopped as part of it: its pending tasks are cancelled in the same
@@ -89,6 +94,14 @@ type CampaignService interface {
 	ResumeLead(ctx context.Context, orgID, campaignID, contactID uuid.UUID) *errx.Error
 	// GetLeadHold reads the live hold on one lead (nil when it is not held).
 	GetLeadHold(ctx context.Context, orgID, campaignID, contactID uuid.UUID) (*models.LeadHold, *errx.Error)
+
+	// ListLeadCC reads the contacts copied on every email to one lead.
+	ListLeadCC(ctx context.Context, orgID, campaignID, contactID uuid.UUID) ([]models.CampaignLeadCC, *errx.Error)
+	// SetLeadCC replaces the contacts copied on one lead and returns the new
+	// list. A copied contact's own lead in the campaign is held meanwhile.
+	SetLeadCC(ctx context.Context, orgID, campaignID, contactID uuid.UUID, contactIDs []string) ([]models.CampaignLeadCC, *errx.Error)
+	// SuggestLeadCC offers the lead's likely colleagues to copy.
+	SuggestLeadCC(ctx context.Context, orgID, campaignID, contactID uuid.UUID) ([]models.CampaignLeadCCSuggestion, *errx.Error)
 }
 
 // Bounds on a manual lead hold. A hold in the past would lift the moment it
@@ -124,12 +137,17 @@ type campaignService struct {
 	// seconds each; see readCache.
 	planCache     *readCache[*models.CampaignSendPlan]
 	capacityCache *readCache[*models.WorkspaceSendCapacity]
+	// planSnapshotRepo stores the background-computed send plan per campaign so
+	// the read endpoint serves a stored snapshot instead of walking the planner
+	// on the request. Optional/nil-safe: without it SendPlan computes inline
+	// through the single-flight cache, as it did before.
+	planSnapshotRepo repository.CampaignSendPlanSnapshotRepository
 }
 
 // SegmentCounter is the slice of the segment service Estimate needs.
 // Satisfied structurally by segment.Service.
 type SegmentCounter interface {
-	Preview(ctx context.Context, orgID uuid.UUID, in *models.SegmentPreview) (int, *errx.Error)
+	CountAudience(ctx context.Context, orgID uuid.UUID, segmentIDs []string, campaignID *uuid.UUID) (int, *errx.Error)
 }
 
 // SegmentAware lets main hand the campaign service the segment counter.
@@ -165,6 +183,16 @@ type ProgressAware interface {
 
 func (s *campaignService) WireProgress(r repository.CampaignProgressRepository) {
 	s.campaignProgressRepo = r
+}
+
+// SnapshotAware lets main hand the campaign service the send-plan snapshot
+// store that the background snapshotter writes and SendPlan reads.
+type SnapshotAware interface {
+	WireSnapshots(r repository.CampaignSendPlanSnapshotRepository)
+}
+
+func (s *campaignService) WireSnapshots(r repository.CampaignSendPlanSnapshotRepository) {
+	s.planSnapshotRepo = r
 }
 
 func (s *campaignService) WireAttachments(repo repository.AttachmentRepository, store storage.Store) {

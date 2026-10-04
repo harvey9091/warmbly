@@ -20,6 +20,12 @@ import React from "react";
 export function SkyChrome() {
     return (
         <div className="app-shell-chrome absolute inset-0 overflow-hidden pointer-events-none bg-chrome">
+            {/* Base tint — clean neutral, a half-step darker than white.
+                Avoid blue-leaning here; the only colour cue is the soft
+                clouds above. */}
+            <div className="absolute inset-0 bg-[#f5f6f8] dark:bg-[var(--wb-chrome)]" />
+            <div className="wb-chrome-light absolute inset-0 hidden dark:block" />
+
             {/* Cloud blobs — visible in light mode, dimmed when a background
                 is active so they don't compete with the user's image. */}
             <div

@@ -37,6 +37,7 @@ import {
     PopoverMenuContent,
     PopoverMenuTrigger,
 } from "@/components/ui/popover-menu";
+import { Checkbox } from "@/components/ui/checkbox";
 
 // htmlToPlain renders the HTML signature down to a plain-text equivalent,
 // turning block elements and <br> into line breaks. Used to keep the plain
@@ -101,6 +102,10 @@ interface EmailEditorProps {
     setSync: (v: boolean) => void;
     code: boolean;
     setCode: (v: boolean) => void;
+    /** What is being edited, for the editor's own copy. */
+    kind?: "signature" | "email";
+    /** Renders the HTML to the synced plain text; signatures keep their own rendering. */
+    toPlain?: (html: string) => string;
 }
 
 export default function EmailEditor({
@@ -113,6 +118,8 @@ export default function EmailEditor({
     setSync,
     code,
     setCode,
+    kind = "signature",
+    toPlain = htmlToPlain,
 }: EmailEditorProps) {
     const editorRef = useRef<HTMLDivElement>(null);
     const [activeTab, setActiveTab] = useState<"html" | "preview" | "plain">("html");
@@ -147,24 +154,24 @@ export default function EmailEditor({
 
     function applyUrl() {
         const u = url.trim();
-        const kind = urlPopover;
+        const target = urlPopover;
         setUrl("");
         setUrlPopover(null);
-        if (!u || !kind) return;
+        if (!u || !target) return;
         editorRef.current?.focus();
         const sel = window.getSelection();
         if (savedRange.current && sel) {
             sel.removeAllRanges();
             sel.addRange(savedRange.current);
         }
-        exec(kind === "image" ? "insertImage" : "createLink", u);
+        exec(target === "image" ? "insertImage" : "createLink", u);
     }
 
     // commitHtml writes the HTML signature and, while sync is on, keeps the
     // plain-text version derived from it so the two stay identical.
     function commitHtml(html: string) {
         setHtmlText(html);
-        if (sync) setPlainText(htmlToPlain(html));
+        if (sync) setPlainText(toPlain(html));
     }
 
     function exec(command: string, value?: string) {
@@ -291,7 +298,7 @@ export default function EmailEditor({
                             disabled={forcedSource}
                             title={
                                 forcedSource
-                                    ? "This signature holds markup the visual editor cannot host safely"
+                                    ? `This ${kind} holds markup the visual editor cannot host safely`
                                     : sourceView
                                       ? "Visual editor"
                                       : "Edit HTML source"
@@ -309,15 +316,13 @@ export default function EmailEditor({
                         className="flex items-center gap-1.5 text-[11px] text-slate-500 cursor-pointer select-none pl-1"
                         title="Generate the plain-text version from the HTML and keep them identical"
                     >
-                        <input
-                            type="checkbox"
+                        <Checkbox size="xs"
                             checked={sync}
                             onChange={(e) => {
                                 const on = e.target.checked;
                                 setSync(on);
-                                if (on) setPlainText(htmlToPlain(htmlText));
+                                if (on) setPlainText(toPlain(htmlText));
                             }}
-                            className="w-3 h-3 rounded accent-sky-600"
                         />
                         <span className="hidden sm:inline">Sync HTML &amp; plain</span>
                         <span className="sm:hidden">Sync</span>
@@ -367,7 +372,7 @@ export default function EmailEditor({
                         <RiEyeLine className="mt-px w-3 h-3 shrink-0" />
                         <span>
                             {forcedSource
-                                ? "Edited as source because this signature carries a stylesheet, a document wrapper or an event handler. It is sent exactly as written; use Preview to see it."
+                                ? `Edited as source because this ${kind} carries a stylesheet, a document wrapper or an event handler. It is sent exactly as written; use Preview to see it.`
                                 : "Sent exactly as written. Any <style> block is copied onto the elements it matches at send time, so it survives Outlook and Yahoo."}
                         </span>
                     </p>
@@ -424,7 +429,11 @@ function UrlForm({
                         e.preventDefault();
                         onApply();
                     }
-                    if (e.key === "Escape") onCancel();
+                    if (e.key === "Escape") {
+                        // Closes only this form, not the drawer or composer around it.
+                        e.stopPropagation();
+                        onCancel();
+                    }
                 }}
             />
             <button

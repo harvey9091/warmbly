@@ -19,11 +19,13 @@ type Task struct {
 	EmailAccountID uuid.UUID
 	Status         string
 	MessageID      string
-	ScheduledAt    *time.Time
-	CompletedAt    *time.Time
-	CloudTaskName  *string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// ReplyTo is the address the send's Reply-To header named, empty for none.
+	ReplyTo       string
+	ScheduledAt   *time.Time
+	CompletedAt   *time.Time
+	CloudTaskName *string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // CampaignTask represents campaign-specific task data
@@ -57,6 +59,10 @@ type EmailTask struct {
 	// Tracked records that this send carries an open pixel and click tickets,
 	// which only happens when the sending mailbox opted in.
 	Tracked bool
+	// ForwardedHTML and ForwardedPlain are the message a forward carries,
+	// appended after the body and signature when the send goes out.
+	ForwardedHTML  string
+	ForwardedPlain string
 }
 
 // TaskFailure represents a task failure record
@@ -67,7 +73,7 @@ type TaskFailure struct {
 }
 
 // ScheduledEmailItem is the join shape returned by
-// ListScheduledForUser — task + email_task + sender mailbox columns,
+// ListScheduledInOrg — task + email_task + sender mailbox columns,
 // shaped for the dashboard's "Scheduled" view.
 type ScheduledEmailItem struct {
 	TaskID      uuid.UUID
@@ -145,6 +151,9 @@ type TaskRepository interface {
 	// CountCampaignEmailsSentTodayByAccounts is CountCampaignEmailsSentToday
 	// for a whole pool in one read; an id with no sends is absent.
 	CountCampaignEmailsSentTodayByAccounts(ctx context.Context, accountIDs []uuid.UUID) (map[uuid.UUID]int, error)
+	// CampaignSendsPerDayByAccounts is each mailbox's average campaign sends
+	// per day over the last `days` whole days; an id with none is absent.
+	CampaignSendsPerDayByAccounts(ctx context.Context, accountIDs []uuid.UUID, days int) (map[uuid.UUID]float64, error)
 	CountWarmupEmailsSentToday(ctx context.Context, accountID uuid.UUID) (int, error)
 
 	// Create user-initiated email task (transactional)
@@ -168,33 +177,43 @@ type TaskRepository interface {
 	// sending from. A campaign task is created before its mailbox is known, so
 	// the send path stamps the rotation's real pick before dispatching.
 	UpdateTaskEmailAccount(ctx context.Context, taskID, accountID uuid.UUID) error
+	// UpdateTaskReplyTo records the Reply-To a send is about to carry.
+	UpdateTaskReplyTo(ctx context.Context, taskID uuid.UUID, replyTo string) error
 
 	// Update campaign task with contact/sequence IDs (for tracking)
 	UpdateCampaignTaskTracking(ctx context.Context, taskID, contactID, sequenceID uuid.UUID) error
+	// UpdateCampaignTaskSubject records the subject a campaign send carries,
+	// which is what a follow-up threads on. Blank records nothing.
+	UpdateCampaignTaskSubject(ctx context.Context, taskID uuid.UUID, subject string) error
 
-	// ListScheduledForUser returns every pending email task scheduled
-	// for the user's mailboxes, ordered by next-to-fire. Used by the
-	// unibox "Scheduled" view.
-	ListScheduledForUser(ctx context.Context, userID uuid.UUID, limit int) ([]ScheduledEmailItem, error)
-	// ListScheduledForUserByThread is the same query scoped to a
+	// ListScheduledInOrg returns every pending email task scheduled
+	// from the organization's mailboxes, ordered by next-to-fire. Used
+	// by the unibox "Scheduled" view.
+	// accountIDs, when non-empty, narrows every scheduled read and the cancel
+	// to those mailboxes (an API key's allowlist).
+	ListScheduledInOrg(ctx context.Context, orgID uuid.UUID, accountIDs []uuid.UUID, limit int) ([]ScheduledEmailItem, error)
+	// ListScheduledInOrgByThread is the same query scoped to a
 	// single email thread. ThreadView uses it to render queued sends
 	// inline alongside already-sent messages so the user can see (and
 	// cancel) what's about to fire on the conversation they're
 	// reading.
-	ListScheduledForUserByThread(ctx context.Context, userID uuid.UUID, threadID string, limit int) ([]ScheduledEmailItem, error)
-	// CountScheduledForUser returns the number of pending email tasks
+	ListScheduledInOrgByThread(ctx context.Context, orgID uuid.UUID, threadID string, accountIDs []uuid.UUID, limit int) ([]ScheduledEmailItem, error)
+	// CountScheduledInOrg returns the number of pending email tasks
 	// currently scheduled (regardless of fire time). Used for the
-	// scope-rail counter.
-	CountScheduledForUser(ctx context.Context, userID uuid.UUID) (int64, error)
-	// CancelScheduledByUser flips a pending email task to status
-	// 'cancelled' only when (a) it belongs to a mailbox the user owns,
-	// (b) it's still pending. Returns (cloudTaskName, ok, err) — the
+	// scope-rail counter and the pending-send cap.
+	CountScheduledInOrg(ctx context.Context, orgID uuid.UUID) (int64, error)
+	// CancelScheduledInOrg flips a pending email task to status
+	// 'cancelled' only when (a) it sends from one of the organization's
+	// mailboxes, (b) it's still pending. Returns (cloudTaskName, ok, err) — the
 	// Cloud Task resource name is included so the caller can issue a
 	// best-effort DeleteTask to clean the queue. The handler still
 	// short-circuits on a non-pending status, so a failed DeleteTask
 	// just degrades to a harmless no-op dispatch — never a real send.
 	// `ok` distinguishes 404 (no row updated) from 200.
-	CancelScheduledByUser(ctx context.Context, taskID, userID uuid.UUID) (cloudTaskName *string, ok bool, err error)
+	CancelScheduledInOrg(ctx context.Context, taskID, orgID uuid.UUID, accountIDs []uuid.UUID) (cloudTaskName *string, ok bool, err error)
+	// ProviderThreadForMailbox returns the provider thread the mailbox itself
+	// holds for a unibox conversation, or "" when it holds none.
+	ProviderThreadForMailbox(ctx context.Context, emailAccountID uuid.UUID, threadID string) (string, error)
 }
 
 type taskRepository struct {
@@ -260,8 +279,8 @@ func (r *taskRepository) CreateWarmupTask(ctx context.Context, warmupTask *Warmu
 // CreateEmailTask creates email-specific task data
 func (r *taskRepository) CreateEmailTask(ctx context.Context, emailTask *EmailTask) error {
 	query := `
-		INSERT INTO email_tasks (task_id, to_addrs, cc, bcc, in_reply_to, subject, body, body_html, body_plain, thread_id, send_mode, encrypted, tracked)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		INSERT INTO email_tasks (task_id, to_addrs, cc, bcc, in_reply_to, subject, body, body_html, body_plain, thread_id, send_mode, encrypted, tracked, forwarded_html, forwarded_plain)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 	`
 
 	sendMode := emailTask.SendMode
@@ -283,6 +302,8 @@ func (r *taskRepository) CreateEmailTask(ctx context.Context, emailTask *EmailTa
 		sendMode,
 		emailTask.Encrypted,
 		emailTask.Tracked,
+		emailTask.ForwardedHTML,
+		emailTask.ForwardedPlain,
 	)
 
 	return err
@@ -326,7 +347,7 @@ func (r *taskRepository) GetTaskByMessageID(ctx context.Context, messageID strin
 		return nil, nil
 	}
 	query := `
-		SELECT id, task_type, email_account_id, status, message_id,
+		SELECT id, task_type, email_account_id, status, message_id, reply_to,
 		       scheduled_at, completed_at, cloud_task_name, created_at, updated_at
 		FROM tasks
 		WHERE message_id = $1 OR message_id = $2
@@ -341,6 +362,7 @@ func (r *taskRepository) GetTaskByMessageID(ctx context.Context, messageID strin
 		&task.EmailAccountID,
 		&task.Status,
 		&task.MessageID,
+		&task.ReplyTo,
 		&task.ScheduledAt,
 		&task.CompletedAt,
 		&task.CloudTaskName,
@@ -400,7 +422,8 @@ func (r *taskRepository) GetWarmupTask(ctx context.Context, taskID uuid.UUID) (*
 // GetEmailTask retrieves email task data
 func (r *taskRepository) GetEmailTask(ctx context.Context, taskID uuid.UUID) (*EmailTask, error) {
 	query := `
-		SELECT task_id, to_addrs, cc, bcc, in_reply_to, subject, body, body_html, body_plain, thread_id, send_mode, encrypted
+		SELECT task_id, to_addrs, cc, bcc, in_reply_to, subject, body, body_html, body_plain, thread_id, send_mode, encrypted,
+		       forwarded_html, forwarded_plain
 		FROM email_tasks
 		WHERE task_id = $1
 	`
@@ -419,6 +442,8 @@ func (r *taskRepository) GetEmailTask(ctx context.Context, taskID uuid.UUID) (*E
 		&emailTask.ThreadID,
 		&emailTask.SendMode,
 		&emailTask.Encrypted,
+		&emailTask.ForwardedHTML,
+		&emailTask.ForwardedPlain,
 	)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -439,16 +464,21 @@ const taskDispatchedEmail = `(t.task_type <> 'campaign' OR t.message_id <> '' OR
 		SELECT 1 FROM campaign_contact_progress ccp WHERE ccp.dispatch_task_id = t.id))`
 
 // CountCampaignEmailsSentToday counts the campaign emails a mailbox dispatched
-// today (excludes warmup, and the campaign chain's own wake-ups).
+// today (excludes warmup, and the campaign chain's own wake-ups). Placement
+// test probes count too: they are cold mail from the same daily budget.
 func (r *taskRepository) CountCampaignEmailsSentToday(ctx context.Context, accountID uuid.UUID) (int, error) {
+	// Two counts so the campaign half keeps its partial index; the probe half
+	// is a range on (email_account_id, completed_at).
 	query := `
-		SELECT COUNT(*)
-		FROM tasks t
-		WHERE t.email_account_id = $1
-		  AND t.status = 'completed'
-		  AND t.task_type = 'campaign'
-		  AND DATE(t.completed_at) = CURRENT_DATE
-		  AND ` + taskDispatchedEmail + `
+		SELECT (
+			SELECT COUNT(*)
+			FROM tasks t
+			WHERE t.email_account_id = $1
+			  AND t.status = 'completed'
+			  AND t.task_type = 'campaign'
+			  AND DATE(t.completed_at) = CURRENT_DATE
+			  AND ` + taskDispatchedEmail + `
+		) + (` + placementSentTodaySQL + ` AND t.email_account_id = $1)
 	`
 
 	var count int
@@ -503,6 +533,14 @@ func (r *taskRepository) CountCampaignEmailsSentTodayByAccounts(ctx context.Cont
 		  AND DATE(t.completed_at) = CURRENT_DATE
 		  AND ` + taskDispatchedEmail + `
 		GROUP BY t.email_account_id
+		UNION ALL
+		SELECT t.email_account_id, COUNT(*)
+		FROM tasks t
+		WHERE t.email_account_id = ANY($1)
+		  AND t.task_type = 'placement'
+		  AND ((t.status = 'completed' AND t.completed_at >= CURRENT_DATE AND t.completed_at < CURRENT_DATE + 1)
+		    OR (t.status IN ('pending', 'active') AND t.scheduled_at < CURRENT_DATE + 1))
+		GROUP BY t.email_account_id
 	`
 	rows, err := r.db.Query(ctx, query, accountIDs)
 	if err != nil {
@@ -515,10 +553,53 @@ func (r *taskRepository) CountCampaignEmailsSentTodayByAccounts(ctx context.Cont
 		if err := rows.Scan(&id, &n); err != nil {
 			return nil, err
 		}
-		out[id] = n
+		out[id] += n
 	}
 	return out, rows.Err()
 }
+
+// CampaignSendsPerDayByAccounts averages the same ledger as
+// CountCampaignEmailsSentTodayByAccounts over whole days before today.
+func (r *taskRepository) CampaignSendsPerDayByAccounts(ctx context.Context, accountIDs []uuid.UUID, days int) (map[uuid.UUID]float64, error) {
+	out := make(map[uuid.UUID]float64, len(accountIDs))
+	if len(accountIDs) == 0 || days <= 0 {
+		return out, nil
+	}
+	query := `
+		SELECT t.email_account_id, COUNT(*)
+		FROM tasks t
+		WHERE t.email_account_id = ANY($1)
+		  AND t.status = 'completed'
+		  AND t.task_type = 'campaign'
+		  AND t.completed_at >= CURRENT_DATE - $2::int
+		  AND t.completed_at < CURRENT_DATE
+		  AND ` + taskDispatchedEmail + `
+		GROUP BY t.email_account_id
+	`
+	rows, err := r.db.Query(ctx, query, accountIDs, days)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = float64(n) / float64(days)
+	}
+	return out, rows.Err()
+}
+
+// placementSentTodaySQL counts today's placement probes, sent or still
+// queued: a queued probe already holds its place in the day, so a campaign
+// cannot spend it while the test is sending. Callers add the mailbox predicate.
+const placementSentTodaySQL = `
+	SELECT COUNT(*) FROM tasks t
+	WHERE t.task_type = 'placement'
+	  AND ((t.status = 'completed' AND t.completed_at >= CURRENT_DATE AND t.completed_at < CURRENT_DATE + 1)
+	    OR (t.status IN ('pending', 'active') AND t.scheduled_at < CURRENT_DATE + 1))`
 
 // CountCampaignSendsTodayBySender is CountCampaignEmailsSentToday for one
 // campaign, split by mailbox. Same ledger and the same day boundary, so the
@@ -577,8 +658,8 @@ func (r *taskRepository) CreateEmailTaskFull(ctx context.Context, task *Task, em
 	}
 
 	etQuery := `
-		INSERT INTO email_tasks (task_id, to_addrs, cc, bcc, in_reply_to, subject, body, body_html, body_plain, thread_id, send_mode, encrypted, tracked)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		INSERT INTO email_tasks (task_id, to_addrs, cc, bcc, in_reply_to, subject, body, body_html, body_plain, thread_id, send_mode, encrypted, tracked, forwarded_html, forwarded_plain)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 	`
 	_, err = tx.Exec(ctx, etQuery,
 		emailTask.TaskID,
@@ -594,6 +675,8 @@ func (r *taskRepository) CreateEmailTaskFull(ctx context.Context, task *Task, em
 		sendMode,
 		emailTask.Encrypted,
 		emailTask.Tracked,
+		emailTask.ForwardedHTML,
+		emailTask.ForwardedPlain,
 	)
 	if err != nil {
 		return err
@@ -1065,13 +1148,23 @@ func (r *taskRepository) UpdateTaskEmailAccount(ctx context.Context, taskID, acc
 	return err
 }
 
+// UpdateTaskReplyTo records the Reply-To a send carries. It is the evidence
+// that lets a reply landing in that address's mailbox count for the campaign.
+func (r *taskRepository) UpdateTaskReplyTo(ctx context.Context, taskID uuid.UUID, replyTo string) error {
+	_, err := r.db.Exec(ctx,
+		`UPDATE tasks SET reply_to = $1, updated_at = NOW() WHERE id = $2 AND reply_to <> $1`,
+		replyTo, taskID)
+	return err
+}
+
 // UpdateCampaignTaskTracking updates the campaign task with contact_id and sequence_id
 // This is called when the task is processed and we know which contact/sequence to send to
-// These IDs are needed for tracking pixel/click events to record progress
+// These IDs are needed for tracking pixel/click events to record progress.
+// A retry may send a different pair, so the recorded subject is cleared with it.
 func (r *taskRepository) UpdateCampaignTaskTracking(ctx context.Context, taskID, contactID, sequenceID uuid.UUID) error {
 	query := `
 		UPDATE campaign_tasks
-		SET contact_id = $2, sequence_id = $3
+		SET contact_id = $2, sequence_id = $3, subject = NULL
 		WHERE task_id = $1
 	`
 
@@ -1079,10 +1172,16 @@ func (r *taskRepository) UpdateCampaignTaskTracking(ctx context.Context, taskID,
 	return err
 }
 
-// ListScheduledForUser returns user-initiated email tasks still in
-// 'pending' state, ordered by scheduled_at. Joins tasks → email_tasks
+// UpdateCampaignTaskSubject records the rendered subject a campaign send carries.
+func (r *taskRepository) UpdateCampaignTaskSubject(ctx context.Context, taskID uuid.UUID, subject string) error {
+	_, err := r.db.Exec(ctx, `UPDATE campaign_tasks SET subject = CASE WHEN btrim($2) = '' THEN NULL ELSE $2 END WHERE task_id = $1`, taskID, subject)
+	return err
+}
+
+// ListScheduledInOrg returns the organization's user-initiated email tasks
+// still in 'pending' state, ordered by scheduled_at. Joins tasks → email_tasks
 // → email_accounts so callers don't need three lookups per row.
-func (r *taskRepository) ListScheduledForUser(ctx context.Context, userID uuid.UUID, limit int) ([]ScheduledEmailItem, error) {
+func (r *taskRepository) ListScheduledInOrg(ctx context.Context, orgID uuid.UUID, accountIDs []uuid.UUID, limit int) ([]ScheduledEmailItem, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
@@ -1098,19 +1197,21 @@ func (r *taskRepository) ListScheduledForUser(ctx context.Context, userID uuid.U
 			et.cc,
 			et.bcc,
 			et.subject,
-			et.body_plain,
+			-- A forward with no note previews the message it forwards.
+			CASE WHEN btrim(et.body_plain) = '' THEN et.forwarded_plain ELSE et.body_plain END,
 			et.body_html,
 			et.thread_id
 		FROM tasks t
 		INNER JOIN email_tasks et ON et.task_id = t.id
 		INNER JOIN email_accounts ea ON ea.id = t.email_account_id
-		WHERE ea.user_id = $1
+		WHERE ea.organization_id = $1
 		  AND t.task_type = 'email'
 		  AND t.status = 'pending'
+		  AND (COALESCE(cardinality($3::uuid[]), 0) = 0 OR ea.id = ANY($3::uuid[]))
 		ORDER BY t.scheduled_at ASC NULLS LAST, t.created_at ASC
 		LIMIT $2
 	`
-	rows, err := r.db.Query(ctx, query, userID, limit)
+	rows, err := r.db.Query(ctx, query, orgID, limit, accountIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -1145,11 +1246,11 @@ func (r *taskRepository) ListScheduledForUser(ctx context.Context, userID uuid.U
 	return items, rows.Err()
 }
 
-// ListScheduledForUserByThread is ListScheduledForUser scoped to a
-// single thread. Same join + ownership enforcement, plus an extra
+// ListScheduledInOrgByThread is ListScheduledInOrg scoped to a
+// single thread. Same join + tenant enforcement, plus an extra
 // thread_id filter. Empty threadID is treated as "no rows" so the
 // caller can't accidentally fall back to the full list.
-func (r *taskRepository) ListScheduledForUserByThread(ctx context.Context, userID uuid.UUID, threadID string, limit int) ([]ScheduledEmailItem, error) {
+func (r *taskRepository) ListScheduledInOrgByThread(ctx context.Context, orgID uuid.UUID, threadID string, accountIDs []uuid.UUID, limit int) ([]ScheduledEmailItem, error) {
 	if threadID == "" {
 		return []ScheduledEmailItem{}, nil
 	}
@@ -1168,20 +1269,22 @@ func (r *taskRepository) ListScheduledForUserByThread(ctx context.Context, userI
 			et.cc,
 			et.bcc,
 			et.subject,
-			et.body_plain,
+			-- A forward with no note previews the message it forwards.
+			CASE WHEN btrim(et.body_plain) = '' THEN et.forwarded_plain ELSE et.body_plain END,
 			et.body_html,
 			et.thread_id
 		FROM tasks t
 		INNER JOIN email_tasks et ON et.task_id = t.id
 		INNER JOIN email_accounts ea ON ea.id = t.email_account_id
-		WHERE ea.user_id = $1
+		WHERE ea.organization_id = $1
 		  AND t.task_type = 'email'
 		  AND t.status = 'pending'
 		  AND et.thread_id = $2
+		  AND (COALESCE(cardinality($4::uuid[]), 0) = 0 OR ea.id = ANY($4::uuid[]))
 		ORDER BY t.scheduled_at ASC NULLS LAST, t.created_at ASC
 		LIMIT $3
 	`
-	rows, err := r.db.Query(ctx, query, userID, threadID, limit)
+	rows, err := r.db.Query(ctx, query, orgID, threadID, limit, accountIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -1216,30 +1319,31 @@ func (r *taskRepository) ListScheduledForUserByThread(ctx context.Context, userI
 	return items, rows.Err()
 }
 
-// CountScheduledForUser returns how many email tasks are pending across
-// every mailbox the user owns. Cheap enough to fold into the overview
+// CountScheduledInOrg returns how many email tasks are pending across
+// every mailbox in the organization. Cheap enough to fold into the overview
 // payload.
-func (r *taskRepository) CountScheduledForUser(ctx context.Context, userID uuid.UUID) (int64, error) {
+func (r *taskRepository) CountScheduledInOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
 	query := `
 		SELECT COUNT(*)
 		FROM tasks t
 		INNER JOIN email_accounts ea ON ea.id = t.email_account_id
-		WHERE ea.user_id = $1
+		WHERE ea.organization_id = $1
 		  AND t.task_type = 'email'
 		  AND t.status = 'pending'
 	`
 	var n int64
-	err := r.db.QueryRow(ctx, query, userID).Scan(&n)
+	err := r.db.QueryRow(ctx, query, orgID).Scan(&n)
 	return n, err
 }
 
-// CancelScheduledByUser flips a single pending email task to
-// 'cancelled', enforcing ownership through the email_accounts join.
+// CancelScheduledInOrg flips a single pending email task to
+// 'cancelled', enforcing the tenant through the email_accounts join.
 // Returns the Cloud Task resource name (if the row had one) so the
 // caller can issue a best-effort DeleteTask to clean up the GCP
-// queue. ok=false when the task either doesn't exist, isn't owned by
-// this user, isn't an email task, or already left the pending state.
-func (r *taskRepository) CancelScheduledByUser(ctx context.Context, taskID, userID uuid.UUID) (*string, bool, error) {
+// queue. ok=false when the task either doesn't exist, sends from
+// another organization's mailbox or one outside accountIDs, isn't an
+// email task, or already left the pending state.
+func (r *taskRepository) CancelScheduledInOrg(ctx context.Context, taskID, orgID uuid.UUID, accountIDs []uuid.UUID) (*string, bool, error) {
 	query := `
 		UPDATE tasks t
 		SET status = 'cancelled',
@@ -1247,13 +1351,14 @@ func (r *taskRepository) CancelScheduledByUser(ctx context.Context, taskID, user
 		FROM email_accounts ea
 		WHERE t.id = $1
 		  AND t.email_account_id = ea.id
-		  AND ea.user_id = $2
+		  AND ea.organization_id = $2
 		  AND t.task_type = 'email'
 		  AND t.status = 'pending'
+		  AND (COALESCE(cardinality($3::uuid[]), 0) = 0 OR ea.id = ANY($3::uuid[]))
 		RETURNING t.cloud_task_name
 	`
 	var cloudTaskName *string
-	err := r.db.QueryRow(ctx, query, taskID, userID).Scan(&cloudTaskName)
+	err := r.db.QueryRow(ctx, query, taskID, orgID, accountIDs).Scan(&cloudTaskName)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, false, nil
@@ -1261,6 +1366,37 @@ func (r *taskRepository) CancelScheduledByUser(ctx context.Context, taskID, user
 		return nil, false, err
 	}
 	return cloudTaskName, true, nil
+}
+
+// ProviderThreadForMailbox returns the provider thread the mailbox holds for a
+// unibox conversation: the conversation's own id when the mailbox has a message
+// in it (synced, or sent and not yet synced back), else the thread its latest
+// earlier reply into the conversation landed in, else "".
+func (r *taskRepository) ProviderThreadForMailbox(ctx context.Context, emailAccountID uuid.UUID, threadID string) (string, error) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return "", nil
+	}
+	var handle string
+	err := r.db.QueryRow(ctx, `
+		SELECT CASE
+			WHEN EXISTS (SELECT 1 FROM unibox_emails WHERE email_id = $1 AND thread_id = $2)
+			  OR EXISTS (SELECT 1 FROM tasks WHERE email_account_id = $1 AND status = 'completed' AND thread_id = $2)
+			THEN $2
+			ELSE COALESCE((
+				SELECT t.thread_id
+				FROM tasks t
+				JOIN email_tasks et ON et.task_id = t.id
+				WHERE t.email_account_id = $1
+				  AND t.task_type = 'email'
+				  AND t.status = 'completed'
+				  AND t.thread_id <> ''
+				  AND et.thread_id = $2
+				ORDER BY t.completed_at DESC NULLS LAST
+				LIMIT 1
+			), '')
+		END`, emailAccountID, threadID).Scan(&handle)
+	return handle, err
 }
 
 // MarkDirectOpened records the first open and lets a later human open replace a machine open.

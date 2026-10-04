@@ -17,9 +17,12 @@ import {
 import clippedTitle from "@/lib/helper/clippedTitle";
 import type { ContactCampaignProgress, VerificationSource, VerificationStatus } from "@/lib/api/models/app/contacts/Contact";
 import type { SearchContactsSortBy } from "@/lib/api/models/app/contacts/search-contacts.types";
-import type { ViewName } from "@/lib/api/models/app/views/ViewPreferences";
+import type { ColumnViewName } from "@/lib/api/models/app/views/ViewPreferences";
 import { CategoryChip } from "./CategoryPicker";
 import VerificationBadge from "./VerificationBadge";
+import ContactAvatar from "./ContactAvatar";
+import CompanyLogo from "./CompanyLogo";
+import { companyDomainOf } from "@/lib/companyLogo";
 import { Dash, EngagementValue, InfoHeader, LeadStatusPill, StatusPill } from "./cells";
 
 // The fields a row needs to render any column. Structural rather than the full
@@ -40,8 +43,10 @@ export interface ContactRow {
     verification_sub_status?: string;
     verification_source?: VerificationSource;
     verification_provider?: string;
-    verification_checked_at?: string | null;
+    verification_checked_at?: Date | null;
     verification_confidence?: number;
+    verification_requested_at?: Date | null;
+    mail_host?: string;
     created_at: Date;
     updated_at?: Date;
 }
@@ -78,6 +83,9 @@ export interface ContactColumn {
     locked?: boolean;
     // The custom-field key this column shows, for the custom columns.
     custom?: string;
+    // Set on columns of optional contact data: a list where no row has a value
+    // hides the column rather than showing a column of dashes.
+    hasValue?: (c: ContactRow) => boolean;
 }
 
 const HIDE: Record<Breakpoint, string> = {
@@ -119,11 +127,7 @@ const nameColumn: ContactColumn = {
                 : c.email;
         return (
             <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center shrink-0">
-                    <span className="text-[9.5px] font-semibold text-slate-600">
-                        {(c.first_name || c.email)?.slice(0, 2).toUpperCase()}
-                    </span>
-                </div>
+                <ContactAvatar c={c} />
                 {/* flex-1, not shrink-to-fit: the chip cap below is a
                     percentage, so this has to be the column's width and
                     not the name's. */}
@@ -152,6 +156,16 @@ const nameColumn: ContactColumn = {
                         <MailIcon className="w-2.5 h-2.5 shrink-0" />
                         <span className="truncate" {...clippedTitle}>{c.email}</span>
                         <VerificationBadge contact={c} />
+                        {!!c.campaign_lead?.cc?.length && (
+                            <span
+                                className="inline-flex items-center h-3.5 px-1 shrink-0 rounded bg-sky-50 text-sky-700 font-sans text-[9.5px] font-medium"
+                                title={`CC: ${c.campaign_lead.cc
+                                    .map((x) => (x.status === "active" ? x.email : `${x.email} (${x.status}, left off)`))
+                                    .join(", ")}`}
+                            >
+                                CC {c.campaign_lead.cc.length}
+                            </span>
+                        )}
                     </div>
                 </div>
             </div>
@@ -163,7 +177,7 @@ const nameColumn: ContactColumn = {
 // leave. Which breakpoint each sized column appears at is then just "does Name
 // still clear ~170px": Leads carries five campaign columns Contacts does not, so
 // company waits longer for room there.
-function companyColumn(view: ViewName): ContactColumn {
+function companyColumn(view: ColumnViewName): ContactColumn {
     return {
         id: "company",
         label: "Company",
@@ -172,15 +186,23 @@ function companyColumn(view: ViewName): ContactColumn {
         sortKey: "company",
         sortAsc: true,
         cellClassName: "text-[12px] text-slate-600",
-        cell: ({ c }) =>
-            c.company ? (
+        hasValue: (c) => !!c.company || !!companyDomainOf(c.email, c.mail_host),
+        cell: ({ c }) => {
+            const domain = companyDomainOf(c.email, c.mail_host);
+            const mark = <Building2Icon className="w-3 h-3 shrink-0 text-slate-400" />;
+            if (!c.company && !domain) return <Dash />;
+            return (
                 <div className="flex items-center gap-1.5 min-w-0">
-                    <Building2Icon className="w-3 h-3 shrink-0 text-slate-400" />
-                    <span className="truncate" {...clippedTitle}>{c.company}</span>
+                    {domain ? <CompanyLogo domain={domain} className="size-3.5 shrink-0 rounded-[3px] object-contain" fallback={mark} /> : mark}
+                    {c.company ? (
+                        <span className="truncate" {...clippedTitle}>{c.company}</span>
+                    ) : (
+                        // No company on file: the domain their address is on.
+                        <span className="truncate text-slate-400" title="From their email domain">{domain}</span>
+                    )}
                 </div>
-            ) : (
-                <Dash />
-            ),
+            );
+        },
     };
 }
 
@@ -192,6 +214,7 @@ const phoneColumn: ContactColumn = {
     sortKey: "phone",
     sortAsc: true,
     cellClassName: "text-[12px] text-slate-600 font-mono",
+    hasValue: (c) => !!c.phone,
     cell: ({ c }) =>
         c.phone ? (
             <div className="flex items-center gap-1.5 min-w-0">
@@ -310,7 +333,7 @@ const campaignsColumn: ContactColumn = {
 
 const dateCell = "font-mono text-[11px] text-slate-500 tabular-nums";
 
-const addedColumn = (view: ViewName): ContactColumn => ({
+const addedColumn = (view: ColumnViewName): ContactColumn => ({
     id: "created_at",
     label: "Added",
     width: view === "campaign_leads" ? "w-32" : "w-24",
@@ -354,6 +377,7 @@ export function customColumn(key: string): ContactColumn {
         sortAsc: true,
         custom: key,
         cellClassName: "text-[12px] text-slate-600",
+        hasValue: (c) => !!c.custom_fields?.[key],
         cell: ({ c }) => {
             const v = c.custom_fields?.[key];
             return v ? <span className="block truncate" {...clippedTitle}>{v}</span> : <Dash />;
@@ -363,7 +387,7 @@ export function customColumn(key: string): ContactColumn {
 
 // Every built-in column a view can show, in its natural order. The chooser
 // lists them in this order under "Available".
-export function builtinColumns(view: ViewName): ContactColumn[] {
+export function builtinColumns(view: ColumnViewName): ContactColumn[] {
     if (view === "campaign_leads") {
         return [
             nameColumn,
@@ -392,8 +416,19 @@ export function builtinColumns(view: ViewName): ContactColumn[] {
     return [nameColumn, companyColumn(view), phoneColumn, statusColumn, campaignsColumn, addedColumn(view), updatedColumn];
 }
 
+// emptyColumnIds names the optional-data columns no loaded row has a value
+// for. An empty list hides nothing, so a loading table keeps its header.
+export function emptyColumnIds(columns: ContactColumn[], rows: ContactRow[]): Set<string> {
+    const out = new Set<string>();
+    if (rows.length === 0) return out;
+    for (const col of columns) {
+        if (col.hasValue && !rows.some(col.hasValue)) out.add(col.id);
+    }
+    return out;
+}
+
 // The layout a member sees before choosing anything.
-export const DEFAULT_COLUMNS: Record<ViewName, string[]> = {
+export const DEFAULT_COLUMNS: Record<ColumnViewName, string[]> = {
     contacts: ["name", "company", "phone", "status", "campaigns", "created_at"],
     campaign_leads: ["name", "company", "progress", "opened", "clicked", "replied", "current_step", "sender", "last_activity"],
 };
@@ -405,7 +440,7 @@ export const DEFAULT_COLUMNS: Record<ViewName, string[]> = {
 // is kept even when no contact currently carries it, so the column the member
 // picked does not vanish because an import replaced the field's name.
 export function resolveColumns(
-    view: ViewName,
+    view: ColumnViewName,
     saved: string[] | undefined,
     customKeys: string[],
 ): { visible: ContactColumn[]; available: ContactColumn[] } {
@@ -438,7 +473,7 @@ export interface SortOption {
 }
 
 // The sort choices the toolbar menu offers, beyond what a header click reaches.
-export function sortOptions(view: ViewName): SortOption[] {
+export function sortOptions(view: ColumnViewName): SortOption[] {
     const base: SortOption[] = [
         { key: "created_at", label: "Date added", asc: false },
         { key: "updated_at", label: "Last updated", asc: false },
@@ -447,6 +482,7 @@ export function sortOptions(view: ViewName): SortOption[] {
         { key: "email", label: "Email", asc: true },
         { key: "company", label: "Company", asc: true },
         { key: "phone", label: "Phone", asc: true },
+        { key: "mail_host", label: "Email provider", asc: true },
     ];
     if (view === "contacts") base.push({ key: "campaign_count", label: "Campaigns", asc: false });
     return base;

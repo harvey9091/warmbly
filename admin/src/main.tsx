@@ -37,10 +37,12 @@ import UserDetailPage from "@/app/dashboard/UserDetailPage";
 import AdminsPage from "@/app/dashboard/AdminsPage";
 import WarmupPage from "@/app/dashboard/WarmupPage";
 import WarmupAppealsPage from "@/app/dashboard/WarmupAppealsPage";
+import DeveloperAppsPage from "@/app/dashboard/DeveloperAppsPage";
 import WarmupContentLayout from "@/app/dashboard/warmup-content/WarmupContentLayout";
 import WarmupContentOverviewPage from "@/app/dashboard/warmup-content/OverviewPage";
 import WarmupContentLibraryPage from "@/app/dashboard/warmup-content/LibraryPage";
 import WarmupContentJobsPage from "@/app/dashboard/warmup-content/JobsPage";
+import PlacementPage from "@/app/dashboard/PlacementPage";
 import CampaignsPage from "@/app/dashboard/CampaignsPage";
 import SendsPage from "@/app/dashboard/SendsPage";
 import LimitRequestsPage from "@/app/dashboard/LimitRequestsPage";
@@ -153,6 +155,7 @@ const router = createBrowserRouter([
                                     { path: "jobs", element: <WarmupContentJobsPage /> },
                                 ],
                             },
+                            { path: "placement", element: gated(AdminPerm.ViewWarmupPool, <PlacementPage />) },
                             { path: "campaigns", element: gated(AdminPerm.ViewCampaigns, <CampaignsPage />) },
                             { path: "sends", element: gated(AdminPerm.ViewCampaigns, <SendsPage />) },
 
@@ -162,6 +165,8 @@ const router = createBrowserRouter([
                             { path: "organizations", element: gated(AdminPerm.ViewOrganizations, <OrganizationsPage />) },
                             { path: "organizations/:id", element: gated(AdminPerm.ViewOrganizations, <OrganizationDetailPage />) },
                             { path: "limit-requests", element: gated(AdminPerm.ViewOrganizations, <LimitRequestsPage />) },
+                            { path: "developer-apps", element: gated(AdminPerm.ViewOrganizations, <DeveloperAppsPage />) },
+                            { path: "app-listings", element: <Navigate to="/developer-apps?tab=directory" replace /> },
                             { path: "discounts", element: gated(AdminPerm.ViewOrganizations, <DiscountsPage />) },
                             { path: "outreach", element: gated(AdminPerm.ViewOrganizations, <OutreachPage />) },
                             { path: "admins", element: gated(AdminPerm.GrantAdminAccess, <AdminsPage />) },

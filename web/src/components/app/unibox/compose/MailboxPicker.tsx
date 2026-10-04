@@ -4,6 +4,7 @@
 // resolved pick. The menu is a compact, searchable list (filterable by
 // mailbox tag) so orgs with dozens of mailboxes can still pick in a second;
 // per-row detail lives in the title tooltip instead of bloating the rows.
+// Replies and forwards reuse it with allowAuto off: they always name a mailbox.
 
 import React from "react";
 import { createPortal } from "react-dom";
@@ -33,11 +34,23 @@ interface MailboxPickerProps {
     candidates: ComposeCandidatesResponse | undefined;
     // True while candidates refetch for a new recipient.
     loading?: boolean;
+    /** Offer the Auto row. Off where the sender is always an explicit mailbox. */
+    allowAuto?: boolean;
+    /** Called as the menu opens, so candidates can be fetched only when wanted. */
+    onOpen?: () => void;
 }
 
 const PANEL_WIDTH = 300;
 
-export default function MailboxPicker({ value, autoTag, onChange, candidates, loading }: MailboxPickerProps) {
+export default function MailboxPicker({
+    value,
+    autoTag,
+    onChange,
+    candidates,
+    loading,
+    allowAuto = true,
+    onOpen,
+}: MailboxPickerProps) {
     const [open, setOpen] = React.useState(false);
     const [search, setSearch] = React.useState("");
     const [tagFilter, setTagFilter] = React.useState<string | null>(null);
@@ -45,7 +58,8 @@ export default function MailboxPicker({ value, autoTag, onChange, candidates, lo
     // overflow, so the menu can't render inside it).
     const [anchor, setAnchor] = React.useState<{ top: number; left: number; up: boolean } | null>(null);
     const boxRef = React.useRef<HTMLDivElement>(null);
-    useClickOutside(boxRef, () => setOpen(false));
+    const triggerRef = React.useRef<HTMLButtonElement>(null);
+    useClickOutside(open, () => setOpen(false), boxRef);
 
     const storeEmails = useAppStore((s) => s.emails);
     const storeTags = useAppStore((s) => s.tags);
@@ -102,6 +116,9 @@ export default function MailboxPicker({ value, autoTag, onChange, candidates, lo
                 ? (scopedBest(autoTag) ?? recommended)
                 : recommended
             : accounts.find((a) => a.id === value);
+    // An explicit pick outside the candidates (still loading, or no longer
+    // active) is named from the store rather than shown as missing.
+    const stored = !selected && value !== "auto" ? storeEmails.find((e) => e.id === value) : undefined;
     const autoTagTitle = autoTag ? storeTags.find((t) => t.id === autoTag)?.title : undefined;
 
     // Every defined tag is offered (not just ones already in use) so a tag
@@ -129,8 +146,12 @@ export default function MailboxPicker({ value, autoTag, onChange, candidates, lo
     return (
         <div ref={boxRef} className="relative min-w-0 flex-1">
             <button
+                ref={triggerRef}
                 type="button"
-                onClick={() => setOpen((o) => !o)}
+                onClick={() => {
+                    if (!open) onOpen?.();
+                    setOpen(!open);
+                }}
                 className="group max-w-full inline-flex items-center gap-1.5 h-6 pl-1 pr-1 -ml-1 rounded-md hover:bg-slate-50 transition-colors min-w-0"
             >
                 {value === "auto" ? (
@@ -156,6 +177,20 @@ export default function MailboxPicker({ value, autoTag, onChange, candidates, lo
                         <span className="font-mono text-[10.5px] text-slate-500 truncate">
                             {selected.email}
                         </span>
+                    </>
+                ) : stored ? (
+                    <>
+                        <span className="text-[12.5px] text-slate-900 font-medium truncate">
+                            {stored.name || stored.email}
+                        </span>
+                        <span className="font-mono text-[10.5px] text-slate-500 truncate">
+                            {stored.email}
+                        </span>
+                        {stored.status !== "active" && (
+                            <span className="h-4 px-1 rounded bg-amber-50 text-amber-700 text-[9.5px] font-medium uppercase tracking-wide shrink-0">
+                                inactive
+                            </span>
+                        )}
                     </>
                 ) : (
                     <span className="text-[12px] text-amber-700">mailbox unavailable</span>
@@ -215,7 +250,7 @@ export default function MailboxPicker({ value, autoTag, onChange, candidates, lo
                             </div>
 
                             {/* Auto: scoped to the active tag filter when one is set */}
-                            {(() => {
+                            {allowAuto && (() => {
                                 const filterTag = tagFilter
                                     ? usedTags.find((t) => t.id === tagFilter)
                                     : undefined;
@@ -255,7 +290,9 @@ export default function MailboxPicker({ value, autoTag, onChange, candidates, lo
                             })()}
 
                             {/* Candidates, best first */}
-                            <AnimatedHeight className="border-t border-slate-100 max-h-52 overflow-y-auto">
+                            <AnimatedHeight
+                                className={cn("max-h-52 overflow-y-auto", allowAuto && "border-t border-slate-100")}
+                            >
                                 {loading && accounts.length === 0 ? (
                                     <>
                                         <CandidateSkeletonRow />

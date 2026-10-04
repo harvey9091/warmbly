@@ -25,4 +25,8 @@ export default interface Organization {
     // member with the Use AI permission sees and can continue every
     // assistant conversation in the workspace.
     assistant_shared_history?: boolean
+    // Workspace timezone (manage_settings), an IANA name or "" when not set.
+    // New campaigns start their schedule in it; a mailbox with no timezone of
+    // its own keeps its warmup hours and working hours in it.
+    timezone?: string
 }

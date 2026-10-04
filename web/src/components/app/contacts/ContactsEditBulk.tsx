@@ -25,6 +25,7 @@ import {
 import toast from "react-hot-toast";
 import { TextInput } from "@/components/ui/field";
 import useUpdateContactsBulk from "@/lib/api/hooks/app/contacts/useUpdateContactsBulk";
+import useCustomFieldKeys from "@/lib/api/hooks/app/contacts/useCustomFieldKeys";
 import type ContactSelection from "@/lib/api/models/app/contacts/ContactSelection";
 import useClickOutside from "@/hooks/useClickOutside";
 import { useConfirm } from "@/hooks/context/confirm";
@@ -34,6 +35,7 @@ import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
 import { cn } from "@/lib/utils";
 import CategoryPicker from "./CategoryPicker";
+import CustomFieldKeyInput from "./CustomFieldKeyInput";
 
 type FieldType = "ADD" | "EDIT" | "DELETE" | "RENAME";
 const FIELD_TYPES: { id: FieldType; label: string; hint: string }[] = [
@@ -230,7 +232,7 @@ export default function ContactsEditBulk({
                                 </PickerRow>
                             </Section>
 
-                            <Section title="Categories" subtitle="Labels put on the contacts themselves.">
+                            <Section title="Labels" subtitle="Labels put on the contacts themselves.">
                                 <PickerRow direction="add" label="Add">
                                     <CategoryPicker value={categoriesAdd} onChange={setCategoriesAdd} />
                                 </PickerRow>
@@ -239,7 +241,7 @@ export default function ContactsEditBulk({
                                         value={categoriesRemove}
                                         onChange={setCategoriesRemove}
                                         allowCreate={false}
-                                        placeholder="Pick categories to strip…"
+                                        placeholder="Pick labels to strip…"
                                     />
                                 </PickerRow>
                             </Section>
@@ -436,8 +438,9 @@ function FieldRow({
     const [showType, setShowType] = React.useState(false);
     const dropRef = React.useRef<HTMLDivElement>(null);
     const triggerRef = React.useRef<HTMLButtonElement>(null);
-    useClickOutside(dropRef, () => setShowType(false));
+    useClickOutside(showType, () => setShowType(false), dropRef);
     const typePlacement = useFlipPlacement(triggerRef, showType, 180);
+    const { data: existingKeys = [] } = useCustomFieldKeys();
     const typeDef = FIELD_TYPES.find((t) => t.id === field.type)!;
     const needsValue = field.type !== "DELETE";
     const missing = !field.key.trim() ? "key" : needsValue && !field.value.trim() ? (field.type === "RENAME" ? "new key name" : "value") : null;
@@ -490,7 +493,13 @@ function FieldRow({
                         )}
                     </AnimatePresence>
                 </div>
-                <TextInput value={field.key} onChange={(v) => onChange({ ...field, key: v })} placeholder="key" className="flex-1" />
+                <CustomFieldKeyInput
+                    value={field.key}
+                    onChange={(v) => onChange({ ...field, key: v })}
+                    keys={existingKeys}
+                    placeholder="key"
+                    className="flex-1"
+                />
                 {/* The value slot keeps its width on DELETE so switching type
                     does not shuffle the row underneath the pointer. */}
                 <div className="flex-1">

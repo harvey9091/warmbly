@@ -852,9 +852,8 @@ func (r *adminRepository) GetWorkerEmails(ctx context.Context, workerID uuid.UUI
 		args = append(args, beforeAt, beforeID)
 	}
 
-	// Health lives on warmup_pool_participants, one row per mailbox. The CASE
-	// rank keeps the worst state winning if that ever stops being true (same
-	// ordering as the risk rebalancer). risk_band is the resolved tier.
+	// Health is the mailbox's standing (pool row, or what Warmbly Cloud
+	// reported), as the risk rebalancer reads it. risk_band is the resolved tier.
 	query := `
 		SELECT ea.id, ea.email, ea.user_id::uuid, ea.organization_id,
 			ea.status, ea.provider, ea.warmup IS NOT NULL, ea.last_synced_at,
@@ -863,19 +862,7 @@ func (r *adminRepository) GetWorkerEmails(ctx context.Context, workerID uuid.UUI
 			COALESCE(wh.health_state, '')::text,
 			wh.blocked_until, ea.created_at
 		FROM email_accounts ea
-		LEFT JOIN LATERAL (
-			SELECT health_state, blocked_until
-			FROM warmup_pool_participants
-			WHERE email_account_id = ea.id
-			ORDER BY CASE health_state
-				WHEN 'blocked' THEN 0
-				WHEN 'quarantined' THEN 1
-				WHEN 'throttled' THEN 2
-				WHEN 'watch' THEN 3
-				WHEN 'healthy' THEN 4
-				ELSE 5
-			END
-			LIMIT 1
+		LEFT JOIN LATERAL (` + warmupStandingSQL("ea.id") + `
 		) wh ON true
 		` + whereClause + `
 		ORDER BY ea.created_at DESC, ea.id DESC
@@ -1159,7 +1146,13 @@ func (r *adminRepository) BlockAccount(ctx context.Context, accountID uuid.UUID,
 
 // UnblockAccount unblocks an account from warmup pools
 func (r *adminRepository) UnblockAccount(ctx context.Context, accountID uuid.UUID) error {
-	_, err := r.db.Exec(ctx, `
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
 		UPDATE warmup_pool_participants
 		SET blocked_at = NULL,
 		    blocked_reason = NULL,
@@ -1169,7 +1162,19 @@ func (r *adminRepository) UnblockAccount(ctx context.Context, accountID uuid.UUI
 		    last_health_evaluated_at = NOW(),
 		    last_health_score = 0
 		WHERE email_account_id = $1
-	`, accountID)
+	`, accountID); err != nil {
+		return err
+	}
+	if err := forgiveWarmupStrikes(ctx, tx, accountID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// forgiveWarmupStrikes clears the tampering strikes behind a hold an admin
+// lifted, or the next health evaluation reimposes it on the same strikes.
+func forgiveWarmupStrikes(ctx context.Context, tx pgx.Tx, accountID uuid.UUID) error {
+	_, err := tx.Exec(ctx, `DELETE FROM warmup_tampering_events WHERE email_account_id = $1`, accountID)
 	return err
 }
 
@@ -1310,6 +1315,9 @@ func (r *adminRepository) ReviewAppeal(ctx context.Context, appealID uuid.UUID, 
 			if err != nil {
 				return err
 			}
+			if err := forgiveWarmupStrikes(ctx, tx, accountID); err != nil {
+				return err
+			}
 
 			_, _ = tx.Exec(ctx, `
 				INSERT INTO warmup_admin_actions (admin_user_id, email_account_id, action, reason)
@@ -1407,8 +1415,8 @@ func (r *adminRepository) SearchCampaigns(ctx context.Context, search *models.Ad
 	addInt(`c.daily_limit <= $%d`, search.DailyLimitMax)
 	addInt(`(SELECT COUNT(*) FROM campaign_leads cl WHERE cl.campaign_id = c.id) >= $%d`, search.ContactCountMin)
 	addInt(`(SELECT COUNT(*) FROM campaign_leads cl WHERE cl.campaign_id = c.id) <= $%d`, search.ContactCountMax)
-	addInt(`(SELECT COUNT(*) FROM campaign_contact_progress ccp WHERE ccp.campaign_id = c.id AND ccp.sent_at IS NOT NULL) >= $%d`, search.SentCountMin)
-	addInt(`(SELECT COUNT(*) FROM campaign_contact_progress ccp WHERE ccp.campaign_id = c.id AND ccp.sent_at IS NOT NULL) <= $%d`, search.SentCountMax)
+	addInt(`(SELECT COUNT(*) FROM campaign_contact_progress ccp WHERE ccp.campaign_id = c.id AND ccp.sent_at IS NOT NULL AND `+progressIsEmailStep("ccp")+`) >= $%d`, search.SentCountMin)
+	addInt(`(SELECT COUNT(*) FROM campaign_contact_progress ccp WHERE ccp.campaign_id = c.id AND ccp.sent_at IS NOT NULL AND `+progressIsEmailStep("ccp")+`) <= $%d`, search.SentCountMax)
 
 	if search.CreatedWithin > 0 {
 		whereClause += " AND c.created_at >= NOW() - ($" + itoa(argNum) + "::int * INTERVAL '1 day')"
@@ -1439,7 +1447,7 @@ func (r *adminRepository) SearchCampaigns(ctx context.Context, search *models.Ad
 	case "contact_count":
 		orderCol = "(SELECT COUNT(*) FROM campaign_leads cl WHERE cl.campaign_id = c.id)"
 	case "sent_count":
-		orderCol = "(SELECT COUNT(*) FROM campaign_contact_progress ccp WHERE ccp.campaign_id = c.id AND ccp.sent_at IS NOT NULL)"
+		orderCol = "(SELECT COUNT(*) FROM campaign_contact_progress ccp WHERE ccp.campaign_id = c.id AND ccp.sent_at IS NOT NULL AND " + progressIsEmailStep("ccp") + ")"
 	}
 	orderDir := "DESC"
 	if search.SortBy != "" && !search.SortDesc {
@@ -1455,7 +1463,7 @@ func (r *adminRepository) SearchCampaigns(ctx context.Context, search *models.Ad
 			u.id, u.first_name, u.last_name, u.email,
 			o.id, o.name, o.slug,
 			(SELECT COUNT(*) FROM campaign_leads cl WHERE cl.campaign_id = c.id),
-			(SELECT COUNT(*) FROM campaign_contact_progress ccp WHERE ccp.campaign_id = c.id AND ccp.sent_at IS NOT NULL),
+			(SELECT COUNT(*) FROM campaign_contact_progress ccp WHERE ccp.campaign_id = c.id AND ccp.sent_at IS NOT NULL AND ` + progressIsEmailStep("ccp") + `),
 			(SELECT COUNT(*) FROM campaign_contact_progress ccp WHERE ccp.campaign_id = c.id AND ccp.opened_at IS NOT NULL),
 			(SELECT COUNT(*) FROM campaign_contact_progress ccp WHERE ccp.campaign_id = c.id AND ccp.clicked_at IS NOT NULL),
 			(SELECT COUNT(*) FROM campaign_contact_progress ccp WHERE ccp.campaign_id = c.id AND ccp.replied_at IS NOT NULL),

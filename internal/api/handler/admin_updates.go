@@ -56,7 +56,7 @@ func (h *Handler) AdminUpdateApply(c *gin.Context) {
 	var body applyUpdateBody
 	if c.Request.ContentLength > 0 {
 		if err := c.ShouldBindJSON(&body); err != nil {
-			errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+			errx.JSON(c, errx.InvalidBody(err))
 			return
 		}
 	}

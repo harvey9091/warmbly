@@ -1,3 +1,5 @@
+import type { CRMExternalRef } from "./CRMProvider";
+
 export type DealStatus = "open" | "won" | "lost";
 
 export default interface Deal {
@@ -10,17 +12,17 @@ export default interface Deal {
     value?: number;
     currency: string;
     status: DealStatus;
-    expected_close_date?: string;
-    won_at?: string;
-    lost_at?: string;
+    expected_close_date?: Date;
+    won_at?: Date;
+    lost_at?: Date;
     lost_reason?: string;
     assigned_to?: string;
     // Attribution: the campaign + sender mailbox that produced the originating
     // reply. Nullable; editable. Lets won revenue trace back to outreach.
     campaign_id?: string;
     source_mailbox_id?: string;
-    created_at: string;
-    updated_at: string;
+    created_at: Date;
+    updated_at: Date;
 
     // Optional joined fields the API may return
     contact?: {
@@ -37,7 +39,12 @@ export default interface Deal {
         position: number;
     };
     campaign_name?: string;
+    // Set when the deal lives in HubSpot.
+    external?: CRMExternalRef;
 }
+
+// Create/update body: expected_close_date goes out as the RFC3339 string the form builds.
+export type DealWrite = Partial<Omit<Deal, "expected_close_date">> & { expected_close_date?: string };
 
 export interface DealsResult {
     data: Deal[];

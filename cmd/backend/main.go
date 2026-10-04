@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	awsconf "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/google/uuid"
 	"github.com/meszmate/apple-go"
+	"github.com/redis/go-redis/v9"
 	"github.com/warmbly/warmbly/internal/api"
 	"github.com/warmbly/warmbly/internal/api/handler"
 	"github.com/warmbly/warmbly/internal/api/middleware"
@@ -34,6 +36,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/aitools"
 	"github.com/warmbly/warmbly/internal/app/analytics"
 	"github.com/warmbly/warmbly/internal/app/apikey"
+	"github.com/warmbly/warmbly/internal/app/appdirectory"
 	"github.com/warmbly/warmbly/internal/app/audit"
 	"github.com/warmbly/warmbly/internal/app/auth"
 	behaviorapp "github.com/warmbly/warmbly/internal/app/behavior"
@@ -44,21 +47,25 @@ import (
 	"github.com/warmbly/warmbly/internal/app/cloudlink"
 	"github.com/warmbly/warmbly/internal/app/compose"
 	"github.com/warmbly/warmbly/internal/app/contact"
+	"github.com/warmbly/warmbly/internal/app/contactimport"
 	"github.com/warmbly/warmbly/internal/app/credits"
 	"github.com/warmbly/warmbly/internal/app/creditwatch"
 	"github.com/warmbly/warmbly/internal/app/crm"
 	"github.com/warmbly/warmbly/internal/app/dailythrottle"
 	"github.com/warmbly/warmbly/internal/app/dangerzone"
+	"github.com/warmbly/warmbly/internal/app/delegation"
 	"github.com/warmbly/warmbly/internal/app/discount"
 	"github.com/warmbly/warmbly/internal/app/email"
 	"github.com/warmbly/warmbly/internal/app/emailsend"
 	emailverifyapp "github.com/warmbly/warmbly/internal/app/emailverify"
+	"github.com/warmbly/warmbly/internal/app/eventschemas"
 	"github.com/warmbly/warmbly/internal/app/feature"
 	"github.com/warmbly/warmbly/internal/app/fleet"
 	"github.com/warmbly/warmbly/internal/app/fleetnode"
 	"github.com/warmbly/warmbly/internal/app/form"
 	"github.com/warmbly/warmbly/internal/app/group"
 	"github.com/warmbly/warmbly/internal/app/guardrail"
+	"github.com/warmbly/warmbly/internal/app/hubspot"
 	idempotencyapp "github.com/warmbly/warmbly/internal/app/idempotency"
 	"github.com/warmbly/warmbly/internal/app/inboxagent"
 	"github.com/warmbly/warmbly/internal/app/inboxtag"
@@ -67,6 +74,8 @@ import (
 	"github.com/warmbly/warmbly/internal/app/instancesettings"
 	"github.com/warmbly/warmbly/internal/app/integration"
 	"github.com/warmbly/warmbly/internal/app/leadsync"
+	"github.com/warmbly/warmbly/internal/app/mailboxavatar"
+	"github.com/warmbly/warmbly/internal/app/mailboximport"
 	"github.com/warmbly/warmbly/internal/app/mcp"
 	"github.com/warmbly/warmbly/internal/app/nativeactions"
 	"github.com/warmbly/warmbly/internal/app/notification"
@@ -84,10 +93,13 @@ import (
 	"github.com/warmbly/warmbly/internal/app/releases"
 	"github.com/warmbly/warmbly/internal/app/replyclassify"
 	"github.com/warmbly/warmbly/internal/app/research"
+	"github.com/warmbly/warmbly/internal/app/salesforce"
 	"github.com/warmbly/warmbly/internal/app/segment"
+	"github.com/warmbly/warmbly/internal/app/sendingdomain"
 	"github.com/warmbly/warmbly/internal/app/sequence"
 	"github.com/warmbly/warmbly/internal/app/settings"
 	"github.com/warmbly/warmbly/internal/app/skills"
+	"github.com/warmbly/warmbly/internal/app/slackapp"
 	"github.com/warmbly/warmbly/internal/app/socialauth"
 	"github.com/warmbly/warmbly/internal/app/socket"
 	"github.com/warmbly/warmbly/internal/app/stripe"
@@ -102,6 +114,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/unibox"
 	"github.com/warmbly/warmbly/internal/app/updates"
 	"github.com/warmbly/warmbly/internal/app/user"
+	"github.com/warmbly/warmbly/internal/app/vendorconn"
 	"github.com/warmbly/warmbly/internal/app/viewprefs"
 	warmupapp "github.com/warmbly/warmbly/internal/app/warmup"
 	"github.com/warmbly/warmbly/internal/app/warmupcontent"
@@ -128,17 +141,23 @@ import (
 	"github.com/warmbly/warmbly/internal/observability"
 	productanalytics "github.com/warmbly/warmbly/internal/observability/analytics"
 	"github.com/warmbly/warmbly/internal/pkg/captcha"
+	"github.com/warmbly/warmbly/internal/pkg/domainproof"
 	"github.com/warmbly/warmbly/internal/pkg/emailverify"
 	"github.com/warmbly/warmbly/internal/pkg/encrypt"
 	"github.com/warmbly/warmbly/internal/pkg/generation"
 	"github.com/warmbly/warmbly/internal/pkg/geo"
 	"github.com/warmbly/warmbly/internal/pkg/idtoken"
+	"github.com/warmbly/warmbly/internal/pkg/mailhost"
+	"github.com/warmbly/warmbly/internal/pkg/mailvendor"
 	"github.com/warmbly/warmbly/internal/pkg/typesafe"
 	"github.com/warmbly/warmbly/internal/repository"
 	"github.com/warmbly/warmbly/internal/scheduler"
 	"github.com/warmbly/warmbly/internal/tasks"
 	"github.com/warmbly/warmbly/internal/tasks/proto"
 	"github.com/warmbly/warmbly/internal/tasksched"
+	"github.com/warmbly/warmbly/internal/version"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 )
 
 func main() {
@@ -158,12 +177,19 @@ func main() {
 
 	var serviceAccount string
 	var keySet keyfunc.Keyfunc
+	var tasksWebhookURL string
 
 	var tokenService token.TokenService
 	var authService auth.AuthService
 	var externalAuthProviders models.ExternalAuthProviders
 	var userService user.UserService
 	var emailService email.EmailService
+	var mailboxImportService *mailboximport.Service
+	var contactImportService *contactimport.Service
+	var hubspotService *hubspot.Service
+	var delegationService *delegation.Service
+	var vendorConnService *vendorconn.Service
+	var sendingDomainService *sendingdomain.Service
 	var poolLinkService poollink.Service
 	var cloudLinkService cloudlink.Service
 	var cliAuthService cliauth.Service
@@ -198,6 +224,7 @@ func main() {
 	var aiSearch generation.SearchClient
 	var aiToolRegistry *aitools.Registry
 	var aiAgentService aiagent.Service
+	var slackService *slackapp.Service
 	var researchService research.Service
 	var skillsService skills.Service
 	var mcpService mcp.Service
@@ -316,6 +343,7 @@ func main() {
 	var webhookServiceForHandler webhook.Service
 	var integrationServiceForHandler integration.Service
 	var oauthService *oauth.Service
+	var appDirectoryService *appdirectory.Service
 	var notificationService notification.Service
 	var twofaService twofa.Service
 	var viewPreferencesService viewprefs.Service
@@ -323,6 +351,7 @@ func main() {
 	var attachmentRepoForHandler repository.AttachmentRepository
 	var emailImageRepoForHandler repository.EmailImageRepository
 	var leadSyncServiceForHandler leadsync.Service
+	var salesforceServiceForHandler *salesforce.Service
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -579,6 +608,15 @@ func main() {
 			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
+		// Register this release's bus schemas before any node publishes them.
+		go func() {
+			rctx, cancel := context.WithTimeout(ctx, time.Minute)
+			defer cancel()
+			if err := eventschemas.Register(rctx, codecImpl); err != nil {
+				errs.CaptureException(err)
+				log.Printf("event schemas: %v", err)
+			}
+		}()
 
 		bus, err := eventbus.FromEnv(kafkaBootstrapServers, kafkaSaslConfig)
 		if err != nil {
@@ -758,6 +796,11 @@ func main() {
 		// Materialize per-org webhook endpoints when an app is authorized/revoked or
 		// its webhook config changes (the app-level subscription model).
 		oauthService.WireWebhookSync(webhookRepository)
+		// Community app directory: published OAuth apps, reviewed before discovery.
+		appDirectoryRepo := repository.NewAppDirectoryRepository(primaryDB.Pool)
+		oauthService.WireListingGuard(appDirectoryRepo)
+		oauthService.WireAdmin(repository.NewOAuthAdminRepository(primaryDB.Pool))
+		appDirectoryService = appdirectory.NewService(appDirectoryRepo, repository.NewOAuthRepository(primaryDB.Pool))
 		// integrationServiceForHandler is constructed after cipherService below —
 		// OAuth/secret sealing depends on the envelope-encryption service.
 		contactRepoForHandler = contactRepostory
@@ -826,6 +869,15 @@ func main() {
 
 		tokenService = token.NewService(primaryDB, tokenRepostory, cache, geoloc, authCfg.AuthSecret)
 		userService = user.NewService(userRepostory, cache)
+
+		// A removed member's sessions and app authorizations end with the membership, on every removal path.
+		organizationService.WireMemberRemoval(func(ctx context.Context, orgID, userID uuid.UUID) error {
+			if xerr := tokenService.LeaveOrganization(ctx, userID, orgID); xerr != nil {
+				return xerr
+			}
+			return nil
+		})
+		organizationService.WireMemberRemoval(oauthService.RevokeMemberGrants)
 
 		// A login ban has to end the sessions the person already holds, or it
 		// does nothing until their tokens expire twelve hours later. Wired here
@@ -1127,8 +1179,8 @@ func main() {
 				Enabled:         getenvDefault("RELEASES_ENABLED", "false") == "true",
 				GithubRepo:      getenvDefault("RELEASES_GITHUB_REPO", "warmbly/warmbly"),
 				WorkerImageRepo: getenvDefault("RELEASES_WORKER_IMAGE_REPO", "ghcr.io/warmbly/warmbly/worker"),
-				WebhookSecret:   os.Getenv("RELEASES_WEBHOOK_SECRET"),
 				GithubToken:     os.Getenv("RELEASES_GITHUB_TOKEN"),
+				SchemaGate:      eventschemas.Gate(codecImpl, version.Version),
 			},
 			fleetSettingsRepo,
 		)
@@ -1185,6 +1237,9 @@ func main() {
 		emailSyncStateRepository = repository.NewEmailSyncStateRepository(primaryDB)
 		emailService.WireSyncState(emailSyncStateRepository)
 		emailService.WireMailboxes(repository.NewMailboxRepository(primaryDB))
+		// A folder excluded from sync has its already-stored mail dropped at
+		// the moment of the change, not a pass later.
+		emailService.WireUnibox(repository.NewUniboxRepository(primaryDB))
 		if instanceSettings != nil {
 			emailService.WireSyncBudget(instanceSettings)
 		}
@@ -1206,6 +1261,9 @@ func main() {
 		if aware, ok := analyticsService.(analytics.LifecycleAware); ok {
 			aware.WireLifecycle(repository.NewSendLifecycleRepository(primaryDB))
 		}
+		if aware, ok := analyticsService.(analytics.WarmupPlacementAware); ok {
+			aware.WireWarmupPlacement(repository.NewWarmupPlacementRepository(primaryDB))
+		}
 
 		// Self-hosted warmup pool link, both roles. The cloud side hands out
 		// codes and runs enrolled mailboxes as warmup-only accounts; the
@@ -1224,6 +1282,7 @@ func main() {
 		cloudLinkService = cloudlink.NewService(cloudLinkRepository, emailRepostory, emailService)
 		// Deleting a mailbox must also revoke its cloud-held credential.
 		emailService.WireCloudUnenroll(cloudLinkService)
+		emailService.WireCloudCredentials(cloudLinkService)
 
 		rateLimitRepository := repository.NewRateLimitRepository(primaryDB)
 		rateLimitService = ratelimit.NewService(cache, rateLimitRepository)
@@ -1241,6 +1300,11 @@ func main() {
 		if aware, ok := contactService.(contact.WebhookAware); ok {
 			aware.WireWebhooks(webhookServiceForHandler)
 		}
+		// Import previews place the columns no header matched; headers and
+		// value kinds only, never a cell.
+		if aware, ok := contactService.(contact.ColumnJudgeAware); ok && typeSafeClient != nil {
+			aware.WireColumnJudge(typeSafeClient)
+		}
 		formRepository := repository.NewFormRepository(primaryDB)
 		formEventRepository := repository.NewFormEventRepository(primaryDB)
 		formService = form.NewService(formRepository)
@@ -1257,6 +1321,7 @@ func main() {
 		formService.SetDomains(organizationRepoForHandler)
 		go jobs.NewFormEventsRetentionJob(formEventRepository).WireRetention(instanceSettings).Start(ctx, 12*time.Hour)
 		go jobs.NewFormsDomainSweep(organizationRepoForHandler).Start(ctx, time.Hour)
+		go jobs.NewContactMailHostSweep(contactRepoForHandler, cache, streamingPublisher).Start(ctx)
 		// A visibly bad import is filed on the workspace's posture. On its own
 		// it can only reach `watch`, which changes nothing.
 		if aware, ok := contactService.(contact.OrgRiskAware); ok && orgRiskService != nil {
@@ -1289,6 +1354,7 @@ func main() {
 				errs.CaptureFatal(err)
 				log.Fatal(err)
 			}
+			tasksWebhookURL = cloudTasksCfg.WebhookURL
 			gclient, err := gtasks.NewClient(ctx, cloudTasksCfg.QueueName, cloudTasksCfg.WebhookURL, serviceAccount, cloudTasksCfg.EmulatorHost)
 			if err != nil {
 				errs.CaptureFatal(err)
@@ -1332,6 +1398,11 @@ func main() {
 		if aware, ok := schedulerService.(scheduler.LifecycleAware); ok {
 			aware.WireLifecycle(repository.NewSendLifecycleRepository(primaryDB))
 		}
+		// A mailbox no heartbeating worker holds is passed over, not picked:
+		// the send path would refuse the hand-off with the same check.
+		if aware, ok := schedulerService.(scheduler.WorkerLivenessAware); ok {
+			aware.WireWorkerLiveness(tasks.NewWorkerLiveness(workerRepository, cache))
+		}
 		campaignService = campaign.NewService(campaignRepostory, taskRepository, emailRepostory, campaignLogRepository, featureGateService, dailyThrottleService, schedulerService, tasksClient, streamingPublisher)
 		// The launch gate refuses a list that is known to be largely
 		// undeliverable, using the same projection preflight reports.
@@ -1341,6 +1412,12 @@ func main() {
 		// A start with nothing left to send says whether verification is why.
 		if aware, ok := campaignService.(campaign.ProgressAware); ok {
 			aware.WireProgress(campaignProgressRepository)
+		}
+		// The send-plan read endpoint serves a background-computed snapshot
+		// rather than walking the planner on the request, so a huge campaign's
+		// plan read stays fast and bounded.
+		if aware, ok := campaignService.(campaign.SnapshotAware); ok {
+			aware.WireSnapshots(repository.NewCampaignSendPlanSnapshotRepository(primaryDB))
 		}
 		// The wizard's audience-versus-pool estimate counts segment members.
 		if aware, ok := campaignService.(campaign.SegmentAware); ok {
@@ -1459,6 +1536,13 @@ func main() {
 			FeatureGate:  featureGateService,
 			Skills:       skillsService,
 			AppBaseURL:   cfg.GetStringOptional(ctx, "APP_BASE_URL", "app_base_url", ""),
+			// tasksService is built later in boot, so it is read at call time.
+			WarmupScheduler: func(ctx context.Context, accountID uuid.UUID) error {
+				if tasksService == nil {
+					return nil
+				}
+				return tasksService.EnsureWarmupScheduled(ctx, accountID)
+			},
 		})
 
 		// Connected MCP servers (client direction): their enabled tools are
@@ -1509,6 +1593,25 @@ func main() {
 		// The AI switch's optional web search shares the same pluggable backend as
 		// the campaign switch and dashboard agent.
 		integrationServiceForHandler.SetAISearch(aiSearch)
+
+		// Native Salesforce sync: events are recorded ahead of the webhook
+		// throttle, and the loops log them as Tasks, pull changes back and run
+		// recurring list-view imports.
+		salesforceServiceForHandler = salesforce.NewService(salesforce.Deps{
+			Repo:         repository.NewSalesforceRepository(primaryDB.Pool),
+			Integrations: integrationServiceForHandler,
+			Cipher:       cipherService,
+			Contacts:     contactService,
+			Holds:        campaignProgressRepository,
+			Suppression:  advancedRepository,
+			Subscription: contactRepostory,
+		})
+		integrationServiceForHandler.SetSalesforce(salesforceServiceForHandler)
+		webhookService.WireRecordSink(salesforceServiceForHandler.Recorder().Record)
+		go jobrun.Loop(ctx, "salesforce_activity_drain", 30*time.Second, true, salesforceServiceForHandler.Drain)
+		go jobrun.Loop(ctx, "salesforce_pull", 5*time.Minute, false, salesforceServiceForHandler.Pull)
+		go jobrun.Loop(ctx, "salesforce_recurring_imports", 5*time.Minute, false, salesforceServiceForHandler.RunRecurring)
+		go jobrun.Loop(ctx, "salesforce_activity_prune", 24*time.Hour, false, salesforceServiceForHandler.Prune)
 		// Port reply-classifier Layer 3 onto the platform provider (OpenAI-first,
 		// self-hostable). Platform-paid, never charged to org credits. Nil provider
 		// leaves Layer 3 disabled (the ambiguous middle resolves to "unknown").
@@ -1532,7 +1635,6 @@ func main() {
 		notificationService = notification.NewService(repository.NewNotificationRepository(primaryDB.Pool), streamingPublisher)
 		// Saved list layouts: each member's columns and sort per dashboard list.
 		viewPreferencesService = viewprefs.NewService(repository.NewViewPreferencesRepository(primaryDB.Pool))
-		notificationService.WireDelivery(emailNotificationService, integrationServiceForHandler, userRepostory, organizationRepoForHandler)
 		// Mobile push (APNs): device registration always works; delivery only
 		// activates when the APNS_* env is configured. The Redis client backs
 		// the shared immediate-then-digest push window. The sender stays a nil
@@ -1563,6 +1665,26 @@ func main() {
 			inboxAgentService.WireDraftGate(inboxtag.NewDraftGate(inboxTagRepository))
 		}
 		advancedService.WireInboxAgent(inboxAgentService)
+		// Slack app: the assistant, the inbox mirror's actions and notifications.
+		// Built here because it needs the agent, the tool registry and the drafts.
+		var slackRedis *redis.Client
+		if authCache != nil {
+			slackRedis = authCache.Client
+		}
+		slackService = slackapp.New(slackapp.Deps{
+			Integrations: integrationServiceForHandler, Repo: repository.NewSlackRepository(primaryDB),
+			Orgs: organizationService, Agent: aiAgentService, Registry: aiToolRegistry,
+			Audit: auditService, Redis: slackRedis,
+			Threads: uniboxRepository, Labels: repository.NewTagCategoryStore(primaryDB.Pool),
+			Drafts: aiDraftRepo, Users: userRepostory, Tasks: taskRepository, Campaigns: campaignRepostory,
+			Cipher: cipherService,
+		})
+		notificationService.WireDelivery(emailNotificationService, slackService, userRepostory, organizationRepoForHandler)
+		if aware, ok := emailSendService.(emailsend.ReplyObserverAware); ok {
+			aware.WireReplyObserver(slackService)
+		}
+		organizationService.WireMemberRemoval(slackService.OnMemberRemoved)
+		slackService.StartMaintenance(ctx)
 		// The classified intent lands on the contact's progress for the
 		// reply_intent branch condition.
 		advancedService.WireInboxTags(inboxTagRepository)
@@ -1620,6 +1742,105 @@ func main() {
 		// ledger as the automation AI nodes. Nil provider leaves them
 		// returning a clean "not available".
 		tasksService.SetAI(aiProvider, creditService)
+
+		// Mailbox imports: files and pasted lists connected in the background,
+		// with each domain's mail host detected from its DNS.
+		// One prover for every DNS ownership proof, keyed by the instance secret.
+		domainProver := domainproof.New(authCfg.AuthSecret)
+
+		// Whole-domain connects: Google Workspace delegation to the instance's
+		// service account, Microsoft 365 consent to its Outlook app.
+		outlookApp := oauth2Cfg.InboxAuthorization.Outlook
+		// A Workspace admin proves the domain by signing in with Google, through
+		// the dashboard's own sign-in client (openid and email only) and its
+		// callback; the mailbox client stands in only where sign-in is off.
+		var googleSignin *oauth2.Config
+		if redirect := ssoRedirectURL(authCfg.GoogleRedirectURI, "google"); authCfg.GoogleClientID != "" && authCfg.GoogleClientSecret != "" && redirect != "" {
+			googleSignin = &oauth2.Config{
+				ClientID: authCfg.GoogleClientID, ClientSecret: authCfg.GoogleClientSecret, RedirectURL: redirect,
+				Scopes: []string{"openid", "email"}, Endpoint: google.Endpoint,
+			}
+		} else if g := oauth2Cfg.InboxAuthorization.Google; g != nil && g.ClientID != "" && g.ClientSecret != "" {
+			googleSignin = &oauth2.Config{
+				ClientID: g.ClientID, ClientSecret: g.ClientSecret, RedirectURL: g.RedirectURL,
+				Scopes: []string{"openid", "email"}, Endpoint: g.Endpoint,
+			}
+		}
+		delegationService = delegation.NewService(delegation.Deps{
+			Repo:              repository.NewDomainGrantRepository(primaryDB),
+			Mailboxes:         emailService,
+			Store:             emailRepostory,
+			Cache:             cache,
+			GoogleKey:         config.GoogleDelegationKey(),
+			MicrosoftClientID: outlookApp.ClientID,
+			MicrosoftSecret:   outlookApp.ClientSecret,
+			MicrosoftRedirect: outlookApp.RedirectURL,
+			GoogleSignin:      googleSignin,
+			Prover:            domainProver,
+		})
+		go delegationService.StartHealth(ctx)
+
+		// Inbox vendor accounts: keys sealed per workspace, mailboxes imported by API.
+		var sandboxVendors func(string, map[string]string) (mailvendor.Client, error)
+		if u := config.MailvendorSandboxURL(); u != "" {
+			log.Printf("inbox vendors: using the sandbox mock at %s", u)
+			sandboxVendors = func(vendor string, fields map[string]string) (mailvendor.Client, error) {
+				return mailvendor.New(vendor, fields, mailvendor.WithBaseURL(u+"/"+vendor))
+			}
+		}
+		vendorConnService = vendorconn.NewService(vendorconn.Deps{
+			Repo:      repository.NewVendorConnectionRepository(primaryDB),
+			Cipher:    cipherService,
+			Mailboxes: emailRepostory,
+			Reconnect: emailService,
+			Grants:    delegationService,
+			Cache:     cache,
+			NewClient: sandboxVendors,
+		})
+
+		// Sending domains: tracking host per domain and the bare-domain redirect.
+		sendingDomainService = sendingdomain.NewService(repository.NewDomainRedirectRepository(primaryDB), emailRepostory, nil, domainProver)
+		sendingDomainService.WireAuditor(auditService)
+		// A linked self-hosted instance can have Warmbly Cloud serve a redirect instead.
+		sendingDomainService.WireCloud(cloudLinkService)
+		cloudLinkService.OnDisconnect(sendingDomainService.MarkCloudUnlinked)
+		go sendingDomainService.StartSweep(ctx)
+
+		mailhostDetector := mailhost.NewDetector(nil, nil, mailboximport.NewRedisDetectionCache(cache))
+		if !config.MailhostISPDB() {
+			mailhostDetector.WithoutISPDB()
+		}
+		mailboxImportService = mailboximport.NewService(mailboximport.Deps{
+			Repo:      repository.NewMailboxImportRepository(primaryDB),
+			Emails:    emailService,
+			Mailboxes: emailRepostory,
+			Tags:      tagRepostory,
+			Cipher:    cipherService,
+			Detector:  mailhostDetector,
+			Allowance: organizationService,
+			Asker:     typeSafeAsker(typeSafeClient),
+			Warmup:    tasksService,
+			Auditor:   auditService,
+			Publisher: streamingPublisher,
+			Delegator: delegationService,
+			Vendors:   vendorConnService,
+			Domains:   sendingDomainService,
+			GoogleSignin: func() bool {
+				return config.GoogleOAuthConnect() && oauth2Cfg.InboxAuthorization.Google != nil &&
+					oauth2Cfg.InboxAuthorization.Google.ClientID != ""
+			},
+		})
+		emailService.WireImportSignin(mailboxImportService)
+		// Mailbox profile photos: read through grants and vendors here, and at a Microsoft connect.
+		if s3ForHandler != nil {
+			mailboxAvatars := mailboxavatar.New(repository.NewMailboxAvatarRepository(primaryDB), s3ForHandler, delegationService, vendorConnService)
+			emailService.WireAvatars(mailboxAvatars)
+			go mailboxAvatars.Start(ctx)
+		}
+		vendorConnService.SetImporter(mailboxImportService)
+		sendingDomainService.WireVendors(vendorConnService)
+		go vendorConnService.StartReconnect(ctx)
+		go mailboxImportService.Start(ctx)
 		tasksService.SetAISearch(aiSearch)
 		// Research-mode AI variables run a bounded web-research agent over the
 		// shared tool registry at send time.
@@ -1695,6 +1916,14 @@ func main() {
 		// crash between send and enqueue). Campaigns have no other bootstrap once
 		// started, so without this a stranded campaign stops sending forever.
 		go tasksService.StartCampaignReconciler(ctx, 5*time.Minute)
+
+		// Send-plan snapshotter: walk every active campaign's send plan on an
+		// interval and store it, so GET /campaigns/:id/send-plan serves a stored
+		// snapshot instead of running the planner (lead supply, per-mailbox
+		// history) on the request. A no-op without the snapshot store or planner.
+		if campaignService != nil {
+			go campaignService.StartSendPlanSnapshotter(ctx, time.Minute)
+		}
 
 		// Segment-linked campaigns: enrol contacts that drifted into a linked
 		// segment (date windows, engagement counters, nested segments) that
@@ -1811,6 +2040,40 @@ func main() {
 			}
 		}
 		go jobs.NewDeliveryEvidenceJob(verificationEvidence, 15*time.Minute, 2000).Start(ctx)
+		if contactService != nil {
+			contactImportService = contactimport.NewService(contactimport.Deps{
+				Repo:      repository.NewContactImportRepository(primaryDB),
+				Contacts:  contactService,
+				Publisher: streamingPublisher,
+				// New addresses are checked right away rather than on the next tick.
+				Kicked: emailVerifyService.Kick,
+			})
+			go contactImportService.Run(ctx)
+		}
+
+		// HubSpot as the workspace CRM: write-through for the CRM service, the
+		// activity sink, and the outbox for automation-written records. The
+		// consumer drains the outbox and runs the pull.
+		hubspotService = hubspot.New(hubspot.Deps{
+			Repo:         repository.NewCRMProviderRepository(primaryDB.Pool),
+			CRM:          crmRepository,
+			Tokens:       integrationServiceForHandler,
+			Contacts:     contactRepostory,
+			Holds:        campaignProgressRepository,
+			Suppress:     advancedRepository,
+			Importer:     hubspotImporter(contactImportService),
+			Leads:        contactService,
+			Realtime:     streamingPublisher,
+			Cache:        cache,
+			AppURL:       os.Getenv("APP_URL"),
+			ClientSecret: strings.TrimSpace(os.Getenv("HUBSPOT_OAUTH_CLIENT_SECRET")),
+		})
+		crmService.SetExternal(hubspotService)
+		integrationServiceForHandler.SetCRMModeCheck(hubspotService.Active)
+		webhookServiceForHandler.WireRecordSink(hubspotService.OnEvent)
+		if advancedService != nil {
+			advancedService.WireCRMOutbox(hubspotService)
+		}
 		emailVerifyService.SetVerdictHook(func(ctx context.Context, orgID uuid.UUID) {
 			if campaignService != nil {
 				campaignService.ResumeVerificationPaused(ctx, orgID)
@@ -1824,14 +2087,6 @@ func main() {
 		emailVerificationJob := jobs.NewEmailVerificationJob(emailVerifyService, config.VerificationBatchSize)
 		emailVerificationScheduler := jobs.NewEmailVerificationScheduler(emailVerificationJob, time.Duration(config.VerificationIntervalSeconds)*time.Second)
 		go emailVerificationScheduler.Start(ctx)
-
-		// Seed inbox-placement testing: send a tokenized copy of a template
-		// through a real sender to the seed panel, then classify where it landed
-		// by looking the token up in each seed's synced unibox entries.
-		placementRepository = repository.NewPlacementRepository(primaryDB)
-		placementService = placement.NewService(placementRepository, emailRepostory, emailSender)
-		placementPoller := jobs.NewPlacementPoller(placementService, 2*time.Minute)
-		go placementPoller.Start(ctx)
 
 		// Auto-pause guardrails: pause any active campaign whose bounce,
 		// complaint, or reply rate has left the band its owner set. Fifteen
@@ -1847,6 +2102,41 @@ func main() {
 		guardrailJob := jobs.NewGuardrailJob(guardrailService, behaviorRepository)
 		guardrailScheduler := jobs.NewGuardrailScheduler(guardrailJob, 15*time.Minute)
 		go guardrailScheduler.Start(ctx)
+
+		// Inbox placement tests: a template or campaign step rendered as the
+		// campaign would send it, one paced task per seed, read back from each
+		// seed's synced mail by Message-ID.
+		placementRepository = repository.NewPlacementRepository(primaryDB)
+		placementDeps := placement.Deps{
+			Repo:      placementRepository,
+			Emails:    emailRepostory,
+			Campaigns: campaignRepostory,
+			Contacts:  contactRepostory,
+			Tasks:     taskRepository,
+			Scheduler: tasksClient,
+			Policy:    instanceSettings,
+			Gate:      featureGateService,
+			Notifier:  notificationService,
+			Mailboxes: emailService,
+			Pauser:    guardrailService,
+			Batches:   repository.NewPlacementBatchRepository(primaryDB),
+		}
+		if streamingPublisher != nil {
+			placementDeps.Publisher = streamingPublisher
+		}
+		if creditService != nil {
+			placementDeps.Credits = creditService
+		}
+		// A self-hosted instance borrows Warmbly Cloud's panel through its link;
+		// the hosted product is the cloud and runs its own.
+		if config.SelfHosted() && cloudLinkService != nil {
+			placementDeps.Cloud = cloudLinkService
+		}
+		placementService = placement.NewService(placementDeps)
+		aitools.RegisterPlacementTools(aiToolRegistry, placementService, auditService)
+		tasksService.SetPlacement(placementRepository)
+		emailService.WireSeedScope(placementRepository)
+		go jobs.NewPlacementPoller(placementService, 30*time.Second).Start(ctx)
 
 		// Advisor. Detection is deterministic Go over a per-org snapshot and
 		// always runs; the narrator is optional and only rewrites the card copy,
@@ -1963,18 +2253,23 @@ func main() {
 		CloudLinkService: cloudLinkService,
 		CLIAuthService:   cliAuthService,
 
-		TokenService:     tokenService,
-		PasskeyService:   passkeyService,
-		UserService:      userService,
-		EmailService:     emailService,
-		CampaignService:  campaignService,
-		AnalyticsService: analyticsService,
-		RateLimitService: rateLimitService,
-		ContactService:   contactService,
-		SegmentService:   segmentService,
-		FormService:      formService,
-		SequenceService:  sequenceService,
-		UniboxService:    uniboxService,
+		TokenService:         tokenService,
+		PasskeyService:       passkeyService,
+		UserService:          userService,
+		EmailService:         emailService,
+		MailboxImportService: mailboxImportService,
+		ContactImportService: contactImportService,
+		DelegationService:    delegationService,
+		VendorConnService:    vendorConnService,
+		SendingDomainService: sendingDomainService,
+		CampaignService:      campaignService,
+		AnalyticsService:     analyticsService,
+		RateLimitService:     rateLimitService,
+		ContactService:       contactService,
+		SegmentService:       segmentService,
+		FormService:          formService,
+		SequenceService:      sequenceService,
+		UniboxService:        uniboxService,
 
 		FolderService:   folderService,
 		TagService:      tagService,
@@ -2007,6 +2302,7 @@ func main() {
 
 		// CRM
 		CRMService: crmService,
+		HubSpot:    hubspotService,
 
 		// Teams
 		TeamService: teamService,
@@ -2048,6 +2344,7 @@ func main() {
 		AISearch:         aiSearch,
 		AITools:          aiToolRegistry,
 		AIAgentService:   aiAgentService,
+		SlackService:     slackService,
 		ResearchService:  researchService,
 		SkillsService:    skillsService,
 		MCPService:       mcpService,
@@ -2072,8 +2369,14 @@ func main() {
 		// OAuth 2.1 authorization server
 		OAuthService: oauthService,
 
+		// Community app directory
+		AppDirectoryService: appDirectoryService,
+
 		// On-demand Google Sheets -> leads sync
 		LeadSyncService: leadSyncServiceForHandler,
+
+		// Native Salesforce sync
+		SalesforceService: salesforceServiceForHandler,
 
 		WebsocketURI: websocketURI,
 
@@ -2133,6 +2436,7 @@ func main() {
 		ServiceAccount: serviceAccount,
 		KeySet:         keySet,
 		AppEnv:         os.Getenv("APP_ENV"),
+		Audience:       tasksWebhookURL,
 	}
 
 	log.Printf("Starting the backend on %s", addr)
@@ -2161,17 +2465,41 @@ func main() {
 	log.Println("Shutting down backend...")
 	cancel()
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Long enough for a mailbox connect in flight (two silent workers, then the
+	// save) and for import rows already connecting; the platform must allow it
+	// (RAILWAY_DEPLOYMENT_DRAINING_SECONDS, docker's stop_grace_period).
+	const shutdownGrace = 45 * time.Second
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownGrace)
 	defer shutdownCancel()
 
+	var drained sync.WaitGroup
+	if mailboxImportService != nil {
+		drained.Add(1)
+		go func() {
+			defer drained.Done()
+			if !mailboxImportService.Drain(shutdownCtx) {
+				log.Println("Import rows still connecting at shutdown; they resume on the next instance")
+			}
+		}()
+	}
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("Server shutdown error: %v", err)
 	}
+	drained.Wait()
 
 	log.Println("Backend stopped")
 }
 
 // emailVerifyHeloHost resolves the hostname the pre-send verifier announces in
+// hubspotImporter keeps a missing import service a nil interface rather than
+// a typed nil, so HubSpot list import reports itself unavailable.
+func hubspotImporter(s *contactimport.Service) hubspot.Importer {
+	if s == nil {
+		return nil
+	}
+	return s
+}
+
 // analyticsHostFrom reduces APP_URL to a bare hostname. It is one of the three
 // inputs to PostHog's cookieless hash, and PostHog reduces it further to the
 // registrable root domain, which is what makes a visit to warmbly.com and the

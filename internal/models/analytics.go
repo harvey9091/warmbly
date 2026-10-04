@@ -1,6 +1,7 @@
 package models
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -9,6 +10,29 @@ import (
 type DateRange struct {
 	From time.Time `json:"from"`
 	To   time.Time `json:"to"`
+}
+
+// ParseDayRange reads an optional pair of whole days (YYYY-MM-DD, UTC, to
+// included): both empty is nil, meaning all time.
+func ParseDayRange(from, to string) (*DateRange, error) {
+	if from == "" && to == "" {
+		return nil, nil
+	}
+	if from == "" || to == "" {
+		return nil, errors.New("from and to must be supplied together")
+	}
+	f, err := time.Parse(time.DateOnly, from)
+	if err != nil {
+		return nil, errors.New("invalid from date format (expected YYYY-MM-DD)")
+	}
+	t, err := time.Parse(time.DateOnly, to)
+	if err != nil {
+		return nil, errors.New("invalid to date format (expected YYYY-MM-DD)")
+	}
+	if t.Before(f) {
+		return nil, errors.New("from must not be after to")
+	}
+	return &DateRange{From: f, To: t}, nil
 }
 
 // Warmup Analytics
@@ -71,19 +95,32 @@ type EngagementBucket struct {
 
 // CampaignEngagementBreakdown is the "where from, on what" view of a
 // campaign's human opens and clicks. Buckets are ordered by activity, capped,
-// and keyed by ISO country code, client or browser name, and device type.
-// Unknown is the empty key.
+// and keyed by ISO country code, client or browser name, device type, and
+// surface (device and app or webmail together). Unknown is the empty key.
 type CampaignEngagementBreakdown struct {
 	Countries []EngagementBucket `json:"countries"`
 	Clients   []EngagementBucket `json:"clients"`
 	Devices   []EngagementBucket `json:"devices"`
+	Surfaces  []EngagementBucket `json:"surfaces"`
 }
+
+// Surface keys beyond the device types themselves and their `_app` forms
+// (`mobile_app`, `desktop_app`, `tablet_app`).
+const (
+	// EngagementSurfaceHidden is a fetch by a mailbox provider's image
+	// proxy, which hides the reader's device.
+	EngagementSurfaceHidden  = "hidden"
+	EngagementSurfaceWebmail = "webmail"
+)
 
 type CampaignSummary struct {
 	TotalContacts int `json:"total_contacts"`
-	EmailsSent    int `json:"emails_sent"`
-	EmailsPending int `json:"emails_pending"`
-	UniqueOpens   int `json:"unique_opens"`
+	// FirstSentAt is the campaign's earliest email send whatever the period,
+	// nil before one; it resolves an all-time date_range.
+	FirstSentAt   *time.Time `json:"-"`
+	EmailsSent    int        `json:"emails_sent"`
+	EmailsPending int        `json:"emails_pending"`
+	UniqueOpens   int        `json:"unique_opens"`
 	// MachineOpens is the subset of UniqueOpens from automated fetchers
 	// (Apple MPP prefetch, UA-less clients). Human opens = unique - machine.
 	MachineOpens int `json:"machine_opens"`
@@ -105,9 +142,10 @@ type CampaignSummary struct {
 type SequenceStats struct {
 	SequenceID uuid.UUID `json:"step_id"`
 	Name       string    `json:"name"`
-	Position   int       `json:"position"`
-	EmailsSent int       `json:"emails_sent"`
-	Opens      int       `json:"opens"`
+	// Position is 1-based among the campaign's email steps, in canvas order.
+	Position   int `json:"position"`
+	EmailsSent int `json:"emails_sent"`
+	Opens      int `json:"opens"`
 	// MachineOpens is the subset of Opens from automated fetchers, by the
 	// same rule the summary uses. Human opens = Opens - MachineOpens.
 	MachineOpens int `json:"machine_opens"`
@@ -150,6 +188,9 @@ type EmailAccountStatus struct {
 	// complaints, throttle/quarantine state). Folded into Health.Score and
 	// also exposed in detail here. Nil when the mailbox is not in a pool.
 	WarmupHealth *WarmupHealthInfo `json:"warmup_health,omitempty"`
+	// Placement is where the mailbox's warmup mail landed over the trailing
+	// week; also caps Health.Score. Nil when nothing was delivered in the window.
+	Placement *WarmupPlacementRate `json:"warmup_placement,omitempty"`
 	// InCampaign reports whether the mailbox currently backs a live campaign.
 	// When true a low-volume health-check warmup keeps running even if the
 	// user has warmup paused/off.
@@ -161,6 +202,13 @@ type EmailAccountStatus struct {
 	// is below the mailbox's own cap. Without it the cap just reads lower than
 	// the number the owner configured.
 	ColdRamp *ColdRampInfo `json:"cold_ramp,omitempty"`
+}
+
+// EmailAccountStatusesResult is one page of account statuses. Data carries the
+// page; Pagination holds the opaque next_cursor for the rest of the inventory.
+type EmailAccountStatusesResult struct {
+	Data       []EmailAccountStatus `json:"data"`
+	Pagination Pagination           `json:"pagination"`
 }
 
 // ColdRampInfo explains a cold cap held below the mailbox's configured limit.
@@ -175,7 +223,15 @@ type ColdRampInfo struct {
 	Held bool `json:"held"`
 }
 
+// WarmupHealthSourceCloud marks a standing Warmbly Cloud reported for a mailbox it warms.
+const WarmupHealthSourceCloud = "cloud"
+
 type WarmupHealthInfo struct {
+	// PoolType is the pool the mailbox warms in: premium or free.
+	PoolType string `json:"pool_type,omitempty"`
+	// Source is "cloud" when Warmbly Cloud warms the mailbox and reported this
+	// standing; empty for this instance's own pool.
+	Source string  `json:"source,omitempty"`
 	State  string  `json:"state"` // healthy/watch/throttled/quarantined/blocked
 	Score  float64 `json:"score"`
 	Reason string  `json:"reason,omitempty"`
@@ -234,6 +290,28 @@ type WarmupStatusInfo struct {
 	// RampHold explains a ramp that is not climbing, so a target below the
 	// plain ramp is never an unexplained drop.
 	RampHold *WarmupRampHold `json:"ramp_hold,omitempty"`
+	// PartnerLimit is present while today's target is capped by how many
+	// partners the mailbox can still reach, so a target below the ramp is
+	// never an unexplained drop.
+	PartnerLimit *WarmupPartnerLimit `json:"partner_limit,omitempty"`
+	// SendFailure is present while the newest warmup send failed and no later one was confirmed delivered.
+	SendFailure *WarmupSendFailure `json:"send_failure,omitempty"`
+}
+
+// WarmupSendFailure is why a warmup send failed: the server's answer when it gave one.
+type WarmupSendFailure struct {
+	Message string    `json:"message"`
+	At      time.Time `json:"at"`
+}
+
+// WarmupPartnerLimit explains a target held below the ramp because a mailbox
+// never writes to the same partner twice in a day.
+type WarmupPartnerLimit struct {
+	// Reachable is how many partners are available to it today, including
+	// any it already wrote to; those at their inbound limit are left out.
+	Reachable int `json:"reachable"`
+	// RampTarget is what the ramp alone would send today.
+	RampTarget int `json:"ramp_target"`
 }
 
 // WarmupRampHold explains a ramp that is not climbing. Present for the whole
@@ -338,6 +416,13 @@ type RecentActivityItem struct {
 	ContactID    uuid.UUID `json:"contact_id,omitempty"`
 	Timestamp    time.Time `json:"timestamp"`
 	Link         string    `json:"link,omitempty"` // For click events
+	// Origin is the client, device and location of a person's open or
+	// click, when it was logged per event.
+	Origin *EngagementOrigin `json:"origin,omitempty"`
+	// SenderID and SenderEmail name the mailbox the step went out from,
+	// which a reply credits even when it landed in a shared reply inbox.
+	SenderID    *uuid.UUID `json:"sender_id,omitempty"`
+	SenderEmail string     `json:"sender_email,omitempty"`
 }
 
 // TopCampaignStats represents performance stats for a top campaign

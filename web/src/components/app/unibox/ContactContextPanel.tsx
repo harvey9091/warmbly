@@ -15,11 +15,13 @@ import {
     CheckIcon,
     ChevronDownIcon,
     CircleDollarSignIcon,
+    CornerDownRightIcon,
     ExternalLinkIcon,
     Loader2Icon,
     MailWarningIcon,
     MegaphoneIcon,
     PlusIcon,
+    RefreshCwIcon,
     StickyNoteIcon,
     UserIcon,
     UserXIcon,
@@ -30,6 +32,7 @@ import { Link } from "react-router-dom";
 import { TextInput } from "@/components/ui/field";
 import NewMeetingDialog from "@/components/app/meetings/NewMeetingDialog";
 import BookACallButton from "@/components/app/integrations/BookACallButton";
+import SalesforceContactCard from "@/components/app/integrations/SalesforceContactCard";
 import {
     PopoverMenu,
     PopoverMenuContent,
@@ -40,6 +43,14 @@ import TaskTypePicker from "@/components/app/crm/TaskTypePicker";
 import DueInDays from "@/components/app/crm/DueInDays";
 import { dueInDaysToISO } from "@/lib/helper/dueDate";
 import useContactByEmail from "@/lib/api/hooks/app/contacts/useContactByEmail";
+import useContactCampaignStates from "@/lib/api/hooks/app/contacts/useContactCampaignStates";
+import type ContactCampaignState from "@/lib/api/models/app/contacts/ContactCampaignState";
+import type MiniCampaign from "@/lib/api/models/app/campaigns/MiniCampaign";
+import { holdSummary } from "@/lib/api/models/app/contacts/Contact";
+import { CC_RESUME_CONFIRM, leadCanBePaused } from "@/lib/leadHold";
+import { usePermission } from "@/hooks/usePermission";
+import { PauseLeadButton, ResumeLeadButton } from "@/components/app/contacts/LeadHoldButtons";
+import LeadStatusPill from "@/components/app/contacts/LeadStatusPill";
 import useContact from "@/lib/api/hooks/app/contacts/useContact";
 import useContactDeals from "@/lib/api/hooks/app/contacts/useContactDeals";
 import useContactNotes from "@/lib/api/hooks/app/contacts/useContactNotes";
@@ -53,9 +64,15 @@ import useUpdateDeal from "@/lib/api/hooks/app/crm/deals/useUpdateDeal";
 import usePipelines from "@/lib/api/hooks/app/crm/pipelines/usePipelines";
 import type { Stage } from "@/lib/api/models/app/crm/Pipeline";
 import type Deal from "@/lib/api/models/app/crm/Deal";
+import type { DealWrite } from "@/lib/api/models/app/crm/Deal";
 import type CRMTask from "@/lib/api/models/app/crm/CRMTask";
-import type { AppError } from "@/lib/api/client/normalizeError";
-import buildError from "@/lib/helper/buildError";
+import type { CRMTaskWrite } from "@/lib/api/models/app/crm/CRMTask";
+import type { CRMExternalRef } from "@/lib/api/models/app/crm/CRMProvider";
+import useCrmProvider from "@/hooks/useCrmProvider";
+import HubSpotContactCard from "@/components/app/crm/HubSpotContactCard";
+import { HubSpotBadge, OpenInHubSpot } from "@/components/app/crm/HubSpot";
+import { HUBSPOT_SETTINGS_PATH } from "@/components/app/crm/hubspotCrm";
+import { crmErrorMessage } from "@/components/app/crm/hubspotUtils";
 
 const DEAL_STATUS: Record<Deal["status"], { label: string; cls: string; dot: string }> = {
     open: { label: "Open", cls: "text-slate-600", dot: "bg-slate-400" },
@@ -81,6 +98,9 @@ export default function ContactContextPanel({
     email,
     name: fromName,
     mailboxId,
+    threadId,
+    threadMailboxId,
+    wroteBack,
     onClose,
 }: {
     email?: string;
@@ -88,10 +108,17 @@ export default function ContactContextPanel({
     // sender as a contact.
     name?: string;
     mailboxId?: string;
+    // The conversation, so a reply from an alias still finds the campaign's lead.
+    threadId?: string;
+    // Set only when the thread itself is scoped to one mailbox.
+    threadMailboxId?: string;
+    // The email is a sender in the thread, not only a recipient.
+    wroteBack?: boolean;
     onClose?: () => void;
 }) {
-    const lookup = useContactByEmail(email);
-    const contact = lookup.data ?? null;
+    const lookup = useContactByEmail(email, true, { threadId, mailboxId: threadMailboxId });
+    const contact = lookup.data?.contact ?? null;
+    const repliedFromOther = !!wroteBack && lookup.data?.match === "thread";
     const contactId = contact?.id;
     const [meetingOpen, setMeetingOpen] = React.useState(false);
 
@@ -101,6 +128,7 @@ export default function ContactContextPanel({
     const tasksQ = useCRMTasks({ contact_id: contactId, limit: 50 }, !!contactId);
     const notesQ = useContactNotes(contactId ?? "");
     const dealDefault = usePipelinesDefault();
+    const { isHubSpot } = useCrmProvider();
 
     const campaigns = detail?.campaigns ?? contact?.campaigns ?? [];
     const eng = detail?.engagement;
@@ -142,6 +170,20 @@ export default function ContactContextPanel({
                         <Loader2Icon className="w-3.5 h-3.5 animate-spin" />
                         Resolving contact…
                     </div>
+                ) : lookup.isError && !lookup.data ? (
+                    <div className="px-4 py-8 text-center">
+                        <p className="text-[12px] font-medium text-slate-700 mb-0.5">Couldn't load this contact</p>
+                        {email && <p className="text-[11px] text-slate-400 break-all mb-3">{email}</p>}
+                        <button
+                            type="button"
+                            onClick={() => void lookup.refetch()}
+                            disabled={lookup.isFetching}
+                            className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-slate-200 hover:border-slate-300 text-[11.5px] text-slate-700 hover:text-slate-900 transition-colors disabled:opacity-60"
+                        >
+                            <RefreshCwIcon className={`w-3 h-3 ${lookup.isFetching ? "animate-spin" : ""}`} />
+                            Try again
+                        </button>
+                    </div>
                 ) : !contact ? (
                     <NotAContact email={email} name={fromName} />
                 ) : (
@@ -160,6 +202,17 @@ export default function ContactContextPanel({
                                     )}
                                 </div>
                             </div>
+                            {repliedFromOther && email && (
+                                <div
+                                    className="mt-2 flex items-start gap-1.5 text-[10.5px] text-slate-500 leading-snug"
+                                    title="The reply came from another address than the one this campaign emailed."
+                                >
+                                    <CornerDownRightIcon className="w-3 h-3 text-slate-400 mt-px shrink-0" />
+                                    <span className="min-w-0 break-all">
+                                        Replied from {email}
+                                    </span>
+                                </div>
+                            )}
                             <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                                 {contact.subscribed ? (
                                     <Badge tone="emerald" icon={<CheckIcon className="w-2.5 h-2.5" />}>Subscribed</Badge>
@@ -172,10 +225,10 @@ export default function ContactContextPanel({
                                     </Badge>
                                 )}
                                 <Link
-                                    to="/app/contacts"
+                                    to={`/app/contacts?contact=${encodeURIComponent(contact.id)}`}
                                     className="ml-auto inline-flex items-center gap-1 text-[10.5px] text-slate-400 hover:text-sky-700 transition-colors"
                                 >
-                                    Contacts
+                                    Open contact
                                     <ExternalLinkIcon className="w-2.5 h-2.5" />
                                 </Link>
                             </div>
@@ -203,23 +256,17 @@ export default function ContactContextPanel({
                             )}
                         </div>
 
-                        {/* Lead source : campaigns */}
-                        <Section label="Campaigns" hint={campaigns.length ? undefined : "Not in any campaign"}>
-                            {campaigns.length > 0 && (
-                                <div className="flex flex-wrap gap-1.5">
-                                    {campaigns.map((c) => (
-                                        <Link
-                                            key={c.id}
-                                            to="/app/campaigns"
-                                            className="inline-flex items-center gap-1 h-5 px-1.5 rounded bg-white border border-slate-200 hover:border-sky-300 text-[10.5px] text-slate-600 hover:text-sky-700 transition-colors"
-                                        >
-                                            <MegaphoneIcon className="w-2.5 h-2.5 text-slate-400" />
-                                            <span className="truncate max-w-[140px]">{c.name}</span>
-                                        </Link>
-                                    ))}
-                                </div>
-                            )}
-                        </Section>
+                        {/* HubSpot mode: the contact's sales context, edited in place. */}
+                        {isHubSpot && (
+                            <div className="px-4 py-3">
+                                <HubSpotContactCard contactId={contact.id} density="panel" />
+                            </div>
+                        )}
+                        {/* The linked Salesforce record, when the workspace syncs with Salesforce. */}
+                        <SalesforceContactCard contactId={contact.id} variant="compact" />
+
+                        {/* Campaigns, with pause / resume so a reply can hold follow-ups in place. */}
+                        <CampaignsSection contactId={contact.id} contactName={name} fallback={campaigns} />
 
                         {/* Engagement */}
                         {eng && (
@@ -243,6 +290,7 @@ export default function ContactContextPanel({
                             mailboxId={mailboxId}
                             pipelineId={dealDefault.pipelineId}
                             stages={dealDefault.stages}
+                            hubspot={isHubSpot}
                         />
 
                         {/* Tasks */}
@@ -254,10 +302,16 @@ export default function ContactContextPanel({
                             contactName={name}
                             company={contact.company}
                             dealId={(dealsQ.data ?? []).find((d) => d.status === "open")?.id}
+                            hubspot={isHubSpot}
                         />
 
                         {/* Notes */}
-                        <NotesSection contactId={contact.id} notes={asNoteList(notesQ.data)} loading={notesQ.isPending} />
+                        <NotesSection
+                            contactId={contact.id}
+                            notes={asNoteList(notesQ.data)}
+                            loading={notesQ.isPending}
+                            hubspot={isHubSpot}
+                        />
                     </div>
                 )}
             </div>
@@ -276,6 +330,117 @@ export default function ContactContextPanel({
             </aside>
         </>
     );
+}
+
+// One row per campaign: the lead's state, what happens next, and pause / resume.
+function CampaignsSection({
+    contactId,
+    contactName,
+    fallback,
+}: {
+    contactId: string;
+    contactName: string;
+    fallback: MiniCampaign[];
+}) {
+    const statesQ = useContactCampaignStates(contactId);
+    const canWrite = usePermission("MANAGE_CAMPAIGNS");
+    const states = statesQ.data?.data;
+
+    // The contact's own campaign list stands in until the per-campaign state loads.
+    if (!states) {
+        return (
+            <Section label="Campaigns" hint={fallback.length || statesQ.isPending ? undefined : "Not in any campaign"}>
+                {fallback.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                        {fallback.map((c) => (
+                            <Link
+                                key={c.id}
+                                to={`/app/campaigns/${c.id}/leads`}
+                                className="inline-flex items-center gap-1 h-5 px-1.5 rounded bg-white border border-slate-200 hover:border-sky-300 text-[10.5px] text-slate-600 hover:text-sky-700 transition-colors"
+                            >
+                                <MegaphoneIcon className="w-2.5 h-2.5 text-slate-400" />
+                                <span className="truncate max-w-[140px]">{c.name}</span>
+                            </Link>
+                        ))}
+                    </div>
+                )}
+            </Section>
+        );
+    }
+
+    return (
+        <Section label="Campaigns" hint={states.length ? undefined : "Not in any campaign"}>
+            <div className="space-y-1.5">
+                {states.map((s) => {
+                    const line = campaignLine(s);
+                    return (
+                        <div key={s.campaign_id} className="rounded-md border border-slate-200 px-2.5 py-2">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                                <MegaphoneIcon className="w-3 h-3 text-slate-400 shrink-0" />
+                                <Link
+                                    to={`/app/campaigns/${s.campaign_id}/leads`}
+                                    title={s.campaign_name}
+                                    className="min-w-0 flex-1 truncate text-[12px] font-medium text-slate-800 hover:text-sky-700 transition-colors"
+                                >
+                                    {s.campaign_name}
+                                </Link>
+                                <LeadStatusPill status={s.lead_status} />
+                            </div>
+                            <div className="mt-1 flex items-center gap-2 min-w-0">
+                                <span
+                                    title={line.title}
+                                    className={`min-w-0 flex-1 truncate text-[11px] ${s.hold ? "text-violet-700" : "text-slate-500"}`}
+                                >
+                                    {line.text}
+                                </span>
+                                {canWrite && s.hold ? (
+                                    <ResumeLeadButton
+                                        campaignId={s.campaign_id}
+                                        contactId={contactId}
+                                        confirmText={s.hold.source === "cc" ? CC_RESUME_CONFIRM : undefined}
+                                    />
+                                ) : canWrite && leadCanBePaused(s) ? (
+                                    <PauseLeadButton
+                                        campaign={{ id: s.campaign_id, name: s.campaign_name }}
+                                        lead={{ id: contactId, name: contactName }}
+                                    />
+                                ) : null}
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+        </Section>
+    );
+}
+
+// A row's second line: the hold, else the next step and its timing, else why it ended.
+function campaignLine(s: ContactCampaignState): { text: string; title?: string } {
+    if (s.hold) {
+        const text = holdSummary(s.hold);
+        return { text, title: text };
+    }
+    const next = s.next;
+    if (next) {
+        let when = "";
+        if (next.state === "due") when = "due";
+        else if (next.state === "paused" || next.state === "blocked") when = next.constraint || next.state;
+        else if (next.not_before) when = shortDate(next.not_before);
+        else if (next.constraint) when = next.constraint;
+        const text = `Next: ${next.step_label}${when ? ` · ${when}` : ""}`;
+        return { text, title: next.constraint ? `${text}. ${next.constraint}` : text };
+    }
+    const text = s.ended_reason || "Nothing scheduled";
+    return { text, title: text };
+}
+
+function shortDate(iso: string | Date): string {
+    return new Date(iso).toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+    });
 }
 
 // Resolve the org's first pipeline + its first stage, used as the default
@@ -297,6 +462,7 @@ function DealsSection({
     mailboxId,
     pipelineId,
     stages,
+    hubspot,
 }: {
     contactId: string;
     deals: Deal[];
@@ -306,6 +472,7 @@ function DealsSection({
     mailboxId?: string;
     pipelineId?: string;
     stages: Stage[];
+    hubspot: boolean;
 }) {
     const create = useCreateDeal();
     const updateDeal = useUpdateDeal();
@@ -324,7 +491,7 @@ function DealsSection({
             toast.error("Deal name required");
             return;
         }
-        const data: Partial<Deal> = {
+        const data: DealWrite = {
             pipeline_id: pipelineId,
             stage_id: stageId,
             name: name.trim(),
@@ -341,7 +508,7 @@ function DealsSection({
             await toast.promise(create.mutateAsync(data), {
                 loading: "Creating deal…",
                 success: "Deal created",
-                error: (e: AppError) => buildError(e),
+                error: (e: unknown) => crmErrorMessage(e),
             });
             setOpen(false);
             setValue("");
@@ -353,8 +520,8 @@ function DealsSection({
     async function moveDeal(dealId: string, newStageId: string) {
         try {
             await toast.promise(
-                updateDeal.mutateAsync({ id: dealId, data: { stage_id: newStageId } as Partial<Deal> }),
-                { loading: "Moving…", success: "Moved", error: (e: AppError) => buildError(e) },
+                updateDeal.mutateAsync({ id: dealId, data: { stage_id: newStageId } as DealWrite }),
+                { loading: "Moving…", success: "Moved", error: (e: unknown) => crmErrorMessage(e) },
             );
         } catch {
             /* surfaced */
@@ -364,9 +531,14 @@ function DealsSection({
     return (
         <Section
             label="Deals"
+            badge={hubspot ? <HubSpotBadge /> : undefined}
             action={
                 canAdd ? (
                     <AddButton open={open} onClick={() => setOpen((o) => !o)} />
+                ) : hubspot ? (
+                    <Link to={HUBSPOT_SETTINGS_PATH} className="text-[10.5px] text-slate-400 hover:text-sky-700">
+                        Choose pipelines
+                    </Link>
                 ) : (
                     <Link to="/app/crm/pipelines" className="text-[10.5px] text-slate-400 hover:text-sky-700">
                         Add a pipeline
@@ -385,7 +557,7 @@ function DealsSection({
                         <p className="text-[10px] text-slate-400 leading-snug">
                             Attributed to this {campaignId ? "campaign" : ""}
                             {campaignId && mailboxId ? " + " : ""}
-                            {mailboxId ? "mailbox" : ""}.
+                            {mailboxId ? "mailbox" : ""}.{hubspot ? " Created in HubSpot." : ""}
                         </p>
                     )}
                     <button
@@ -437,6 +609,7 @@ function DealsSection({
                                         {money(d.value, d.currency)}
                                     </span>
                                 )}
+                                {hubspot && <OpenInHubSpot external={d.external} compact label="Open deal in HubSpot" />}
                             </div>
                         );
                     })}
@@ -515,6 +688,7 @@ function TasksSection({
     contactName,
     company,
     dealId,
+    hubspot,
 }: {
     contactId: string;
     tasks: CRMTask[];
@@ -523,6 +697,7 @@ function TasksSection({
     contactName: string;
     company?: string;
     dealId?: string;
+    hubspot: boolean;
 }) {
     const create = useCreateCRMTask();
     const [open, setOpen] = React.useState(false);
@@ -539,7 +714,7 @@ function TasksSection({
             toast.error("Task title required");
             return;
         }
-        const data: Partial<CRMTask> = {
+        const data: CRMTaskWrite = {
             title: title.trim(),
             contact_id: contactId,
             priority,
@@ -552,7 +727,7 @@ function TasksSection({
             await toast.promise(create.mutateAsync(data), {
                 loading: "Adding task…",
                 success: "Task added",
-                error: (e: AppError) => buildError(e),
+                error: (e: unknown) => crmErrorMessage(e),
             });
             setOpen(false);
             setType("");
@@ -565,7 +740,11 @@ function TasksSection({
     }
 
     return (
-        <Section label="Tasks" action={<AddButton open={open} onClick={() => setOpen((o) => !o)} />}>
+        <Section
+            label="Tasks"
+            badge={hubspot ? <HubSpotBadge /> : undefined}
+            action={<AddButton open={open} onClick={() => setOpen((o) => !o)} />}
+        >
             {open && (
                 <div className="mb-2 rounded-md border border-slate-200 bg-white p-2 space-y-1.5">
                     <TextInput
@@ -604,7 +783,7 @@ function TasksSection({
                     <p className="text-[10px] text-slate-400 leading-snug">
                         Linked to {contactName}
                         {company ? ` · ${company}` : ""}
-                        {dealId ? " · open deal" : ""}.
+                        {dealId ? " · open deal" : ""}.{hubspot ? " Created in HubSpot." : ""}
                     </p>
                     <button
                         type="button"
@@ -632,6 +811,7 @@ function TasksSection({
                                     {fmtDate(t.due_date)}
                                 </span>
                             )}
+                            {hubspot && <OpenInHubSpot external={t.external} compact label="Open task in HubSpot" />}
                         </div>
                     ))}
                 </div>
@@ -644,10 +824,12 @@ function NotesSection({
     contactId,
     notes,
     loading,
+    hubspot,
 }: {
     contactId: string;
-    notes: { id: string; content: string; created_at: Date | string }[];
+    notes: PanelNote[];
     loading: boolean;
+    hubspot: boolean;
 }) {
     const create = useCreateContactNote();
     const [draft, setDraft] = React.useState("");
@@ -658,17 +840,17 @@ function NotesSection({
             await create.mutateAsync({ contactId, data: { content: draft.trim() } });
             setDraft("");
         } catch (e) {
-            toast.error(buildError(e as AppError));
+            toast.error(crmErrorMessage(e));
         }
     }
 
     return (
-        <Section label="Notes">
+        <Section label="Notes" badge={hubspot ? <HubSpotBadge /> : undefined}>
             <div className="mb-2 rounded-md border border-slate-200 bg-white p-2">
                 <textarea
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
-                    placeholder="Add a note…"
+                    placeholder={hubspot ? "Add a note to HubSpot…" : "Add a note…"}
                     rows={2}
                     className="w-full bg-transparent text-[11.5px] text-slate-900 placeholder:text-slate-400 outline-none resize-none"
                 />
@@ -693,7 +875,17 @@ function NotesSection({
                     {notes.slice(0, 5).map((n) => (
                         <div key={n.id} className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
                             <p className="text-[11.5px] text-slate-700 leading-snug whitespace-pre-wrap break-words">{n.content}</p>
-                            <p className="text-[10px] text-slate-400 mt-1 font-mono">{fmtDate(n.created_at)}</p>
+                            <div className="mt-1 flex items-center gap-1">
+                                <p className="text-[10px] text-slate-400 font-mono">{fmtDate(n.created_at)}</p>
+                                {hubspot && (
+                                    <OpenInHubSpot
+                                        external={n.external}
+                                        compact
+                                        label="Open note in HubSpot"
+                                        className="ml-auto h-5 w-5"
+                                    />
+                                )}
+                            </div>
                         </div>
                     ))}
                 </div>
@@ -707,11 +899,13 @@ function NotesSection({
 function Section({
     label,
     hint,
+    badge,
     action,
     children,
 }: {
     label: string;
     hint?: string;
+    badge?: React.ReactNode;
     action?: React.ReactNode;
     children?: React.ReactNode;
 }) {
@@ -719,6 +913,7 @@ function Section({
         <div className="px-4 py-3">
             <div className="flex items-center gap-2 mb-2">
                 <span className="text-[10.5px] uppercase tracking-[0.12em] text-slate-400 font-medium">{label}</span>
+                {badge}
                 {action && <span className="ml-auto">{action}</span>}
             </div>
             {hint ? <p className="text-[11px] text-slate-400">{hint}</p> : children}
@@ -845,9 +1040,11 @@ function NotAContact({ email, name }: { email?: string; name?: string }) {
 // The notes endpoint returns either a bare array or a { data, pagination }
 // envelope depending on the path; normalise to a plain list (mirrors the
 // contacts NotesTab helper) so .slice/.map never blow up.
-function asNoteList(raw: unknown): { id: string; content: string; created_at: Date | string }[] {
+type PanelNote = { id: string; content: string; created_at: Date | string; external?: CRMExternalRef };
+
+function asNoteList(raw: unknown): PanelNote[] {
     const arr = Array.isArray(raw) ? raw : ((raw as { data?: unknown } | null | undefined)?.data ?? []);
-    return Array.isArray(arr) ? (arr as { id: string; content: string; created_at: Date | string }[]) : [];
+    return Array.isArray(arr) ? (arr as PanelNote[]) : [];
 }
 
 function initials(name: string): string {

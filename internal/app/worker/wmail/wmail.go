@@ -2,6 +2,7 @@ package wmail
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/warmbly/warmbly/internal/app/cipher"
@@ -95,9 +96,30 @@ type WMail struct {
 	laneCache  laneCache
 	googleTick *tickStats
 	graphTick  *tickStats
+	// googleReconciledAt is when the Gmail folder reconciliation last ran;
+	// googleInboxChecked is when it last looked up an id and found it still
+	// in the inbox (or gone), so the next passes spend lookups elsewhere.
+	googleReconciledAt time.Time
+	googleInboxChecked map[string]time.Time
+	// googleFolders is the folder last reported per Gmail id this tick, so a
+	// move that both adds and removes labels is reported once.
+	googleFolders map[string]string
 	// flagScan is the previous flag snapshot per folder name, used only on
 	// IMAP servers without CONDSTORE, which cannot say what changed.
 	flagScan map[string]*folderFlagScan
+	// skipChecked remembers, for this session, the stored rows that left a
+	// synced folder and were looked for in the skipped folders without being
+	// found, so they are not searched for again on every pass.
+	skipChecked map[string]struct{}
+	// listed is the previous listing's count and UIDNEXT per folder name:
+	// session-local, since the stored cursor advances to the SELECT view.
+	listed map[string]imapListed
+	// skipPending marks folders whose skipped-folder reconciliation hit the
+	// per-pass search cap, so the next pass continues it.
+	skipPending map[string]bool
+	// unmapPending holds map entries for unpublished arrivals whose removal
+	// failed, keyed by map key; every pass retries them before it looks.
+	unmapPending map[string]uuid.UUID
 	// transportFailures counts consecutive passes that could not reach the
 	// mail server, which paces the retry and keeps one outage to one warning.
 	transportFailures int
@@ -227,6 +249,7 @@ func NewWMail(
 				FirstName: data.FirstName,
 				LastName:  data.LastName,
 
+				User:       data.Graph.User,
 				Cache:      mail.Cache,
 				DeltaLinks: cloneStringMap(deltaLinks),
 
@@ -306,4 +329,17 @@ func (w *WMail) ApplySyncPolicy(data *models.AddWorkerEmailSyncData) {
 		return
 	}
 	w.gov.SetPolicy(data.Policy)
+}
+
+// Discard releases a WMail that was built but never put to work.
+func (w *WMail) Discard() {
+	if w.Cancel != nil {
+		w.Cancel()
+	}
+	if w.SmtpImapData == nil || w.SmtpImapData.ImapClient == nil {
+		return
+	}
+	if c, ok := w.SmtpImapData.ImapClient.(interface{ Close() error }); ok {
+		_ = c.Close()
+	}
 }

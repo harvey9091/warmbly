@@ -1,4 +1,3 @@
-export type CampaignKind = "sequence" | "one_time";
 
 export default interface Campaign {
     id: string;
@@ -6,9 +5,6 @@ export default interface Campaign {
     name: string;
     description: string;
     status: string;
-    // "sequence" (multi-step, the default) or "one_time" (a single message
-    // to an audience, no follow-ups). Fixed at creation.
-    kind: CampaignKind;
 
     stop_on_reply: boolean;
     open_tracking: boolean;
@@ -25,7 +21,10 @@ export default interface Campaign {
 
     start_date?: Date | null;
     end_date?: Date | null;
+    /** The schedule's own IANA zone, or "" when the campaign follows the workspace timezone. */
     timezone: string;
+    /** The zone actually in use: timezone when set, else the workspace's, else UTC. Read-only. */
+    effective_timezone?: string;
     days: number;
     start_time: string;
     end_time: string;
@@ -58,7 +57,7 @@ export default interface Campaign {
     ramp_increment: number;
     ramp_ceiling: number;
     ramp_level: number;
-    ramp_level_date?: string | null;
+    ramp_level_date?: Date | null;
 
     // Match the sending mailbox provider to the recipient's provider.
     esp_match_mode: 'off' | 'prefer' | 'strict';
@@ -74,7 +73,7 @@ export default interface Campaign {
     // Keep running for new leads: out of leads, the campaign waits (idle_since
     // set) instead of finishing. Linking a segment turns it on.
     continuous: boolean;
-    idle_since?: string | null;
+    idle_since?: Date | null;
 
     // Auto-pause guardrails. Bounce and complaint rates are ceilings (pause at
     // or above); the reply rate is a floor (pause below). A rate of 0 turns its
@@ -85,13 +84,13 @@ export default interface Campaign {
     guardrail_reply_rate_min: number;
     guardrail_min_sample: number;
     guardrail_window_days: number;
-    guardrail_tripped_at?: string | null;
+    guardrail_tripped_at?: Date | null;
     guardrail_reason?: string;
 
     // Campaign-scoped tracking-domain override (honored only when verified).
     tracking_domain: string;
     tracking_domain_verified: boolean;
-    tracking_domain_verified_at?: string | null;
+    tracking_domain_verified_at?: Date | null;
 
     // Automatic UTM tagging of every link. Empty source/medium/campaign keep
     // the defaults (warmbly / email / the campaign name); utm_content is
@@ -117,7 +116,7 @@ export interface ScheduleInterval {
 export interface CampaignSender {
     email_account_id: string;
     weight: number;
-    last_sent_at?: string | null;
+    last_sent_at?: Date | null;
     enabled: boolean;
 }
 

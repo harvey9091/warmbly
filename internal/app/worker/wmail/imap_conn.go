@@ -26,6 +26,9 @@ type ImapConn interface {
 	HasCondStore() bool
 	ReleaseMailbox()
 	SelectForSync(mailbox string) (uint32, *errx.MailError)
+	// SelectForSyncState selects like SelectForSync and reports the selected
+	// view's cursors, which an incremental pass advances the folder to.
+	SelectForSyncState(mailbox string) (imap.Selected, *errx.MailError)
 	SearchChangedSince(modSeq uint64) ([]goimap.UID, *errx.MailError)
 	SearchNewSince(uidNext uint32) ([]goimap.UID, *errx.MailError)
 	// SearchAll is the folder's complete UID set, the presence side of the
@@ -51,14 +54,26 @@ type ImapConn interface {
 	// MoveToFolder reports whether the message actually moved; a message
 	// already in the destination is left where it is.
 	MoveToFolder(ctx context.Context, sourceMailbox, dstFolder string, uid uint32) (bool, error)
+	// MoveUIDs is the unibox's filing relay: many UIDs out of one folder in
+	// one command, answering old UID -> new UID when the server reports it.
+	MoveUIDs(ctx context.Context, src, dst string, uids []uint32) (map[uint32]uint32, uint32, error)
 	RemoveFromSpam(ctx context.Context, sourceMailbox, inboxName string, uid uint32) error
+	// MarkNotJunk swaps the junk keywords for the not-junk ones before a
+	// warmup message is moved out of Junk.
+	MarkNotJunk(ctx context.Context, mailboxName string, uid uint32) error
 	// FindUIDByMessageID relocates a warmup message whose UID went void when an
 	// earlier engagement leg moved it.
 	FindUIDByMessageID(ctx context.Context, mailboxName, rfcMessageID string) (uint32, error)
+	// FindUIDsByMessageIDs answers which of many ids one folder holds, with
+	// one SELECT: the skipped-folder reconciliation's lookup.
+	FindUIDsByMessageIDs(ctx context.Context, mailboxName string, rfcMessageIDs []string) (map[string]uint32, error)
 	// DeleteUID removes one message, the retention window's deletion: an
 	// expunge scoped to the UID, or a move into trashName where the server
 	// cannot scope one.
 	DeleteUID(ctx context.Context, mailboxName, trashName string, uid uint32) error
+	// LocateMessageID lists which folders hold a message: the search behind
+	// a warmup removal's verdict.
+	LocateMessageID(ctx context.Context, mailboxes []string, rfcMessageID string) (held []string, unsearched int, err error)
 }
 
 var _ ImapConn = (*imap.Client)(nil)

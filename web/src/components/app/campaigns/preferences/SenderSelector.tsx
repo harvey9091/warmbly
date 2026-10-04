@@ -17,6 +17,7 @@ import { useUserProfile } from "@/hooks/context/user";
 import useClickOutside from "@/hooks/useClickOutside";
 import useFlipPlacement from "@/hooks/useFlipPlacement";
 import useEmails from "@/lib/api/hooks/app/emails/useEmails";
+import { labelInk } from "@/lib/utils";
 
 // A health dot color from the mailbox status, mirroring InboxDetails.statusTone.
 function healthDot(status: string): string {
@@ -52,13 +53,13 @@ export default function SenderSelector({
         () => [...(profile?.user.tags ?? [])].sort((a, b) => a.position - b.position),
         [profile?.user.tags],
     );
-    const { emails, isLoading } = useEmails({ query: "", tag: "", limit: 200 });
+    const { emails, isLoading } = useEmails({ query: "", tag: "" });
 
     const [open, setOpen] = React.useState(false);
     const [query, setQuery] = React.useState("");
     const ref = React.useRef<HTMLDivElement>(null);
     const triggerRef = React.useRef<HTMLDivElement>(null);
-    useClickOutside(ref, () => setOpen(false));
+    useClickOutside(open, () => setOpen(false), ref);
     const placement = useFlipPlacement(triggerRef, open, 320);
 
     const tagById = React.useMemo(() => {
@@ -126,7 +127,7 @@ export default function SenderSelector({
                                 className="inline-flex items-center gap-1 h-5 pl-1.5 pr-1 rounded text-[11px] font-medium"
                                 style={{
                                     backgroundColor: hexToRgba(t.color, 0.12),
-                                    color: t.color,
+                                    color: labelInk(t.color),
                                     border: `1px solid ${hexToRgba(t.color, 0.25)}`,
                                 }}
                             >

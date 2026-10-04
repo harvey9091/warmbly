@@ -35,7 +35,7 @@ func resourceSpecs() []resource {
 	out = append(out, campaignSpec(), contactSpec(), suppressionSpec(), mailboxSpec(), inboxSpec())
 	out = append(out, segmentSpec(), templateSpec(), automationSpec(), formSpec())
 	out = append(out, dealSpec(), pipelineSpec(), taskSpec())
-	out = append(out, analyticsSpec(), auditSpec(), advisorSpec())
+	out = append(out, analyticsSpec(), placementSpec(), auditSpec(), advisorSpec())
 	out = append(out, webhookSpec(), keySpec(), oauthAppSpec(), toolSpec())
 	out = append(out, orgSpec(), teamSpec(), settingsSpec(), warmupRoutingSpec(), integrationSpec())
 	return out
@@ -257,10 +257,12 @@ report what would stop it. Nothing is sent.`,
 				Name: "test", Aliases: []string{"test-email"}, Short: "Send the campaign as a test to an address you name",
 				Method: http.MethodPost, Path: "/campaigns/{id}/test-email", Body: bodyRequired, Sends: true,
 				Args:    []argSpec{{Name: "id", Help: "The campaign's id"}},
-				Example: "  $ warmbly campaign test CAMPAIGN_ID --to you@example.com",
+				Example: "  $ warmbly campaign test CAMPAIGN_ID --mailbox MAILBOX_ID --to you@example.com",
 				Flag: []flagSpec{
-					{Name: "to", Help: "Where to send the test"},
-					{Name: "step", Help: "Which step to send", Kind: flagInt, Key: "step_id"},
+					{Name: "to", Help: "Where to send the test (required)", Key: "recipient"},
+					{Name: "mailbox", Help: "The mailbox to send it from (required)", Key: "account_id"},
+					{Name: "step", Help: "The step's id; the first step when omitted", Key: "step_id"},
+					{Name: "contact", Help: "Render the copy for this contact's id instead of a placeholder", Key: "contact_id"},
 				},
 				Success: "Test email sent.",
 			},
@@ -315,6 +317,46 @@ the hold. Resuming a lead that is not held succeeds and changes nothing.`,
 					{Name: "id", Help: "The campaign's id"},
 					{Name: "contact", Help: "The contact's id"},
 				},
+			},
+			{
+				Name: "lead-cc", Short: "Contacts copied on one lead's emails",
+				Method: http.MethodGet, Path: "/campaigns/{id}/leads/{contact}/cc",
+				Args: []argSpec{
+					{Name: "id", Help: "The campaign's id"},
+					{Name: "contact", Help: "The lead's contact id"},
+				},
+				Table: output.Table{Root: "cc", Columns: []output.Column{
+					col("CONTACT", "contact_id"), col("EMAIL", "email"), col("STATUS", "status"),
+				}, Empty: "This lead copies nobody."},
+			},
+			{
+				Name: "set-lead-cc", Short: "Replace the contacts copied on one lead's emails",
+				Long: `Copy up to two contacts on every email this campaign sends one lead, follow-ups
+included, so colleagues at one company share a single thread. The list replaces
+the current one. A copied contact who is also a lead of the campaign has their
+own sequence held while any lead copies them, so they never get two threads.`,
+				Example: "  $ warmbly campaign set-lead-cc CAMPAIGN_ID CONTACT_ID --cc COLLEAGUE_ID\n" +
+					"  $ warmbly campaign set-lead-cc CAMPAIGN_ID CONTACT_ID --input '{\"contact_ids\":[]}'   # copy nobody",
+				Method: http.MethodPut, Path: "/campaigns/{id}/leads/{contact}/cc", Body: bodyRequired,
+				Args: []argSpec{
+					{Name: "id", Help: "The campaign's id"},
+					{Name: "contact", Help: "The lead's contact id"},
+				},
+				Flag: []flagSpec{
+					{Name: "cc", Help: "A contact id to copy (repeatable, at most 2)", Kind: flagStrings, Key: "contact_ids"},
+				},
+				Success: "Lead CC replaced.",
+			},
+			{
+				Name: "lead-cc-suggestions", Short: "The lead's likely colleagues to copy",
+				Method: http.MethodGet, Path: "/campaigns/{id}/leads/{contact}/cc/suggestions",
+				Args: []argSpec{
+					{Name: "id", Help: "The campaign's id"},
+					{Name: "contact", Help: "The lead's contact id"},
+				},
+				Table: output.Table{Root: "data", Columns: []output.Column{
+					col("CONTACT", "contact_id"), col("EMAIL", "email"), col("COMPANY", "company"), col("MATCH", "reason"),
+				}, Empty: "No contacts share the lead's company or email domain."},
 			},
 			{
 				Name: "logs", Short: "The campaign's send log",
@@ -481,6 +523,35 @@ A display-name form works too, so a raw From header can be passed straight in.`,
 				Method: http.MethodPost, Path: "/contacts/import/commit", Body: bodyRequired, Idempotent: true,
 			},
 			{
+				Name: "imports", Short: "Background imports, newest first",
+				Method: http.MethodGet, Path: "/contacts/imports", Paginate: true,
+				Flag: withPaging(),
+				Table: output.Table{Root: "data", Columns: []output.Column{
+					col("ID", "id"), col("FILE", "filename"), col("STATUS", "status"),
+					col("ROWS", "total"), col("DONE", "processed"), col("FAILED", "failed"),
+				}, Empty: "No imports yet."},
+			},
+			{
+				Name: "import-status", Short: "A background import's progress and result",
+				Method: http.MethodGet, Path: "/contacts/imports/{id}",
+				Args: []argSpec{{Name: "id", Help: "The import's id"}},
+			},
+			{
+				Name: "import-analyze", Short: "What a draft import would do under a mapping",
+				Method: http.MethodPost, Path: "/contacts/imports/{id}/analyze", Body: bodyRequired,
+				Args: []argSpec{{Name: "id", Help: "The import's id"}},
+			},
+			{
+				Name: "import-start", Short: "Start a draft import with its mapping and options",
+				Method: http.MethodPost, Path: "/contacts/imports/{id}/start", Body: bodyRequired, Idempotent: true,
+				Args: []argSpec{{Name: "id", Help: "The import's id"}},
+			},
+			{
+				Name: "import-cancel", Short: "Stop a background import; imported rows stay",
+				Method: http.MethodPost, Path: "/contacts/imports/{id}/cancel",
+				Args: []argSpec{{Name: "id", Help: "The import's id"}},
+			},
+			{
 				Name: "export", Short: "Export contacts",
 				Method: http.MethodPost, Path: "/contacts/export", Body: bodyOptional,
 			},
@@ -528,7 +599,7 @@ unsubscribe or a complaint from being undone by the next import.`,
 			{
 				Name: "add", Short: "Suppress an address or a domain",
 				Method: http.MethodPost, Path: "/suppressions", Body: bodyRequired,
-				Example: "  $ warmbly suppression add --input '{\"values\":[\"jane@example.com\"],\"reason\":\"manual\"}'",
+				Example: "  $ warmbly suppression add --input '{\"entries\":[{\"value\":\"jane@example.com\"},{\"value\":\"example.org\"}],\"reason\":\"manual\"}'",
 			},
 			{
 				Name: "remove", Aliases: []string{"rm"}, Short: "Lift a suppression",
@@ -661,9 +732,26 @@ so a removed alias stops being used instead of failing every send.`,
 				Success: "Sending identity refreshed.",
 			},
 			{
-				Name: "sync", Short: "The mailbox's sync state and backfill progress",
+				Name: "sync", Short: "The mailbox's sync state, backfill progress and skipped folders",
 				Method: http.MethodGet, Path: "/emails/{id}/sync",
 				Args: []argSpec{{Name: "id", Help: "The mailbox's id"}},
+			},
+			{
+				Name: "skip-folders", Short: "Choose the folders an IMAP mailbox's sync leaves alone",
+				Long: `Replaces the list of folders the sync never opens, named as the mail
+server lists them (see "mailbox sync" for the names). Each also covers its
+subfolders. Mail already imported from a folder is removed from Warmbly
+when it is skipped; the mail itself stays in the mailbox. Inbox, sent,
+drafts, spam, trash and archive cannot be skipped. Sending an empty list
+with --input follows every folder again from then on; the mail removed
+while a folder was skipped is not brought back.`,
+				Example: "  $ warmbly mailbox skip-folders MAILBOX_ID --folder Warmer\n  $ warmbly mailbox skip-folders MAILBOX_ID --folder Warmer --folder \"Clients/Acme\"\n  $ warmbly mailbox skip-folders MAILBOX_ID --input '{\"skip_folders\": []}'",
+				Method:  http.MethodPut, Path: "/emails/{id}/sync", Body: bodyRequired,
+				Args: []argSpec{{Name: "id", Help: "The mailbox's id"}},
+				Flag: []flagSpec{
+					{Name: "folder", Help: "A folder to skip, as the server lists it (repeatable)", Kind: flagStrings, Key: "skip_folders"},
+				},
+				Success: "Skipped folders updated.",
 			},
 			{
 				Name: "behavior", Short: "The mailbox's human-sending ranges",
@@ -692,7 +780,7 @@ so a removed alias stops being used instead of failing every send.`,
 				Args:    []argSpec{{Name: "id", Help: "The mailbox to send from"}},
 				Example: "  $ warmbly mailbox send MAILBOX_ID --to jane@example.com --subject Hello --body \"Hi Jane\"",
 				Flag: []flagSpec{
-					{Name: "to", Help: "Recipient address"},
+					{Name: "to", Help: "Recipient addresses", Kind: flagStrings},
 					{Name: "subject", Help: "Subject line"},
 					{Name: "body", Help: "Message body", Key: "body_html"},
 					{Name: "cc", Help: "CC addresses", Kind: flagStrings},
@@ -748,8 +836,9 @@ begin rather than being stopped the moment the mailbox looks ready.`,
 			},
 			{
 				Name: "warmup-appeal", Short: "Appeal a warmup pool block",
-				Method: http.MethodPost, Path: "/emails/{id}/warmup/appeal", Body: bodyOptional,
+				Method: http.MethodPost, Path: "/emails/{id}/warmup/appeal", Body: bodyRequired,
 				Args: []argSpec{{Name: "id", Help: "The mailbox's id"}},
+				Flag: []flagSpec{{Name: "reason", Help: "Why the block should be reviewed (required)"}},
 			},
 			{
 				Name: "tracking", Short: "The mailbox's tracking domain",
@@ -758,9 +847,9 @@ begin rather than being stopped the moment the mailbox looks ready.`,
 			},
 			{
 				Name: "set-tracking", Short: "Set the mailbox's tracking domain",
-				Method: http.MethodPatch, Path: "/emails/{id}/track", Body: bodyRequired,
+				Method: http.MethodPatch, Path: "/emails/{id}/track",
 				Args:    []argSpec{{Name: "id", Help: "The mailbox's id"}},
-				Flag:    []flagSpec{{Name: "domain", Help: "The tracking domain", Key: "tracking_domain"}},
+				Flag:    []flagSpec{{Name: "domain", Help: "The tracking domain; empty clears it", Query: true}},
 				Success: "Tracking domain set.",
 			},
 			{
@@ -806,6 +895,7 @@ Replying and composing put real mail on the wire, so both ask before they do.`,
 					flagSpec{Name: "subject", Help: "Filter by subject", Query: true},
 					flagSpec{Name: "unseen", Help: "Only unread messages", Kind: flagBool, Query: true},
 					flagSpec{Name: "awaiting-reply", Help: "Only threads waiting on a reply", Kind: flagBool, Query: true, Key: "awaiting_reply"},
+					flagSpec{Name: "automated", Help: "true for only mail nobody wrote (alerts, bounces, auto-replies), false to leave it out", Query: true},
 					flagSpec{Name: "since", Help: "Only messages after this time (RFC 3339)", Query: true},
 					flagSpec{Name: "until", Help: "Only messages before this time (RFC 3339)", Query: true},
 				),
@@ -842,13 +932,13 @@ which is the unified view.`,
 			{
 				Name: "read", Short: "Mark messages read",
 				Method: http.MethodPatch, Path: "/unibox/seen", Body: bodyRequired,
-				Example: "  $ warmbly inbox read --input '{\"ids\":[\"...\"],\"seen\":true}'",
+				Example: "  $ warmbly inbox read --input '{\"email_ids\":[\"...\"],\"seen\":true}'",
 				Success: "Marked.",
 			},
 			{
 				Name: "reply", Short: "Reply in a thread",
 				Method: http.MethodPost, Path: "/unibox/reply", Body: bodyRequired, Sends: true, Idempotent: true,
-				Example: "  $ warmbly inbox reply --input '{\"email_id\":\"...\",\"body_html\":\"<p>Thanks</p>\"}'",
+				Example: "  $ warmbly inbox reply --input '{\"email_account_id\":\"...\",\"to\":[\"jane@example.com\"],\"subject\":\"Re: Hello\",\"thread_id\":\"...\",\"body_html\":\"<p>Thanks</p>\"}'",
 				Success: "Reply sent.",
 			},
 			{
@@ -1118,17 +1208,19 @@ func automationSpec() resource {
 			{
 				Name: "create", Short: "Create an automation",
 				Method: http.MethodPost, Path: "/automations", Body: bodyRequired,
-				Flag:  []flagSpec{{Name: "name", Short: "n", Help: "Automation name"}},
-				Table: output.Table{Columns: automationColumns},
+				Long: `Create an automation from a JSON document: name, enabled, trigger_event
+and graph (one trigger node plus its actions). Build it in the dashboard and
+export it, or write it by hand; the API reference describes the graph.`,
+				Example: "  $ warmbly automation create --input @automation.json",
+				Table:   output.Table{Columns: automationColumns},
 			},
 			{
 				Name: "edit", Aliases: []string{"update"}, Short: "Change an automation",
 				Method: http.MethodPatch, Path: "/automations/{id}", Body: bodyRequired,
 				Args: []argSpec{{Name: "id", Help: "The automation's id"}},
-				Flag: []flagSpec{
-					{Name: "name", Short: "n", Help: "Automation name"},
-					{Name: "status", Help: "active or paused"},
-				},
+				Long: `Replace an automation with a JSON document of the same shape create takes.
+Every field is written, so start from ` + "`warmbly automation view <id> --json`" + `.`,
+				Example: "  $ warmbly automation edit AUTOMATION_ID --input @automation.json",
 				Success: "Automation updated.",
 			},
 			{
@@ -1225,7 +1317,7 @@ func formSpec() resource {
 			{
 				Name: "set-domain", Short: "Set the domain forms are served from",
 				Method: http.MethodPut, Path: "/forms/domain", Body: bodyRequired,
-				Flag:    []flagSpec{{Name: "domain", Help: "The custom forms domain"}},
+				Flag:    []flagSpec{{Name: "domain", Help: "The custom forms domain", Key: "forms_domain"}},
 				Success: "Forms domain set.",
 			},
 			{
@@ -1346,8 +1438,8 @@ func pipelineSpec() resource {
 				Method: http.MethodPost, Path: "/crm/pipelines/{id}/stages", Body: bodyRequired,
 				Args: []argSpec{{Name: "id", Help: "The pipeline's id"}},
 				Flag: []flagSpec{
-					{Name: "name", Short: "n", Help: "Stage name"},
-					{Name: "color", Help: "Stage colour"},
+					{Name: "name", Short: "n", Help: "Stage name (required)"},
+					{Name: "color", Help: "Stage colour, such as #0ea5e9 (required)"},
 				},
 			},
 			{
@@ -1404,7 +1496,7 @@ func taskSpec() resource {
 				Flag: []flagSpec{
 					{Name: "title", Short: "t", Help: "What needs doing"},
 					{Name: "contact", Help: "The contact it is about", Key: "contact_id"},
-					{Name: "due", Help: "When it is due (RFC 3339)", Key: "due_at"},
+					{Name: "due", Help: "When it is due (RFC 3339)", Key: "due_date"},
 				},
 				Table: output.Table{Columns: taskColumns},
 			},
@@ -1414,8 +1506,8 @@ func taskSpec() resource {
 				Args: []argSpec{{Name: "id", Help: "The task's id"}},
 				Flag: []flagSpec{
 					{Name: "title", Short: "t", Help: "What needs doing"},
-					{Name: "status", Help: "open or done"},
-					{Name: "due", Help: "When it is due (RFC 3339)", Key: "due_at"},
+					{Name: "status", Help: "pending, in_progress, completed or cancelled"},
+					{Name: "due", Help: "When it is due (RFC 3339)", Key: "due_date"},
 				},
 				Success: "Task updated.",
 			},
@@ -1432,6 +1524,211 @@ func taskSpec() resource {
 			{
 				Name: "types", Short: "The task types in use",
 				Method: http.MethodGet, Path: "/crm/task-types",
+			},
+		},
+	}
+}
+
+func placementSpec() resource {
+	testTable := output.Table{
+		Root: "data",
+		Columns: []output.Column{
+			col("ID", "id"),
+			colt("SENDER", "sender_email", 30),
+			colt("SUBJECT", "subject", 30),
+			col("PANEL", "panel"),
+			col("STATUS", "status"),
+			col("INBOX", "summary.inbox"),
+			col("TABS", "summary.promotions"),
+			col("SPAM", "summary.spam"),
+			col("MISSING", "summary.missing"),
+			colf("CREATED", "created_at", "time"),
+		},
+		Empty: "No placement tests yet. Start one with `warmbly placement test --mailbox MAILBOX_ID --campaign CAMPAIGN_ID`.",
+	}
+	batchTable := output.Table{
+		Root: "data",
+		Columns: []output.Column{
+			col("ID", "id"),
+			colt("SUBJECT", "subject", 30),
+			col("MAILBOXES", "sender_count"),
+			col("STATUS", "status"),
+			col("DONE", "progress.completed"),
+			col("SKIPPED", "progress.skipped"),
+			col("INBOX", "summary.inbox"),
+			col("SPAM", "summary.spam"),
+			colf("CREATED", "created_at", "time"),
+		},
+		Empty: "No placement batches yet. Start one with `warmbly placement batch-start --scope campaign --scope-campaign CAMPAIGN_ID --campaign CAMPAIGN_ID`.",
+	}
+	batchFlags := []flagSpec{
+		{Name: "mailbox", Help: "Test from this mailbox's id (repeatable); instead of --scope", Kind: flagStrings, Key: "sender_account_ids"},
+		{Name: "scope", Help: "campaign (a campaign's mailboxes) or workspace (every mailbox)", Key: "sender_scope[type]"},
+		{Name: "scope-campaign", Help: "The campaign whose mailboxes to test, with --scope campaign", Key: "sender_scope[campaign_id]"},
+		{Name: "only-provider", Help: "Only mailboxes hosted by this provider, e.g. google_workspace (repeatable)", Kind: flagStrings, Key: "sender_scope[providers]"},
+		{Name: "only-domain", Help: "Only mailboxes sending from this domain (repeatable)", Kind: flagStrings, Key: "sender_scope[domains]"},
+		{Name: "only-tag", Help: "Only mailboxes with this tag id (repeatable)", Kind: flagStrings, Key: "sender_scope[tag_ids]"},
+		{Name: "include-inactive", Help: "Keep disconnected mailboxes", Kind: flagBool, Key: "sender_scope[include_inactive]"},
+		{Name: "untested-days", Help: "Only mailboxes with no finished placement test in this many days", Kind: flagInt, Key: "sender_scope[untested_days]"},
+		{Name: "sample", Help: "all, random, percent, per_domain or per_provider", Key: "sample[mode]"},
+		{Name: "sample-count", Help: "Mailboxes for random, or per group for per_domain and per_provider", Kind: flagInt, Key: "sample[count]"},
+		{Name: "sample-percent", Help: "Share of mailboxes for percent, 1 to 100", Kind: flagInt, Key: "sample[percent]"},
+		{Name: "stratify", Help: "Spread a random or percent sample across provider or domain", Key: "sample[stratify]"},
+		{Name: "campaign", Help: "Test this campaign's copy", Key: "campaign_id"},
+		{Name: "step", Help: "The step to test; with --campaign", Key: "sequence_id"},
+		{Name: "contact", Help: "Render the copy for this contact's id", Key: "contact_id"},
+		{Name: "subject", Help: "Subject of an ad-hoc template", Key: "subject"},
+		{Name: "text", Help: "Plain-text body of an ad-hoc template", Key: "body_plain"},
+		{Name: "html", Help: "HTML body of an ad-hoc template", Key: "body_html"},
+		{Name: "tracking", Help: "campaign, on, off or compare (sends twice, with and without)", Key: "tracking"},
+		{Name: "panel", Help: "instance, workspace or cloud", Key: "panel"},
+		{Name: "seed", Help: "Only this seed inbox's id, with --panel workspace (repeatable)", Kind: flagStrings, Key: "seed_ids"},
+		{Name: "provider", Help: "Only seeds at this provider, e.g. gmail or outlook (repeatable)", Kind: flagStrings, Key: "families"},
+		{Name: "on-unavailable", Help: "defer (retry a mailbox that cannot send yet, the default) or skip", Key: "on_unavailable"},
+		{Name: "max-credits", Help: "Pay up to this many credits in total for tests past this month's free ones", Kind: flagInt, Key: "max_credits"},
+	}
+	return resource{
+		Name:    "placement",
+		Aliases: []string{"placement-test", "placement-tests"},
+		Short:   "Test where a template lands: inbox, a Gmail tab or spam",
+		Group:   groupData,
+		Long: `Send a campaign step or a template from one of your mailboxes to a panel of
+seed inboxes and see where each copy landed.
+
+Every copy is a real send from that mailbox, counted against its daily limit,
+so starting a test asks before it does it. A batch runs the same test from many
+mailboxes, a few at a time.`,
+		Endpoints: []endpoint{
+			{Name: "overview", Short: "The seed panels you can test on and this month's allowance", Method: http.MethodGet, Path: "/placement/overview"},
+			{
+				Name: "list", Aliases: []string{"ls"}, Short: "List placement tests",
+				Method: http.MethodGet, Path: "/placement/tests", Paginate: true,
+				Flag:  withPaging(flagSpec{Name: "campaign", Help: "Only this campaign's tests", Query: true, Key: "campaign_id"}),
+				Table: testTable,
+			},
+			{
+				Name: "view", Aliases: []string{"get", "show"}, Short: "Show one test with where every copy landed",
+				Method: http.MethodGet, Path: "/placement/tests/{id}",
+				Args: []argSpec{{Name: "id", Help: "The test's id"}},
+			},
+			{
+				Name: "test", Aliases: []string{"run", "start"}, Short: "Start a placement test",
+				Method: http.MethodPost, Path: "/placement/tests", Body: bodyRequired, Sends: true, Idempotent: true,
+				Example: "  $ warmbly placement test --mailbox MAILBOX_ID --campaign CAMPAIGN_ID --step STEP_ID\n" +
+					"  $ warmbly placement test --mailbox MAILBOX_ID --subject \"Quick question\" --text \"Hi there\" --tracking compare",
+				Flag: []flagSpec{
+					{Name: "mailbox", Help: "The mailbox to send from (required)", Key: "sender_account_id"},
+					{Name: "campaign", Help: "Test this campaign's copy", Key: "campaign_id"},
+					{Name: "step", Help: "The step to test; with --campaign", Key: "sequence_id"},
+					{Name: "contact", Help: "Render the copy for this contact's id; the campaign's first lead when omitted", Key: "contact_id"},
+					{Name: "subject", Help: "Subject of an ad-hoc template", Key: "subject"},
+					{Name: "text", Help: "Plain-text body of an ad-hoc template", Key: "body_plain"},
+					{Name: "html", Help: "HTML body of an ad-hoc template", Key: "body_html"},
+					{Name: "tracking", Help: "campaign, on, off or compare (sends twice, with and without)", Key: "tracking"},
+					{Name: "panel", Help: "instance, workspace or cloud", Key: "panel"},
+					{Name: "seed", Help: "Only this seed inbox's id, with --panel workspace (repeatable)", Kind: flagStrings, Key: "seed_ids"},
+					{Name: "provider", Help: "Only seeds at this provider, e.g. gmail or outlook (repeatable)", Kind: flagStrings, Key: "families"},
+					{Name: "pace", Help: "spaced (about a minute apart) or quick (a few seconds apart)", Key: "pace"},
+					{Name: "max-credits", Help: "Pay up to this many credits when this month's free tests are used up", Kind: flagInt, Key: "max_credits"},
+				},
+				Table: testTable,
+			},
+			{
+				Name: "cancel", Short: "Stop the copies of a running test that have not been sent",
+				Method: http.MethodPost, Path: "/placement/tests/{id}/cancel", Body: bodyOptional,
+				Args:    []argSpec{{Name: "id", Help: "The test's id"}},
+				Success: "Placement test cancelled.",
+			},
+			{
+				Name: "seeds", Short: "List your mailboxes and which are seed inboxes",
+				Method: http.MethodGet, Path: "/placement/seeds",
+				Table: output.Table{Root: "data", Columns: []output.Column{
+					col("ID", "email_account_id"), colt("MAILBOX", "email", 36), col("PROVIDER", "label"),
+					colf("SEED", "seed", "bool"), colt("NOTE", "blocker", 40),
+				}, Empty: "No mailboxes in this workspace."},
+			},
+			{
+				Name: "set-seed", Short: "Make a mailbox a seed inbox, or an ordinary mailbox again",
+				Method: http.MethodPut, Path: "/placement/seeds/{id}", Body: bodyRequired,
+				Args:    []argSpec{{Name: "id", Help: "The mailbox's id"}},
+				Example: "  $ warmbly placement set-seed MAILBOX_ID --seed\n  $ warmbly placement set-seed MAILBOX_ID --seed=false",
+				Flag:    []flagSpec{{Name: "seed", Help: "true to make it a seed inbox, false to stop", Kind: flagBool, Key: "seed"}},
+				Success: "Seed inbox updated.",
+			},
+			{
+				Name: "monitor", Short: "Show a campaign's scheduled placement test",
+				Method: http.MethodGet, Path: "/campaigns/{id}/placement-monitor",
+				Args: []argSpec{{Name: "id", Help: "The campaign's id"}},
+			},
+			{
+				Name: "set-monitor", Short: "Schedule or change a campaign's placement test",
+				Method: http.MethodPut, Path: "/campaigns/{id}/placement-monitor", Body: bodyRequired,
+				Args:    []argSpec{{Name: "id", Help: "The campaign's id"}},
+				Example: "  $ warmbly placement set-monitor CAMPAIGN_ID --enabled --interval-days 7 --alert-below 70",
+				Flag: []flagSpec{
+					{Name: "enabled", Help: "Run the scheduled test", Kind: flagBool, Key: "enabled"},
+					{Name: "interval-days", Help: "Days between tests, 1 to 30", Kind: flagInt, Key: "interval_days"},
+					{Name: "alert-below", Help: "Alert when the inbox rate falls below this percent", Kind: flagInt, Key: "alert_below"},
+					{Name: "panel", Help: "instance, workspace or cloud", Key: "panel"},
+					{Name: "pause-on-alert", Help: "Pause the campaign when it alerts", Kind: flagBool, Key: "pause_on_alert"},
+				},
+				Success: "Placement monitor saved.",
+			},
+			{
+				Name: "delete-monitor", Short: "Stop a campaign's scheduled placement test",
+				Method: http.MethodDelete, Path: "/campaigns/{id}/placement-monitor",
+				Args:    []argSpec{{Name: "id", Help: "The campaign's id"}},
+				Success: "Placement monitor removed.",
+			},
+			{
+				Name: "batches", Short: "List placement batches: one test run from many mailboxes",
+				Method: http.MethodGet, Path: "/placement/batches", Paginate: true,
+				Flag:  withPaging(),
+				Table: batchTable,
+			},
+			{
+				Name: "batch", Aliases: []string{"batch-view"}, Short: "Show a batch with its placement by domain and provider",
+				Method: http.MethodGet, Path: "/placement/batches/{id}",
+				Args: []argSpec{{Name: "id", Help: "The batch's id"}},
+			},
+			{
+				Name: "batch-preview", Short: "Count the mailboxes, tests, copies and credits a batch would take",
+				Method: http.MethodPost, Path: "/placement/batches/preview", Body: bodyRequired,
+				Example: "  $ warmbly placement batch-preview --scope campaign --scope-campaign CAMPAIGN_ID --sample percent --sample-percent 10 --stratify provider --campaign CAMPAIGN_ID --step STEP_ID",
+				Flag:    batchFlags,
+			},
+			{
+				Name: "batch-start", Aliases: []string{"batch-test"}, Short: "Run a placement test from many mailboxes, a few at a time",
+				Method: http.MethodPost, Path: "/placement/batches", Body: bodyRequired, Sends: true, Idempotent: true,
+				Example: "  $ warmbly placement batch-start --scope campaign --scope-campaign CAMPAIGN_ID --campaign CAMPAIGN_ID --step STEP_ID\n" +
+					"  $ warmbly placement batch-start --scope workspace --untested-days 30 --sample per_domain --sample-count 2 --subject \"Quick question\" --text \"Hi there\"",
+				Flag:  batchFlags,
+				Table: batchTable,
+			},
+			{
+				Name: "batch-senders", Short: "List a batch's mailboxes, worst inbox rate first",
+				Method: http.MethodGet, Path: "/placement/batches/{id}/senders", Paginate: true,
+				Args: []argSpec{{Name: "id", Help: "The batch's id"}},
+				Flag: withPaging(
+					flagSpec{Name: "sort", Help: "worst (default), best, email or status", Query: true},
+					flagSpec{Name: "status", Help: "Only mailboxes in this status: queued, deferred, running, completed, skipped, failed or cancelled", Query: true},
+					flagSpec{Name: "search", Help: "Only addresses containing this text", Query: true, Key: "q"},
+				),
+				Table: output.Table{Root: "data", Columns: []output.Column{
+					colt("MAILBOX", "sender_email", 34), col("PROVIDER", "sender_family_label"), col("STATUS", "status"),
+					col("INBOX", "summary.inbox"), col("SPAM", "summary.spam"), col("MISSING", "summary.missing"),
+					colt("REASON", "detail", 40),
+				}, Empty: "No mailboxes match."},
+			},
+			{
+				Name: "batch-cancel", Short: "Stop a batch; copies already sent keep being classified",
+				Method: http.MethodPost, Path: "/placement/batches/{id}/cancel", Body: bodyOptional,
+				Args:    []argSpec{{Name: "id", Help: "The batch's id"}},
+				Success: "Placement batch cancelled.",
+			},
+			{
+				Name: "coverage", Short: "How many mailboxes finished a placement test in the last 7 and 30 days",
+				Method: http.MethodGet, Path: "/placement/coverage",
 			},
 		},
 	}
@@ -1470,14 +1767,24 @@ func analyticsSpec() resource {
 				Args: []argSpec{{Name: "id", Help: "The mailbox's id"}},
 			},
 			{
-				Name: "campaign", Short: "One campaign's analytics",
+				Name: "campaign", Short: "One campaign's analytics, all time or for the emails sent in a date range",
 				Method: http.MethodGet, Path: "/analytics/campaigns/{id}",
-				Args: []argSpec{{Name: "id", Help: "The campaign's id"}},
+				Example: "  $ warmbly analytics campaign ID --from 2026-09-01 --to 2026-09-07",
+				Args:    []argSpec{{Name: "id", Help: "The campaign's id"}},
+				Flag: []flagSpec{
+					{Name: "from", Help: "First day of the range, YYYY-MM-DD (with --to; omit both for all time)", Query: true},
+					{Name: "to", Help: "Last day of the range, YYYY-MM-DD, included (with --from)", Query: true},
+				},
 			},
 			{
 				Name: "campaign-daily", Short: "One campaign's daily series",
 				Method: http.MethodGet, Path: "/analytics/campaigns/{id}/daily",
-				Args: []argSpec{{Name: "id", Help: "The campaign's id"}},
+				Example: "  $ warmbly analytics campaign-daily ID --from 2026-09-01 --to 2026-09-30",
+				Args:    []argSpec{{Name: "id", Help: "The campaign's id"}},
+				Flag: []flagSpec{
+					{Name: "from", Help: "First day of the range, YYYY-MM-DD (required)", Query: true},
+					{Name: "to", Help: "Last day of the range, YYYY-MM-DD, included (required)", Query: true},
+				},
 			},
 			{
 				Name: "campaign-hourly", Short: "One campaign's hourly series",
@@ -1548,8 +1855,9 @@ func advisorSpec() resource {
 			},
 			{
 				Name: "snooze", Short: "Snooze a recommendation",
-				Method: http.MethodPost, Path: "/advisor/recommendations/{id}/snooze", Body: bodyOptional,
+				Method: http.MethodPost, Path: "/advisor/recommendations/{id}/snooze", Body: bodyRequired,
 				Args:    []argSpec{{Name: "id", Help: "The recommendation's id"}},
+				Flag:    []flagSpec{{Name: "days", Help: "How many days, 1 to 90 (required)", Kind: flagInt}},
 				Success: "Recommendation snoozed.",
 			},
 			{
@@ -1597,8 +1905,11 @@ means updating the receiver at the same time.`,
 				Name: "edit", Aliases: []string{"update"}, Short: "Change a webhook endpoint",
 				Method: http.MethodPatch, Path: "/webhooks/{id}", Body: bodyRequired,
 				Args: []argSpec{{Name: "id", Help: "The endpoint's id"}},
+				Long: `Replace a webhook endpoint's settings. Every field is written: pass --url
+and --events each time, a description left out is cleared, and the endpoint is
+enabled unless --enabled=false is given.`,
 				Flag: []flagSpec{
-					{Name: "url", Help: "Where to POST events"},
+					{Name: "url", Help: "Where to POST events (required)"},
 					{Name: "description", Help: "What this endpoint is for"},
 					{Name: "events", Help: "Event types to subscribe to", Kind: flagStrings, Key: "event_types"},
 					{Name: "enabled", Help: "Whether it receives events", Kind: flagBool},
@@ -1782,6 +2093,7 @@ func oauthAppSpec() resource {
 				Flag: []flagSpec{
 					{Name: "name", Short: "n", Help: "Application name"},
 					{Name: "redirect-uris", Help: "Allowed redirect URIs", Kind: flagStrings, Key: "redirect_uris"},
+					{Name: "scopes", Help: "API permission bitmask the app may request (required; see the permissions reference)", Kind: flagInt},
 				},
 			},
 			{
@@ -2024,8 +2336,10 @@ connection stays in the dashboard. Everything after that is here.`,
 			},
 			{
 				Name: "push", Short: "Push data through a connection now",
-				Method: http.MethodPost, Path: "/integrations/connections/{id}/push", Body: bodyOptional,
-				Args: []argSpec{{Name: "id", Help: "The connection's id"}},
+				Method: http.MethodPost, Path: "/integrations/connections/{id}/push", Body: bodyRequired,
+				Args:    []argSpec{{Name: "id", Help: "The connection's id"}},
+				Example: "  $ warmbly integration push CONNECTION_ID --contacts CONTACT_ID,CONTACT_ID",
+				Flag:    []flagSpec{{Name: "contacts", Help: "Contact ids to push", Kind: flagStrings}},
 			},
 			{
 				Name: "disconnect", Aliases: []string{"rm"}, Short: "Disconnect an integration",

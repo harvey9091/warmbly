@@ -18,7 +18,10 @@ The feed and the bell count update live, without refreshing.
 | Bounce detected | Health | On | A campaign starts bouncing |
 | Spam complaint | Health | On | A complaint lands on a campaign |
 | Worker downtime | Health | On | A sender worker stops responding |
+| Mail that needs action | Health | On, including email | [Automatic inbox tagging](/guides/inbox-tagging/#mail-that-needs-your-action) found automated mail in a mailbox that needs someone to act, such as a failed payment, a suspended account or a suspicious sign-in |
 | Campaign auto-paused | Health | On, including email | An [auto-pause guardrail](/guides/campaigns/) stopped a campaign |
+| Placement monitor alert | Health | On, including email | A campaign's scheduled [placement test](/guides/placement-tests/#campaign-placement-monitors) landed less of its mail in the primary inbox than the monitor's threshold |
+| Placement test finished | Health | On | A [placement test](/guides/placement-tests/) you started has a verdict for every copy |
 | New sign-in | Security | On | Your account is accessed from a new device, with browser, OS, and rough location |
 | Billing alerts | Billing | On, including email | A trial expired or sending was paused for billing |
 | Teammate joined | Team | On | Someone accepted an invitation |
@@ -28,8 +31,16 @@ The feed and the bell count update live, without refreshing.
 Health defaults **on** because those alerts are operationally important and low volume. Inbound defaults **off** because a large campaign would generate one notification per recipient and flood the feed. Turn **Reply received** on only for smaller, higher-touch campaigns.
 
 <Callout type="info" title="Who gets notified">
-Workspace events never fan out to everyone. Reply and bounce alerts go to the owner of the mailbox or campaign, worker downtime to members who can manage mailboxes, billing to those who can manage billing, and team changes to those who can manage the team. The person who joined is not notified about themselves.
+Workspace events never fan out to everyone. Reply and bounce alerts go to the owner of the mailbox or campaign, worker downtime to members who can manage mailboxes, mailbox mail that needs action to members who can both manage mailboxes and use the inbox, a finished placement test to whoever started it, a placement monitor alert to members who can view campaigns, billing to those who can manage billing, and team changes to those who can manage the team. The person who joined is not notified about themselves.
 </Callout>
+
+## Notifications about a message follow it
+
+A **Reply received**, **Out-of-office detected** or **Mail that needs action** notification is about one message in the [Unibox](/guides/unibox/), and it stays in step with it:
+
+- **Clicking it opens that conversation**, not the inbox in general.
+- **Reading the message reads the notification**, wherever you read it: in the Unibox, through the API, or in Gmail or Outlook, which Warmbly picks up on the next sync. A notification read this way is not emailed later either.
+- **Removing the message removes the notification.** Deleted mail, and mail later confirmed to be [warmup](/guides/warmup/), takes its notification out of the feed and the bell count. Warmup never raises one in the first place; this covers anything identified after it arrived. A push or Slack message already delivered cannot be recalled.
 
 <Callout type="info" title="Where to read replies">
 Even with reply notifications off you never miss anything: every reply still lands in the [Unibox](/guides/unibox/). The notification is only an optional ping.
@@ -44,7 +55,7 @@ Toggle each category under **Settings > Notifications**. Changes save automatica
 | **In-app** | The bell. Always on, governed by the category toggles |
 | **Mobile push** | iOS app devices, registered automatically when you allow notifications. Batched: the first alert in a quiet stretch goes immediately, and anything inside the window (five hours by default) is held and sent as one summary like "3 new replies" |
 | **Email** | Your account email, batched by the digest rules below |
-| **Slack** | Posts to the channel configured under [Integrations](/guides/integrations/). Until a channel is set, the toggle saves but nothing is delivered |
+| **Slack** | Posts to the workspace's connected Slack: the channel set for that category, else the default channel, both chosen under [Slack](/guides/slack/#notifications). A notification for several teammates is posted once. If you linked your Slack account and turned on personal DMs, you also get it as a DM from the bot. With no channel set the toggle still saves, and only personal DMs are delivered. To have every reply posted to a channel as a thread the team can answer from, use the [inbox channel](/guides/slack/#inbox-in-slack) instead |
 
 ## Email digest
 

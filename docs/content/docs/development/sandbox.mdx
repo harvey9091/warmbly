@@ -39,11 +39,12 @@ Two other entry points:
 - AI credits: the plan's monthly allowance plus a 5,000-credit purchased top-up, so the assistant and every other AI surface work out of the box (re-seeding refills both pools)
 - 20 sender mailboxes on `@sunrise.test` (a healthy warmup pool by the dashboard's own coverage bar), assigned to the worker `make sandbox` runs, spread across the whole warmup lifecycle: seven graduated senders that finished their ramp weeks ago and carry full (~50/day) cold volume, eight mid-ramp, three freshly connected, one with warmup paused, and one on reduced health with an open provider warning. Every account has matching warmup ramp stats and daily send counts backfilled, varied pool health scores, a personal signature, and a tag (VIP, Agency, or Cold); pacing is demo friendly (45s minimum gap, 100/day cap)
 - campaigns in every list bucket: two active ("Sunrise Q3 launch outreach", 3 steps, 48 contacts; "Agency partnerships", 2 steps, 24 contacts), one paused, one completed, and one draft, all with tracking enabled, every step connected to the next (the scheduler only follows explicit step connections), all 20 senders in the rotation, and a realistic funnel of sent, opened, clicked, replied, and bounced timestamps spread over three weeks
+- six placement seed inboxes on the instance panel, on domains of their own (`gmail-seeds.test`, `workspace-seeds.test`, `m365-seeds.test`, `outlook-seeds.test`, `yahoo-seeds.test`) with the provider each stands in for, so a [placement test](/guides/placement-tests/) from any Sunrise mailbox has somewhere to land
 - a live unified inbox: threaded inbound replies across several senders, including a meeting request, an out-of-office autoreply, a not-interested reply, and a bounce notice, with a mix of read and unread
 - a CRM pipeline with five stages, five deals across them, tasks, contact notes, and per-contact activity timelines
 - the analytics tables behind the deliverability and reporting views: deliverability events (opens, clicks, replies, bounces, complaints, unsubscribes), reply-intent classifications, a suppression list, and resolved and open mailbox errors
 - an org audit trail (campaign created and started, mailbox connected, member invited, deal created, key created) so the audit log has depth
-- reply templates, notifications (some unread), and labels everywhere they appear: folders (Outbound, Nurture), mailbox tags (VIP, Cold, Agency), and categories (Lead, Customer, Churn risk) bound to the campaigns, senders, several contacts, and inbox threads
+- reply templates, notifications (some unread), and labels everywhere they appear: folders (Outbound, Nurture), mailbox tags (VIP, Cold, Agency), and workspace labels (Lead, Customer, Churn risk) bound to the campaigns, senders, several contacts, and inbox threads
 - working credentials for every `smtp_imap` account in the database, including the older `make seed` fixtures, sealed with `CREDENTIALS_ENCRYPTION_KEY` so the worker can decrypt and use them
 - an [Advisor](/guides/advisor/) showcase (see below), and one evaluation run at the end of seeding so the recommendations exist before you log in
 
@@ -69,11 +70,11 @@ Real mail servers stand in for the internet's mail infrastructure:
 - **Mailpit** is the SMTP sink. Every mailbox's outbound server points at it, so all sends (campaign and warmup) are captured and visible in its UI.
 - **Dovecot** hosts the mailboxes' inboxes. It accepts any username with the password `sandbox` and auto-creates the maildir on first use. The worker's real IMAP sync polls it every minute.
 
-The simulator bridges the two and plays every human:
+The simulator bridges the two and plays every human. It also plays the spam filter for the seed inboxes: a placement copy the content check scores below 70 goes to Junk, and a fixed share of the rest does too, more on the Microsoft and Yahoo seeds and more again for tracked copy, so a test and its tracking comparison both show a spread:
 
 1. It polls Mailpit's API for new messages (the read flag is its cursor).
 2. Mail addressed to a hosted mailbox (for example warmup mail between pool members) is appended into that user's Dovecot inbox. The recipient's worker sync picks it up, the warmup token verifies, and engagement actions run against the real IMAP folders.
-3. Mail addressed to a seeded contact triggers a persona: after humanized delays, most contacts open the pixel against the local tracking service, some click the tracked link, and some reply. Replies are composed with correct `In-Reply-To` threading and appended into the sending mailbox's inbox, so reply attribution, the reply classifier, `EMAIL_REPLIED` realtime events, and the unibox all behave exactly as in production. A slice of replies are out-of-office autoresponders (with `Auto-Submitted` headers) so classifier gating is visible too.
+3. Mail addressed to a seeded contact triggers a persona: after humanized delays, most contacts open the pixel against the local tracking service, some click the tracked link, and some reply. Replies are composed with correct `In-Reply-To` threading and appended into the sending mailbox's inbox, or into the mailbox its reply-to names when that is another sandbox mailbox, the way a mail client answers a `Reply-To`, so reply attribution, the reply classifier, `EMAIL_REPLIED` realtime events, and the unibox all behave exactly as in production. A slice of replies are out-of-office autoresponders (with `Auto-Submitted` headers) so classifier gating is visible too.
 
 Personas are derived from a hash of the contact's address, so behavior is stable across restarts without any extra state: roughly 92% open, 57% of openers click, 45% of openers reply, with reply tones split across interested, question, not-interested, and out-of-office. The rates are deliberately hotter than real-world outreach so the demo stays lively.
 
@@ -102,6 +103,21 @@ Personas are derived from a hash of the contact's address, so behavior is stable
 | `SANDBOX_SMTP_HOST` / `SANDBOX_SMTP_PORT` | `localhost` / `11025` | seeded as the mailboxes' outbound server (the worker dials it) |
 | `SANDBOX_IMAP_HOST` / `SANDBOX_IMAP_PORT` | `localhost` / `10993` | seeded as the mailboxes' inbound server (the worker dials it) |
 | `CREDENTIALS_ENCRYPTION_KEY` | set by the Makefile | must match the backend's key |
+| `SANDBOX_VENDOR_ADDR` | `127.0.0.1:18099` | where the mock inbox vendor API listens |
+| `SANDBOX_VENDOR_LATENCY_MS` | `1200` | how long the mock vendor takes to answer, like a real API; `0` answers at once |
+
+## Mock inbox vendors
+
+The simulator also plays two inbox vendors, so connecting a vendor account, importing its mailboxes and managing its domains work with no vendor account. `make sandbox` starts it and points the backend at it with `MAILVENDOR_SANDBOX_URL=http://127.0.0.1:18099`. To run only the mock next to your own backend, use `go run ./cmd/sandbox -vendors-only` and start the backend with the same variable. The backend ignores it unless `APP_ENV` is `dev`.
+
+Connect either vendor from **Add account > Inbox vendor** with any API key. The InboxKit mock has two workspaces, so its mailboxes show which one each sits in:
+
+| Vendor | Mailboxes | Domains |
+|--------|-----------|---------|
+| InboxKit | eight Google Workspace mailboxes, on `sunrise-outbound.test` in the "Sunrise Outbound" workspace and `trysunrise.test` in "Sunrise Trials". Only a password comes back, as with the real API, and `.test` has no mail servers, so their rows ask for server settings; **Fix** on a row can point it at the sandbox's Mailpit (`localhost:11025`) and Dovecot (`localhost:10993`) | forwarding and DNS writes, so **Sending domains** can set the root forward and the tracking record in one click |
+| Mailforge | four mailboxes on `sunrisehq.test`, hosted on the sandbox's Mailpit and Dovecot, so they import and connect for real | forwarding only |
+
+The mock keeps its state in memory, so a restart puts every domain back the way it started.
 
 ## Demo script
 

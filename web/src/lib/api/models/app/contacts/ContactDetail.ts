@@ -8,11 +8,26 @@ export interface ContactEngagement {
     total_bounced: number;
     total_complained: number;
 
-    last_sent_at?: string | null;
-    last_opened_at?: string | null;
-    last_clicked_at?: string | null;
-    last_replied_at?: string | null;
-    last_bounced_at?: string | null;
+    last_sent_at?: Date | null;
+    last_opened_at?: Date | null;
+    last_clicked_at?: Date | null;
+    last_replied_at?: Date | null;
+    last_bounced_at?: Date | null;
+
+    // How the contact reads your mail: each client and device a person's
+    // opens came from, most recent first.
+    reads_on?: ContactReadingOrigin[];
+}
+
+export interface ContactReadingOrigin {
+    client?: string;
+    client_type?: "app" | "webmail";
+    device_hidden?: boolean;
+    device_type?: string;
+    os?: string;
+    browser?: string;
+    opens: number;
+    last_opened_at: Date;
 }
 
 export interface ContactSuppression {
@@ -23,8 +38,8 @@ export interface ContactSuppression {
     value: string;
     reason: string;
     source: "bounce" | "complaint" | "unsubscribe" | "manual" | "import" | string;
-    expires_at?: string | null;
-    created_at: string;
+    expires_at?: Date | null;
+    created_at: Date;
 }
 
 // Where a contact first came from. Mirrors the backend CHECK; "unknown" is
@@ -35,6 +50,7 @@ export type ContactSource =
     | "campaign"
     | "import"
     | "sheet_sync"
+    | "crm_sync"
     | "api"
     | "ai_assistant"
     | "form"
@@ -54,7 +70,7 @@ export type VerificationEvidenceKind =
 export interface ContactVerificationEvidence {
     kind: VerificationEvidenceKind;
     detail?: string;
-    observed_at: string;
+    observed_at: Date;
 }
 
 export interface ContactVerificationDetail {
@@ -64,6 +80,17 @@ export interface ContactVerificationDetail {
     // True when real mail, not a check, decided the status.
     decisive: boolean;
     evidence: ContactVerificationEvidence[];
+    // Who produced the last verdict: "probe", "provider", "imported",
+    // "manual", or "" when never checked. provider_label is the verifier's
+    // display name ("MillionVerifier") when there is one.
+    source: "" | "probe" | "provider" | "imported" | "manual";
+    provider: string;
+    provider_label?: string;
+    // What that check said, before real mail was weighed against it.
+    check_status: "" | "valid" | "risky" | "invalid" | "unknown";
+    checked_at?: Date | null;
+    // Set while a re-check a member asked for waits to run.
+    requested_at?: Date | null;
 }
 
 export default interface ContactDetail extends Contact {
@@ -74,5 +101,5 @@ export default interface ContactDetail extends Contact {
     // First-touch attribution; never changes after creation.
     source: ContactSource;
     source_detail: string;
-    first_seen_at: string;
+    first_seen_at: Date;
 }

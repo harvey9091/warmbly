@@ -122,6 +122,7 @@ import { ExpressionReference } from "@/components/app/automations/ExpressionRefe
 import DealStagePicker from "@/components/app/crm/DealStagePicker";
 import TaskTypePicker from "@/components/app/crm/TaskTypePicker";
 import AssigneeTeamPicker, { type AssigneeValue } from "@/components/app/crm/AssigneeTeamPicker";
+import { HubSpotActionNote } from "@/components/app/crm/hubspotCrm";
 import { useAutomations } from "@/lib/api/hooks/app/automations/useAutomations";
 import ProviderGlyph from "@/app/app/integrations/_components/ProviderGlyph";
 import ResourceViewers from "@/components/app/presence/ResourceViewers";
@@ -560,9 +561,9 @@ function ConvergeEdge({
                             <div
                                 className="rounded border px-1 py-px text-[10px]"
                                 style={{
-                                    borderColor: (labelBgStyle as { stroke?: string } | undefined)?.stroke ?? "#e2e8f0",
-                                    background: (labelBgStyle as { fill?: string } | undefined)?.fill ?? "#fff",
-                                    color: (labelStyle as { fill?: string } | undefined)?.fill ?? "#475569",
+                                    borderColor: (labelBgStyle as { stroke?: string } | undefined)?.stroke ?? "light-dark(#e2e8f0, #2e2f34)",
+                                    background: (labelBgStyle as { fill?: string } | undefined)?.fill ?? "light-dark(#fff, #1a1b1e)",
+                                    color: (labelStyle as { fill?: string } | undefined)?.fill ?? "light-dark(#475569, #b4bac3)",
                                 }}
                             >
                                 {label}
@@ -612,7 +613,7 @@ function whenToHandle(w?: string): string {
 function styledEdge(id: string, source: string, target: string, sourceHandle: string, when: When): Edge {
     const aiLabel = when.startsWith("label:") ? when.slice("label:".length) : "";
     const color =
-        when === "true" ? "#0ea5e9" : when === "false" ? "#94a3b8" : when === "error" ? "#f43f5e" : aiLabel ? "#a855f7" : "#cbd5e1";
+        when === "true" ? "var(--wb-edge-sky)" : when === "false" ? "var(--wb-edge-muted)" : when === "error" ? "var(--wb-edge-rose)" : aiLabel ? "var(--wb-edge-violet)" : "var(--wb-edge-faint)";
     return {
         id,
         source,
@@ -624,7 +625,7 @@ function styledEdge(id: string, source: string, target: string, sourceHandle: st
         markerEnd: { type: MarkerType.ArrowClosed, color, width: 16, height: 16 },
         style: { stroke: color, strokeWidth: 1.5 },
         labelStyle: { fill: color },
-        labelBgStyle: { fill: "#fff", stroke: color },
+        labelBgStyle: { fill: "light-dark(#fff, #1a1b1e)", stroke: color },
     };
 }
 
@@ -1078,7 +1079,7 @@ export default function AutomationFlow({
             if (isNativeAction(d.action)) {
                 const need = nativeActionNeeds(d.action);
                 if (need === "tag" && !String(d.config?.category_id ?? "").trim()) {
-                    toast.error("A tag action needs a tag");
+                    toast.error("A label action needs a label");
                     setSelectedId(n.id);
                     return false;
                 }
@@ -1088,7 +1089,7 @@ export default function AutomationFlow({
                     return false;
                 }
                 if (need === "label" && !triggerCarriesThread(trigger)) {
-                    toast.error("Label email only runs on a “Reply received” automation");
+                    toast.error("Label the conversation only runs on a “Reply received” automation");
                     setSelectedId(n.id);
                     return false;
                 }
@@ -1499,7 +1500,7 @@ export default function AutomationFlow({
                     fitView
                     proOptions={{ hideAttribution: true }}
                 >
-                    <Background color="#e9eef5" gap={24} size={1} />
+                    <Background color="light-dark(#e9eef5, #25262a)" gap={24} size={1} />
                     <Controls showInteractive={false} />
                     <CanvasSelections selections={live.selections} />
                     <CanvasCursors cursors={live.cursors} />
@@ -2286,8 +2287,8 @@ function ConditionEditor({
 // the editor header. Drives both the action dropdown glyphs and the editor
 // header, so the picker reads like the campaign step picker.
 const ACTION_VISUAL: Record<string, { Icon: typeof TagIcon; tint: string; bg: string; desc?: string }> = {
-    "warmbly.add_tag": { Icon: TagIcon, tint: "text-emerald-600", bg: "bg-emerald-50", desc: "Add a tag to the contact." },
-    "warmbly.remove_tag": { Icon: TagIcon, tint: "text-amber-600", bg: "bg-amber-50", desc: "Remove a tag from the contact." },
+    "warmbly.add_tag": { Icon: TagIcon, tint: "text-emerald-600", bg: "bg-emerald-50", desc: "Add a label to the contact." },
+    "warmbly.remove_tag": { Icon: TagIcon, tint: "text-amber-600", bg: "bg-amber-50", desc: "Remove a label from the contact." },
     "warmbly.create_task": { Icon: CheckSquareIcon, tint: "text-violet-600", bg: "bg-violet-50", desc: "Open a CRM task for the contact." },
     "warmbly.create_deal": { Icon: BriefcaseIcon, tint: "text-sky-600", bg: "bg-sky-50", desc: "Create a CRM deal for the contact." },
     "warmbly.move_deal_stage": { Icon: BriefcaseIcon, tint: "text-sky-600", bg: "bg-sky-50", desc: "Move the contact's open deal to another stage." },
@@ -2549,6 +2550,12 @@ function ActionEditor({
                 <NativeActionConfig action={data.action ?? ""} trigger={trigger} config={config} patchConfig={patchConfig} selfId={selfId} />
             ) : (
                 <>
+                    {data.action === "hubspot.upsert_contact" && (
+                        <HubSpotActionNote>
+                            HubSpot sync is automatic now: contacts are created and updated in HubSpot as they move
+                            through Warmbly, so this step is no longer needed. It keeps running if you leave it.
+                        </HubSpotActionNote>
+                    )}
                     {actionNeedsChannel(data.action ?? "") && (
                         <div>
                             <Label>Channel</Label>
@@ -2628,11 +2635,11 @@ function NativeActionConfig({
         <div className="space-y-3">
             {need === "tag" && (
                 <div>
-                    <Label>{action === "warmbly.add_tag" ? "Tag to add" : "Tag to remove"}</Label>
+                    <Label>{action === "warmbly.add_tag" ? "Label to add" : "Label to remove"}</Label>
                     <CategoryPicker
                         value={config.category_id ? [String(config.category_id)] : []}
                         onChange={(ids) => patchConfig({ category_id: ids.length ? ids[ids.length - 1] : "" })}
-                        placeholder="Pick a tag…"
+                        placeholder="Pick a label…"
                     />
                 </div>
             )}
@@ -2663,6 +2670,11 @@ function NativeActionConfig({
 
             {need === "deal" && (
                 <>
+                    <HubSpotActionNote>
+                        {action === "warmbly.create_deal"
+                            ? "The deal is created in HubSpot, in the pipeline and deal stage you pick."
+                            : "The deal moves in HubSpot too. Pipelines and deal stages are HubSpot's."}
+                    </HubSpotActionNote>
                     <div>
                         <Label>{action === "warmbly.create_deal" ? "Create the deal in" : "Move the deal to"}</Label>
                         <DealStagePicker
@@ -2719,6 +2731,9 @@ function NativeActionConfig({
 
             {need === "task" && (
                 <>
+                    <HubSpotActionNote>
+                        The task is created in HubSpot with a HubSpot task type. A member needs a HubSpot owner to be assigned.
+                    </HubSpotActionNote>
                     <div>
                         <Label>Task title</Label>
                         <TextInput
@@ -2813,7 +2828,7 @@ function NativeActionConfig({
 type SetVarRow = { key: string; value: string };
 
 const IF_EXISTS_OPTIONS: SelectOption[] = [
-    { value: "update", label: "Update it (fill blanks, add tags and campaign)" },
+    { value: "update", label: "Update it (fill blanks, add labels and campaign)" },
     { value: "skip", label: "Leave it alone" },
 ];
 
@@ -2915,11 +2930,11 @@ function UpsertContactFields({
                 </button>
             </div>
             <div>
-                <Label>Tags</Label>
+                <Label>Labels</Label>
                 <CategoryPicker
                     value={Array.isArray(config.category_ids) ? (config.category_ids as string[]) : []}
                     onChange={(ids) => patchConfig({ category_ids: ids })}
-                    placeholder="Pick tags…"
+                    placeholder="Pick labels…"
                 />
             </div>
             <div>
@@ -2942,7 +2957,7 @@ function UpsertContactFields({
             </div>
             <p className="text-[11px] text-slate-400 leading-relaxed">
                 A blank value never erases what the contact already has. The written contact becomes this event&apos;s contact, so the
-                steps after it (tag, task, deal) act on it. A campaign picked here keeps running for new leads instead of finishing between runs.
+                steps after it (label, task, deal) act on it. A campaign picked here keeps running for new leads instead of finishing between runs.
             </p>
         </div>
     );
@@ -3432,7 +3447,7 @@ function AITagPoolField({
             <p className="mt-1.5 text-[11px] text-slate-400">
                 {value.length
                     ? "The agent chooses among these for each event."
-                    : "Empty, so the agent may use any of your tags for each event."}
+                    : "Empty, so the agent may use any of your labels for each event."}
             </p>
         </div>
     );
@@ -3465,7 +3480,7 @@ function AIAgentFields({
             <AIInstruction
                 value={String(config.instruction ?? "")}
                 onChange={(v) => patchConfig({ instruction: v })}
-                placeholder="Read the reply. If they ask about pricing, tag them 'pricing' and create a follow-up task."
+                placeholder="Read the reply. If they ask about pricing, label them 'pricing' and create a follow-up task."
             />
             <div>
                 <Label>Actions the agent may take</Label>
@@ -3495,10 +3510,10 @@ function AIAgentFields({
                                         <AITagPoolField
                                             label={
                                                 id === "warmbly.add_tag"
-                                                    ? "Tags the agent can add"
+                                                    ? "Labels the agent can add"
                                                     : id === "warmbly.remove_tag"
-                                                      ? "Tags the agent can remove"
-                                                      : "Labels the agent can apply"
+                                                      ? "Labels the agent can remove"
+                                                      : "Conversation labels the agent can apply"
                                             }
                                             value={poolFor(id)}
                                             onChange={(refs) => patchConfig({ [poolKey]: refs })}
@@ -3523,7 +3538,7 @@ function AIAgentFields({
                         >
                             {!!config.ai_allow_create_tags && <CheckIcon className="w-3 h-3" />}
                         </span>
-                        Let the agent create a new tag/label when none fits
+                        Let the agent create a new label when none fits
                     </button>
                 )}
                 <p className="mt-1.5 text-[11px] text-slate-400 leading-relaxed">

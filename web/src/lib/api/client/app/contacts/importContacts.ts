@@ -38,6 +38,19 @@ export interface ImportPreview {
     has_header: boolean;
     sample_rows: string[][];
     suggested_mapping: ImportColumnMapping[];
+    // Columns whose suggestion came from the TypeSafe judgment rather than
+    // the header or the values. Absent when none did.
+    inferred_columns?: number[];
+    // Every column's fill over the whole file (the background import sends it).
+    column_stats?: ImportColumnStats[];
+    // "saved" when this workspace confirmed a mapping for these exact headers before.
+    mapping_source?: "suggested" | "saved";
+}
+
+export interface ImportColumnStats {
+    filled: number;
+    distinct: number;
+    samples: string[];
 }
 
 export interface ImportCommitOptions {
@@ -63,8 +76,9 @@ export interface ImportResult {
     updated: number;
     skipped: number;
     failed: number;
-    started_at: string;
-    ended_at: string;
+    // A Date when revived through Request (a lead-sync run); a string from the direct import upload.
+    started_at: Date | string;
+    ended_at: Date | string;
     errors?: ImportRowError[];
     // Set when more rows failed than the API reports back; `errors` then holds
     // the first slice of them and `failed` is the true count.

@@ -53,13 +53,20 @@ type IntegrationRepository interface {
 	// Connections
 	UpsertConnection(ctx context.Context, w *ConnectionWrite) error
 	ListConnections(ctx context.Context, orgID uuid.UUID) ([]models.IntegrationConnection, error)
+	// WorkspacesByProvider counts the workspaces with a live connection to each
+	// provider: an instance-wide aggregate for popularity, carrying no org data.
+	WorkspacesByProvider(ctx context.Context) (map[models.IntegrationProvider]int, error)
 	GetConnection(ctx context.Context, orgID uuid.UUID, provider models.IntegrationProvider, label string) (*models.IntegrationConnection, error)
 	GetConnectionByID(ctx context.Context, orgID, id uuid.UUID) (*models.IntegrationConnection, error)
 	GetConnectionSecrets(ctx context.Context, id uuid.UUID) (*ConnectionSecrets, error)
 	GetConnectionByInboundSecret(ctx context.Context, provider models.IntegrationProvider, secret string) (*models.IntegrationConnection, error)
+	// ListConnectionsByExternalAccount finds a provider's connections across
+	// orgs by the external account id (a Slack team id), oldest first.
+	ListConnectionsByExternalAccount(ctx context.Context, provider models.IntegrationProvider, externalID string) ([]models.IntegrationConnection, error)
 	DeleteConnection(ctx context.Context, orgID, id uuid.UUID) error
 	MarkConnectionSynced(ctx context.Context, id uuid.UUID, status models.IntegrationStatus, displayFields json.RawMessage, errMsg string) error
 	UpdateConnectionTokens(ctx context.Context, id uuid.UUID, accessEnc, refreshEnc string, expiresAt *time.Time, scopes []string) error
+	MergeDisplayFields(ctx context.Context, id uuid.UUID, patch map[string]any) error
 	SetConnectionStatus(ctx context.Context, id uuid.UUID, status models.IntegrationStatus, health models.IntegrationHealth, detail string) error
 	ClearConnectionHealth(ctx context.Context, id uuid.UUID) error
 
@@ -109,6 +116,11 @@ type IntegrationRepository interface {
 	ListFieldMappings(ctx context.Context, orgID, connID uuid.UUID) ([]models.IntegrationFieldMapping, error)
 	ReplaceConnectionFieldMappings(ctx context.Context, orgID, connID uuid.UUID, object string, mappings []models.IntegrationFieldMapping) error
 	UpdateConnectionConfig(ctx context.Context, orgID, connID uuid.UUID, configCapabilities []byte, syncDirection string) error
+	// SetInboundSigningConfig writes a Calendly/Cal.com connection's sealed
+	// config and records in display_fields whether deliveries must be signed.
+	SetInboundSigningConfig(ctx context.Context, orgID, connID uuid.UUID, configEncrypted []byte, signed bool) error
+	// SetInboundSecret replaces a Calendly/Cal.com connection's inbound URL secret.
+	SetInboundSecret(ctx context.Context, orgID, connID uuid.UUID, secret string) error
 
 	// Sync runs
 	CreateSyncRun(ctx context.Context, run *models.IntegrationSyncRun) error
@@ -230,6 +242,28 @@ func normalizeScopes(s []string) []string {
 	return s
 }
 
+func (r *integrationRepository) WorkspacesByProvider(ctx context.Context) (map[models.IntegrationProvider]int, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT provider, count(DISTINCT organization_id)::int
+		FROM integration_connections
+		WHERE status <> 'disconnected'
+		GROUP BY provider`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[models.IntegrationProvider]int{}
+	for rows.Next() {
+		var p string
+		var n int
+		if err := rows.Scan(&p, &n); err != nil {
+			return nil, err
+		}
+		out[models.IntegrationProvider(p)] = n
+	}
+	return out, rows.Err()
+}
+
 func (r *integrationRepository) ListConnections(ctx context.Context, orgID uuid.UUID) ([]models.IntegrationConnection, error) {
 	rows, err := r.db.Query(ctx, `SELECT `+connectionPublicCols+`
 		FROM integration_connections WHERE organization_id = $1 ORDER BY created_at DESC`, orgID)
@@ -308,6 +342,28 @@ func (r *integrationRepository) GetConnectionByInboundSecret(ctx context.Context
 	return &c, nil
 }
 
+func (r *integrationRepository) ListConnectionsByExternalAccount(ctx context.Context, provider models.IntegrationProvider, externalID string) ([]models.IntegrationConnection, error) {
+	out := []models.IntegrationConnection{}
+	if externalID == "" {
+		return out, nil
+	}
+	rows, err := r.db.Query(ctx, `SELECT `+connectionPublicCols+`
+		FROM integration_connections WHERE provider = $1 AND external_account_id = $2
+		ORDER BY created_at ASC, id ASC`, string(provider), externalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var c models.IntegrationConnection
+		if err := scanConnectionInto(rows, &c); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 func (r *integrationRepository) DeleteConnection(ctx context.Context, orgID, id uuid.UUID) error {
 	_, err := r.db.Exec(ctx,
 		`DELETE FROM integration_connections WHERE organization_id = $1 AND id = $2`, orgID, id)
@@ -335,6 +391,28 @@ func (r *integrationRepository) MarkConnectionSynced(ctx context.Context, id uui
 		    last_error = $3, last_error_at = $4, updated_at = $4
 		WHERE id = $5`, string(status), displayFields, errMsg, now, id)
 	return err
+}
+
+// MergeDisplayFields overlays keys onto a connection's non-secret display
+// fields, such as a Salesforce instance host that moved.
+func (r *integrationRepository) MergeDisplayFields(ctx context.Context, id uuid.UUID, patch map[string]any) error {
+	raw, err := json.Marshal(patch)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.Exec(ctx, `UPDATE integration_connections SET display_fields = COALESCE(display_fields, '{}'::jsonb) || $2::jsonb, updated_at = NOW() WHERE id = $1`, id, raw)
+	return err
+}
+
+func oauthParams(p map[string]string) []byte {
+	if len(p) == 0 {
+		return []byte("{}")
+	}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return []byte("{}")
+	}
+	return raw
 }
 
 func (r *integrationRepository) UpdateConnectionTokens(ctx context.Context, id uuid.UUID, accessEnc, refreshEnc string, expiresAt *time.Time, scopes []string) error {
@@ -388,10 +466,10 @@ func (r *integrationRepository) CreateOAuthState(ctx context.Context, st *models
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO integration_oauth_states (
 			id, organization_id, user_id, provider, state, code_verifier,
-			label, requested_scopes, expires_at, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			label, requested_scopes, expires_at, created_at, params
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		st.ID, st.OrganizationID, st.UserID, string(st.Provider), st.State, st.CodeVerifier,
-		st.Label, normalizeScopes(st.RequestedScopes), st.ExpiresAt, st.CreatedAt)
+		st.Label, normalizeScopes(st.RequestedScopes), st.ExpiresAt, st.CreatedAt, oauthParams(st.Params))
 	return err
 }
 
@@ -404,11 +482,15 @@ func (r *integrationRepository) TakeOAuthState(ctx context.Context, state string
 		SET used_at = NOW()
 		WHERE state = $1 AND used_at IS NULL AND expires_at > NOW()
 		RETURNING id, organization_id, user_id, provider, state, code_verifier,
-		          label, requested_scopes, used_at, expires_at, created_at`, state)
+		          label, requested_scopes, used_at, expires_at, created_at, params`, state)
 	var st models.IntegrationOAuthState
 	var provider string
+	var params []byte
 	err := row.Scan(&st.ID, &st.OrganizationID, &st.UserID, &provider, &st.State, &st.CodeVerifier,
-		&st.Label, &st.RequestedScopes, &st.UsedAt, &st.ExpiresAt, &st.CreatedAt)
+		&st.Label, &st.RequestedScopes, &st.UsedAt, &st.ExpiresAt, &st.CreatedAt, &params)
+	if err == nil && len(params) > 0 {
+		_ = json.Unmarshal(params, &st.Params)
+	}
 	if isNoRows(err) {
 		return nil, nil
 	}
@@ -790,6 +872,41 @@ func (r *integrationRepository) UpdateConnectionConfig(ctx context.Context, orgI
 		WHERE organization_id = $3 AND id = $4`, configCapabilities, syncDirection, orgID, connID)
 	return err
 }
+
+func (r *integrationRepository) SetInboundSigningConfig(ctx context.Context, orgID, connID uuid.UUID, configEncrypted []byte, signed bool) error {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE integration_connections
+		SET config_encrypted = $3,
+		    display_fields = COALESCE(display_fields, '{}'::jsonb) || jsonb_build_object('inbound_signing', $4::boolean),
+		    updated_at = now()
+		WHERE organization_id = $1 AND id = $2 AND provider IN ('calendly', 'cal_com')`,
+		orgID, connID, nullIfEmptyBytes(configEncrypted), signed)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrInboundConnectionNotFound
+	}
+	return nil
+}
+
+func (r *integrationRepository) SetInboundSecret(ctx context.Context, orgID, connID uuid.UUID, secret string) error {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE integration_connections SET inbound_secret = $3, updated_at = now()
+		WHERE organization_id = $1 AND id = $2 AND provider IN ('calendly', 'cal_com')`,
+		orgID, connID, secret)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrInboundConnectionNotFound
+	}
+	return nil
+}
+
+// ErrInboundConnectionNotFound means no Calendly or Cal.com connection with
+// that id exists in the organization.
+var ErrInboundConnectionNotFound = errors.New("inbound connection not found")
 
 // MatchingDispatchTargets returns enabled subscriptions for an org+event whose
 // connection is usable, each hydrated with the connection's encrypted secrets.

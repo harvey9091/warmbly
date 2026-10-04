@@ -11,6 +11,9 @@ const (
 	// WorkerEventTypeMessageSeen relays a read/unread change a person made in
 	// the unibox out to the mailbox provider, so the two agree.
 	WorkerEventTypeMessageSeen WorkerEventType = "MESSAGE_SEEN"
+	// WorkerEventTypeMessageFolder relays an Archive, Delete or Move to inbox
+	// made in the unibox out to the mailbox provider.
+	WorkerEventTypeMessageFolder WorkerEventType = "MESSAGE_FOLDER"
 	// WorkerEventTypeMailboxIdentity asks the worker holding a mailbox to read
 	// its send-as identities (and one signature) from the provider. The
 	// control plane never calls a customer's provider itself.
@@ -32,8 +35,11 @@ const (
 	JobEventTypeFlagsAdd         JobEventType = "FLAGS_ADD"
 	JobEventTypeFlagsRemove      JobEventType = "FLAGS_REMOVE"
 	JobEventTypeEmailUpdate      JobEventType = "UPDATE_EMAIL"
-	JobEventTypeMailboxUpdate    JobEventType = "UPDATE_MAILBOX"
-	JobEventTypeMailboxDelete    JobEventType = "DELETE_MAILBOX"
+	// JobEventTypeFolderUpdate is a provider moving a message between folders
+	// without a full rescan of it (a Gmail label change).
+	JobEventTypeFolderUpdate  JobEventType = "UPDATE_FOLDER"
+	JobEventTypeMailboxUpdate JobEventType = "UPDATE_MAILBOX"
+	JobEventTypeMailboxDelete JobEventType = "DELETE_MAILBOX"
 	// JobEventTypeMailboxRename is a folder that kept its UIDVALIDITY under a
 	// new name. Distinct from a delete plus an insert because the folder's
 	// stored mail has to move with it rather than be orphaned.
@@ -59,6 +65,9 @@ const (
 	// Per-worker health telemetry. Emitted every 30s by every worker;
 	// consumer writes it into worker_health_samples for the capacity view.
 	JobEventTypeWorkerHealth JobEventType = "WORKER_HEALTH"
+
+	// JobEventTypeWarmupRemovalChecked answers a verify_removal warmup action.
+	JobEventTypeWarmupRemovalChecked JobEventType = "WARMUP_REMOVAL_CHECKED"
 )
 
 type JobEvent struct {

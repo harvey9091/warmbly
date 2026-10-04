@@ -27,6 +27,9 @@ func (s *JobsService) HandleSyncState(ctx context.Context, e *models.JobEventSyn
 	}
 
 	if err := s.EmailSyncStateRepository.Put(ctx, e.UserID, e.EmailID, &e.State); err != nil {
+		if s.dropForDeletedMailbox(ctx, e.UserID, e.EmailID, err) {
+			return nil
+		}
 		CaptureError(e.UserID, e.EmailID, err)
 		return err
 	}

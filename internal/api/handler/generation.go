@@ -62,7 +62,7 @@ func (h *Handler) GenerateWriting(c *gin.Context) {
 
 	var req generationWriteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	req.Prompt = strings.TrimSpace(req.Prompt)

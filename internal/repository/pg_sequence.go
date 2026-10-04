@@ -143,9 +143,9 @@ func (r *sequenceRepository) Create(ctx context.Context, orgID string, campaignI
 	defer tx.Rollback(ctx)
 
 	// FOR UPDATE serialises step creation per campaign, so two concurrent
-	// inserts on a one-time campaign cannot both see zero email steps.
+	// inserts cannot take the same position.
 	query := `
-		SELECT kind
+		SELECT id
 		FROM campaigns WHERE id = $1 AND organization_id = $2
 		FOR UPDATE
 	`
@@ -154,31 +154,18 @@ func (r *sequenceRepository) Create(ctx context.Context, orgID string, campaignI
 		campaignID,
 		orgID,
 	}
-	var kind string
+	var locked uuid.UUID
 	err = tx.QueryRow(
 		ctx,
 		query,
 		params...,
-	).Scan(&kind)
+	).Scan(&locked)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errx.ErrNotFound
 		}
 		db.CaptureError(err, query, params, "queryrow")
 		return nil, errx.InternalError()
-	}
-
-	// A one-time email is a single message: a second email step would turn
-	// it into a sequence without the list, status wording or docs saying so.
-	if kind == models.CampaignKindOneTime {
-		var emailSteps int
-		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM sequences WHERE campaign_id = $1 AND kind = 'email'`, campaignID).Scan(&emailSteps); err != nil {
-			db.CaptureError(err, "", params, "queryrow")
-			return nil, errx.InternalError()
-		}
-		if emailSteps > 0 {
-			return nil, errx.New(errx.BadRequest, "a one-time email has a single message; create a sequence campaign for follow-ups")
-		}
 	}
 
 	// Get the next position for this campaign's sequences
@@ -407,7 +394,14 @@ func (r *sequenceRepository) Delete(ctx context.Context, orgID, campaignID, sequ
 		sequenceID,
 	}
 
-	cmd, err := r.DB.Exec(
+	tx, err := r.DB.Begin(ctx)
+	if err != nil {
+		db.CaptureError(err, "", nil, "begin")
+		return errx.InternalError()
+	}
+	defer tx.Rollback(ctx)
+
+	cmd, err := tx.Exec(
 		ctx,
 		query,
 		params...,
@@ -418,6 +412,18 @@ func (r *sequenceRepository) Delete(ctx context.Context, orgID, campaignID, sequ
 	}
 	if cmd.RowsAffected() == 0 {
 		return errx.ErrNotFound
+	}
+
+	if stepID, err := uuid.Parse(sequenceID); err == nil {
+		if err := ResolveAdvisorFindingsFor(ctx, tx, orgID, []uuid.UUID{stepID}); err != nil {
+			db.CaptureError(err, "", nil, "exec")
+			return errx.InternalError()
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		db.CaptureError(err, "", nil, "commit")
+		return errx.InternalError()
 	}
 	return nil
 }

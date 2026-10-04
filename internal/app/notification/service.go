@@ -7,6 +7,8 @@ package notification
 
 import (
 	"context"
+	"errors"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,10 +26,20 @@ type EmailSender interface {
 	Send(ctx context.Context, to, cc, bcc []string, subject, message string) error
 }
 
-// SlackNotifier posts to the org's connected Slack. Satisfied by the
-// integration service (NotifySlack).
+// SlackNotice is one notification as Slack renders it.
+type SlackNotice struct {
+	Category          models.NotificationCategory
+	Title, Body, Link string
+	// Meta carries ids a card can act on, such as "unibox_email_id".
+	Meta map[string]any
+}
+
+// SlackNotifier delivers to Slack. Satisfied by slackapp.Notifier.
 type SlackNotifier interface {
-	NotifySlack(ctx context.Context, orgID uuid.UUID, title, body string) error
+	// NotifyOrg posts to the workspace's routed channel.
+	NotifyOrg(ctx context.Context, orgID uuid.UUID, n SlackNotice) error
+	// NotifyMember DMs one member; a no-op unless they linked Slack with DMs on.
+	NotifyMember(ctx context.Context, orgID, userID uuid.UUID, n SlackNotice) error
 }
 
 // UserLookup resolves a user's email + name for email delivery. Satisfied by
@@ -53,12 +65,18 @@ type Service interface {
 	// Notify is the gated ingress — best-effort, never errors out the caller.
 	Notify(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any)
 
+	// NotifyAboutMessage is Notify for one unibox message: the row is removed
+	// with the message and read when the message is read.
+	NotifyAboutMessage(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, uniboxEmailID uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any)
+
 	// NotifyOrg raises the same notification for every accepted org member
 	// holding perm (never the whole org blindly), excluding exclude when set.
 	// Rows share groupKey, so the email flush coalesces the event into one
 	// message with every recipient in To; Slack fires at most once. Each
 	// member's own preferences still gate their channels. Best-effort.
 	NotifyOrg(ctx context.Context, orgID uuid.UUID, perm models.OrganizationPermission, exclude uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any, groupKey string)
+	// NotifyOrgAboutMessage is NotifyOrg for one unibox message.
+	NotifyOrgAboutMessage(ctx context.Context, orgID uuid.UUID, perm models.OrganizationPermission, uniboxEmailID uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any, groupKey string)
 
 	// WireDelivery attaches the email + Slack + user/member-lookup
 	// dependencies (wired post-construction in both mains) and starts the
@@ -153,13 +171,33 @@ func (s *service) Notify(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID
 	if s == nil {
 		return
 	}
-	s.notifyOne(ctx, userID, orgID, category, title, body, link, meta, "", false)
+	s.notifyOne(ctx, userID, orgID, nil, category, title, body, link, meta, "", false)
+}
+
+func (s *service) NotifyAboutMessage(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, uniboxEmailID uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any) {
+	if s == nil || uniboxEmailID == uuid.Nil {
+		return
+	}
+	s.notifyOne(ctx, userID, orgID, &uniboxEmailID, category, title, body, link, meta, "", false)
 }
 
 // NotifyOrg resolves the permission-targeted audience and raises the
 // notification for each member. Slack posts to one org workspace, so it fires
 // for the first member whose prefs allow it and stays suppressed for the rest.
 func (s *service) NotifyOrg(ctx context.Context, orgID uuid.UUID, perm models.OrganizationPermission, exclude uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any, groupKey string) {
+	s.notifyMembers(ctx, orgID, perm, exclude, nil, category, title, body, link, meta, groupKey)
+}
+
+// NotifyOrgAboutMessage is NotifyOrg for one unibox message, so each member's
+// notification leaves with the message and is read with it.
+func (s *service) NotifyOrgAboutMessage(ctx context.Context, orgID uuid.UUID, perm models.OrganizationPermission, uniboxEmailID uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any, groupKey string) {
+	if uniboxEmailID == uuid.Nil {
+		return
+	}
+	s.notifyMembers(ctx, orgID, perm, uuid.Nil, &uniboxEmailID, category, title, body, link, meta, groupKey)
+}
+
+func (s *service) notifyMembers(ctx context.Context, orgID uuid.UUID, perm models.OrganizationPermission, exclude uuid.UUID, uniboxEmailID *uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any, groupKey string) {
 	if s == nil || s.members == nil || orgID == uuid.Nil {
 		return
 	}
@@ -176,7 +214,7 @@ func (s *service) NotifyOrg(ctx context.Context, orgID uuid.UUID, perm models.Or
 		if perm != 0 && !m.Permissions.HasPermission(perm) {
 			continue
 		}
-		fired := s.notifyOne(ctx, m.UserID, &org, category, title, body, link, meta, groupKey, slackFired)
+		fired := s.notifyOne(ctx, m.UserID, &org, uniboxEmailID, category, title, body, link, meta, groupKey, slackFired)
 		slackFired = slackFired || fired
 	}
 }
@@ -186,7 +224,7 @@ func (s *service) NotifyOrg(ctx context.Context, orgID uuid.UUID, perm models.Or
 // rows queue as pending with a due time from the user's digest cadence, and
 // the flush loop bundles them later (see email.go). Returns whether the Slack
 // channel fired, so org fan-outs post to the shared workspace only once.
-func (s *service) notifyOne(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any, groupKey string, suppressSlack bool) bool {
+func (s *service) notifyOne(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID, uniboxEmailID *uuid.UUID, category models.NotificationCategory, title, body, link string, meta map[string]any, groupKey string, suppressSlack bool) bool {
 	if userID == uuid.Nil {
 		return false
 	}
@@ -209,6 +247,7 @@ func (s *service) notifyOne(ctx context.Context, userID uuid.UUID, orgID *uuid.U
 			Body:           body,
 			Link:           link,
 			Metadata:       meta,
+			UniboxEmailID:  uniboxEmailID,
 			GroupKey:       groupKey,
 			// In-app off but email on: keep the row as the email record
 			// without ringing the bell.
@@ -220,21 +259,36 @@ func (s *service) notifyOne(ctx context.Context, userID uuid.UUID, orgID *uuid.U
 			n.EmailDueAt = &due
 		}
 		created, cerr := s.repo.Create(ctx, n)
+		if errors.Is(cerr, repository.ErrNotificationMessageGone) {
+			return false // the message left the unibox first; nothing to announce
+		}
+		if cerr == nil && created != nil && created.MessageSeen {
+			return false // already read where it arrived; the row is the record
+		}
 		if cerr == nil && created != nil && cat.Channels.InApp && s.publisher != nil {
 			s.publisher.PublishNotificationCreated(ctx, userID.String(), created.ID.String(), string(category), title, link)
 		}
 	}
 
-	// Slack: post to the org's connected workspace (detached, best-effort).
+	// Slack: the org channel once per notification, plus this member's DM
+	// (detached, best-effort).
 	slackFired := false
-	if cat.Channels.Slack && !suppressSlack && s.slack != nil && orgID != nil {
-		slackFired = true
-		org := *orgID
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	if cat.Channels.Slack && s.slack != nil && orgID != nil {
+		org, postOrg := *orgID, !suppressSlack
+		slackFired = postOrg
+		notice := slackNotice(category, title, body, link, meta, uniboxEmailID)
+		go func(parent context.Context) {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 8*time.Second)
 			defer cancel()
-			_ = s.slack.NotifySlack(ctx, org, title, body)
-		}()
+			if postOrg {
+				if err := s.slack.NotifyOrg(ctx, org, notice); err != nil {
+					log.Printf("notification: slack channel post failed (org=%s category=%s): %v", org, category, err)
+				}
+			}
+			if err := s.slack.NotifyMember(ctx, org, userID, notice); err != nil {
+				log.Printf("notification: slack dm failed (org=%s category=%s): %v", org, category, err)
+			}
+		}(ctx)
 	}
 
 	// Push: immediate on a quiet window, digest-batched inside one (detached).
@@ -242,4 +296,16 @@ func (s *service) notifyOne(ctx context.Context, userID uuid.UUID, orgID *uuid.U
 		go s.deliverPush(userID, category, title, body, link)
 	}
 	return slackFired
+}
+
+// slackNotice copies meta so the detached delivery never shares the caller's map.
+func slackNotice(category models.NotificationCategory, title, body, link string, meta map[string]any, uniboxEmailID *uuid.UUID) SlackNotice {
+	m := make(map[string]any, len(meta)+1)
+	for k, v := range meta {
+		m[k] = v
+	}
+	if uniboxEmailID != nil && *uniboxEmailID != uuid.Nil {
+		m["unibox_email_id"] = uniboxEmailID.String()
+	}
+	return SlackNotice{Category: category, Title: title, Body: body, Link: link, Meta: m}
 }

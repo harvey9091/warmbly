@@ -53,14 +53,18 @@ const (
 	AuditEntityCampaign AuditEntityType = "campaign"
 	// AuditEntityCampaignLead is ONE contact inside ONE campaign: the entity id
 	// is the contact and metadata carries the campaign. Written when a member
-	// pauses or resumes that lead's flow.
-	AuditEntityCampaignLead AuditEntityType = "campaign_lead"
-	AuditEntityContact      AuditEntityType = "contact"
-	AuditEntityEmailAccount AuditEntityType = "email_account"
-	AuditEntityAPIKey       AuditEntityType = "api_key"
-	AuditEntitySequence     AuditEntityType = "step"
-	AuditEntityUser         AuditEntityType = "user"
-	AuditEntityOrganization AuditEntityType = "organization"
+	// pauses or resumes that lead's flow, or changes who it copies.
+	AuditEntityCampaignLead   AuditEntityType = "campaign_lead"
+	AuditEntityContact        AuditEntityType = "contact"
+	AuditEntityEmailAccount   AuditEntityType = "email_account"
+	AuditEntityMailboxImport  AuditEntityType = "mailbox_import"
+	AuditEntityMailboxGrant   AuditEntityType = "mailbox_grant"
+	AuditEntityMailboxVendor  AuditEntityType = "mailbox_vendor"
+	AuditEntityDomainRedirect AuditEntityType = "domain_redirect"
+	AuditEntityAPIKey         AuditEntityType = "api_key"
+	AuditEntitySequence       AuditEntityType = "step"
+	AuditEntityUser           AuditEntityType = "user"
+	AuditEntityOrganization   AuditEntityType = "organization"
 	// AuditEntityOrgRisk carries a risk-posture transition. It rides the audit
 	// spine like every other entity, so a change reaches every teammate's
 	// dashboard without a bespoke emit site.
@@ -142,6 +146,19 @@ const (
 	// spine so the settings page and mailbox lists refresh for every member.
 	AuditEntityPoolLink  AuditEntityType = "pool_link"
 	AuditEntityCloudLink AuditEntityType = "cloud_link"
+
+	// Community directory listing of one of the workspace's OAuth apps.
+	AuditEntityAppListing AuditEntityType = "app_listing"
+
+	// Operator moderation of an OAuth app, and a block on who may register them.
+	AuditEntityOAuthApplication    AuditEntityType = "oauth_application"
+	AuditEntityOAuthDeveloperBlock AuditEntityType = "oauth_developer_block"
+
+	// Inbox placement: a test or batch started or cancelled, and a campaign's
+	// scheduled test set up, changed or removed.
+	AuditEntityPlacementTest    AuditEntityType = "placement_test"
+	AuditEntityPlacementMonitor AuditEntityType = "placement_monitor"
+	AuditEntityPlacementBatch   AuditEntityType = "placement_batch"
 )
 
 // AuditActor is the minimal identity of the member who performed an action,

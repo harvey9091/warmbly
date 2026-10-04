@@ -14,6 +14,11 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 
+// Exit animations never finish in jsdom; closed layers unmount at once instead.
+vi.mock("framer-motion", async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
 vi.mock("react-hot-toast", () => ({
     default: { success: () => {}, error: () => {} },
 }));
@@ -31,9 +36,47 @@ vi.mock("@/lib/api/hooks/app/unibox/useDraftReply", () => ({
 vi.mock("@/hooks/context/user", () => ({
     useUserProfile: () => ({ user: { id: "u1", email: "me@example.com", name: "Me" } }),
 }));
+const mailboxes = vi.hoisted(() => {
+    const all = [
+        { id: "acc1", email: "me@example.com", status: "active", tags: [], signature_html: "", signature_plain: "" },
+        // Points its replies at acc1, the shared reply inbox.
+        { id: "acc2", email: "other@example.com", reply_to: "me@example.com", status: "active", tags: [], signature_html: "", signature_plain: "Other signature", signature_sync: true },
+        { id: "acc3", email: "gone@example.com", status: "inactive", tags: [], signature_html: "", signature_plain: "" },
+    ];
+    return { all, current: all as unknown[] };
+});
 vi.mock("@/stores", () => ({
-    useAppStore: (sel: (s: { emails: unknown[]; currentOrganization: { id: string } }) => unknown) =>
-        sel({ currentOrganization: { id: "org1" }, emails: [{ id: "acc1", email: "me@example.com", signature_html: "", signature_plain: "" }] }),
+    useAppStore: (sel: (s: { emails: unknown[]; tags: unknown[]; currentOrganization: { id: string } }) => unknown) =>
+        sel({
+            currentOrganization: { id: "org1" },
+            tags: [],
+            emails: mailboxes.current,
+        }),
+}));
+vi.mock("@/lib/api/hooks/app/unibox/useComposeCandidates", () => ({
+    default: () => ({
+        isPending: false,
+        data: {
+            accounts: ["me@example.com", "other@example.com"].map((email, i) => ({
+                id: `acc${i + 1}`, email, name: "", provider: "gmail", auth_state: "passing", warmup_active: false,
+                daily_limit: 50, sent_today: 0, remaining_today: 50, history_messages: 0, score: 1, reasons: [], recommended: i === 0,
+            })),
+            recommended_account_id: "acc1",
+            recommended_reason: "",
+            contact: null,
+            suppression: null,
+        },
+    }),
+}));
+const followUps = vi.hoisted(() => ({
+    campaigns: [] as { campaign_id: string; campaign_name: string }[],
+    pauseAll: vi.fn(async () => ({ paused: 1, failed: 0 })),
+}));
+vi.mock("@/lib/api/hooks/app/campaigns/usePauseFollowUps", () => ({
+    default: (email?: string) => ({
+        targets: { contactId: email ? "ct1" : "", campaigns: email ? followUps.campaigns : [] },
+        pauseAll: followUps.pauseAll,
+    }),
 }));
 vi.mock("@/hooks/useOutboxStore", () => ({
     useOutboxStore: (sel: (s: { add: () => void }) => unknown) => sel({ add: () => {} }),
@@ -43,25 +86,56 @@ vi.mock("@/hooks/useOutboxStore", () => ({
 // is about; they are rendered as nothing so the textarea is the only writer.
 vi.mock("@/components/app/ai/AIDraftBar", () => ({
     default: () => null,
-    useAIDraft: () => ({ state: "idle", start: () => {}, keep: () => {}, discard: () => {} }),
+    useAIDraft: () => ({ state: "idle", phase: "idle", start: () => {}, keep: () => {}, discard: () => {} }),
 }));
 vi.mock("@/components/app/ai/TextareaAIEdit", () => ({ default: () => null }));
 vi.mock("@/components/app/ai/TextareaAICaret", () => ({ default: () => null }));
-vi.mock("./TemplatePicker", () => ({ default: () => null }));
+const template = vi.hoisted(() => ({
+    id: "tpl1",
+    name: "Brochure",
+    subject: "",
+    body_plain: "Here is our brochure: https://example.com/brochure.pdf",
+    body_html: '<p>Here is our <a href="https://example.com/brochure.pdf">brochure</a>.</p>',
+}));
+vi.mock("./TemplatePicker", () => ({
+    default: ({ onPick }: { onPick: (t: typeof template) => void }) => (
+        <button type="button" onClick={() => onPick(template)}>Use Brochure</button>
+    ),
+}));
+const confirmShow = vi.hoisted(() => vi.fn((_text: string, onSubmit: () => void) => onSubmit()));
+vi.mock("@/hooks/context/confirm", () => ({ useConfirm: () => ({ show: confirmShow }) }));
 vi.mock("./InsertBookingLink", () => ({ default: () => null }));
 vi.mock("./compose/ContactRecipientField", () => ({ default: () => null }));
 vi.mock("@/components/ui/DateTimePicker", () => ({ DateTimePicker: () => null }));
+vi.mock("@/lib/api/hooks/app/unibox/useUniboxEmail", () => ({
+    default: () => ({
+        isPending: false,
+        isError: false,
+        data: {
+            from: ["Them <them@example.com>"],
+            to: ["me@example.com"],
+            cc: [],
+            subject: "Quarterly numbers",
+            date: new Date("2026-09-23T08:34:00Z"),
+            body_html: "",
+            body_plain: "The figures are attached.",
+            body_truncated: true,
+        },
+    }),
+}));
+vi.mock("./EmailBody", () => ({ default: ({ plain }: { plain?: string }) => <p>{plain}</p> }));
 
 const { ReplyComposer } = await import("./ReplyComposer");
 const { replyDraftKey } = await import("@/lib/unibox/replyDraft");
+const { endOfLocalDay, localDayISO } = await import("@/lib/leadHold");
 const draftKey = () => replyDraftKey("u1", "org1", "t1", "msg-1", "reply");
 
 // The thread maps its payload through `toUniboxEmail` on every render, so each
 // render hands the composer a new object for the same message. This builds one.
-function message() {
+function message(accountId = "acc1") {
     return {
         id: "msg-1",
-        account_id: "acc1",
+        account_id: accountId,
         from: "Them <them@example.com>",
         subject: "Quarterly numbers",
         to: [],
@@ -73,9 +147,20 @@ function body() {
     return screen.getByPlaceholderText(/write/i) as HTMLTextAreaElement;
 }
 
+function fromTrigger(email: string) {
+    return screen.getAllByText(email)[0].closest("button") as HTMLButtonElement;
+}
+
+function pickSender(current: string, next: string) {
+    fireEvent.click(fromTrigger(current));
+    fireEvent.click(screen.getByText(next));
+}
+
 describe("reply composer drafts", () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        mailboxes.current = mailboxes.all;
+        followUps.campaigns = [];
         setupStorage();
         vi.useFakeTimers();
     });
@@ -224,6 +309,227 @@ describe("reply composer drafts", () => {
         expect(screen.getByPlaceholderText("Subject")).toHaveValue("Custom subject");
     });
 
+    it("forwards the message by id, with or without a note", async () => {
+        const seed = { to: ["colleague@example.com"], cc: [], bcc: [], subject: "Fwd: Quarterly numbers", body: "" };
+        render(<ReplyComposer threadId="t1" replyTo={message()} mode="forward" seed={seed} onClose={() => {}} />);
+        expect(screen.getByText("Forwarded message")).toBeInTheDocument();
+        expect(screen.getByText(/carries that preview/)).toBeInTheDocument();
+
+        const send = screen.getByRole("button", { name: "Send" });
+        expect(send).toBeEnabled();
+        await act(async () => fireEvent.click(send));
+        expect(sendReply).toHaveBeenCalledWith(expect.objectContaining({
+            to: ["colleague@example.com"],
+            forward_message_id: "msg-1",
+            thread_id: undefined,
+            body_plain: "",
+        }));
+    });
+
+    it("previews the forwarded message on demand", () => {
+        render(<ReplyComposer threadId="t1" replyTo={message()} mode="forward" onClose={() => {}} />);
+        expect(screen.queryByText("The figures are attached.")).toBeNull();
+        fireEvent.click(screen.getByRole("button", { name: /Forwarded message/ }));
+        expect(screen.getByText("The figures are attached.")).toBeInTheDocument();
+        expect(screen.getByText("Attachments on the original are not forwarded.")).toBeInTheDocument();
+    });
+
+    it("keeps a reply's body required and never names a message to forward", async () => {
+        const seed = { to: ["them@example.com"], cc: [], bcc: [], subject: "Re: x", body: "" };
+        const view = render(<ReplyComposer threadId="t1" replyTo={message()} mode="reply" seed={seed} onClose={() => {}} />);
+        expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+        expect(screen.queryByText("Forwarded message")).toBeNull();
+        fireEvent.change(body(), { target: { value: "Thanks" } });
+        await act(async () => fireEvent.keyDown(body(), { key: "Enter", ctrlKey: true }));
+        expect(sendReply).toHaveBeenCalledWith(expect.objectContaining({ thread_id: "t1", forward_message_id: undefined }));
+        view.unmount();
+    });
+
+    it("sends from the mailbox picked in From and keeps the conversation", async () => {
+        render(<ReplyComposer threadId="t1" replyTo={message()} mode="reply" onClose={() => {}} />);
+        expect(screen.queryByText(/Replying from another mailbox/)).toBeNull();
+        pickSender("me@example.com", "other@example.com");
+        expect(screen.getByText(/Replying from another mailbox/)).toBeInTheDocument();
+        expect(screen.getByText("Other signature")).toBeInTheDocument();
+        fireEvent.change(body(), { target: { value: "From the other address" } });
+        await act(async () => fireEvent.keyDown(body(), { key: "Enter", ctrlKey: true }));
+        expect(sendReply).toHaveBeenCalledWith(expect.objectContaining({ email_account_id: "acc2", thread_id: "t1" }));
+    });
+
+    it("keeps the picked mailbox in the draft and in a restored undo-send", () => {
+        const view = render(<ReplyComposer threadId="t1" replyTo={message()} mode="reply" onClose={() => {}} />);
+        pickSender("me@example.com", "other@example.com");
+        view.unmount();
+        expect(JSON.parse(localStorage.getItem(draftKey()) ?? "{}")).toMatchObject({ email_account_id: "acc2" });
+        const reopened = render(<ReplyComposer threadId="t1" replyTo={message()} mode="reply" onClose={() => {}} />);
+        expect(fromTrigger("other@example.com")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Switch back" }));
+        expect(fromTrigger("me@example.com")).toBeInTheDocument();
+        const seed = { to: ["them@example.com"], cc: [], bcc: [], subject: "Re: x", body: "restored", email_account_id: "acc2" };
+        reopened.rerender(<ReplyComposer threadId="t1" replyTo={message()} mode="reply" seed={seed} onClose={() => {}} />);
+        expect(fromTrigger("other@example.com")).toBeInTheDocument();
+    });
+
+    it("will not send from an inactive mailbox and says how to fix it", async () => {
+        render(<ReplyComposer threadId="t1" replyTo={message("acc3")} mode="reply" onClose={() => {}} />);
+        fireEvent.change(body(), { target: { value: "Still here?" } });
+        expect(screen.getByRole("status")).toHaveTextContent("gone@example.com is not active");
+        expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+        await act(async () => fireEvent.keyDown(body(), { key: "Enter", ctrlKey: true }));
+        expect(sendReply).not.toHaveBeenCalled();
+        pickSender("gone@example.com", "other@example.com");
+        expect(screen.queryByRole("status")).toBeNull();
+        await act(async () => fireEvent.keyDown(body(), { key: "Enter", ctrlKey: true }));
+        expect(sendReply).toHaveBeenCalledWith(expect.objectContaining({ email_account_id: "acc2" }));
+    });
+
+    it("falls back to the thread's mailbox when a saved one is gone", () => {
+        localStorage.setItem(draftKey(), JSON.stringify({ to: ["them@example.com"], cc: [], bcc: [], subject: "Re: x", body: "saved", email_account_id: "acc9" }));
+        render(<ReplyComposer threadId="t1" replyTo={message()} mode="reply" onClose={() => {}} />);
+        expect(body()).toHaveValue("saved");
+        expect(fromTrigger("me@example.com")).toBeInTheDocument();
+        expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("answers from the mailbox that emailed them when the message sits in its reply inbox", async () => {
+        const answer = { ...(message() as object), answers_mailbox_id: "acc2" } as never;
+        render(<ReplyComposer threadId="t1" replyTo={answer} mode="reply" onClose={() => {}} />);
+        expect(fromTrigger("other@example.com")).toBeInTheDocument();
+        expect(screen.getByText(/which sent the email they answered/)).toHaveTextContent("comes back to me@example.com");
+        expect(screen.queryByText(/Replying from another mailbox/)).toBeNull();
+        fireEvent.change(body(), { target: { value: "Happy to" } });
+        await act(async () => fireEvent.keyDown(body(), { key: "Enter", ctrlKey: true }));
+        expect(sendReply).toHaveBeenCalledWith(expect.objectContaining({ email_account_id: "acc2" }));
+    });
+
+    it("lets a reply inbox answer for itself, and switches back to the sender", () => {
+        const answer = { ...(message() as object), answers_mailbox_id: "acc2" } as never;
+        const view = render(<ReplyComposer threadId="t1" replyTo={answer} mode="reply" onClose={() => {}} />);
+        fireEvent.click(screen.getByRole("button", { name: "Use me@example.com" }));
+        expect(fromTrigger("me@example.com")).toBeInTheDocument();
+        expect(screen.getByText(/Replying from another mailbox/)).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Switch back" }));
+        expect(fromTrigger("other@example.com")).toBeInTheDocument();
+        view.unmount();
+        // Nothing typed, so the default sender is no reason to keep a draft.
+        expect(localStorage.getItem(draftKey())).toBeNull();
+    });
+
+    it("follows the mailbox list as it loads without calling the default a draft", () => {
+        mailboxes.current = [];
+        const answer = { ...(message() as object), answers_mailbox_id: "acc2" } as never;
+        const view = render(<ReplyComposer threadId="t1" replyTo={answer} mode="reply" onClose={() => {}} />);
+        mailboxes.current = mailboxes.all;
+        view.rerender(<ReplyComposer threadId="t1" replyTo={answer} mode="reply" onClose={() => {}} />);
+        expect(fromTrigger("other@example.com")).toBeInTheDocument();
+        act(() => vi.advanceTimersByTime(500));
+        expect(screen.queryByText(/Draft saved/)).toBeNull();
+        view.unmount();
+        expect(localStorage.getItem(draftKey())).toBeNull();
+    });
+
+    it("keeps the holding mailbox when the answered one points its replies elsewhere", () => {
+        const answer = { ...(message("acc2") as object), answers_mailbox_id: "acc1" } as never;
+        render(<ReplyComposer threadId="t1" replyTo={answer} mode="reply" onClose={() => {}} />);
+        expect(fromTrigger("other@example.com")).toBeInTheDocument();
+        expect(screen.queryByText(/which sent the email they answered/)).toBeNull();
+    });
+
+    it("closes only the mailbox menu on Escape", () => {
+        const onClose = vi.fn();
+        render(<ReplyComposer threadId="t1" replyTo={message()} mode="forward" onClose={onClose} />);
+        fireEvent.click(fromTrigger("me@example.com"));
+        const search = screen.getByPlaceholderText("Search mailboxes…");
+        expect(screen.queryByText("Auto")).toBeNull();
+        fireEvent.keyDown(search, { key: "Escape" });
+        expect(screen.queryByPlaceholderText("Search mailboxes…")).toBeNull();
+        expect(fromTrigger("me@example.com")).toHaveFocus();
+        expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("pauses the recipient's follow-ups once the reply is accepted, when asked to", async () => {
+        followUps.campaigns = [{ campaign_id: "c1", campaign_name: "Q3 outreach" }];
+        render(<ReplyComposer threadId="t1" replyTo={message()} mode="reply" onClose={() => {}} />);
+        fireEvent.click(screen.getByRole("button", { name: /Pause follow-ups/ }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "For 1 week" }));
+        expect(screen.getByRole("button", { name: /Pause follow-ups: 1 week/ })).toBeInTheDocument();
+        fireEvent.change(body(), { target: { value: "Let's talk next month" } });
+        await act(async () => fireEvent.keyDown(body(), { key: "Enter", ctrlKey: true }));
+        expect(sendReply).toHaveBeenCalledOnce();
+        expect(followUps.pauseAll).toHaveBeenCalledWith(
+            { contactId: "ct1", campaigns: followUps.campaigns },
+            expect.any(String),
+        );
+        expect(sendReply.mock.invocationCallOrder[0]).toBeLessThan(followUps.pauseAll.mock.invocationCallOrder[0]);
+    });
+
+    it("pauses with no end when told to wait for a resume", async () => {
+        followUps.campaigns = [{ campaign_id: "c1", campaign_name: "Q3 outreach" }];
+        render(<ReplyComposer threadId="t1" replyTo={message()} mode="reply" onClose={() => {}} />);
+        fireEvent.click(screen.getByRole("button", { name: /Pause follow-ups/ }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Until I resume them" }));
+        fireEvent.change(body(), { target: { value: "Noted" } });
+        await act(async () => fireEvent.keyDown(body(), { key: "Enter", ctrlKey: true }));
+        expect(followUps.pauseAll).toHaveBeenCalledWith(expect.objectContaining({ contactId: "ct1" }), null);
+    });
+
+    it("pauses nothing unless asked, or when the send fails", async () => {
+        followUps.campaigns = [{ campaign_id: "c1", campaign_name: "Q3 outreach" }];
+        const view = render(<ReplyComposer threadId="t1" replyTo={message()} mode="reply" onClose={() => {}} />);
+        fireEvent.change(body(), { target: { value: "Plain reply" } });
+        await act(async () => fireEvent.keyDown(body(), { key: "Enter", ctrlKey: true }));
+        expect(sendReply).toHaveBeenCalledOnce();
+        expect(followUps.pauseAll).not.toHaveBeenCalled();
+        view.unmount();
+
+        sendReply.mockRejectedValueOnce(new Error("offline"));
+        render(<ReplyComposer threadId="t1" replyTo={message()} mode="reply" onClose={() => {}} />);
+        fireEvent.click(screen.getByRole("button", { name: /Pause follow-ups/ }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "For 3 days" }));
+        fireEvent.change(body(), { target: { value: "Will fail" } });
+        await act(async () => fireEvent.keyDown(body(), { key: "Enter", ctrlKey: true }));
+        expect(followUps.pauseAll).not.toHaveBeenCalled();
+    });
+
+    it("counts a scheduled reply's pause from when it goes out", async () => {
+        followUps.campaigns = [{ campaign_id: "c1", campaign_name: "Q3 outreach" }];
+        render(<ReplyComposer threadId="t1" replyTo={message()} mode="reply" onClose={() => {}} />);
+        fireEvent.click(screen.getByRole("button", { name: /Pause follow-ups/ }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "For 3 days" }));
+        fireEvent.change(body(), { target: { value: "Talk tomorrow" } });
+        fireEvent.click(screen.getByRole("button", { name: /Schedule/ }));
+        await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: "Tomorrow 9:00" })));
+        expect(sendReply).toHaveBeenCalledWith(expect.objectContaining({ send_mode: "scheduled" }));
+        expect(followUps.pauseAll).toHaveBeenCalledWith(expect.anything(), endOfLocalDay(localDayISO(4)));
+    });
+
+    it("pauses only the campaigns left ticked", async () => {
+        followUps.campaigns = [
+            { campaign_id: "c1", campaign_name: "Q3 outreach" },
+            { campaign_id: "c2", campaign_name: "Partners" },
+        ];
+        render(<ReplyComposer threadId="t1" replyTo={message()} mode="reply" onClose={() => {}} />);
+        fireEvent.click(screen.getByRole("button", { name: /Pause follow-ups/ }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Partners" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "For 2 weeks" }));
+        fireEvent.change(body(), { target: { value: "Only this one" } });
+        await act(async () => fireEvent.keyDown(body(), { key: "Enter", ctrlKey: true }));
+        expect(followUps.pauseAll).toHaveBeenCalledWith(
+            { contactId: "ct1", campaigns: [followUps.campaigns[0]] },
+            expect.any(String),
+        );
+    });
+
+    it("offers no pause on a forward or with nothing left to send", () => {
+        const view = render(<ReplyComposer threadId="t1" replyTo={message()} mode="reply" onClose={() => {}} />);
+        expect(screen.queryByRole("button", { name: /Pause follow-ups/ })).toBeNull();
+        view.unmount();
+        followUps.campaigns = [{ campaign_id: "c1", campaign_name: "Q3 outreach" }];
+        const seed = { to: ["them@example.com"], cc: [], bcc: [], subject: "Fwd: x", body: "" };
+        render(<ReplyComposer threadId="t1" replyTo={message()} mode="forward" seed={seed} onClose={() => {}} />);
+        expect(screen.queryByRole("button", { name: /Pause follow-ups/ })).toBeNull();
+    });
+
     it("does not claim a failed save succeeded or close away the unsaved text", () => {
         vi.spyOn(localStorage, "setItem").mockImplementation(() => { throw new Error("quota"); });
         const onClose = vi.fn();
@@ -237,8 +543,54 @@ describe("reply composer drafts", () => {
         expect(body()).toHaveValue("Keep me");
     });
 
-});
 
+    it("sends a template's HTML body as the HTML part, with its own plain text beside it", async () => {
+        render(<ReplyComposer threadId="t1" replyTo={message()} mode="reply" onClose={() => {}} />);
+        fireEvent.click(screen.getByRole("button", { name: /Template/ }));
+        fireEvent.click(screen.getByRole("button", { name: "Use Brochure" }));
+        expect(screen.queryByPlaceholderText(/write/i)).toBeNull();
+        await act(async () => fireEvent.click(screen.getByRole("button", { name: "Send" })));
+        expect(sendReply).toHaveBeenCalledWith(expect.objectContaining({
+            body_html: template.body_html,
+            body_plain: template.body_plain,
+        }));
+    });
+
+    it("keeps a template's HTML in the saved draft and reopens it as HTML", () => {
+        const view = render(<ReplyComposer threadId="t1" replyTo={message()} mode="reply" onClose={() => {}} />);
+        fireEvent.click(screen.getByRole("button", { name: /Template/ }));
+        fireEvent.click(screen.getByRole("button", { name: "Use Brochure" }));
+        view.unmount();
+        expect(JSON.parse(localStorage.getItem(draftKey()) ?? "{}")).toMatchObject({
+            body: template.body_plain,
+            body_html: template.body_html,
+        });
+        render(<ReplyComposer threadId="t1" replyTo={message()} mode="reply" onClose={() => {}} />);
+        expect(screen.queryByPlaceholderText(/write/i)).toBeNull();
+        expect(screen.getByRole("button", { name: "HTML", pressed: true })).toBeInTheDocument();
+    });
+
+    it("goes back to plain text with the template's plain body after confirming", () => {
+        render(<ReplyComposer threadId="t1" replyTo={message()} mode="reply" onClose={() => {}} />);
+        fireEvent.click(screen.getByRole("button", { name: /Template/ }));
+        fireEvent.click(screen.getByRole("button", { name: "Use Brochure" }));
+        fireEvent.click(screen.getByRole("button", { name: "HTML", pressed: true }));
+        expect(confirmShow).toHaveBeenCalledOnce();
+        expect(body()).toHaveValue(template.body_plain);
+    });
+
+    it("closes the link popover, not the composer, on Escape in HTML mode", () => {
+        const onClose = vi.fn();
+        render(<ReplyComposer threadId="t1" replyTo={message()} mode="reply" onClose={onClose} />);
+        fireEvent.click(screen.getByRole("button", { name: /Template/ }));
+        fireEvent.click(screen.getByRole("button", { name: "Use Brochure" }));
+        fireEvent.click(screen.getByTitle("Insert link"));
+        fireEvent.keyDown(screen.getByRole("button", { name: "Apply" }), { key: "Escape" });
+        expect(onClose).not.toHaveBeenCalled();
+        fireEvent.keyDown(document.getElementById("reply-body") as HTMLElement, { key: "Escape" });
+        expect(onClose).toHaveBeenCalledOnce();
+    });
+});
 
 function setupStorage() {
     const values = new Map<string, string>();

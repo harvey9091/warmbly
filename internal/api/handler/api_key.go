@@ -30,7 +30,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 
 	var data models.CreateAPIKey
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -124,7 +124,7 @@ func (h *Handler) UpdateAPIKey(c *gin.Context) {
 
 	var data models.UpdateAPIKey
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 

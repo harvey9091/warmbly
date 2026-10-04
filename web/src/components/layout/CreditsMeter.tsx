@@ -38,7 +38,7 @@ export function CreditsMeter() {
     const [open, setOpen] = React.useState(false);
     const ref = React.useRef<HTMLDivElement>(null);
     const close = React.useCallback(() => setOpen(false), []);
-    useClickOutside(ref, close);
+    useClickOutside(open, close, ref);
 
     // Nothing to gauge when the ledger is bypassed (self-host without billing).
     if (!canSee || !metered || credits.isPending || !credits.data || credits.data.unlimited) return null;
@@ -321,7 +321,7 @@ function formatCredits(n: number): string {
 }
 
 // resetLabel turns next_reset_at into a short relative note for the panel.
-function resetLabel(iso: string | null): string | null {
+function resetLabel(iso: string | Date | null): string | null {
     if (!iso) return null;
     const days = Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000);
     if (days <= 0) return "Resets soon";

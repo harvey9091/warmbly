@@ -17,6 +17,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { BracesIcon, XIcon, CheckIcon } from "lucide-react";
 import useCustomFieldKeys from "@/lib/api/hooks/app/contacts/useCustomFieldKeys";
 import { useAnchoredFloating } from "@/hooks/useAnchoredFloating";
+import useClickOutside from "@/hooks/useClickOutside";
 import {
     STANDARD_VARS,
     buildToken,
@@ -212,25 +213,7 @@ function VariableChipEditor({
         [setFloating],
     );
 
-    React.useEffect(() => {
-        const onDown = (e: MouseEvent | TouchEvent) => {
-            if (!localRef.current?.contains(e.target as Node)) onClose();
-        };
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === "Escape") {
-                e.stopPropagation();
-                onClose();
-            }
-        };
-        document.addEventListener("mousedown", onDown, true);
-        document.addEventListener("touchstart", onDown, true);
-        document.addEventListener("keydown", onKey, true);
-        return () => {
-            document.removeEventListener("mousedown", onDown, true);
-            document.removeEventListener("touchstart", onDown, true);
-            document.removeEventListener("keydown", onKey, true);
-        };
-    }, [onClose]);
+    useClickOutside(true, onClose, localRef);
 
     const options = [
         ...STANDARD_VARS.map((v) => ({ key: v.key, label: v.label })),
@@ -246,7 +229,7 @@ function VariableChipEditor({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.1 }}
-            className="z-[60] w-64 overflow-hidden rounded-lg border border-slate-200 bg-white p-2 text-left shadow-[0_10px_30px_-10px_rgba(15,23,42,0.25)]"
+            className="z-[150] w-64 overflow-hidden rounded-lg border border-slate-200 bg-white p-2 text-left shadow-[0_10px_30px_-10px_rgba(15,23,42,0.25)]"
         >
             <div className="flex items-center justify-between px-0.5 pb-1">
                 <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-slate-400">

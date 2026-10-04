@@ -189,7 +189,7 @@ func (s *service) connectBrokered(ctx context.Context, st brokerState, code stri
 // startWarmup: failures here are retried by the reconciler.
 func (s *service) startWarmup(ctx context.Context, orgID string, accountID uuid.UUID) {
 	if _, xerr := s.emailSvc.SetWarmupLifecycle(ctx, orgID, accountID.String(), "start"); xerr != nil {
-		log.Warn().Str("account_id", accountID.String()).Msg("pool link: warmup start failed after enrollment")
+		log.Warn().Str("account_id", accountID.String()).Str("code", xerr.Identifier).Str("error", xerr.Message).Msg("pool link: warmup start failed after enrollment")
 	}
 	if err := s.emailSvc.LoadAccountOntoWorker(ctx, accountID); err != nil {
 		log.Warn().Err(err).Str("account_id", accountID.String()).Msg("pool link: worker load failed; reconciler will retry")
@@ -272,7 +272,9 @@ func (s *service) Adopt(ctx context.Context, inst *models.PoolLinkInstance, req 
 	if xerr != nil {
 		return nil, xerr
 	}
+	// A mailbox under an administrator's grant has no token of its own to broker.
 	if acc.OrganizationID == nil || *acc.OrganizationID != inst.OrganizationID || acc.Status != "active" ||
+		acc.AuthMethod == models.MailAuthDelegated ||
 		(acc.Provider != string(models.InboxProviderGoogle) && acc.Provider != string(models.InboxProviderOutlook)) {
 		return nil, ErrNotAdoptable
 	}
@@ -284,10 +286,7 @@ func (s *service) Adopt(ctx context.Context, inst *models.PoolLinkInstance, req 
 	if err := s.repo.EnrollMailbox(ctx, &models.PoolLinkMailbox{InstanceID: inst.ID, RemoteID: req.RemoteID, EmailAccountID: acc.ID, Managed: true}); err != nil {
 		return nil, errx.InternalError()
 	}
-	userID, xerr := s.ownerUserID(ctx, inst)
-	if xerr == nil {
-		s.startWarmup(ctx, userID, acc.ID)
-	}
+	s.startWarmup(ctx, inst.OrganizationID.String(), acc.ID)
 	return s.GetMailbox(ctx, inst, req.RemoteID)
 }
 

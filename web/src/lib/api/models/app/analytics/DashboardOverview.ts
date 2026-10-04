@@ -1,4 +1,5 @@
 import type { WorkspaceSendCapacity } from "@/lib/api/models/app/campaigns/SendPlan"
+import type { EngagementOrigin } from "@/lib/api/models/app/contacts/ContactTimelineEvent"
 
 // GET /analytics/dashboard?period=7d|30d|90d — a single (un-enveloped) object
 // mirroring the backend models.DashboardAnalytics. The previous flat shape
@@ -28,8 +29,14 @@ export interface RecentActivityItem {
     campaign_name: string
     contact_email: string
     contact_id?: string
-    timestamp: string
+    timestamp: Date
     link?: string
+    // Client, device and location of a person's open or click, when logged.
+    origin?: EngagementOrigin
+    // The mailbox the step went out from, which a reply credits even when it
+    // landed in a shared reply inbox.
+    sender_id?: string
+    sender_email?: string
 }
 
 export interface TopCampaignStats {

@@ -7,16 +7,23 @@ A mailbox is a sender account you connect to Warmbly. Every warmup message and c
 
 ## Connecting an account
 
-Open **Accounts** and choose **Add account**.
+Open **Accounts** and choose **Add account**. Google and Microsoft each have one entry, and choosing it asks how to connect:
 
 | Provider | Method | Notes |
 |----------|--------|-------|
-| Gmail / Google Workspace | App password over IMAP + SMTP (`smtp_imap`) | The connect dialog walks you through it in three steps, see [Gmail and Google Workspace](#gmail-and-google-workspace) below. Google sign-in for new mailboxes is coming soon |
-| Outlook / Microsoft 365 | OAuth (`outlook`) | Recommended. No password stored. Runs on Microsoft Graph |
-| Any other server | IMAP + SMTP (`smtp_imap`) | Custom domains, self-hosted, or providers without OAuth. Any IMAP server works, including Outlook.com, Microsoft 365 over IMAP, Yahoo, Fastmail, Zoho, cPanel and self-hosted Dovecot |
+| Google | **Whole Workspace domain**: an administrator's grant (`gmail`, sign-in method `delegated`) | Recommended for Google Workspace. A super admin authorizes Warmbly once, and every mailbox on the domain connects with no password and no sign-in each. Runs on the Gmail API. See [connect a whole Google Workspace domain](/guides/mailbox-import/#connect-a-whole-google-workspace-domain) |
+| Google | **App password** over IMAP + SMTP (`smtp_imap`, sign-in method `app_password`) | Works for personal Gmail and for Workspace. The dialog walks you through it in three steps, see [Gmail and Google Workspace](#gmail-and-google-workspace) below |
+| Google | **Sign in with Google**: OAuth for one mailbox (`gmail`, sign-in method `oauth`) | Being retired, see [moving off per-mailbox Google sign-in](#moving-off-per-mailbox-google-sign-in). Offered only where the instance still allows it for new mailboxes |
+| Microsoft | **Whole organization**: an administrator's grant (`outlook`, sign-in method `delegated`) | Recommended for Microsoft 365. A Global Administrator approves Warmbly once, and every licensed mailbox connects with no sign-in each. Runs on Microsoft Graph. See [connect a whole Microsoft 365 organization](/guides/mailbox-import/#connect-a-whole-microsoft-365-organization) |
+| Microsoft | **Sign in one mailbox**: OAuth (`outlook`, sign-in method `oauth`) | No password stored. Runs on Microsoft Graph. The way to connect Outlook.com and a single Microsoft 365 mailbox |
+| Any other server | IMAP + SMTP (`smtp_imap`) | Custom domains, self-hosted, or providers without OAuth. Any IMAP server that accepts a password works, including Yahoo, Fastmail, Zoho, Seznam.cz, cPanel and self-hosted Dovecot. Exchange Online (Microsoft 365 and Outlook.com) no longer accepts passwords over IMAP, so connect those with Microsoft |
 
-<Callout title="Google sign-in is coming soon">
-  For now, new Gmail and Google Workspace mailboxes connect with an app password; the connect dialog says so and walks you through it. A mailbox you already connected with Google sign-in is not affected: it keeps sending and syncing as before, and if Google ever invalidates its token the **Re-authorize** button in its drawer still works. Nothing has to be reconnected. A self-hosted instance with its own Google app can turn sign-in back on for new mailboxes with `BOX_GOOGLE_OAUTH_CONNECT=true`, see [configuration](/development/configuration/#mailbox-connections).
+On a self-hosted instance the two whole-domain methods are shown switched off until the operator sets them up; see [whole-domain mailbox connects](/development/whole-domain-connect/).
+
+Once you press **Connect**, the connect finishes on the server even if you refresh or close the page: the credentials are checked, and the mailbox is either saved, placed on a worker and added to your list, or not saved at all. It appears in the list on its own when it is done. Pressing **Connect** again meanwhile cannot add the address twice.
+
+<Callout title="Per-mailbox Google sign-in is being retired">
+  A mailbox you already connected with **Sign in with Google** is not affected yet: it keeps sending and syncing, and if Google invalidates its token the **Re-authorize** button in its drawer still works. There is no cutoff date. The dashboard marks these mailboxes and offers to move each one, without losing anything, onto its domain's grant (Google Workspace) or an app password (personal Gmail). See [moving off per-mailbox Google sign-in](#moving-off-per-mailbox-google-sign-in).
 </Callout>
 
 **OAuth** sends you to your provider's consent screen and returns a token instead of a password. Both OAuth providers use the provider's native API, never IMAP or SMTP, so consent asks to send mail and to read and organize your mailbox. Google additionally asks to read your mail settings, which is what lets Warmbly offer the addresses Google has verified you to send as and import the signature you already wrote there. It needs no app passwords or server settings. Note that Google revokes Gmail tokens when the account's password changes, so a password change there means [re-authorizing the mailbox](#reconnecting-an-account) once.
@@ -38,6 +45,10 @@ Google's scopes nest, so `gmail.modify` already covers reading, sending, composi
 
 A consent screen lets you untick individual permissions. Warmbly checks what was actually granted and refuses a half-granted mailbox at connect time, naming the missing permission, rather than storing one that looks connected and fails on its first send days later.
 
+#### When Microsoft asks for admin approval
+
+Many Microsoft 365 organizations let only an administrator approve a new app, and then Microsoft answers the sign-in with **Need admin approval** instead of its consent screen. Mailboxes bought from an inbox provider are usually in such an organization, run by the provider. Nothing you choose in Warmbly changes that, but one approval fixes it for everyone: after a first try, the **Sign in one mailbox** panel shows an approval link. Send it to the organization's administrator (for a provider's mailboxes, the provider). It approves exactly the four permissions above for the whole organization, and afterwards every mailbox in it signs in on its own, with no administrator involved. On a self-hosted instance, the operator verifying the publisher of their Microsoft app removes this step for most organizations; see [Outlook and Microsoft 365](/development/deployment-guide/#outlook-and-microsoft-365).
+
 **IMAP / SMTP** needs host, port, username, and password for each direction:
 
 ```text
@@ -55,13 +66,15 @@ Each side also has a **security** setting, which is what decides how the connect
 
 If port 465 never answers (many hosting networks block outbound 465 while 587 stays open), the worker dials 587 with STARTTLS on the same server alongside it and uses whichever connects first. A connect that succeeds that way is stored with port 587 and STARTTLS, and the mailbox settings show that. A refusal or a name that does not resolve is an answer from the network, not silence: one that arrives before 587 has been dialled is reported as is, and the fallback is only for a port that never answers.
 
+A server that accepts submission only on 465 has no 587 to fall back to. When the worker's own network is the one blocking 465 (it learns that from several servers leaving 465 silent while answering on 587), the mailbox's error says so: the block is on the sending side, your server needs no change, and sending resumes on its own once the port is open. Turning on submission on 587 with STARTTLS at your server gets the mailbox sending sooner.
+
 The form picks TLS or STARTTLS from the port as you type, so standard setups need no thought. It never picks **None**, on any port: dropping encryption is always something you ask for. Change the mode yourself when your server is unusual: any port from 1 to 65535 works, so a submission relay on `2525` or IMAP on a custom port is fine as long as the security setting matches what the server actually speaks.
 
 Encryption is not optional over a network. Warmbly will not send credentials over an unencrypted connection to anything but this machine, which is why **None** only appears once the host is `localhost`, an address in `127.0.0.0/8`, or `::1`, and only on a [self-hosted instance](/development/install/). See [local mail relays](#local-mail-relays-proton-bridge) below.
 
 If a mailbox fails to connect with a server-unreachable error and the host and port are definitely right, the security setting is the first thing to check. A server expecting STARTTLS looks unreachable to a client attempting implicit TLS, and vice versa.
 
-The error says which step failed and what the server or the network answered, so the two cases read differently: `dial smtp.example.com:465: connect: connection refused` never reached the server, `dial smtp.example.com:465: tls: first record does not look like a TLS handshake` reached a server that does not speak implicit TLS on that port, and `mail from: 451 4.7.1 try again later` is the server deferring a message. A connection that is refused or times out on `465` while `587` works is a network between the sender and the server that does not allow implicit TLS submission; switching that mailbox to `587` with STARTTLS is the fix.
+The error says which step failed and what the server or the network answered, so the two cases read differently: `dial smtp.example.com:465: connect: connection refused` never reached the server, `dial smtp.example.com:465: tls: first record does not look like a TLS handshake` reached a server that does not speak implicit TLS on that port, and `mail from: 451 4.7.1 try again later` is the server deferring a message. A connection that is refused or times out on `465` while `587` works is a network between the sender and the server that does not allow implicit TLS submission; switching that mailbox to `587` with STARTTLS is the fix. An error that starts with "Warmbly's sending network currently blocks outbound port 465" is that block on the worker's side, not a fault on your server.
 
 When a mail server goes down or stops answering, the mailbox is not deactivated. Warmbly says so once in the drawer, retries on a widening interval, and picks up where it left off when the server comes back. Nothing that arrived meanwhile is skipped, and the error clears itself on the first pass that reaches the server again.
 
@@ -73,13 +86,13 @@ Warmbly signs in with whichever method your server offers, preferring CRAM-MD5, 
 
 ### Gmail and Google Workspace
 
-Choose **Add account**, then **Gmail / Google Workspace**. The dialog walks through three steps, and the only things you type are the address and the app password; the server settings are Gmail's own and are filled in for you.
+Choose **Add account**, then **Google**, then **App password**. The dialog walks through three steps, and the only things you type are the address and the app password; the server settings are Gmail's own and are filled in for you.
 
 1. **Turn on 2-Step Verification** on the Google account, under [Google Account, Security](https://myaccount.google.com/security). Google only offers app passwords once it is on, and only alongside a second-step method other than a security key (a phone prompt, an authenticator app or a text message). Already on? Continue.
-2. **Create an app password** at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords): name it Warmbly, press **Create**, and copy the 16 characters. Google shows them once; the spaces between the groups do not matter, Warmbly drops them wherever the password arrives (the dialog, the CSV import, the API).
+2. **Create an app password** at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords): name it Warmbly, press **Create**, and copy the 16 characters. Google shows them once; the spaces between the groups do not matter, Warmbly drops them wherever the password arrives (the dialog, the [mailbox import](/guides/mailbox-import/), the API).
 3. **Connect**: enter your name, the full address (including `@gmail.com` or your Workspace domain) and the app password. Warmbly checks it against Google before saving anything. The address has to be the one the Google account signs in with: Google refuses an app password presented with an alias or a group address, and one created while signed in to a different account.
 
-The settings the dialog uses, in case you connect the same mailbox through **Other (SMTP / IMAP)** or the [CSV import](#connecting-many-mailboxes-at-once):
+The settings the dialog uses, in case you connect the same mailbox through **Other (SMTP / IMAP)** or the [mailbox import](/guides/mailbox-import/):
 
 ```text
 SMTP   host: smtp.gmail.com   port: 587   security: STARTTLS
@@ -93,6 +106,26 @@ On Google Workspace the administrator decides. They can switch IMAP off for the 
 <Callout type="warn" title="Authentication runs on connect">
   Credentials and both connections are validated when you add the account, so wrong settings fail immediately rather than silently at send time. When the check fails, the message says which server (SMTP or IMAP) failed and why, quoting the server's reply when there is one, so a refused password, an unreachable host and a failed secure connection each read differently. Tokens and credentials are sealed with envelope encryption before they touch storage.
 </Callout>
+
+### Moving off per-mailbox Google sign-in
+
+Per-mailbox **Sign in with Google** is being retired. This is a notice, not a deadline: a mailbox on it keeps sending, syncing and warming, and re-authorizing it still works. The two methods that replace it need no per-mailbox Google token at all. The whole-domain grant is authorized once by a Workspace administrator and survives password changes, and an app password works for any Google account.
+
+The **Accounts** page shows a banner while any mailbox is still on per-mailbox Google sign-in, each such mailbox carries a chip in the list, and its drawer shows a notice with the move for it. Mailboxes whose sign-in is held by [Warmbly Cloud](/guides/warmbly-cloud/) are not included; the cloud keeps their sign-in.
+
+**A Google Workspace mailbox moves onto its domain's grant.**
+
+1. Choose **Add account > Google > Whole Workspace domain** and set up the grant for the domain, as in [connect a whole Google Workspace domain](/guides/mailbox-import/#connect-a-whole-google-workspace-domain). Skip this when the domain already has an active grant.
+2. In the grant's user list, the mailboxes still on their own sign-in are marked as ones to move. Pick them, or connect everyone, which includes them.
+
+Connecting the address converts the existing mailbox in place: it is the same mailbox, with the same history, campaigns, warmup progress and settings, and the stored Google token is deleted. Converting does not add a mailbox, so it never counts against the [mailbox allowance](#mailbox-allowance). The same works for a mailbox on per-mailbox Microsoft sign-in under a Microsoft 365 organization grant, although Microsoft sign-in is not being retired and that move is optional.
+
+**A personal Gmail mailbox moves to an app password.** This works for a Workspace mailbox too, when a grant is not an option.
+
+1. Turn on 2-Step Verification for the Google account and create an app password at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords), as in [Gmail and Google Workspace](#gmail-and-google-workspace).
+2. In the notice in the mailbox's drawer, choose to switch to an app password and paste the 16 letters. Spaces do not matter.
+
+Warmbly checks the app password against Gmail's IMAP and SMTP servers before anything is stored. A refusal changes nothing, and the message says which server refused and why. Once it passes, the mailbox becomes an IMAP and SMTP mailbox in place (`smtp_imap`, sign-in method `app_password`) and its Google token is deleted. Mail already imported stays, and sync carries on with new mail from that point; the history is not imported a second time. The mailbox keeps its campaigns, warmup and settings. The **Sending identity** list is read from Gmail's API, so it is not offered on an app password, as for any IMAP mailbox.
 
 ### Local mail relays (Proton Bridge)
 
@@ -132,40 +165,23 @@ The connect dialog shows the allowance up front: a quiet count while there is ro
 
 Nothing is ever removed for being over the allowance. A workspace that moves to a smaller plan keeps every mailbox sending and warming; it simply cannot add more until it is back under, or the allowance is raised.
 
-There is no daily cap on how many mailboxes you connect: a Business workspace can connect thousands in one afternoon, and the [bulk import](#connecting-many-mailboxes-at-once) exists for exactly that.
+There is no daily cap on how many mailboxes you connect: a Business workspace can connect thousands in one afternoon, and the [mailbox import](/guides/mailbox-import/) exists for exactly that.
 
 ## Connecting many mailboxes at once
 
-Pick **Bulk import from CSV** in the connect dialog to connect any number of SMTP and IMAP mailboxes from one file. Gmail mailboxes qualify, with the [settings above](#gmail-and-google-workspace) and an app password per row. Outlook mailboxes sign in one at a time, because each needs its own consent.
+Choose **Import mailboxes** in the connect dialog to connect up to 5,000 mailboxes from a CSV, TSV or XLSX file, a vendor export, or a pasted list of `address:password` pairs. Only an address and a password are needed: the columns are recognised and each domain's servers are found from DNS. Microsoft 365 and Outlook.com rows wait for a Microsoft sign-in each, and Google rows need an app password. The import runs on the server, verifies every credential before saving it, and groups whatever fails by cause with the fix.
 
-**The file.** One mailbox per row. `email`, `smtp_host` and `imap_host` are required, plus a password; everything else has a default.
+The same dialog imports straight from an [inbox vendor](/guides/mailbox-import/#import-from-an-inbox-vendor) with an API key, and connects a whole [Google Workspace domain](/guides/mailbox-import/#connect-a-whole-google-workspace-domain) (**Google > Whole Workspace domain**) or [Microsoft 365 organization](/guides/mailbox-import/#connect-a-whole-microsoft-365-organization) (**Microsoft > Whole organization**) through one administrator's grant.
 
-| Column | Default |
-| --- | --- |
-| `email` | required |
-| `name` | derived from the address (`alex.rivera@` becomes Alex Rivera) |
-| `smtp_host`, `imap_host` | required |
-| `smtp_port`, `imap_port` | `587` and `993` |
-| `smtp_user`, `imap_user` | the address, or a shared `username` column |
-| `smtp_password`, `imap_password` | a shared `password` column |
-| `smtp_security`, `imap_security` | inferred from the port (`465` and `993` are `tls`, `587` and `143` are `starttls`); `none` is accepted only for a loopback host on a self-hosted instance |
-
-The dialog offers a template with these headers, and accepts the common spellings (`smtp_server`, `app_password`, `login`, and so on).
-
-**What happens.** The file is read in your browser and checked before anything is sent: rows missing something the connect needs are listed with the reason and left out of the run. The preview also says how many rows fit your allowance; if the file is larger, the first rows that fit are connected and the rest are reported as failed so you can request more and re-upload only those.
-
-The run then streams the rows to the server in small batches. Every credential is verified against its own server before it is saved, the same as a single connect, so a large file takes a few seconds per mailbox; the dialog shows live progress and the mailbox list behind it fills in as they land, for everyone in the workspace. You can stop after the batch in flight. Closing the tab loses nothing that was already connected.
-
-**When it is done** you see how many connected, how many were already here, and how many did not connect, with a reason per row. **Retry failed** runs those rows again without leaving the dialog, passwords still in memory. **Download failed rows** gives you those rows as you uploaded them plus an `error` column, with the password columns left out so no credential lands in a Downloads folder; add them back before uploading the fixed file. Re-uploading is always safe: a mailbox that is already connected is skipped, never doubled.
-
-The same endpoint is available to the API as `POST /emails/onboarding/smtp-imap/bulk`, up to `50` rows per call, answered per row.
+See [Import mailboxes](/guides/mailbox-import/) for the columns, what each provider needs, and what is kept, and [sending domains](/guides/sending-domains/) for setting a tracking host and a root redirect per domain.
 
 ## Reconnecting an account
 
 When the provider stops accepting a mailbox's stored credential (a password change, a revoked grant, an expired app password), the mailbox is taken out of sending and syncing and its drawer shows the reason under **Needs attention**, with the fix right on the error:
 
-- **Gmail (connected with Google sign-in) and Outlook**: a **Re-authorize** button re-runs the provider consent in a popup, preselecting the mailbox's own address. This works for an existing Gmail mailbox even while Google sign-in is paused for new ones. The consent must be for that same address; signing in with a different account is refused instead of quietly connecting the wrong mailbox.
+- **Gmail (connected with Google sign-in) and Outlook**: a **Re-authorize** button re-runs the provider consent in a popup, preselecting the mailbox's own address. This works for an existing Gmail mailbox even where per-mailbox Google sign-in is no longer offered for new ones. The consent must be for that same address; signing in with a different account is refused instead of quietly connecting the wrong mailbox.
 - **SMTP / IMAP**: an **Update credentials** button opens a form for the new password (or new host and port). The replacement is validated against your server before it is saved, the same as at connect time.
+- **Connected through an admin grant** (sign-in method `delegated`, shown as **Admin grant**): there is no **Re-authorize** action, because the mailbox holds no credential of its own; asking to re-authorize one answers `mailbox_reauth_delegated`. It follows its grant: when the grant stops working, every mailbox under it stops, and when the grant's hourly check (or **Check again**) succeeds again, the mailboxes that stopped because of it restart on their own. One you switched off yourself stays off. Check the grant from **Add account > Google or Microsoft > Whole domain**, and fix it in the Google Admin console or with a Microsoft 365 Global Administrator, as described in [Import mailboxes](/guides/mailbox-import/#connect-a-whole-google-workspace-domain).
 
 A successful reconnect stores the new credential, clears the authentication error, reactivates the mailbox on its existing worker, and it resumes syncing from where it stopped. Nothing else changes: settings, history, warmup progress, and campaign membership all stay.
 
@@ -175,13 +191,23 @@ Reconnecting never counts against the mailbox allowance, so a workspace at its c
 
 Connecting a mailbox does two things: it imports the mailbox's recent history, and from then on it follows new mail as it arrives. Both are the same on every provider.
 
-**The import** brings in the last `90` days, newest first, up to `5,000` messages per mailbox (the defaults; a self-hosted instance can change both under Instance settings). It reads the inbox, sent mail and archive (plus your own folders on Gmail and IMAP), and skips trash, drafts, spam and Gmail's "All Mail". You can watch it in the mailbox drawer's **Sync** card: a progress bar with a running count while it works, then "Up to date" with what was imported. Because it runs newest first, the mail you would look for is there within the first minute; a large mailbox finishes over the next while at a steady pace.
+**The import** brings in the last `90` days, newest first, up to `5,000` messages per mailbox (the defaults; a self-hosted instance can change both under Instance settings). It reads the inbox, sent mail and archive (plus your own folders on Gmail and IMAP), and skips trash, drafts, spam and Gmail's "All Mail". You can watch it in the mailbox drawer's **Sync** card: a progress bar with a running count while it works, then "Up to date" with what was imported. Because it runs newest first, the mail you would look for is there within the first minute; a large mailbox finishes over the next while at a steady pace. A few IMAP servers (Seznam.cz, for one) refuse to search a folder by date; on those the import reads each message's arrival date instead, which makes the first pass over a large folder a little slower and changes nothing else.
 
 **Live sync** then follows every folder the provider exposes, including junk (so placement problems are visible) and sent mail (so a conversation shows both sides). Read state, flags, deletions and moves are mirrored too.
 
 Nested folders are followed as well, so mail in a subfolder of the inbox or under a label group arrives like anything else. Up to `100` folders per mailbox are synced. Past that the inbox, sent, drafts, spam, trash and archive are always kept and the rest are taken in the order the server lists them, with a note in the mailbox drawer's **Sync** card saying how many were left out. The note goes away by itself once the mailbox is back under the limit.
 
 On IMAP, folders are identified by the standard attributes a server publishes, and by name when it publishes none. The common names are recognized in a dozen languages, so a mailbox whose Sent folder is called "Gesendete Elemente" or "Éléments envoyés" still files sent mail as sent rather than as inbox.
+
+### Folders you do not want synced
+
+A folder the sync does not recognize files as inbox, so its mail shows up in the [unified inbox](/guides/unibox/). That is right for a folder you sort real mail into and wrong for one another tool fills: a second warmup service running out of its own folder, for example, puts machine mail in your inbox, spends the mailbox's sync budget on it, and has it classified like a reply.
+
+On an IMAP mailbox, the drawer's **Sync** card lists the folders the worker has seen under **Folders not synced**. Tick one and the sync stops opening it on its next pass, within a minute; mail already imported from it is removed from Warmbly, and mail that later moves into it from a synced folder is removed too. The mail itself is never touched at the provider. A folder that is not listed yet, because the mailbox has not synced or the folder was just created, can be typed in by name, exactly as your mail server lists it (`Warmer`, or `INBOX/Warmer` on a server that nests everything under the inbox). Case does not matter, and a skipped folder covers its subfolders.
+
+The inbox, sent, drafts, spam, trash and archive folders cannot be skipped: a sync without them is a broken mailbox, not a quieter one. Un-ticking a folder brings it back the way a new folder arrives, syncing what lands in it from then on; the mail that accumulated while it was skipped is not imported. Up to `50` folders can be skipped per mailbox. Gmail and Outlook mailboxes have no such list.
+
+The same setting is `PUT /emails/:id/sync` in the [API](/api/endpoints/) and `warmbly mailbox skip-folders` in the CLI.
 
 <Callout type="info" title="Read state on older IMAP servers">
   Some IMAP servers, including Outlook.com, Microsoft 365 over IMAP and Yahoo, cannot tell a client what changed since it last looked. New mail from those servers still arrives within a minute. Reading or flagging a message in another mail client shows up in Warmbly within about ten minutes rather than immediately. Nothing is lost either way, and Gmail, Outlook over OAuth, Fastmail and most self-hosted servers are immediate.
@@ -216,13 +242,34 @@ SMTP mailboxes get a **Keep a copy of sent mail** toggle, on by default. SMTP su
 
 Turn it off when your provider already saves its own copy of anything submitted over SMTP, which Gmail, Fastmail and Zoho do, or the folder ends up with two of every message. Gmail and Outlook mailboxes connected with OAuth never show the toggle: their APIs file the copy themselves. Warmup mail is never filed, since it would bury your real sent mail.
 
-The same tab sets the **display name**, **reply-to** (empty uses the mailbox address), **signature** in plain text and HTML, and **tags** for grouping. Tags belong to the workspace: one anybody creates is there for every teammate, on every mailbox. A new display name is on the From header of the next message the mailbox sends, campaign, reply or warmup alike; nothing needs to be reconnected.
+### Filing in the mailbox
+
+**Mirror Archive and Delete** is on by default for every mailbox. With it on, Archive, Delete and Move to inbox in the [unibox](/guides/unibox/#filing-in-the-mailbox-too) move the message in the mailbox too: Gmail gains or loses its Inbox label or goes to Trash, Outlook moves it to Archive, Deleted Items or Inbox, and an IMAP mailbox moves it between its Archive, Trash and INBOX folders. Delete always lands in the mailbox's own trash, never a permanent delete. Turn it off to keep filing inside Warmbly for this mailbox; the conversation still leaves the unibox view you filed it from, and the mailbox keeps it where it was.
+
+The same tab sets the **display name**, **reply-to** (empty uses the mailbox address, see [a shared reply inbox](#a-shared-reply-inbox)), **signature** in plain text and HTML, and **tags** for grouping. Tags belong to the workspace: one anybody creates is there for every teammate, on every mailbox. A new display name is on the From header of the next message the mailbox sends, campaign, reply or warmup alike; nothing needs to be reconnected.
 
 The HTML signature is placed in a block of its own one line below the body, so it arrives without the stack of blank lines above it that Apple Mail and Outlook used to show. Put any extra spacing you want inside the signature itself. On a body laid out in HTML it goes inside the container the email was built in, so it lines up with the copy it signs off rather than sitting under it at the left edge of the window (the same placement as the [opt-out line](/guides/unsubscribe/#where-it-appears)). The plain-text signature follows the body after a single blank line.
 
 The signature editor has four views. **HTML** is the visual surface with bold, italic, underline, links and images. The `</>` button next to it swaps that for the raw markup, which is sent exactly as written, so a table-based signature from another tool can be pasted in whole. **Preview** renders it the way a mail client will, in its own frame. **Plain** holds the plain-text version, generated from the HTML while **Sync** is on.
 
 A signature carrying a `<style>` block, a whole HTML document, or an event handler is always edited as markup and the visual toggle is greyed out. The visual surface works by putting the markup into the page, and a signature is workspace data your teammates also see, so that markup is never given a live element to run in. Preview is how you look at it. Any `<style>` block in a signature is inlined onto the elements it matches when the email sends, the same as a campaign body.
+
+### A shared reply inbox
+
+**Reply-to** puts a `Reply-To` header on the mailbox's campaign mail, unibox replies, test sends and placement tests, so answers land in another address instead of the one that sent them. Leave it empty, or set it to the mailbox's own address, and no header is added. Warmup mail never carries it: the warmup exchange reads its replies back in the mailbox that sent them.
+
+Point several sending mailboxes at one mailbox you have connected here, one that only receives, and every reply collects in one place while Warmbly keeps track of who sent what:
+
+- the reply counts for the campaign. It stops the sequence when **Stop on reply** is on, runs the reply branch of the email it answers, and is credited to the mailbox that sent that email, in campaign stats and in the dashboard's recent activity ("Reply from lead@acme.com to alex@yourco.com")
+- a reply from someone copied on the lead's emails counts for the lead, as it would at the sending mailbox
+- in the unibox the message shows which mailbox's email it answers, and **Reply** starts from that mailbox, as does a reply the [inbox agent](/guides/inbox-agent/) drafts, so the contact keeps hearing from the address they wrote to. Your answer carries the same reply-to, so their next reply comes back to the shared inbox too. See [choosing the sending mailbox](/guides/unibox/#choosing-the-sending-mailbox)
+- the `campaign.reply_received` webhook names both: `email_account_id` is the mailbox the reply landed in and `sender_email_account_id` the one that sent the email it answers
+
+Replies are only tracked where Warmbly can read them. A reply-to naming an address that is not a mailbox in this workspace still routes replies there, but none of it is counted, and the field says so. The reply inbox has to be in the same workspace as the mailboxes pointing at it.
+
+Keep the reply-to on the sending domain where you can. A `Reply-To` on a different domain from the `From` is a mild spam signal to some filters, and one on the same domain is not.
+
+Reply-to only applies to mail sent after it is set: an email sent before carried no header, so an answer to it still arrives at the mailbox that sent it.
 
 ### Sending identity
 
@@ -240,6 +287,16 @@ Two things worth knowing before you use one:
 **Import signature from Gmail** on the same card replaces the mailbox's signature with the one configured in Gmail, for whichever address the mailbox sends as. It writes straight away rather than waiting for the save bar, and the editor below updates to show what was stored. An empty signature in Gmail changes nothing, and one larger than Warmbly stores is refused rather than cut in half. Editing the signature here afterwards makes it yours again: nothing re-imports on its own, so a signature you have since adjusted is never overwritten behind your back.
 
 Outlook and SMTP/IMAP mailboxes have no equivalent list to read, so the card is absent for them. Their signature is written in Warmbly.
+
+### Profile photo
+
+The mailbox's own profile photo shows at the top of its drawer, with its provider's logo in the corner. Warmbly reads it where it can without asking for any extra permission:
+
+- a Microsoft 365 or Outlook.com mailbox, when it connects or reconnects
+- a mailbox connected through a Google Workspace or Microsoft 365 [admin grant](/guides/mailbox-import/), from the organization's directory
+- a mailbox imported from an inbox vendor that publishes one, such as Zapmail
+
+Grant and vendor photos are checked again every week, so a new photo appears on its own and a removed one goes away. A Google mailbox signed in on its own and any SMTP/IMAP mailbox shows its initials instead, because nothing Warmbly is allowed to read carries a photo for it.
 
 ### Custom tracking domain
 
@@ -294,13 +351,19 @@ The same tab decides where warmup mail lands **in your own mail client**: its ow
 
 Keep warmup running after campaigns begin rather than switching it off once a mailbox looks ready. See [Warmup](/guides/warmup/).
 
+A mailbox marked as a [placement seed inbox](/guides/placement-tests/#your-own-seed-inboxes) is the exception: it never warms up (starting warmup on it is refused until it is unmarked) and never sends campaign mail, because a test inbox has to stay a stranger to your senders.
+
 <Callout type="info" title="Warmup is a paid feature">
   The model still supports separate free and premium pools, but access is gated to paid workspaces today.
 </Callout>
 
 ## Pausing and disconnecting
 
-A mailbox can be set inactive (`PATCH /emails/{id}` with `status`) when you want it to stop without losing its settings, its history, or its place in the fleet.
+A mailbox can be switched off when you want it to stop without losing its settings, its history, or its place in the fleet. Use **Switch off** on its row's **More** menu, the **Mailbox on** switch on its **Settings** tab, or the selection bar for several at once. Over the API it is `PATCH /emails/{id}` with `status` set to `inactive`, and `active` turns it back on.
+
+Off means the whole mailbox: it sends no campaign mail, sends and receives no warmup, and syncs nothing, whatever its warmup setting says. The list shows it as **Off**, and its warmup column reads **Stopped** when warmup is still set to run. To stop cold sending while the mailbox keeps warming, which is what a mailbox recovering from spam placement needs, use [Hold from campaigns](#holding-a-mailbox-yourself) instead.
+
+A switched-off mailbox is turned back on the same ways: **Switch back on** on the row's **More** menu or its warmup menu, the **Switch back on** button at the top of its Overview tab, the **Mailbox on** switch, or **Switch on** in the selection bar. Warmup that was set to run starts again straight away. To bring a mailbox back for warmup only, turn on **Hold from campaigns** on its Overview tab before switching it on, so campaigns cannot pick it in between. A mailbox whose provider access was revoked shows **Reconnect** rather than **Off**, and is turned back on by reconnecting it.
 
 Switching it off takes effect immediately: the machine syncing it is told to drop it, so it stops importing mail and stops being picked for campaign sends and warmup within seconds rather than at that machine's next restart. Warmup pool membership is dropped, and any warmup chain it had winds down on its next step. A campaign email already handed over is answered as a failure and the step is retried later on a mailbox that is still active, so nobody receives it twice and no lead is stranded.
 
@@ -360,13 +423,13 @@ A mailbox now has a cold-rotation state, separate from its health:
 | `resting` | Out of cold rotation to recover. Warmup keeps running, so its reputation stays alive. Leads mid-sequence on it move to another mailbox at their next step |
 | `reserve` | Held back by you. Never entered or left automatically |
 
-A mailbox rests when its warmup health reaches `throttled` or worse, and returns on its own once it is healthy again **and** has held steady for three days. One good hour does not put it back at full cold volume.
+A mailbox rests when it is quarantined or blocked from warmup, and returns on its own three days after that lifts. One good hour does not put it back in rotation. Spam placement never rests a mailbox: a `watch` or `throttled` mailbox stays in rotation with its daily cold volume dampened (to 70% and 50%) until placement recovers.
 
-Resting only makes sense while the mailbox is in a warmup pool, because pool health is the signal it recovers on. If a resting mailbox leaves its pool (the workspace loses warmup when a trial ends or a plan changes), there is no health signal to wait for, so the mailbox returns on its own three days after its last rest stamp rather than staying out indefinitely. Pausing warmup on the mailbox does not remove it from the pool, so its health keeps being tracked and the normal three healthy days still apply.
+Resting only makes sense while the mailbox is in a warmup pool, because pool health is the signal it recovers on. If a resting mailbox leaves its pool (the workspace loses warmup when a trial ends or a plan changes), there is no health signal to wait for, so the mailbox returns on its own three days after its last rest stamp rather than staying out indefinitely. Pausing warmup on the mailbox does not remove it from the pool, so its health keeps being tracked and the normal three days after it lifts still apply.
 
 ### Putting a resting mailbox back yourself
 
-You do not have to wait. A resting mailbox's notice in the drawer has a **Put back into campaigns** button. It lands in `active` unless its warmup health is still `throttled` or worse, in which case it stays resting and the drawer says so: a mailbox that warmup can see is struggling should not send cold mail, and there is no override for that short of the health recovering.
+You do not have to wait. A resting mailbox's notice in the drawer has a **Put back into campaigns** button. It lands in `active` unless it is still quarantined or blocked from warmup, in which case it stays resting and the drawer says so: a mailbox the pool has taken out should not send cold mail, and there is no override for that short of the standing lifting.
 
 API keys get the same exit through `POST /emails/:id/release`, which works on a resting mailbox as well as a held one.
 
@@ -384,9 +447,11 @@ This is not the same as the risk band that decides which sending worker and IP h
 
 ## Health
 
-The Accounts list groups mailboxes as **Healthy** (sending normally), **Warming** (ramping through warmup), or **Needs attention** (paused, failing, or not sending), each row showing a live state and score. A drop between refreshes notifies you rather than waiting to be noticed.
+The Accounts list groups mailboxes as **Healthy** (sending normally), **Warming** (ramping through warmup), or **Needs attention** (paused, failing, or not sending). Each row shows the mailbox with how it connects and its tags, a **Status** that says what it is doing (**Sending**, **Warming**, **Active** when it does both, **Resting**, or **Idle**, and **Error**, **Off** or **Reconnect** when something stops it), campaign emails sent today against its cap, warmup sent today against the ramp target, the inbox rate, and the health score. Hover a status for the reason, and click any column header to sort. A drop in health between refreshes notifies you rather than waiting to be noticed.
 
-The detail drawer runs a live `SPF`, `DKIM`, and `DMARC` check on your sending domain. Confirm it is green before sending; major providers require alignment for bulk and cold mail. A domain that stays Failing eventually stops cold sending and warmup from every mailbox on it, so fix the records and press **Re-check** to clear it straight away. DKIM reads **Not verified** rather than Missing when no key answers, because its selector is not something DNS can be asked for; that never gates sending. See [Deliverability](/guides/deliverability/) for the grace period and exactly what is stopped.
+The **Inbox** column is the share of the mailbox's warmup mail that reached partners' inboxes at Google, Microsoft and Yahoo over the last seven days (smaller mail hosts run their own filters and are never counted), and the score is capped at it, so a mailbox landing some mail in spam no longer reads `100`. Click it, or open the drawer's **Deliverability** tab, for the day-by-day history and the split per provider. See [seeing where warmup lands](/guides/warmup/#seeing-where-warmup-lands).
+
+The detail drawer runs a live `SPF`, `DKIM`, and `DMARC` check on your sending domain. Confirm it is green before sending; major providers require alignment for bulk and cold mail. A domain that stays Failing eventually stops cold sending and warmup from every mailbox on it, so fix the records and press **Check** to clear it straight away; for anyone who can manage mailboxes, the check records its verdict. A lookup DNS did not answer shows the records as Not verified and is never held against the domain. DKIM reads **Not verified** rather than Missing when no key answers, because its selector is not something DNS can be asked for; that never gates sending. See [Deliverability](/guides/deliverability/) for the grace period and exactly what is stopped.
 
 Underneath, health moves through `healthy`, `watch`, `throttled`, `quarantined`, and `blocked`. These feed warmup pool selection, which only picks healthy mailboxes as partners, so an unhealthy one can be lowered in volume, removed from the pool, or blocked entirely. A blocked mailbox shows the reason and any appeal option on the Warmup tab, and must requalify on a fresh probation sample rather than waiting out the clock.
 
@@ -399,6 +464,7 @@ Health is judged only on what happened while the mailbox was in the pool: signal
 ## Related guides
 
 <Cards>
+  <Card title="Import mailboxes" href="/guides/mailbox-import/" />
   <Card title="Deliverability" href="/guides/deliverability/" />
   <Card title="Personalization & Expressions" href="/guides/expressions/" />
 </Cards>

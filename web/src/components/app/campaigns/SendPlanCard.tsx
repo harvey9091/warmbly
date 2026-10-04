@@ -111,6 +111,7 @@ const STATE_META: Record<MailboxPlan["state"], { label: string; tone: string }> 
     domain_auth: { label: "Auth failing", tone: "bg-rose-50 text-rose-700 ring-rose-200" },
     resting: { label: "Resting", tone: "bg-slate-100 text-slate-600 ring-slate-200" },
     health_hold: { label: "Health hold", tone: "bg-rose-50 text-rose-700 ring-rose-200" },
+    no_worker: { label: "Reconnecting", tone: "bg-amber-50 text-amber-700 ring-amber-200" },
     window_closed: { label: "Window closed", tone: "bg-amber-50 text-amber-700 ring-amber-200" },
 };
 
@@ -122,7 +123,7 @@ const LIMITED_BY: Record<MailboxPlan["limited_by"], string> = {
     workspace_risk: "workspace posture",
 };
 
-function fmtTime(iso: string | undefined, tz: string): string {
+function fmtTime(iso: string | Date | undefined, tz: string): string {
     if (!iso) return "";
     try {
         return new Date(iso).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: tz });
@@ -131,7 +132,7 @@ function fmtTime(iso: string | undefined, tz: string): string {
     }
 }
 
-function fmtDay(iso: string | undefined, tz: string): string {
+function fmtDay(iso: string | Date | undefined, tz: string): string {
     if (!iso) return "";
     const d = new Date(iso);
     const today = new Date();

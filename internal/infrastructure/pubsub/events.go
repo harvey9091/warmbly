@@ -45,10 +45,15 @@ const (
 	EventAccountError         EventType = "ACCOUNT_ERROR"
 	EventAccountSynced        EventType = "ACCOUNT_SYNCED"
 	EventAccountHealthChanged EventType = "ACCOUNT_HEALTH_CHANGED"
+	// EventWarmupPlacement: a partner saw one of the org's warmup emails land.
+	EventWarmupPlacement EventType = "WARMUP_PLACEMENT"
 	// EventAccountSyncState: a mailbox's import finished or fair use started
 	// or stopped holding it. Status carries the backfill status, Reason the
 	// throttle reason (empty when released).
 	EventAccountSyncState EventType = "ACCOUNT_SYNC_STATE"
+	// EventPlacementTest: an inbox placement test started, got a verdict for
+	// a copy, or finished.
+	EventPlacementTest EventType = "PLACEMENT_TEST_UPDATED"
 
 	// Bulk operation events
 	EventBulkStarted   EventType = "BULK_STARTED"
@@ -96,6 +101,13 @@ const (
 	// AI contact research progress (org-scoped). Fires as each run completes so
 	// teammates see a batch advance and the contact's research refreshes live.
 	EventAIResearchProgress EventType = "AI_RESEARCH_PROGRESS"
+	// EventMailboxImportProgress: a mailbox import moved (rows settled, or it finished).
+	EventMailboxImportProgress EventType = "MAILBOX_IMPORT_PROGRESS"
+	// EventContactImportProgress: a contact import moved (a chunk settled, or it finished).
+	EventContactImportProgress EventType = "CONTACT_IMPORT_PROGRESS"
+	// EventCRMSynced: mirrored CRM records changed (a connected CRM pushed or
+	// pulled), so the deals, tasks and contact panels refetch.
+	EventCRMSynced EventType = "CRM_SYNCED"
 
 	// An AI-drafted unibox reply is ready for human review (org-scoped, gated on
 	// access_unibox). The web client invalidates the unibox + drafts queries.
@@ -157,6 +169,8 @@ type ContactEvent struct {
 // BulkOperationEvent for bulk operation signals
 type BulkOperationEvent struct {
 	BaseEvent
+	// OrgID routes the event to every member of the organization.
+	OrgID          string  `json:"org_id,omitempty"`
 	OperationID    string  `json:"operation_id"`
 	OperationType  string  `json:"operation_type"`
 	EntityType     string  `json:"entity_type"`
@@ -232,10 +246,14 @@ type TrackingEventPayload struct {
 	// base timestamp is when this event was published.
 	OccurredAt time.Time `json:"occurred_at,omitempty"`
 	// Where and on what, from the engagement logs, for live feeds.
-	Client      string `json:"client,omitempty"`
-	DeviceType  string `json:"device_type,omitempty"`
-	CountryCode string `json:"country_code,omitempty"`
-	City        string `json:"city,omitempty"`
+	Client       string `json:"client,omitempty"`
+	ClientType   string `json:"client_type,omitempty"`
+	DeviceHidden bool   `json:"device_hidden,omitempty"`
+	DeviceType   string `json:"device_type,omitempty"`
+	OS           string `json:"os,omitempty"`
+	Browser      string `json:"browser,omitempty"`
+	CountryCode  string `json:"country_code,omitempty"`
+	City         string `json:"city,omitempty"`
 }
 
 // PageHitEvent is a website page view tied to a contact.
@@ -405,6 +423,28 @@ func (p *StreamingPublisher) PublishContactsReload(ctx context.Context, userID, 
 	}
 }
 
+// PublishOrgContactsReload tells every member of an organization to reload
+// its contact lists, for a change no single member made.
+func (p *StreamingPublisher) PublishOrgContactsReload(ctx context.Context, orgID, operationID string) {
+	if p.client == nil {
+		return
+	}
+	event := &BulkOperationEvent{
+		BaseEvent: BaseEvent{
+			EventType: EventContactsReload,
+			Timestamp: time.Now(),
+		},
+		OrgID:       orgID,
+		OperationID: operationID,
+		EntityType:  "contacts",
+	}
+	attrs := map[string]string{
+		"org_id":     orgID,
+		"event_type": string(EventContactsReload),
+	}
+	_ = p.client.Publish(ctx, TopicBulkOps, event, attrs)
+}
+
 // PublishBulkProgress sends bulk operation progress update
 func (p *StreamingPublisher) PublishBulkProgress(ctx context.Context, event *BulkOperationEvent) {
 	if p.client == nil {
@@ -489,6 +529,21 @@ func (p *StreamingPublisher) PublishAccountHealth(ctx context.Context, orgID, us
 	})
 }
 
+// PublishWarmupPlacement tells the sending mailbox's organization that one of
+// its warmup emails was seen landing, so placement views refresh live.
+func (p *StreamingPublisher) PublishWarmupPlacement(ctx context.Context, orgID, userID, accountID, email, landed string) {
+	if p == nil || p.client == nil || orgID == "" {
+		return
+	}
+	p.PublishAccountEvent(ctx, &AccountEvent{
+		BaseEvent:      BaseEvent{EventType: EventWarmupPlacement, UserID: userID},
+		OrgID:          orgID,
+		EmailAccountID: accountID,
+		Email:          email,
+		Status:         landed,
+	})
+}
+
 // AuditEvent signals that a new audit-trail entry was recorded. It is
 // org-scoped: org_id is set in both the body and the Pub/Sub attributes so the
 // realtime fanout delivers it to the org channel (owners/admins watching the
@@ -569,6 +624,57 @@ func (p *StreamingPublisher) PublishFormSubmission(ctx context.Context, orgID, f
 	}
 }
 
+// PlacementTestEvent is the org-scoped placement test signal. Ids and status
+// only: where the copies landed stays behind the read endpoint's permission.
+type PlacementTestEvent struct {
+	BaseEvent
+	OrgID      string `json:"org_id"`
+	TestID     string `json:"test_id,omitempty"`
+	BatchID    string `json:"batch_id,omitempty"`
+	CampaignID string `json:"campaign_id,omitempty"`
+	Status     string `json:"status"`
+}
+
+// PublishPlacementTest emits an org-scoped placement test signal.
+func (p *StreamingPublisher) PublishPlacementTest(ctx context.Context, orgID, testID uuid.UUID, campaignID *uuid.UUID, status string) {
+	if p == nil || p.client == nil || orgID == uuid.Nil {
+		return
+	}
+	event := &PlacementTestEvent{
+		BaseEvent: BaseEvent{EventType: EventPlacementTest, Timestamp: time.Now()},
+		OrgID:     orgID.String(),
+		TestID:    testID.String(),
+		Status:    status,
+	}
+	if campaignID != nil {
+		event.CampaignID = campaignID.String()
+	}
+	attrs := map[string]string{
+		"org_id":     orgID.String(),
+		"event_type": string(EventPlacementTest),
+	}
+	_ = p.client.Publish(ctx, TopicUserEvents, event, attrs)
+}
+
+// PublishPlacementBatch emits the placement signal for a batch that moved
+// without one of its tests moving (a sender skipped, the batch finished).
+func (p *StreamingPublisher) PublishPlacementBatch(ctx context.Context, orgID, batchID uuid.UUID, status string) {
+	if p == nil || p.client == nil || orgID == uuid.Nil {
+		return
+	}
+	event := &PlacementTestEvent{
+		BaseEvent: BaseEvent{EventType: EventPlacementTest, Timestamp: time.Now()},
+		OrgID:     orgID.String(),
+		BatchID:   batchID.String(),
+		Status:    status,
+	}
+	attrs := map[string]string{
+		"org_id":     orgID.String(),
+		"event_type": string(EventPlacementTest),
+	}
+	_ = p.client.Publish(ctx, TopicUserEvents, event, attrs)
+}
+
 // AutomationEvent is an org-scoped automation lifecycle/run signal. The web
 // client invalidates the ['automations'] queries on any "AUTOMATION" event.
 type AutomationEvent struct {
@@ -590,6 +696,78 @@ type AIResearchEvent struct {
 	ContactID string `json:"contact_id,omitempty"`
 	RunID     string `json:"run_id,omitempty"`
 	Status    string `json:"status,omitempty"`
+}
+
+// MailboxImportEvent is the org-scoped payload for MAILBOX_IMPORT_PROGRESS.
+type MailboxImportEvent struct {
+	BaseEvent
+	OrgID    string `json:"org_id"`
+	ImportID string `json:"import_id"`
+	Status   string `json:"status"`
+}
+
+// PublishMailboxImportProgress tells the workspace an import moved, so every
+// teammate watching it refetches.
+func (p *StreamingPublisher) PublishMailboxImportProgress(ctx context.Context, orgID, importID uuid.UUID, status string) {
+	if p == nil || p.client == nil || orgID == uuid.Nil {
+		return
+	}
+	event := &MailboxImportEvent{
+		BaseEvent: BaseEvent{EventType: EventMailboxImportProgress, Timestamp: time.Now()},
+		OrgID:     orgID.String(),
+		ImportID:  importID.String(),
+		Status:    status,
+	}
+	attrs := map[string]string{"org_id": orgID.String(), "event_type": string(EventMailboxImportProgress)}
+	_ = p.client.Publish(ctx, TopicUserEvents, event, attrs)
+}
+
+// ContactImportEvent is the org-scoped payload for CONTACT_IMPORT_PROGRESS.
+type ContactImportEvent struct {
+	BaseEvent
+	OrgID    string `json:"org_id"`
+	ImportID string `json:"import_id"`
+	Status   string `json:"status"`
+}
+
+// PublishContactImportProgress tells the workspace a contact import moved, so
+// every teammate watching it refetches.
+func (p *StreamingPublisher) PublishContactImportProgress(ctx context.Context, orgID, importID uuid.UUID, status string) {
+	if p == nil || p.client == nil || orgID == uuid.Nil {
+		return
+	}
+	event := &ContactImportEvent{
+		BaseEvent: BaseEvent{EventType: EventContactImportProgress, Timestamp: time.Now()},
+		OrgID:     orgID.String(),
+		ImportID:  importID.String(),
+		Status:    status,
+	}
+	attrs := map[string]string{"org_id": orgID.String(), "event_type": string(EventContactImportProgress)}
+	_ = p.client.Publish(ctx, TopicUserEvents, event, attrs)
+}
+
+// CRMSyncedEvent names what changed; ids only, the records stay behind their
+// list endpoints.
+type CRMSyncedEvent struct {
+	BaseEvent
+	OrgID     string   `json:"org_id"`
+	Objects   []string `json:"objects"`
+	ContactID string   `json:"contact_id,omitempty"`
+}
+
+// PublishCRMSynced tells the workspace its mirrored CRM data moved.
+func (p *StreamingPublisher) PublishCRMSynced(ctx context.Context, orgID uuid.UUID, objects []string, contactID string) {
+	if p == nil || p.client == nil || orgID == uuid.Nil || len(objects) == 0 {
+		return
+	}
+	event := &CRMSyncedEvent{
+		BaseEvent: BaseEvent{EventType: EventCRMSynced, Timestamp: time.Now()},
+		OrgID:     orgID.String(),
+		Objects:   objects,
+		ContactID: contactID,
+	}
+	attrs := map[string]string{"org_id": orgID.String(), "event_type": string(EventCRMSynced)}
+	_ = p.client.Publish(ctx, TopicUserEvents, event, attrs)
 }
 
 // PublishAIResearchProgress emits AI_RESEARCH_PROGRESS for one completed run.

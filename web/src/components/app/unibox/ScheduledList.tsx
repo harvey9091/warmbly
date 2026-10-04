@@ -24,8 +24,9 @@ import useUniboxScheduled from "@/lib/api/hooks/app/unibox/useUniboxScheduled";
 import cancelScheduled from "@/lib/api/client/app/unibox/cancelScheduled";
 import type UniboxScheduledItem from "@/lib/api/models/app/unibox/UniboxScheduled";
 import { cn } from "@/lib/utils";
+import ComposeButton from "@/components/app/unibox/compose/ComposeButton";
 
-function formatWhen(iso: string): { absolute: string; relative: string } {
+function formatWhen(iso: string | Date): { absolute: string; relative: string } {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return { absolute: "—", relative: "" };
 
@@ -97,6 +98,7 @@ export function ScheduledList({ onOpenScopeSheet }: { onOpenScopeSheet?: () => v
             >
                 <RefreshCwIcon className={cn("w-3.5 h-3.5", q.isFetching && "animate-spin")} />
             </button>
+            <ComposeButton />
         </div>
     );
 
@@ -221,7 +223,7 @@ function ScheduledRow({
                                     ? "bg-amber-100 text-amber-800"
                                     : "bg-sky-100 text-sky-700",
                             )}
-                            title={item.scheduled_at}
+                            title={when.absolute}
                         >
                             {when.relative || "soon"}
                         </span>

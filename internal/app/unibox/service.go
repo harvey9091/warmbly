@@ -29,6 +29,9 @@ type UniboxService interface {
 		ctx context.Context,
 		orgID, id uuid.UUID,
 	) (*models.EmailMessage, *errx.Error)
+	// ForwardSource is the message a forward carries, read without marking it
+	// seen. NotFound when the id names no message in the organization.
+	ForwardSource(ctx context.Context, orgID, id uuid.UUID) (*models.ForwardedMessage, *errx.Error)
 	GetByThread(
 		ctx context.Context,
 		orgID, emailID uuid.UUID,
@@ -55,6 +58,8 @@ type UniboxService interface {
 
 	// Overview powers the scope rail + top metric strip in one call.
 	Overview(ctx context.Context, orgID, userID uuid.UUID) (*models.UniboxOverview, *errx.Error)
+	// ForgetOverview makes the next Overview for the organization compute afresh.
+	ForgetOverview(orgID uuid.UUID)
 
 	// Conversation labels. SetThreadLabels replaces a thread's full
 	// label set (idempotent); ListThreadLabels reads the current set.
@@ -65,12 +70,14 @@ type UniboxService interface {
 	// flip status to 'cancelled' and let the queued Cloud Task fire as
 	// a no-op (handler short-circuits on non-pending status). Avoids
 	// per-cancel API calls against Cloud Tasks.
-	ListScheduled(ctx context.Context, userID uuid.UUID) ([]models.UniboxScheduledItem, *errx.Error)
-	// ListScheduledByThread returns the user's pending queued sends
-	// for a single thread. ThreadView calls this so queued replies
-	// render inline alongside already-sent messages.
-	ListScheduledByThread(ctx context.Context, userID uuid.UUID, threadID string) ([]models.UniboxScheduledItem, *errx.Error)
-	CancelScheduled(ctx context.Context, userID, taskID uuid.UUID) *errx.Error
+	// All three are scoped to the organization, whose mailboxes send them, and
+	// a non-empty accountIDs (an API key's allowlist) narrows them further.
+	ListScheduled(ctx context.Context, orgID uuid.UUID, accountIDs []uuid.UUID) ([]models.UniboxScheduledItem, *errx.Error)
+	// ListScheduledByThread returns the pending queued sends for a single
+	// thread. ThreadView calls this so queued replies render inline
+	// alongside already-sent messages.
+	ListScheduledByThread(ctx context.Context, orgID uuid.UUID, threadID string, accountIDs []uuid.UUID) ([]models.UniboxScheduledItem, *errx.Error)
+	CancelScheduled(ctx context.Context, orgID, taskID uuid.UUID, accountIDs []uuid.UUID) *errx.Error
 
 	// ThreadGrounding and AddressGrounding return message text for AI prompts:
 	// the stored body when it exists, the preview snippet as the fallback.
@@ -83,7 +90,7 @@ type UniboxService interface {
 	StartBodyTextBackfill(ctx context.Context)
 
 	// WireProviderRelay attaches the worker bus, after which a read/unread
-	// change made here is carried out to the mailbox provider too.
+	// change or a filing made here is carried out to the mailbox provider too.
 	WireProviderRelay(p events.Publisher)
 }
 
@@ -93,10 +100,12 @@ type uniboxService struct {
 	tasksClient      tasksched.Scheduler
 	cache            *cache.Cache
 	blob             storage.Store
-	// publisher relays read/unread changes out to the mailbox providers.
-	// Optional: without it the unibox still works and only Warmbly's own copy
-	// of the read state changes.
+	// publisher relays read/unread changes and filings out to the mailbox
+	// providers. Optional: without it the unibox still works and only
+	// Warmbly's own copy changes.
 	publisher events.Publisher
+	// overview shares one overview computation per organization between concurrent readers.
+	overview *overviewCache
 }
 
 // WireProviderRelay attaches the bus the unibox relays read state through.
@@ -114,11 +123,13 @@ func NewService(
 	taskRepo repository.TaskRepository,
 	tasksClient tasksched.Scheduler,
 ) UniboxService {
-	return &uniboxService{
+	s := &uniboxService{
 		uniboxRepository: uniboxRepository,
 		taskRepo:         taskRepo,
 		tasksClient:      tasksClient,
 		cache:            cache,
 		blob:             blob,
 	}
+	s.overview = newOverviewCache(s.computeOverview)
+	return s
 }

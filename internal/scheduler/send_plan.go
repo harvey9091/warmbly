@@ -22,6 +22,9 @@ type CampaignSendPlanner interface {
 	// estimate) or for the whole workspace (the dashboard meter). A campaign
 	// with no daily limit clamps nothing at the campaign level.
 	PoolCapacityToday(ctx context.Context, campaign *models.Campaign, accounts []models.Email) (*models.WorkspaceSendCapacity, error)
+	// ProjectCampaign simulates a campaign that may not exist yet day by
+	// day, for the wizard's estimate. Read-only.
+	ProjectCampaign(ctx context.Context, in CampaignProjectionInput) (*models.CampaignEstimateResult, error)
 }
 
 // mailboxDay is one mailbox's day on a campaign with the working shown: every
@@ -128,7 +131,11 @@ func (s *schedulerService) planMailbox(ctx context.Context, pass *campaignPass, 
 	// below where its delta can be named.
 	gate, _ := s.gateFor(ctx, pass, acct, 1)
 	d.health = s.healthFor(ctx, pass, acct.ID)
-	if !gate.open() && gate.reason != gateBudget {
+	// A mailbox without a live worker is back within minutes, so its day is
+	// still expected; it is only shown as reconnecting, as the capacity
+	// estimate counts it.
+	reconnecting := gate.reason == gateNoWorker
+	if !gate.open() && gate.reason != gateBudget && !reconnecting {
 		d.gate = gate
 		d.byGate = r
 		r = 0
@@ -222,7 +229,7 @@ func (s *schedulerService) planMailbox(ctx context.Context, pass *campaignPass, 
 				r = byHour
 			}
 		}
-	} else if acct.Timezone != "" && acct.Timezone != pass.campaign.Timezone {
+	} else if acct.Timezone != "" && acct.Timezone != pass.campaign.ClockTimezone() {
 		// The 8am-8pm band in the mailbox's own timezone, both ends: the
 		// placer moves any send past 8pm to the next morning.
 		loc := loadLocation(acct.Timezone)
@@ -282,6 +289,9 @@ func (s *schedulerService) planMailbox(ctx context.Context, pass *campaignPass, 
 	d.remaining = r
 	if r > 0 {
 		d.state = models.MailboxPlanSending
+		if reconnecting {
+			d.state = models.MailboxPlanNoWorker
+		}
 		return d
 	}
 	// Its next allowed send falls after the day's sending time ends.
@@ -294,7 +304,7 @@ func (s *schedulerService) planMailbox(ctx context.Context, pass *campaignPass, 
 
 // dayWindow is the campaign's calendar for today, in its own timezone.
 func dayWindow(campaign *models.Campaign, now time.Time) (models.CampaignSendWindow, int, time.Time) {
-	tz := loadLocation(campaign.Timezone)
+	tz := loadLocation(campaign.ClockTimezone())
 	windows := effectiveWindows(campaign)
 	local := now.In(tz)
 	y, m, d := local.Date()
@@ -400,7 +410,7 @@ func (s *schedulerService) PlanCampaignDay(ctx context.Context, campaignID uuid.
 	}
 	now := time.Now()
 	projectRampLevel(campaign, now)
-	tz := loadLocation(campaign.Timezone)
+	tz := loadLocation(campaign.ClockTimezone())
 	window, windowSecondsLeft, closesAt := dayWindow(campaign, now)
 
 	plan := &models.CampaignSendPlan{
@@ -623,7 +633,8 @@ func (s *schedulerService) PoolCapacityToday(ctx context.Context, campaign *mode
 	for _, acct := range accounts {
 		out.ConfiguredCeiling += acct.CampaignLimit
 		stages, _ := stagedCap(pass, acct)
-		if gate, _ := s.gateFor(ctx, pass, acct, 1); !gate.open() && gate.reason != gateBudget {
+		// A worker gap is minutes long, not a day's capacity.
+		if gate, _ := s.gateFor(ctx, pass, acct, 1); !gate.open() && gate.reason != gateBudget && gate.reason != gateNoWorker {
 			out.Held++
 			continue
 		}

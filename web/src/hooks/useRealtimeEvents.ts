@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { useQueryClient, type QueryKey } from '@tanstack/react-query'
 import { useSocket } from './context/socket'
@@ -6,6 +6,18 @@ import { useAppStore } from '@/stores'
 import { useUserProfile } from './context/user'
 import { markSelfMutation } from '@/lib/realtime/selfActivity'
 import { announceCampaignDeleted } from '@/lib/realtime/campaignDeleted'
+import { MAILBOX_REMOVAL_KEYS } from '@/lib/api/hooks/app/emails/invalidateAfterMailboxRemoval'
+import { createDeliveryDeduper, createRefreshCoalescer } from '@/lib/realtime/refreshCoalescer'
+
+// What an inbox event moves besides its own thread; refreshed through the coalescer, never per event.
+const INBOX_AGGREGATES: QueryKey[] = [
+  ['unibox', 'overview'],
+  ['unibox', 'unseen-count'],
+  ['unibox', 'search'],
+  ['unibox', 'incoming'],
+  ['unibox', 'scheduled'],
+  ['analytics'],
+]
 
 // Bridges realtime socket events into both the zustand store and react-query
 // cache so list pages, detail panes, counters, and workflow states stay live.
@@ -18,7 +30,6 @@ export function useRealtimeEvents() {
 
   const updateCampaign = useAppStore((s) => s.updateCampaign)
   const addUniboxEmail = useAppStore((s) => s.addUniboxEmail)
-  const incrementUnseenCount = useAppStore((s) => s.incrementUnseenCount)
   const updateDeal = useAppStore((s) => s.updateDeal)
   const setSubscription = useAppStore((s) => s.setSubscription)
 
@@ -30,6 +41,35 @@ export function useRealtimeEvents() {
     },
     [queryClient],
   )
+
+  // Warmup deliveries arrive all day across a whole pool, so their refreshes
+  // are coalesced: placement views every 15s, and the account statuses (a
+  // per-mailbox fan-out whose 7-day rate barely moves) every 5 minutes.
+  const placementTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const accountsTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const refreshPlacement = useCallback(() => {
+    if (!placementTimer.current) {
+      placementTimer.current = setTimeout(() => {
+        placementTimer.current = null
+        invalidate([['analytics', 'warmup', 'placement']])
+      }, 15_000)
+    }
+    if (!accountsTimer.current) {
+      accountsTimer.current = setTimeout(() => {
+        accountsTimer.current = null
+        invalidate([['analytics', 'accounts']])
+      }, 300_000)
+    }
+  }, [invalidate])
+  useEffect(() => () => {
+    if (placementTimer.current) clearTimeout(placementTimer.current)
+    if (accountsTimer.current) clearTimeout(accountsTimer.current)
+  }, [])
+
+  // One aggregate refresh per quiet interval; per-thread work once per delivery, not per channel.
+  const [inboxRefresh] = useState(() => createRefreshCoalescer(queryClient))
+  const [isDuplicateDelivery] = useState(() => createDeliveryDeduper())
+  useEffect(() => () => inboxRefresh.dispose(), [inboxRefresh])
 
   const handleRealtimeEvent = useCallback(
     (payload: Record<string, unknown>) => {
@@ -49,6 +89,14 @@ export function useRealtimeEvents() {
       // and must never trigger a react-query refetch.
       if (event.startsWith('LIVE_')) return
 
+      // A placement test started, got a verdict, finished or was cancelled.
+      // Checked this early because its name would otherwise match the warmup
+      // placement and campaign branches below.
+      if (event === 'PLACEMENT_TEST_UPDATED') {
+        invalidate([['placement'], ['analytics', 'deliverability']])
+        return
+      }
+
       const getString = (key: string) => {
         const value = payload[key]
         return typeof value === 'string' && value.length > 0 ? value : null
@@ -62,36 +110,101 @@ export function useRealtimeEvents() {
       const threadId = getString('thread_id')
       const emailId = getString('email_id') ?? getString('message_id')
 
+      // A mailbox import moved: its job, the import list and the mailbox list
+      // all refresh. Checked before the ACCOUNT/EMAIL branches below.
+      if (event === 'MAILBOX_IMPORT_PROGRESS') {
+        const importId = getString('import_id')
+        // A finished row can move a mailbox off Google sign-in.
+        invalidate([['emails', 'imports'], ['emails', 'list'], ['sending-domains'], ['mailbox-grants', 'migration'], ['pool-link']])
+        if (importId) invalidate([['emails', 'imports', importId]])
+        return
+      }
+
+      // Mirrored CRM data moved (HubSpot pushed or pulled): the deals, tasks,
+      // pipelines and the contact's HubSpot panel refetch.
+      if (event === 'CRM_SYNCED') {
+        const objects = Array.isArray(payload.objects) ? (payload.objects as string[]) : []
+        const keys: QueryKey[] = [['crm', 'sync']]
+        if (objects.includes('owner')) keys.push(['crm', 'owners'])
+        if (objects.includes('deal')) keys.push(['crm', 'deals'])
+        if (objects.includes('task')) keys.push(['crm', 'tasks'])
+        if (objects.includes('pipeline')) keys.push(['crm', 'pipelines'], ['crm', 'deals'])
+        if (objects.some((o) => o === 'contact' || o === 'note' || o === 'deal' || o === 'task')) {
+          keys.push(contactId ? ['contacts', contactId] : ['contacts'])
+          keys.push(contactId ? ['crm', 'contact', contactId] : ['crm', 'contact'])
+        }
+        invalidate(keys)
+        return
+      }
+
+      // A contact import moved. The import refreshes on every beat; the lists
+      // its rows land in refresh when it settles, not once a second while it runs.
+      if (event === 'CONTACT_IMPORT_PROGRESS') {
+        const importId = getString('import_id')
+        invalidate([['contacts', 'imports', 'list']])
+        if (importId) invalidate([['contacts', 'imports', importId]])
+        const status = getString('status')
+        if (status === 'completed' || status === 'cancelled' || status === 'failed') {
+          invalidate([['contacts'], ['segments'], ['campaigns', 'list'], ['organizations', 'limits']])
+        }
+        return
+      }
+
       // An AI-suggested unibox reply was drafted and is awaiting human review.
       // Refresh the unibox (badge/overview) + the drafts list, and the specific
       // thread if present.
       if (includes('AI_DRAFT')) {
-        invalidate([
-          ['unibox'],
-          ['unibox', 'overview'],
-          ['unibox', 'agent-drafts'],
-        ])
+        invalidate([['unibox', 'agent-drafts']])
+        inboxRefresh.add([['unibox', 'overview'], ['unibox', 'search']])
         if (threadId) invalidate([['unibox', 'thread', threadId]])
         return
+      }
+
+      // Inbox events ride the user channel as well as the org one, so the
+      // owner gets each twice and a member of two workspaces gets the other
+      // one's mail too. The unread badge is refetched rather than counted up
+      // here: the server knows whether the message is unread, in the Inbox
+      // and in this workspace, and an increment knew none of that.
+      const inboxEvent = includes(
+        'EMAIL_RECEIVED',
+        'NEW_EMAIL',
+        'INBOX_NEW',
+        'EMAIL_UPDATED',
+        'EMAIL_DELETED',
+        'INBOX_UPDATE',
+      )
+      const eventOrg = getString('org_id')
+      if (inboxEvent && eventOrg && currentOrg?.id && eventOrg !== currentOrg.id) return
+
+      // The named thread and message refresh now; without a thread id the message may sit in any open thread, refreshed later.
+      const refreshInbox = (aggregates: QueryKey[]) => {
+        const own: QueryKey[] = []
+        if (threadId) own.push(['unibox', 'thread', threadId], ['unibox', 'thread', 'labels', threadId])
+        // An unthreaded message is its own conversation, keyed by its id.
+        else if (emailId) own.push(['unibox', 'thread', emailId])
+        if (emailId) own.push(['unibox', 'email', emailId])
+        const later = threadId ? aggregates : [...aggregates, ['unibox', 'thread']]
+        const stamp = getString('timestamp')
+        const deliveryKey = [event, stamp ?? '', eventOrg ?? '', emailId ?? '', threadId ?? ''].join('|')
+        if (own.length === 0) inboxRefresh.add(later)
+        else if (!isDuplicateDelivery(deliveryKey)) {
+          invalidate(own)
+          inboxRefresh.add(later)
+        }
+        // Without a publish stamp a repeat may be a second change, so its thread still refreshes.
+        else inboxRefresh.add(stamp ? later : [...later, ...own])
       }
 
       if (includes('EMAIL_RECEIVED', 'NEW_EMAIL', 'INBOX_NEW')) {
         addUniboxEmail(payload as any)
-        incrementUnseenCount()
-        invalidate([
-          ['unibox'],
-          ['analytics'],
-          ['emails', 'list'],
-        ])
-        if (threadId) invalidate([['unibox', 'thread', threadId]])
-        if (emailId) invalidate([['unibox', 'email', emailId]])
+        refreshInbox([...INBOX_AGGREGATES, ['emails', 'list']])
         return
       }
 
+      // A message read or removed takes its reply notification with it
+      // (server side), so the bell refreshes along with the inbox.
       if (includes('EMAIL_UPDATED', 'EMAIL_DELETED', 'INBOX_UPDATE')) {
-        invalidate([['unibox'], ['analytics'], ['inbox-tagging']])
-        if (threadId) invalidate([['unibox', 'thread', threadId]])
-        if (emailId) invalidate([['unibox', 'email', emailId]])
+        refreshInbox([...INBOX_AGGREGATES, ['inbox-tagging'], ['notifications', 'feed']])
         return
       }
 
@@ -198,9 +311,12 @@ export function useRealtimeEvents() {
         invalidate([
           ['campaigns', 'list'],
           ['analytics'],
-          ['contacts'],
         ])
-        if (contactId) invalidate([['contacts', contactId]])
+        // Other contacts' campaign-state (a scheduler preview per campaign) is left alone.
+        void queryClient.invalidateQueries({
+          queryKey: ['contacts'],
+          predicate: (q) => !contactId || q.queryKey[2] !== 'campaign-state' || q.queryKey[1] === contactId,
+        })
         return
       }
 
@@ -222,6 +338,11 @@ export function useRealtimeEvents() {
         return
       }
 
+      if (event === 'WARMUP_PLACEMENT') {
+        refreshPlacement()
+        return
+      }
+
       if (includes('ACCOUNT', 'EMAIL_STATUS', 'EMAIL_ERROR', 'WARMUP')) {
         // ACCOUNT_SYNC_STATE: the mailbox's import finished or fair use
         // started/stopped holding it; the drawer's sync card refetches.
@@ -232,6 +353,7 @@ export function useRealtimeEvents() {
           ['analytics', 'accounts'],
           ['analytics', 'warmup'],
           ['analytics', 'dashboard'],
+          ['cloud-link'],
         ])
         return
       }
@@ -312,9 +434,10 @@ export function useRealtimeEvents() {
           ['integrations', 'connections'],
           ['integrations', 'catalog'],
           ['integrations', 'bookings'],
+          ['integrations', 'slack', 'status'],
         ])
         const connectionId = getString('connection_id')
-        if (connectionId) invalidate([['integrations', 'connection', connectionId]])
+        if (connectionId) invalidate([['integrations', 'connection', connectionId], ['integrations', 'salesforce', connectionId]])
         return
       }
 
@@ -361,7 +484,18 @@ export function useRealtimeEvents() {
           // per-mailbox detail reads too (['emails', id, 'behavior'] and its
           // rolled plan), so a teammate retuning a mailbox's sending behaviour
           // refreshes everyone's open drawer instead of only the list row.
-          email_account: [['emails'], ['analytics', 'accounts']],
+          // A mailbox write can move it off Google sign-in, so the migration list follows.
+          // A seed toggle is audited here too, so the placement seed list follows.
+          email_account: [['emails'], ['analytics', 'accounts'], ['sending-domains'], ['mailbox-grants', 'migration'], ['pool-link'], ['placement', 'seeds'], ['placement', 'overview']],
+          // A mailbox import created, retried or cancelled by a teammate; it may move mailboxes onto a grant.
+          mailbox_import: [['emails', 'imports'], ['mailbox-grants', 'migration']],
+          // An admin grant added, re-checked or removed, and an inbox vendor
+          // account connected, re-keyed or removed.
+          mailbox_grant: [['mailbox-grants'], ['emails', 'list']],
+          mailbox_vendor: [['mailbox-vendors'], ['sending-domains']],
+          // A sending domain's root redirect or vendor forwarding changed. Its
+          // tracking host is an email_account write, covered above.
+          domain_redirect: [['sending-domains']],
           api_key: [['api-keys']],
           webhook: [['webhooks'], ['integrations', 'connections']],
           template: [['templates']],
@@ -376,7 +510,8 @@ export function useRealtimeEvents() {
           team: [['teams']],
           role: [['organizations']],
           automation: [['automations']],
-          integration: [['integrations', 'connections']],
+          // Slack and Salesforce settings, member links and import sources are audited as integration writes too.
+          integration: [['integrations', 'connections'], ['integrations', 'slack'], ['integrations', 'salesforce'], ['crm', 'settings'], ['crm', 'owners']],
           lead_sync_source: [['lead-sync', 'sources']],
           meeting: [['meetings'], ['meetings', 'summary']],
           subscription: [['subscription'], ['organizations', 'limits']],
@@ -392,6 +527,8 @@ export function useRealtimeEvents() {
           ai_skill: [['ai', 'skills']],
           // Connected MCP servers (external tools).
           mcp_server: [['ai', 'connections']],
+          // A teammate published, edited or unpublished one of the workspace's apps.
+          app_listing: [['oauth-app-listing'], ['integrations', 'community']],
           // Advisor: a background evaluation that opened or resolved findings,
           // or a teammate applying/snoozing/dismissing one. Refreshes every
           // strip and every nav badge at once.
@@ -405,15 +542,18 @@ export function useRealtimeEvents() {
             ['organizations', 'exports'],
             ['organizations', 'imports'],
           ],
-          unibox: [['unibox']],
           crm_note: [['crm'], ['contacts']],
           crm_pipeline: [['crm', 'pipelines'], ['crm', 'deals']],
           crm_stage: [['crm', 'pipelines'], ['crm', 'deals']],
           crm_deal: [['crm', 'deals'], ['contacts']],
           crm_task: [['crm', 'tasks'], ['crm', 'deals']],
           warmup_routing_rule: [['analytics', 'warmup']],
-    cloud_link: [['cloud-link'], ['emails']],
-    pool_link: [['pool-link'], ['emails']],
+          // Placement tests started or stopped and campaign monitors changed.
+          placement_test: [['placement']],
+          placement_monitor: [['placement']],
+          placement_batch: [['placement']],
+          cloud_link: [['cloud-link'], ['emails']],
+          pool_link: [['pool-link'], ['emails']],
           // Folders / tags / categories ride the user payload.
           folder: [['auth', 'me']],
           tag: [['auth', 'me']],
@@ -421,6 +561,14 @@ export function useRealtimeEvents() {
         }
         const keys = spine[entityType]
         if (keys) invalidate(keys)
+        // Unibox writes come in bursts (reading, filing), so they ride the coalescer.
+        if (entityType === 'unibox') inboxRefresh.add([['unibox']])
+        // A deletion also takes the entity's inbox mail, unread badge and
+        // advice with it, which no update ever does.
+        if (getString('action') === 'delete') {
+          if (entityType === 'email_account') invalidate([...MAILBOX_REMOVAL_KEYS])
+          if (entityType === 'campaign' || entityType === 'step') invalidate([['advisor']])
+        }
         if (entityId && entityType === 'contact') invalidate([['contacts', entityId]])
         if (entityId && entityType === 'segment') invalidate([['segments', entityId]])
         if (entityId && entityType === 'form') invalidate([['forms', entityId]])
@@ -455,10 +603,13 @@ export function useRealtimeEvents() {
     },
     [
       addUniboxEmail,
-      incrementUnseenCount,
+      currentOrg?.id,
+      inboxRefresh,
       invalidate,
+      isDuplicateDelivery,
       myId,
       queryClient,
+      refreshPlacement,
       setSubscription,
       updateCampaign,
       updateDeal,

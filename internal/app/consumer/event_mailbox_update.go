@@ -13,6 +13,9 @@ func (s *JobsService) HandleMailboxUpdate(ctx context.Context, e *models.JobEven
 		e.EmailID,
 		e.Data,
 	); err != nil { // replaces the data if it already exists
+		if s.dropForDeletedMailbox(ctx, e.UserID, e.EmailID, err) {
+			return nil
+		}
 		CaptureError(e.UserID, e.EmailID, err)
 		return err
 	}

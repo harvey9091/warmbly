@@ -12,6 +12,7 @@
 // Tabs:
 //   - Overview  → engagement stats + suppression + profile snapshot
 //   - Activity  → merged timeline
+//   - Deals     → the contact's deals (HubSpot's in HubSpot mode)
 //   - Notes     → CRM notes CRUD
 //   - Details   → identity / categories / campaigns / custom fields
 
@@ -31,21 +32,23 @@ import BookACallButton from "@/components/app/integrations/BookACallButton";
 import ResourceViewers from "@/components/app/presence/ResourceViewers";
 import { usePresenceResource } from "@/hooks/PresenceProvider";
 import NewMeetingDialog from "@/components/app/meetings/NewMeetingDialog";
+import ScrollStrip from "@/components/ui/scroll-strip";
 import OverviewTab from "./contact-edit/OverviewTab";
 import ActivityTab from "./contact-edit/ActivityTab";
+import DealsTab from "./contact-edit/DealsTab";
 import NotesTab from "./contact-edit/NotesTab";
 import ResearchTab from "./contact-edit/ResearchTab";
-import DetailsTab, { type CustomField } from "./contact-edit/DetailsTab";
+import DetailsTab from "./contact-edit/DetailsTab";
+import { type CustomField, customFieldsPatch, customFieldsProblem } from "./customFields";
 import {
     fieldsOf,
     hasUnnamedValue,
     idsOf,
     rebase,
-    recordFromCF,
+    rebaseFields,
     sameCampaigns,
     sameFields,
     sameIDs,
-    sameRows,
 } from "./contact-edit/rebase";
 import {
     CONTACT_SLIDE_TABS,
@@ -63,10 +66,13 @@ export default function ContactEdit({
     setActive: React.Dispatch<React.SetStateAction<string>>;
     initialTab?: ContactSlideTab;
 }) {
-    const contact = React.useMemo(
+    const listed = React.useMemo(
         () => contacts.find((c) => c.id === active),
         [contacts, active],
     );
+    // A deep link (?contact=<id>) can name someone the loaded page does not hold.
+    const fetched = useContact(active, !!active && !listed);
+    const contact = listed ?? (active ? fetched.data : undefined);
 
     return (
         <AnimatePresence>
@@ -146,11 +152,8 @@ function ContactEditPanel({
         setCategoryIds((v) =>
             rebase(v, idsOf(prev.categories ?? []), idsOf(contact.categories ?? []), sameIDs),
         );
-        // sameRows, not sameFields: a row the user has typed a value into but
-        // not yet named saves as nothing, so the save-shaped comparison would
-        // call the draft untouched and throw that row away.
         setCustomFields((v) =>
-            rebase(v, fieldsOf(prev.custom_fields), fieldsOf(contact.custom_fields), sameRows),
+            rebaseFields(v, fieldsOf(prev.custom_fields), fieldsOf(contact.custom_fields)),
         );
     }, [contact]);
 
@@ -177,6 +180,14 @@ function ContactEditPanel({
 
     async function save() {
         if (!changed) return;
+        const fieldsChanged = !sameFields(customFields, fieldsOf(contact.custom_fields));
+        const fieldsPatch = fieldsChanged ? customFieldsPatch(contact.custom_fields, customFields) : {};
+        const problem = customFieldsProblem(customFields, fieldsPatch);
+        if (problem) {
+            setTab("details");
+            toast.error(problem);
+            return;
+        }
         const data: Record<string, unknown> = {};
         if (firstName !== contact.first_name) data.first_name = firstName;
         if (lastName !== contact.last_name) data.last_name = lastName;
@@ -186,9 +197,7 @@ function ContactEditPanel({
         if (subscribed !== contact.subscribed) data.subscribed = subscribed;
         // Same comparisons `dirty` and the rebase use, so what counts as
         // changed is decided in exactly one place.
-        if (!sameFields(customFields, fieldsOf(contact.custom_fields))) {
-            data.custom_fields = recordFromCF(customFields);
-        }
+        if (fieldsChanged) data.custom_fields = fieldsPatch;
         if (!sameCampaigns(campaigns, contact.campaigns ?? [])) data.campaigns = idsOf(campaigns);
         if (!sameIDs(categoryIds, idsOf(contact.categories ?? []))) data.categories = categoryIds;
 
@@ -212,7 +221,10 @@ function ContactEditPanel({
 
     React.useEffect(() => {
         function onKey(e: KeyboardEvent) {
-            if (e.key === "Escape") requestClose();
+            if (e.key !== "Escape") return;
+            // Innermost layer only: an open popover, confirm or dialog takes its own Escape.
+            if (document.querySelector("[data-floating], [role='alertdialog'], [aria-modal='true']")) return;
+            requestClose();
         }
         window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
@@ -260,7 +272,13 @@ function ContactEditPanel({
                             detailLoading={detail.isLoading}
                         />
                     )}
-                    {tab === "activity" && <ActivityTab contactId={contact.id} />}
+                    {tab === "activity" && <ActivityTab contactId={contact.id} contactName={firstName || lastName ? displayName : contact.email} />}
+                    {tab === "deals" && (
+                        <DealsTab
+                            contactId={contact.id}
+                            defaultName={contact.company || (firstName || lastName ? displayName : contact.email)}
+                        />
+                    )}
                     {tab === "notes" && <NotesTab contactId={contact.id} />}
                     {tab === "research" && <ResearchTab contactId={contact.id} />}
                     {tab === "details" && (
@@ -454,15 +472,16 @@ function TabStrip({
     setTab: (t: ContactSlideTab) => void;
 }) {
     return (
-        <nav className="shrink-0 px-3 flex items-center gap-1 border-b border-slate-200 overflow-x-auto md:overflow-visible">
+        <ScrollStrip activeKey={tab} className="shrink-0 border-b border-slate-200" innerClassName="px-3 gap-1">
             {CONTACT_SLIDE_TABS.map((t) => {
                 const isActive = tab === t.id;
                 return (
                     <button
                         key={t.id}
                         type="button"
+                        data-active={isActive ? "true" : undefined}
                         onClick={() => setTab(t.id)}
-                        className={`relative h-10 px-2.5 inline-flex items-center gap-1.5 text-[12.5px] outline-none transition-colors ${
+                        className={`relative h-10 px-2.5 shrink-0 inline-flex items-center gap-1.5 text-[12.5px] whitespace-nowrap outline-none transition-colors ${
                             isActive
                                 ? "text-slate-900 font-medium"
                                 : "text-slate-500 hover:text-slate-800"
@@ -473,14 +492,14 @@ function TabStrip({
                         {isActive && (
                             <motion.span
                                 layoutId="contact-tab-underline"
-                                className="absolute left-1.5 right-1.5 -bottom-px h-0.5 rounded-full bg-sky-600"
+                                className="absolute left-1.5 right-1.5 bottom-0 h-0.5 rounded-full bg-sky-600"
                                 transition={{ type: "spring", duration: 0.3, bounce: 0.15 }}
                             />
                         )}
                     </button>
                 );
             })}
-        </nav>
+        </ScrollStrip>
     );
 }
 

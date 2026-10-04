@@ -87,7 +87,7 @@ func (h *Handler) RequestContactVerification(c *gin.Context) {
 	}
 	var req models.ContactVerificationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	// A campaign-scoped re-verify carries no ids of its own, so only resolve a

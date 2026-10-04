@@ -1,6 +1,6 @@
 ---
 title: "Automatic inbox tagging"
-description: "Label and score inbound mail as it arrives, and let a confident verdict hold, stop, follow up or suppress. Optional, off by default."
+description: "Label and score inbound mail as it arrives, keep automated mail out of the inbox, and let a confident verdict hold, stop, follow up or suppress. Optional, off by default."
 ---
 
 Automatic tagging reads each inbound message and files it under workspace labels, then scores how much it deserves your attention. It is optional and off until an operator turns it on.
@@ -9,52 +9,87 @@ Classification sends message content to TypeSafe, so it is opt-in twice: an oper
 
 ## What it does
 
-It writes labels and a relevance score for every inbound message. That part needs nothing from you beyond turning the feature on.
+It writes labels and a relevance score for every inbound message, and moves mail nobody wrote (sign-in codes, receipts, notifications, bounces, auto-replies) out of the inbox into the **Automated** view. Automated mail that needs your action, such as a failed payment or a suspended account, stays in the inbox labelled **Action required**. That part needs nothing from you beyond turning the feature on.
 
 It can also act on a confident verdict: hold a contact who said not now, stop a contact who declined, open a task when someone asks for a call, and suppress a sender who asked to be removed. Each of those is its own switch under **Settings > Sending > Classified replies**. The three reversible ones are on from the start; the suppression is off until you turn it on, because it is the one the system cannot undo. See [Acting on a verdict](#acting-on-a-verdict).
 
 ## Nothing to set up
 
-The whole label set is created when a workspace is created (and, on an instance that turned the feature on later, within the hour by the follow-up sweep), so the inbox can filter for `opt-out` before anything has opted out. The premade **Views** in the inbox rail (Hot leads, Needs a reply, Follow up, Declined, Automated) are built on those labels and fill as mail is classified; see [Unified inbox](/guides/unibox/). Every label has a hover explanation, so nobody has to learn the taxonomy first.
+The whole label set is created when a workspace is created (and, on an instance that turned the feature on later, within the hour by the follow-up sweep), so the inbox can filter for **Unsubscribe** before anyone has asked. The premade **Views** in the inbox rail (Action required, Hot leads, Needs a reply, Follow up, Declined, Automated) are built on those labels and fill as mail is classified; see [Unified inbox](/guides/unibox/). Every label has a hover explanation, so nobody has to learn the taxonomy first.
 
 ## The labels
 
-Four families, all of them ordinary workspace labels. The inbox filters on them like any label you made yourself, and the whole set is created when the feature is switched on, so you can filter for `opt-out` before anything has opted out.
+Labels are plain words, so anyone on the team can read them without learning a taxonomy first. They are ordinary workspace labels: the inbox filters on them like any label you made yourself. A workspace that already had a label with the same name keeps it and the automatic one files under it.
 
-**What the message is.** Exactly one applies: `bounce-hard`, `bounce-soft`, `auto-reply-ooo`, `auto-reply-ticket`, `human-reply`, `cold-inbound`, `notification`, `internal`.
+**What the message is.** At most one: **Bounced**, **Out of office**, **Auto-reply**, **Notification** or **Sales pitch**. A reply from a person carries no label for being a reply, because nearly every thread is one. A notification that needs your action also carries **Action required**; see [Mail that needs your action](#mail-that-needs-your-action).
 
-**What a reply wants.** Only on a human reply.
+**What a reply wants.** Only on a person's reply:
 
-For a first answer to an approach: `agreed`, `wants-info`, `wants-pricing`, `not-now`, `not-interested`, `wrong-person`, `opt-out`.
+| Label | Means |
+|---|---|
+| **Interested** | They said yes to the call, the partnership or the next step |
+| **Meeting** | They asked for a call or meeting, or proposed or confirmed a time |
+| **Pricing** | They asked about price, terms or commercials |
+| **Question** | Open to it, but asking questions before deciding |
+| **Update** | News on something already agreed, or the answer to something you asked |
+| **Not now** | Interested in principle, but the timing is wrong |
+| **Not interested** | They declined |
+| **Wrong person** | Not the right contact, or they named someone else |
+| **Unsubscribe** | They asked to stop receiving email, or complained |
+| **Legal threat** | They threatened legal action or named a regulator |
 
-For a thread that is already a working relationship: `scheduling` (proposes or confirms a time), `in-progress` (reports progress, or says their side is done), `question-answered` (answers something you asked). Most of a real inbox is this, once anything has been agreed, and without these buckets those replies score badly for the wrong reason.
+The classifier answers more questions than this (whether the sender is the decision maker, mentions a competitor, is hostile, and a dozen more). Those feed the relevance score without becoming labels, because a thread wearing fifteen chips is not easier to read than one wearing two. A reply whose intent genuinely cannot be read gets no intent label rather than a wrong one.
 
-`unclear` is deliberate. A reply whose intent genuinely cannot be read needs somewhere to go, or it gets forced into a bucket that is simply wrong.
+**Needs review** means the classifier was not sure. See below.
 
-**Signals worth finding a thread by**: `asks-for-call`, `requests-removal`, `legal-threat`, `needs-human-judgement`. Ten more signals are recorded and feed the score without becoming labels, because a thread wearing fifteen chips is not easier to read than one wearing three.
+## Automated mail stays out of the inbox
 
-**`needs-review`** means the classifier declined to decide. See below.
+Sign-in and verification codes, routine security, account and billing notices, receipts, newsletters, bounces and auto-replies are not mail anyone has to answer. When the verdict is that no person wrote a message, its conversation leaves **Inbox**, Unread, every mailbox and tag view and the unread badge, and is listed under the **Automated** view instead. **All mail** still shows everything.
+
+Only a confident verdict moves a conversation: a message the classifier was unsure about stays in the inbox. A conversation counts as automated only while every message in it that is not yours was judged automated, so a reply from a person brings it back to the inbox the moment it arrives, before it is even classified. Nothing is moved in the mailbox itself; the provider's folders are untouched.
+
+Common senders and headers (no-reply addresses, bulk mail, out-of-office subjects, delivery failures) are decided offline. Everything else is judged by the model.
+
+## Mail that needs your action
+
+Mailboxes used only for campaigns still receive mail a person has to deal with: a failed payment for the mailbox's subscription, a suspended or restricted account, a suspicious sign-in, a sending limit or policy notice from the provider, a domain or service about to expire. Nobody logs into those mailboxes one by one, so if that mail went to Automated with the receipts it would never be seen.
+
+So every notification is also asked one question: does it tell the recipient about a problem with their own account, payment, domain or service that they must act on? When the answer is yes:
+
+- the conversation **stays in the inbox**, and in Unread and the unread badge, instead of moving to Automated
+- it is labelled **Action required** (next to **Notification**), and the **Action required** view in the rail lists every such conversation with its unread count
+- it sorts with the replies due today when the inbox is sorted by relevance
+- members who can both manage mailboxes and use the inbox get a **Mail that needs action** [notification](/guides/notifications/), by email too unless they turned it off. It names the mailbox and links to the conversation but never quotes the message, since mail that claims an account is suspended is also what phishing looks like. It is tied to the message, so reading the message reads the notification
+
+Routine notices are not affected: a sign-in code, a receipt, a newsletter or a "your settings were changed" confirmation still goes to Automated. Archive the conversation once the problem is dealt with. The label is an ordinary label: removing it takes the conversation out of the **Action required** view but leaves it in the inbox.
+
+A notification recognised offline by its sender alone costs one small call for this question and nothing else; a notification the model judged has it in the same call as every other question. If that call fails, the notification is filed under Automated as it was before the check existed, and `--recheck-notifications` (below) asks it later.
+
+It is on by default for every workspace. To turn it off, clear **Keep mail that needs action in the inbox** under **Settings > Sending > Automated mail**; notifications then go to Automated as before and no call is made for them. To file other automated mail your own way, ask one of [your own questions](#your-own-questions) of notifications too.
 
 ## Follow-ups: who owes whom a reply
 
-Four labels answer the question a pipeline actually turns on, which is not "what is this message" but "what have I dropped".
+Three labels answer the question a pipeline actually turns on, which is not "what is this message" but "what have I dropped".
 
-| label | means |
+| Label | Means |
 |---|---|
-| `ball-in-our-court` | They replied and you have not answered for two days or more |
-| `awaiting-reply` | You sent last and it is still early |
-| `follow-up-due` | You sent last, five days ago, and heard nothing |
-| `going-cold` | They were interested, then went quiet for ten days |
+| **Needs reply** | They replied and you have not answered for two days or more |
+| **Follow up** | You sent last, five days ago, and heard nothing |
+| **Gone quiet** | They were interested, then went quiet for ten days |
 
-`going-cold` is separate from `follow-up-due` on purpose. A stalled deal and an unanswered cold email need different things from you, and someone who already said yes has earned more patience than someone who never answered. That is why its fuse is longer.
+A thread you wrote to recently wears nothing: there is nothing to do yet, and the **Awaiting reply** scope already lists it.
+
+**Gone quiet** is separate from **Follow up** on purpose. A stalled deal and an unanswered cold email need different things from you, and someone who already said yes has earned more patience than someone who never answered. That is why its fuse is longer.
 
 **The sweep makes no additional model calls.** When automatic tagging is enabled, it reuses stored classifications so bounces, autoresponders, and platform notices are not treated as human replies.
 
-**Threads that said no are never chased.** A reply classified `not-interested`, `opt-out`, `wrong-person` or `not-now` gets no follow-up label, ever. Nagging someone who declined is rude, and nagging someone who asked to be removed is a compliance problem rather than a missed opportunity. Bounces, autoresponders and platform notices are skipped too: there is nobody on the other end to chase.
+**Threads that said no are never chased.** A reply classified Not interested, Unsubscribe, Wrong person or Not now gets no follow-up label, ever. Nagging someone who declined is rude, and nagging someone who asked to be removed is a compliance problem rather than a missed opportunity. Automated mail is skipped too: there is nobody on the other end to chase.
 
-These labels change as the calendar moves, so they are recomputed hourly and **replaced rather than added**. A thread is never wearing both `awaiting-reply` and `follow-up-due`; it wears its state, not its history. A reply clears the follow-up label within the hour.
+These labels change as the calendar moves, so they are recomputed hourly and **replaced rather than added**. A thread is never wearing both **Follow up** and **Needs reply**; it wears its state, not its history. A reply clears the follow-up label within the hour.
 
-To recompute on demand:
+Every conversation with activity in the last 90 days is checked, however many there are. A large workspace is checked a page at a time: each hourly pass spends a few minutes at most and picks up where the previous one stopped, including after a restart. An older conversation therefore gets its label within one full sweep of the workspace after its day comes, which is one pass for most workspaces and several for a very large one. Each pass first checks every conversation that received mail or had a reply classified since the previous pass, whatever date the message carries, so a reply that synced late still clears its label on the next pass.
+
+To recompute on demand (this checks every conversation in one run and leaves the hourly sweep's place alone):
 
 ```bash
 warmblyctl inbox-tag follow-ups --org you@example.com
@@ -68,29 +103,75 @@ The score is arithmetic over the answers, computed in Warmbly rather than asked.
 
 ## Acting on a verdict
 
-Four actions, each behind its own switch under **Settings > Sending > Classified replies**. The hold, the stop and the task are on by default; the suppression is off. Only a confident human reply may act: a verdict marked `needs-review`, a bounce, an autoresponder or a cold pitch never does, whatever its signals say. The intent has to clear the same `0.70` floor the labels use, because an action on an intent the labels did not trust is an action on a coin toss.
+Four actions, each behind its own switch under **Settings > Sending > Classified replies**. The hold, the stop and the task are on by default; the suppression is off. Only a confident human reply may act: a verdict marked **Needs review**, a bounce, an autoresponder or a cold pitch never does, whatever its signals say. The intent has to clear the same `0.70` floor the labels use, because an action on an intent the labels did not trust is an action on a coin toss.
 
 | Switch | Fires on | What happens |
 |---|---|---|
-| Hold a contact who says not now | `not-now` | The contact's sequences are parked, in every campaign they are in, for the number of days you set (default 30, between 1 and 90). The hold shows on the campaign's Leads tab and lifts on its own |
-| Stop a contact who declines | `not-interested`, `wrong-person` | The contact's sequences are parked for a year, in every campaign they are in. Nothing is unsubscribed and nothing is deleted; resume the lead from the Leads tab if the reply was misread |
-| Open a task when they ask for a call | `asks-for-call`, `scheduling` | A high-priority CRM task for the mailbox owner, due in 24 hours, titled with what they asked |
+| Hold a contact who says not now | **Not now** | The contact's sequences are parked, in every campaign they are in, for the number of days you set (default 30, between 1 and 90). The hold shows on the campaign's Leads tab and lifts on its own |
+| Stop a contact who declines | **Not interested**, **Wrong person** | The contact's sequences are parked for a year, in every campaign they are in. Nothing is unsubscribed and nothing is deleted; resume the lead from the Leads tab if the reply was misread |
+| Open a task when they ask for a call | **Meeting** | A high-priority CRM task for the mailbox owner, due in 24 hours, titled with what they asked |
 | Suppress a contact who asks to be removed | requests removal at `0.80` or above | The sender goes on the suppression list with the reason, and the contact's subscription flag is cleared, exactly as a reply that says "unsubscribe" does today |
 
-The suppression is the one irreversible action, so it reads its own yes/no question ("the sender asks to be removed") at the strong floor rather than the eight-way intent, and when it fires nothing else does: a suppressed address has no sequence left to hold or chase. A hold written by a classified reply never overrides a hold a member set by hand, and never cuts a longer automatic hold short. A call request opens one task, whichever of the tagging switch and the reply follow-up setting would have opened it.
+The suppression follows the same rule as a reply that says "unsubscribe": it only fires for someone replying in one of your campaign threads, or one of your contacts writing in, and never for mail sent to a list. It is the one irreversible action, so it reads its own yes/no question ("the sender asks to be removed") at the strong floor rather than the eight-way intent, and when it fires nothing else does: a suppressed address has no sequence left to hold or chase. A hold written by a classified reply never overrides a hold a member set by hand, and never cuts a longer automatic hold short. A call request opens one task, whichever of the tagging switch and the reply follow-up setting would have opened it.
+
+Your own questions can act too; see [Your own questions](#your-own-questions).
 
 Every action is recorded on the verdict, so the review page shows what was done next to the answer that caused it, and the **Actions taken** count at the top tells you how often the switches fire. Actions run on mail as it arrives; a backfill over history labels and never acts.
+
+## Your own questions
+
+The built-in labels answer what every workspace needs to know. Anything more specific to yours, you can ask yourself under **Settings > Sending > Tagging languages and questions**. For example: "The sender says there is no suitable position right now but they will get back later", labelled **Later maybe**, holding the contact for 60 days.
+
+A question is one of two kinds:
+
+- **Yes or no.** One plain statement about the message. When the answer is yes, the thread gets the question's label.
+- **Pick one.** A question with two to eight options, each with its own label and a one-line description of when it applies. The thread gets the label of the option the classifier picked. A reply that fits none of them gets no label, so no option has to be a catch-all.
+
+Write each question the way the classifier reads it: literally. One judgment per question, no double negatives, no "unless". Labels are plain words like the built-in ones: letters (in any script) and digits, with single spaces or hyphens between them, up to 40 characters. A label cannot reuse a built-in name in any capitalization.
+
+Each label, or each option, can also act, with the same primitives as the switches above: **hold** the contact's sequences for 1 to 365 days, **stop** them for a year, or **open a task** for the mailbox owner. These run whatever the built-in switches say, and follow the same rules: only a confident human reply acts, never a verdict marked **Needs review**, and a suppression ends every other action. A yes/no question labels at 60% and acts at 80%; an option labels and acts at the 70% floor. When two holds apply, the longer one wins.
+
+A question can also be asked of automated notifications: tick **Also ask about automated notifications** on it. Notifications are otherwise never asked your questions, since they are about what a person said. A notification the question matches gets its label and stays in the inbox instead of the Automated view, like one that needs your action. It never holds, stops or opens a task: those still apply to replies only. A notification recognised offline by its sender is asked only these questions and the action check, in one small call.
+
+Your questions ride in the same call as the built-in ones, so they cost input tokens on every classified message but never a second request. A workspace can ask up to 10. They add labels and nothing else to a verdict: the kind, the intent and the relevance score are calibrated on the built-in questions alone and are never moved by yours. The labels are created the first time they apply, or within the hour by the hourly sweep. Questions are part of the workspace settings, so they travel with a [workspace export](/guides/workspace-export-import/).
+
+## Tagging languages
+
+Tagging reads English, German, French, Spanish, Italian and Dutch replies out of the box. If your mail also arrives in other languages, add them under **Settings > Sending > Tagging languages and questions**. Nothing about a language is used until a workspace adds it: a language nobody on your team writes in only adds patterns that could misread someone's mail, so leave it off. The setting changes inbox tagging only; campaign reply handling reads replies the same way whatever it says.
+
+Adding a language does two things:
+
+- **It is named to the classifier**, alongside each message, so it knows what to expect. It is a hint, not a translation: nothing about the message or the questions changes, and the built-in questions stay in English. Any of 44 languages can be named: Arabic, Bengali, Bulgarian, Catalan, Chinese, Croatian, Czech, Danish, Dutch, English, Estonian, Filipino, Finnish, French, German, Greek, Hebrew, Hindi, Hungarian, Indonesian, Italian, Japanese, Korean, Latvian, Lithuanian, Malay, Norwegian, Persian, Polish, Portuguese, Romanian, Russian, Serbian, Slovak, Slovenian, Spanish, Swahili, Swedish, Tamil, Thai, Turkish, Ukrainian, Urdu and Vietnamese.
+- **It adds that language to the reading done before any call**, for every one of them. English is always read.
+
+The reading before any call covers:
+
+- **Quoted history**, cut from a reply so the classifier reads what the person wrote and not your own message quoted under it: the reply line each mail client writes ("Den ... skrev", "W dniu ... pisze:", "于 ... 写道：" and the like), Outlook's quoted `From: / Sent:` block in that language (`Von: / Gesendet:`, `De : / Envoyé :`, `差出人: / 送信日時:`), and the dashed "Original message" and "Forwarded message" lines.
+- **Out-of-office replies**, recognized by the subject their mail provider writes (`Автоматический ответ`, `自動応答`, `자동 회신`, `رد تلقائي` and so on) and decided with no call at all.
+- **Non-delivery notices**, by the subject Exchange writes in Spanish, Italian, Dutch and Portuguese. A notice carrying a delivery-status report is recognized in any language without this.
+
+Tagging languages are part of the workspace settings, so they travel with a [workspace export](/guides/workspace-export-import/).
 
 ## What else reads the verdict
 
 Two other features reuse a stored verdict rather than paying for a second judgment:
 
-- **Campaign reply handling.** The reply classifier that drives `stop_on_reply` and the reply branches reads the stored kind and intent when one exists, so `agreed` routes as a positive reply and `not-interested` as a negative one with the classifier's real confidence. The intent itself is also stored on the contact's progress, and a sequence can branch on it with the `reply_intent` condition (see [Campaigns](/guides/campaigns/)). Without tagging, the classifier asks TypeSafe one three-way question instead, and without a key it falls back to the platform LLM as before.
-- **The inbox agent.** A reply the verdict shows as closed (`not-interested`, `opt-out`, `wrong-person`, `not-now`), a one-line acknowledgement, a legal threat or a message that needs a person to read it is not drafted, so no credits are spent answering it.
+- **Campaign reply handling.** The reply classifier that drives `stop_on_reply` and the reply branches reads the stored kind and intent when one exists, so an interested reply routes as positive and a declined one as negative with the classifier's real confidence. The intent itself is also stored on the contact's progress, and a sequence can branch on it with the `reply_intent` condition (see [Campaigns](/guides/campaigns/)). Without tagging, the classifier asks TypeSafe one three-way question instead, and without a key it falls back to the platform LLM as before.
+- **The inbox agent.** A reply the verdict shows as closed (Not interested, Unsubscribe, Wrong person, Not now), a one-line acknowledgement, a legal threat or a message that needs a person to read it is not drafted, so no credits are spent answering it.
+
+## Confirming an away message's return date
+
+When an [out-of-office reply holds a lead](/guides/campaigns/#out-of-office-and-pausing-one-lead), the day it resumes comes from rules that read the return date out of the away message. Rules can pick the wrong date near a cue: `ab dem 4.9. nicht im Büro` names the first day away, not the last. So when tagging is on and the hold is on, an away message whose date the rules read is asked one more yes/no question: whether the phrase the date came from (`ab dem 4.9.`, `bis KW 41`, `until 12 September`) says when the sender will be back.
+
+The question is about the phrase as written, never a date Warmbly worked out from it. Turning `bis einschließlich 18.9.` into "back on the 19th", or a calendar week into its Monday, stays with the rules, because date arithmetic is what the model is worst at.
+
+Below `0.40` the hold uses the workspace's fallback instead of the date. That is the mirror of the `0.60` a signal needs: the rules already reached this date, so an unsure answer is no evidence against it, and only a model fairly sure the date is wrong overrules them. An unsure answer or a failed call keeps the date, as before the question existed. The answer never changes a label.
+
+An away message recognised offline costs one small call carrying only the message and the phrase, and only when the rules found a date and the workspace holds on out-of-office. When the model decides the kind, the question rides in the same call as the rest. A backfill never asks it, since it labels history and holds nobody. The review page shows the date and the answer next to the verdict, struck through when the hold used the fallback.
 
 ## When it declines to decide
 
-Every classification carries a confidence. If the message kind is below 0.70, the thread is labelled `needs-review` and no inferred kind, intent, or signal label is applied. If the kind is confident but the intent is below 0.70, the trusted kind and relevance remain, the uncertain intent label is omitted, and `needs-review` is added.
+Every classification carries a confidence. If the message kind is below 0.70, the thread is labelled **Needs review**, no other label is applied, and the conversation stays in the inbox. If the kind is confident but the intent is below 0.70, the trusted kind and relevance remain, the uncertain intent label is omitted, and **Needs review** is added.
 
 That floor is not caution for its own sake. A low-confidence answer is not merely uncertain, it is not reproducible: the same ambiguous message run three times returned a different winning label each time while confidence stayed near 0.2. A label that would not survive being asked again is not one to file mail under.
 
@@ -98,13 +179,15 @@ That floor is not caution for its own sake. A low-confidence answer is not merel
 
 Anything Warmbly already knows is established in code and never sent as a question: which direction a message travelled, which mailbox it belongs to, which campaign it answers, whether the sender is already suppressed.
 
+The campaign is what separates a reply to your outreach from someone pitching you, so it is resolved from every fact the mailbox holds: a Message-ID the reply names, your sent copy in the thread, and on Gmail the conversation the send landed in. Gmail can replace the Message-ID a message is sent with by its own, so the thread is what still ties a Gmail reply to its campaign.
+
 This matters more than it sounds. Given only a message body, the model classified one of our own outbound sends as a human reply at 0.94 confidence. The answer was reasonable for the question; the question should never have been asked. Your own sends are filtered out before anything is asked about them.
 
-Common out-of-office subject prefixes and automated sender addresses are checked offline. When one is decisive, no model call is made. The review page shows which verdicts were decided offline and which came from the model.
+Common out-of-office subject prefixes and automated sender addresses are checked offline. When one is decisive, the kind is not asked; only a notification is still asked whether it needs your action, and an away message whether its [return date](#confirming-an-away-messages-return-date) is the day the sender is back. The review page shows which verdicts were decided offline and which came from the model.
 
 ## Follow-ups without TypeSafe
 
-With no `TYPESAFE_API_KEY`, Warmbly can still compute `awaiting-reply` and `follow-up-due` locally from sent-message dates. It makes no external call. `ball-in-our-court` and `going-cold` also need a trusted stored classification so an automated message is not mistaken for a person and a weak intent is not treated as interest.
+With no `TYPESAFE_API_KEY`, Warmbly can still compute **Follow up** locally from sent-message dates. It makes no external call. **Needs reply** and **Gone quiet** also need a trusted stored classification so an automated message is not mistaken for a person and a weak intent is not treated as interest, and without classification nothing leaves the inbox as automated.
 
 The key and switch add message classification. When both are unset, automatic inbox tagging sends no message content to TypeSafe. Other optional AI features use their separately configured provider; see [data control](/development/data-control/).
 
@@ -137,10 +220,26 @@ Only inbound mail is covered. Your own sends are excluded, and so is mail from o
 
 A backfill fills in the previous message in each thread from your sent mail, so a reply reading "yes, let's do it" is judged against the thing it is agreeing to.
 
+A reply classified before its campaign could be found can be labelled **Sales pitch** instead of being read as a reply. To ask again about those, with the campaign in front of the classifier this time:
+
+```bash
+warmblyctl inbox-tag backfill --org you@example.com --days 30 --recheck-cold-inbound
+```
+
+Only messages stored as a sales pitch in a thread one of your campaign sends belongs to are asked again; nothing else is sent. Any automatic label the old verdict wrote and the new one does not comes off the thread, unless another message in it still carries it. A label a teammate applied by hand is never removed. A message the classifier still reads as a sales pitch with the campaign in front of it keeps that verdict, and is asked about again if you run the command again. Like any backfill, it labels and never acts.
+
+Notifications classified before the action check existed are sitting in Automated without having been asked. To ask them now, so a failed payment among them comes back to the inbox:
+
+```bash
+warmblyctl inbox-tag backfill --org you@example.com --days 30 --recheck-notifications
+```
+
+Only messages stored as a notification by a verdict that never asked the action check are covered, and each is asked again, so the ones that need action return to the inbox labelled **Action required**. The command refuses when **Keep mail that needs action in the inbox** is off. A notification with no text to read is skipped. A message whose call fails is offered again by the next run, or by a plain backfill. Like any backfill, it labels, moves and never notifies.
+
 ## What it costs
 
 
-One call contains every question for a message and currently uses about 1,300 input tokens on the recorded fixture set. TypeSafe evaluates the questions in parallel, but each question still contributes tokens, so check its current pricing before a large backfill. Output tokens are not billed.
+One call contains every question for a message and currently uses about 1,300 input tokens on the recorded fixture set. A notification recognised offline costs one smaller call, for the action check and any of your questions asked of notifications, and nothing when neither is on. An away message recognised offline costs one small call when its return date is checked, and nothing otherwise. TypeSafe evaluates the questions in parallel, but each question still contributes tokens, so check its current pricing before a large backfill. Output tokens are not billed.
 
 A message with no Message-ID is skipped. A database claim prevents two concurrent deliveries of the same Message-ID from making duplicate calls, and an abandoned claim becomes eligible for retry after 15 minutes.
 

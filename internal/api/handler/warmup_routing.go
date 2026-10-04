@@ -97,7 +97,7 @@ func (h *Handler) CreateWarmupRoutingRule(c *gin.Context) {
 	}
 	var payload warmupRoutingRulePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	if xerr := validateRoutingPayload(&payload); xerr != nil {
@@ -131,7 +131,7 @@ func (h *Handler) UpdateWarmupRoutingRule(c *gin.Context) {
 	}
 	var payload warmupRoutingRulePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	if xerr := validateRoutingPayload(&payload); xerr != nil {

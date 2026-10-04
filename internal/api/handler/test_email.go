@@ -36,7 +36,7 @@ func (h *Handler) SendTestEmail(c *gin.Context) {
 
 	var req sendTestEmailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 

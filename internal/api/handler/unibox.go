@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,6 +14,16 @@ import (
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
 )
+
+// uniboxReadTimeout bounds an interactive unibox read, connection wait and body load included.
+const uniboxReadTimeout = 30 * time.Second
+
+// boundUniboxRead puts the interactive read deadline on the request context; defer the returned cancel.
+func boundUniboxRead(c *gin.Context) context.CancelFunc {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), uniboxReadTimeout)
+	c.Request = c.Request.WithContext(ctx)
+	return cancel
+}
 
 // gateUnibox enforces feature access for any unibox endpoint that
 // needs an org context. Returns true when the caller is allowed.
@@ -33,6 +44,8 @@ func (h *Handler) gateUnibox(c *gin.Context) bool {
 }
 
 func (h *Handler) GetUniboxIncoming(c *gin.Context) {
+	defer boundUniboxRead(c)()
+
 	orgID := middleware.GetOrganizationID(c)
 	if orgID == nil {
 		errx.Handle(c, errx.New(errx.BadRequest, "no organization selected"))
@@ -172,6 +185,17 @@ func (h *Handler) GetUniboxIncoming(c *gin.Context) {
 		params.Uncategorized = &v
 	}
 
+	// automated=true lists only conversations no person wrote in, false leaves
+	// them out; absent is both.
+	switch c.Query("automated") {
+	case "true":
+		v := true
+		params.Automated = &v
+	case "false":
+		v := false
+		params.Automated = &v
+	}
+
 	// Conversation-label filter: category_ids=<uuid>,<uuid>. A thread
 	// matches if it carries any of the listed labels. Invalid UUIDs are
 	// dropped, matching the email_ids behaviour.
@@ -197,6 +221,8 @@ func (h *Handler) GetUniboxIncoming(c *gin.Context) {
 }
 
 func (h *Handler) GetUniboxEmail(c *gin.Context) {
+	defer boundUniboxRead(c)()
+
 	// Org-scoped: the inbox list is org-wide, so opening a message must be too.
 	// A non-owner member who sees a message in the org-scoped list would
 	// otherwise get "email not found" because the row is keyed to the mailbox
@@ -236,6 +262,8 @@ func (h *Handler) GetUniboxEmail(c *gin.Context) {
 }
 
 func (h *Handler) GetUniboxThread(c *gin.Context) {
+	defer boundUniboxRead(c)()
+
 	// Org-scoped: the inbox list is org-wide, so the thread view must be too.
 	// Otherwise a non-owner member sees the conversation in the list but an
 	// empty thread when they open it — the messages are keyed to the mailbox
@@ -299,6 +327,8 @@ func (h *Handler) GetUniboxThread(c *gin.Context) {
 // GetUniboxThreadLabels returns the conversation labels on a thread.
 // GET /unibox/thread/labels?thread_id=<id>
 func (h *Handler) GetUniboxThreadLabels(c *gin.Context) {
+	defer boundUniboxRead(c)()
+
 	if !h.gateUnibox(c) {
 		return
 	}
@@ -344,7 +374,7 @@ func (h *Handler) SetUniboxThreadLabels(c *gin.Context) {
 
 	var req models.UniboxThreadLabels
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -374,7 +404,7 @@ func (h *Handler) UniboxMarkSeen(c *gin.Context) {
 
 	var data models.MarkSeen
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -404,7 +434,7 @@ func (h *Handler) UniboxMoveFolder(c *gin.Context) {
 
 	var data models.MoveFolder
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -429,6 +459,8 @@ func (h *Handler) UniboxMoveFolder(c *gin.Context) {
 // GetUnseenCount gets the count of unseen emails
 // GET /unibox/count
 func (h *Handler) GetUnseenCount(c *gin.Context) {
+	defer boundUniboxRead(c)()
+
 	orgID := middleware.GetOrganizationID(c)
 	if orgID == nil {
 		errx.Handle(c, errx.New(errx.BadRequest, "no organization selected"))
@@ -464,9 +496,12 @@ type UniboxReplyRequest struct {
 	ThreadID       string     `json:"thread_id"`
 	SendMode       string     `json:"send_mode"`
 	ScheduledAt    *time.Time `json:"scheduled_at,omitempty"`
+	// ForwardMessageID makes the send a forward of that stored message, which
+	// goes out under the body and signature.
+	ForwardMessageID string `json:"forward_message_id"`
 }
 
-// UniboxReply schedules a reply email from Unibox.
+// UniboxReply schedules a reply or forward email from Unibox.
 // POST /unibox/reply
 func (h *Handler) UniboxReply(c *gin.Context) {
 	orgID := middleware.GetOrganizationID(c)
@@ -483,7 +518,7 @@ func (h *Handler) UniboxReply(c *gin.Context) {
 
 	var req UniboxReplyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -495,6 +530,31 @@ func (h *Handler) UniboxReply(c *gin.Context) {
 	if xerr := mailboxAllowed(c, accountID); xerr != nil {
 		errx.Handle(c, xerr)
 		return
+	}
+
+	var forward *models.ForwardedMessage
+	if req.ForwardMessageID != "" {
+		// Forwarding discloses the message, so it needs read access as well as write.
+		if xerr := h.hasAccess(c, models.PermAccessUnibox, models.APIPermReadUnibox); xerr != nil {
+			errx.Handle(c, xerr)
+			return
+		}
+		forwardID, err := uuid.Parse(req.ForwardMessageID)
+		if err != nil {
+			errx.Handle(c, errx.New(errx.BadRequest, "forward_message_id must be a message id"))
+			return
+		}
+		src, xerr := h.UniboxService.ForwardSource(c.Request.Context(), *orgID, forwardID)
+		if xerr != nil {
+			errx.Handle(c, xerr)
+			return
+		}
+		// Its mailbox is checked like the sender's.
+		if xerr := mailboxAllowed(c, src.EmailID); xerr != nil {
+			errx.Handle(c, xerr)
+			return
+		}
+		forward = src
 	}
 
 	// The composer only knows the provider thread id, but a thread id is
@@ -519,6 +579,7 @@ func (h *Handler) UniboxReply(c *gin.Context) {
 		ThreadID:    req.ThreadID,
 		SendMode:    req.SendMode,
 		ScheduledAt: req.ScheduledAt,
+		Forward:     forward,
 	}
 	if sendReq.SendMode == "" {
 		sendReq.SendMode = "instant"
@@ -530,12 +591,31 @@ func (h *Handler) UniboxReply(c *gin.Context) {
 		return
 	}
 
-	h.auditOrg(c, models.AuditActionSend, models.AuditEntityUnibox, &accountID, nil, map[string]string{
+	audit := map[string]string{
 		"send_mode":  sendReq.SendMode,
 		"recipients": strconv.Itoa(len(req.To)),
-	})
+	}
+	if forward != nil {
+		audit["forwarded_message_id"] = req.ForwardMessageID
+	}
+	h.auditOrg(c, models.AuditActionSend, models.AuditEntityUnibox, &accountID, nil, audit)
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// ForgetUniboxOverviewOnWrite drops the organization's shared unibox overview after any successful write.
+func (h *Handler) ForgetUniboxOverviewOnWrite(c *gin.Context) {
+	c.Next()
+	switch c.Request.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return
+	}
+	if h.UniboxService == nil || c.Writer.Status() >= http.StatusBadRequest {
+		return
+	}
+	if orgID := middleware.GetOrganizationID(c); orgID != nil {
+		h.UniboxService.ForgetOverview(*orgID)
+	}
 }
 
 // GetUniboxOverview rolls up unread/today/week/snoozed/awaiting plus
@@ -543,6 +623,8 @@ func (h *Handler) UniboxReply(c *gin.Context) {
 // rail and metric strip share this response.
 // GET /unibox/overview
 func (h *Handler) GetUniboxOverview(c *gin.Context) {
+	defer boundUniboxRead(c)()
+
 	if !h.gateUnibox(c) {
 		return
 	}
@@ -601,7 +683,7 @@ func (h *Handler) CreateUniboxSnooze(c *gin.Context) {
 
 	var req UniboxSnoozeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -664,10 +746,10 @@ func (h *Handler) DeleteUniboxSnooze(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// ListUniboxScheduled returns every pending email task the user has
-// queued: what the "Scheduled" scope in the dashboard reads from.
-// When `thread_id` is set we scope the response to a single thread,
-// which the ThreadView uses to render queued replies inline. The
+// ListUniboxScheduled returns every pending email task queued from the
+// organization's mailboxes: what the "Scheduled" scope in the dashboard
+// reads from. When `thread_id` is set we scope the response to a single
+// thread, which the ThreadView uses to render queued replies inline. The
 // response shape is identical either way so the same client + hook
 // handle both forms.
 // GET /unibox/scheduled
@@ -676,15 +758,14 @@ func (h *Handler) ListUniboxScheduled(c *gin.Context) {
 	if !h.gateUnibox(c) {
 		return
 	}
-	userID := middleware.GetUserID(c)
-	uid, err := uuid.Parse(userID)
-	if err != nil {
-		errx.Handle(c, errx.ErrUser)
+	orgID := middleware.GetOrganizationID(c)
+	if orgID == nil {
+		errx.Handle(c, errx.New(errx.BadRequest, "no organization selected"))
 		return
 	}
 
 	if threadID := c.Query("thread_id"); threadID != "" {
-		items, xerr := h.UniboxService.ListScheduledByThread(c.Request.Context(), uid, threadID)
+		items, xerr := h.UniboxService.ListScheduledByThread(c.Request.Context(), *orgID, threadID, middleware.GetAPIKeyAllowedEmailAccounts(c))
 		if xerr != nil {
 			errx.Handle(c, xerr)
 			return
@@ -693,7 +774,7 @@ func (h *Handler) ListUniboxScheduled(c *gin.Context) {
 		return
 	}
 
-	items, xerr := h.UniboxService.ListScheduled(c.Request.Context(), uid)
+	items, xerr := h.UniboxService.ListScheduled(c.Request.Context(), *orgID, middleware.GetAPIKeyAllowedEmailAccounts(c))
 	if xerr != nil {
 		errx.Handle(c, xerr)
 		return
@@ -709,10 +790,9 @@ func (h *Handler) CancelUniboxScheduled(c *gin.Context) {
 	if !h.gateUnibox(c) {
 		return
 	}
-	userID := middleware.GetUserID(c)
-	uid, err := uuid.Parse(userID)
-	if err != nil {
-		errx.Handle(c, errx.ErrUser)
+	orgID := middleware.GetOrganizationID(c)
+	if orgID == nil {
+		errx.Handle(c, errx.New(errx.BadRequest, "no organization selected"))
 		return
 	}
 	taskID, err := uuid.Parse(c.Param("task_id"))
@@ -721,7 +801,7 @@ func (h *Handler) CancelUniboxScheduled(c *gin.Context) {
 		return
 	}
 
-	if xerr := h.UniboxService.CancelScheduled(c.Request.Context(), uid, taskID); xerr != nil {
+	if xerr := h.UniboxService.CancelScheduled(c.Request.Context(), *orgID, taskID, middleware.GetAPIKeyAllowedEmailAccounts(c)); xerr != nil {
 		errx.Handle(c, xerr)
 		return
 	}

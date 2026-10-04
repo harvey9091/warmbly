@@ -439,6 +439,9 @@ function Toolbar({
 }) {
     const [linkOpen, setLinkOpen] = React.useState(false);
     const [linkUrl, setLinkUrl] = React.useState("");
+    const linkBtnRef = React.useRef<HTMLSpanElement>(null);
+    const linkPanelRef = React.useRef<HTMLDivElement>(null);
+    useClickOutside(linkOpen, () => setLinkOpen(false), [linkBtnRef, linkPanelRef]);
 
     const applyLink = () => {
         const url = linkUrl.trim();
@@ -516,16 +519,18 @@ function Toolbar({
             <Btn active={editor.isActive("orderedList")} onClick={() => editor.chain().focus().toggleOrderedList().run()} title="Numbered list">
                 <ListOrderedIcon className="w-3.5 h-3.5" />
             </Btn>
-            <Btn
-                active={editor.isActive("link")}
-                onClick={() => {
-                    setLinkUrl(editor.getAttributes("link").href ?? "");
-                    setLinkOpen((o) => !o);
-                }}
-                title="Link"
-            >
-                <Link2Icon className="w-3.5 h-3.5" />
-            </Btn>
+            <span ref={linkBtnRef} className="contents">
+                <Btn
+                    active={editor.isActive("link")}
+                    onClick={() => {
+                        setLinkUrl(editor.getAttributes("link").href ?? "");
+                        setLinkOpen((o) => !o);
+                    }}
+                    title="Link"
+                >
+                    <Link2Icon className="w-3.5 h-3.5" />
+                </Btn>
+            </span>
             <ImageMenu editor={editor} />
             <ButtonInsert editor={editor} />
             <Divider />
@@ -574,6 +579,7 @@ function Toolbar({
             <AnimatePresence>
                 {linkOpen && (
                     <motion.div
+                        ref={linkPanelRef}
                         initial={{ opacity: 0, y: -4 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -4 }}
@@ -588,8 +594,6 @@ function Toolbar({
                                 if (e.key === "Enter") {
                                     e.preventDefault();
                                     applyLink();
-                                } else if (e.key === "Escape") {
-                                    setLinkOpen(false);
                                 }
                             }}
                             placeholder="https://…"
@@ -681,7 +685,7 @@ export function VariableMenu({
     const ref = React.useRef<HTMLDivElement>(null);
     // Ignores clicks inside the portaled [data-floating] panel, so only a click
     // truly outside the trigger+panel closes it.
-    useClickOutside(ref, () => setOpen(false));
+    useClickOutside(open, () => setOpen(false), ref);
     // floating-ui keeps the panel glued to the trigger through scroll/resize.
     const { setReference, setFloating, floatingStyle } = useAnchoredFloating(open, {
         placement: "bottom-start",
@@ -731,7 +735,7 @@ export function VariableMenu({
                                 animate={{ opacity: 1 }}
                                 exit={{ opacity: 0 }}
                                 transition={{ duration: 0.12 }}
-                                className="z-[60] w-[340px] max-w-[calc(100vw-24px)] overflow-y-auto rounded-md border border-slate-200 bg-white shadow-[0_12px_32px_-8px_rgba(15,23,42,0.18)]"
+                                className="z-[150] w-[340px] max-w-[calc(100vw-24px)] overflow-y-auto rounded-md border border-slate-200 bg-white shadow-[0_12px_32px_-8px_rgba(15,23,42,0.18)]"
                             >
                         <div className="px-3 py-2 border-b border-slate-100">
                             <p className="text-[12px] font-medium text-slate-800">Personalization</p>
@@ -893,7 +897,7 @@ export function VariableMenu({
 function FormMenu({ onPick }: { onPick: (publicId: string) => void }) {
     const [open, setOpen] = React.useState(false);
     const ref = React.useRef<HTMLDivElement | null>(null);
-    useClickOutside(ref, () => setOpen(false));
+    useClickOutside(open, () => setOpen(false), ref);
     const { setReference, setFloating, floatingStyle } = useAnchoredFloating(open, {
         placement: "bottom-start",
         gap: 6,
@@ -939,7 +943,7 @@ function FormMenu({ onPick }: { onPick: (publicId: string) => void }) {
                                 animate={{ opacity: 1 }}
                                 exit={{ opacity: 0 }}
                                 transition={{ duration: 0.12 }}
-                                className="z-[60] w-72 max-w-[calc(100vw-24px)] overflow-hidden rounded-md border border-slate-200 bg-white p-2 shadow-[0_12px_32px_-8px_rgba(15,23,42,0.18)]"
+                                className="z-[150] w-72 max-w-[calc(100vw-24px)] overflow-hidden rounded-md border border-slate-200 bg-white p-2 shadow-[0_12px_32px_-8px_rgba(15,23,42,0.18)]"
                             >
                                 <div className="px-1 pb-1.5">
                                     <p className="text-[12px] font-medium text-slate-800">Insert a form</p>

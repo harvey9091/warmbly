@@ -52,6 +52,7 @@ import AIDraftBar, { useAIDraft } from "@/components/app/ai/AIDraftBar";
 import TextareaAIEdit from "@/components/app/ai/TextareaAIEdit";
 import TextareaAICaret from "@/components/app/ai/TextareaAICaret";
 import ContactRecipientField from "./ContactRecipientField";
+import SeedRecipientsButton from "./SeedRecipientsButton";
 import MailboxPicker from "./MailboxPicker";
 import ComposeHistoryPanel from "./ComposeHistoryPanel";
 import { DateTimePicker } from "@/components/ui/DateTimePicker";
@@ -67,7 +68,17 @@ import {
 import type { AppError } from "@/lib/api/client/normalizeError";
 import buildError from "@/lib/helper/buildError";
 import { cn } from "@/lib/utils";
-import { plainToHtml } from "@/lib/email/body";
+import {
+    bodyHasContent,
+    bodyTooLong,
+    capPlain,
+    htmlHasContent,
+    outgoingParts,
+    withTemplate,
+    withText,
+} from "@/lib/email/composerBody";
+import { useComposerBody } from "@/lib/email/useComposerBody";
+import { HtmlBody, HtmlModeToggle } from "./HtmlBody";
 import { bareEmail } from "@/lib/helper/emailAddress";
 
 const MAX_BODY_LEN = 4000;
@@ -116,9 +127,10 @@ function draftSnapshot(d: {
     bcc: string[];
     subject: string;
     body: string;
+    body_html?: string;
     email_account_id?: string | null;
 }): string {
-    return JSON.stringify([d.to, d.cc, d.bcc, d.subject, d.body, d.email_account_id ?? "auto"]);
+    return JSON.stringify([d.to, d.cc, d.bcc, d.subject, d.body, d.body_html ?? "", d.email_account_id ?? "auto"]);
 }
 
 const SCHEDULE_PRESETS: { label: string; at: () => Date }[] = [
@@ -177,7 +189,8 @@ function ComposeWindowInner({
     const [showCc, setShowCc] = React.useState((seed?.cc?.length ?? 0) > 0);
     const [showBcc, setShowBcc] = React.useState((seed?.bcc?.length ?? 0) > 0);
     const [subject, setSubject] = React.useState(seed?.subject ?? "");
-    const [body, setBody] = React.useState(seed?.body ?? "");
+    const bodyState = useComposerBody(seed?.body ?? "", seed?.body_html);
+    const { body, setBody, html } = bodyState;
     const [accountSel, setAccountSel] = React.useState(seed?.email_account_id || "auto");
     // Tag scoping the Auto pick ("Auto in Sales"); session-only, not part
     // of the draft payload. Meaningless with an explicit account.
@@ -191,11 +204,20 @@ function ComposeWindowInner({
 
     const templatesQuery = useTemplates();
 
-    // Body empty → replace; otherwise append under a separator. The template
-    // subject only fills an empty subject line, never overwrites yours.
+    // Body empty → replace; otherwise append under a separator. An HTML body
+    // switches the composer to HTML. The template subject only fills an empty
+    // subject line, never overwrites yours.
     const applyTemplate = (t: Template) => {
-        const plain = t.body_plain ?? "";
-        setBody((b) => (b.trim() ? `${b.trimEnd()}\n\n${plain}` : plain).slice(0, MAX_BODY_LEN));
+        if (aiDraft.phase !== "idle" && htmlHasContent(t.body_html ?? "")) {
+            toast.error("Keep or discard the AI draft before adding an HTML template");
+            return;
+        }
+        const next = capPlain(withTemplate(bodyState.value, t));
+        if (bodyTooLong(next)) {
+            toast.error(`"${t.name}" is too long to add to this email`);
+            return;
+        }
+        bodyState.setValue(next);
         if (t.subject && !subject.trim()) setSubject(t.subject);
         setTemplateOpen(false);
         toast.success(`Inserted "${t.name}"`);
@@ -280,16 +302,18 @@ function ComposeWindowInner({
     };
 
     const sendMut = useComposeSend();
-    const trimmedBody = body.trim();
+    const hasBody = React.useMemo(() => bodyHasContent(bodyState.value), [bodyState.value]);
+    const htmlTooLong = React.useMemo(() => bodyTooLong(bodyState.value), [bodyState.value]);
     const canSend =
         to.length > 0 &&
         to.every(looksLikeEmail) &&
         !!subject.trim() &&
-        !!trimmedBody &&
+        hasBody &&
+        !htmlTooLong &&
         !suppressed &&
         !isSending;
 
-    const dirty = to.length > 0 || cc.length > 0 || bcc.length > 0 || !!subject.trim() || !!trimmedBody;
+    const dirty = to.length > 0 || cc.length > 0 || bcc.length > 0 || !!subject.trim() || hasBody;
 
     // ── Autosave. The draft id is client-generated (or the resumed seed's),
     // so the debounced PUT is idempotent. Everything the user types survives
@@ -300,7 +324,8 @@ function ComposeWindowInner({
     const saveMut = useSaveComposeDraft();
     const deleteMut = useDeleteComposeDraft();
 
-    const currentSnapshot = draftSnapshot({ to, cc, bcc, subject, body, email_account_id: accountSel });
+    const bodyHtml = html ?? "";
+    const currentSnapshot = draftSnapshot({ to, cc, bcc, subject, body, body_html: bodyHtml, email_account_id: accountSel });
     const saveNow = React.useCallback(() => {
         if (!dirty) return;
         if (currentSnapshot === lastSavedRef.current) return;
@@ -315,9 +340,10 @@ function ComposeWindowInner({
                 bcc,
                 subject,
                 body,
+                body_html: bodyHtml,
             },
         });
-    }, [accountSel, bcc, body, cc, currentSnapshot, dirty, saveMut, subject, to]);
+    }, [accountSel, bcc, body, bodyHtml, cc, currentSnapshot, dirty, saveMut, subject, to]);
 
     React.useEffect(() => {
         if (!dirty || currentSnapshot === lastSavedRef.current) return;
@@ -345,9 +371,11 @@ function ComposeWindowInner({
             else if (!to.every(looksLikeEmail)) toast.error("Recipient email looks invalid");
             else if (suppressed) toast.error("This recipient is suppressed");
             else if (!subject.trim()) toast.error("Add a subject");
-            else if (!trimmedBody) toast.error("Body is empty");
+            else if (!hasBody) toast.error("Body is empty");
+            else if (htmlTooLong) toast.error("This email's HTML is too long to send");
             return;
         }
+        const parts = outgoingParts(bodyState.value);
         setIsSending(true);
         try {
             const res = await sendMut.mutateAsync({
@@ -357,8 +385,7 @@ function ComposeWindowInner({
                 cc: cc.length ? cc : undefined,
                 bcc: bcc.length ? bcc : undefined,
                 subject: subject.trim(),
-                body_plain: trimmedBody,
-                body_html: plainToHtml(trimmedBody),
+                ...parts,
                 ...(scheduledAt
                     ? { send_mode: "scheduled" as const, scheduled_at: scheduledAt.toISOString() }
                     : { send_mode: "instant" as const }),
@@ -367,7 +394,7 @@ function ComposeWindowInner({
                 // Undo window: the send is queued a few seconds out. No
                 // "sent" toast; the header pill counts down and can cancel,
                 // reopening the composer from this seed.
-                const nowIso = new Date().toISOString();
+                const now = new Date();
                 addOutbox({
                     taskId: res.task_id,
                     scheduledAt: resolveSendAt(res.scheduled_at, user.undo_send_seconds || 30),
@@ -381,9 +408,10 @@ function ComposeWindowInner({
                         cc,
                         bcc,
                         subject: subject.trim(),
-                        body: trimmedBody,
-                        updated_at: nowIso,
-                        created_at: nowIso,
+                        body: html === null ? parts.body_plain : body,
+                        body_html: bodyHtml,
+                        updated_at: now,
+                        created_at: now,
                     },
                 });
             } else {
@@ -447,6 +475,8 @@ function ComposeWindowInner({
             )}
             onKeyDown={(e) => {
                 if (e.key === "Escape") {
+                    // A portaled popover (template picker, link form) closes itself first.
+                    if ((e.target as HTMLElement).closest?.("[data-floating]")) return;
                     // Floating AI layers portal to <body> and stop their own
                     // Escape; reaching here means nothing else claimed it.
                     e.stopPropagation();
@@ -572,28 +602,27 @@ function ComposeWindowInner({
                             placeholder="Search contacts or type an email"
                             autoFocus={!prefillTo}
                         />
-                        {(!showCc || !showBcc) && (
-                            <div className="ml-auto flex items-center gap-0.5 shrink-0 self-start pt-px">
-                                {!showCc && (
-                                    <button
-                                        type="button"
-                                        onClick={() => setShowCc(true)}
-                                        className="h-5 px-1 rounded text-[11px] text-slate-400 hover:text-slate-700 transition-colors"
-                                    >
-                                        Cc
-                                    </button>
-                                )}
-                                {!showBcc && (
-                                    <button
-                                        type="button"
-                                        onClick={() => setShowBcc(true)}
-                                        className="h-5 px-1 rounded text-[11px] text-slate-400 hover:text-slate-700 transition-colors"
-                                    >
-                                        Bcc
-                                    </button>
-                                )}
-                            </div>
-                        )}
+                        <div className="ml-auto flex items-center gap-0.5 shrink-0 self-start pt-px">
+                            <SeedRecipientsButton value={to} onChange={setTo} />
+                            {!showCc && (
+                                <button
+                                    type="button"
+                                    onClick={() => setShowCc(true)}
+                                    className="h-5 px-1 rounded text-[11px] text-slate-400 hover:text-slate-700 transition-colors"
+                                >
+                                    Cc
+                                </button>
+                            )}
+                            {!showBcc && (
+                                <button
+                                    type="button"
+                                    onClick={() => setShowBcc(true)}
+                                    className="h-5 px-1 rounded text-[11px] text-slate-400 hover:text-slate-700 transition-colors"
+                                >
+                                    Bcc
+                                </button>
+                            )}
+                        </div>
                     </ComposeRow>
 
                     {showCc && (
@@ -669,6 +698,14 @@ function ComposeWindowInner({
 
                 {/* Body + in-composer AI */}
                 <div className="relative flex-1 min-h-0 flex flex-col">
+                    {html !== null ? (
+                        <HtmlBody
+                            id="compose-body"
+                            state={bodyState}
+                            onSend={() => void send()}
+                            className="flex-1 px-3.5 py-2.5"
+                        />
+                    ) : (
                     <textarea
                         ref={bodyRef}
                         value={body}
@@ -682,6 +719,7 @@ function ComposeWindowInner({
                         }}
                         className="w-full flex-1 min-h-[160px] px-3.5 py-3 text-[13px] text-slate-800 placeholder:text-slate-400 bg-transparent resize-none focus:outline-none"
                     />
+                    )}
                     {aiDraft.phase === "busy" && (
                         <div className="ai-sheen pointer-events-none absolute inset-0" aria-hidden />
                     )}
@@ -696,6 +734,8 @@ function ComposeWindowInner({
                         ]}
                     />
                 </div>
+                {html === null && (
+                <>
                 <TextareaAIEdit
                     textareaRef={bodyRef}
                     value={body}
@@ -713,6 +753,8 @@ function ComposeWindowInner({
                     contextHint={`It is a new outbound email${contactDisplay ? ` to ${contactDisplay}` : ""}${subject.trim() ? ` with the subject "${subject.trim()}"` : ""}.`}
                     maxLen={MAX_BODY_LEN}
                 />
+                </>
+                )}
 
                 {/* One-time nudge: drafts came back ungrounded in any product
                     context, so point at the workspace voice profile. */}
@@ -832,17 +874,17 @@ function ComposeWindowInner({
                         </PopoverMenuContent>
                     </PopoverMenu>
 
+                    <HtmlModeToggle state={bodyState} disabled={aiDraft.phase !== "idle"} />
+
                     <InsertBookingLink
                         email={to[0]}
-                        onInsert={(text) =>
-                            setBody((b) => (b.trim() ? `${b.trimEnd()}\n\n${text}` : text).slice(0, MAX_BODY_LEN))
-                        }
+                        onInsert={(text) => bodyState.setValue((b) => capPlain(withText(b, text)))}
                     />
 
-                    {body && (
+                    {(body || html !== null) && (
                         <button
                             type="button"
-                            onClick={() => setBody("")}
+                            onClick={() => bodyState.setValue({ plain: "", html: null, sync: false })}
                             className="h-7 px-2 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100 text-[12px] transition-colors"
                         >
                             Discard
@@ -867,9 +909,11 @@ function ComposeWindowInner({
                             ? "Signature on"
                             : "No signature"}
                     </span>
-                    <span className="font-mono text-[10px] text-slate-400 tabular-nums">
-                        {body.length}/{MAX_BODY_LEN}
-                    </span>
+                    {html === null && (
+                        <span className="font-mono text-[10px] text-slate-400 tabular-nums">
+                            {body.length}/{MAX_BODY_LEN}
+                        </span>
+                    )}
                 </div>
                 </>
                 )}

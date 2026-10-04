@@ -25,6 +25,7 @@ var WorkerEventBodies = map[WorkerEventType]any{
 	WorkerEventTypeEmailValidation: EventWorkerEmailValidation{},
 	WorkerEventTypeWarmupAction:    (*WarmupEmailAction)(nil),
 	WorkerEventTypeMessageSeen:     (*MessageSeenAction)(nil),
+	WorkerEventTypeMessageFolder:   (*MessageFolderAction)(nil),
 	WorkerEventTypeMailboxIdentity: EventWorkerMailboxIdentity{},
 }
 
@@ -43,6 +44,7 @@ var JobEventBodies = map[JobEventType]any{
 	JobEventTypeRemoveEmail:      (*JobEventRemoveEmail)(nil),
 	JobEventTypeFlagsAdd:         (*JobEventFlags)(nil),
 	JobEventTypeFlagsRemove:      (*JobEventFlags)(nil),
+	JobEventTypeFolderUpdate:     (*JobEventFolderUpdate)(nil),
 	JobEventTypeMailboxUpdate:    (*JobEventMailboxUpdate)(nil),
 	JobEventTypeMailboxDelete:    (*JobEventMailboxDelete)(nil),
 	JobEventTypeMailboxRename:    (*JobEventMailboxRename)(nil),
@@ -57,4 +59,6 @@ var JobEventBodies = map[JobEventType]any{
 	JobEventTypeEmailRateLimited: EmailErrorEvent{},
 	JobEventTypeEmailServerError: EmailErrorEvent{},
 	JobEventTypeWorkerHealth:     WorkerHealthSample{},
+
+	JobEventTypeWarmupRemovalChecked: (*JobEventWarmupRemovalChecked)(nil),
 }

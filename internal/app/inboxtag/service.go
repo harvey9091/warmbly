@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/warmbly/warmbly/internal/app/replyclassify"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/dsn"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -49,6 +51,9 @@ type Categories interface {
 	// thread. Follow-up states change with the calendar, so they are replaced
 	// rather than accumulated; nothing outside the named family is touched.
 	SyncExclusiveLabels(ctx context.Context, orgID uuid.UUID, threadID string, family []string, want string) error
+	// RemoveAutoLabels takes automatic labels off a thread that no stored
+	// verdict in it still carries. A label a person applied is never touched.
+	RemoveAutoLabels(ctx context.Context, orgID uuid.UUID, threadID string, slugs []string) error
 }
 
 // MailboxAddresses answers "is this one of ours", which is a fact and must
@@ -57,11 +62,18 @@ type MailboxAddresses interface {
 	IsOwnAddress(ctx context.Context, orgID uuid.UUID, addr string) (bool, error)
 }
 
+// SettingsSource reads a workspace's settings, for its own questions and its
+// language hint. The outreach settings repository satisfies it.
+type SettingsSource interface {
+	GetOutreachSettings(ctx context.Context, orgID uuid.UUID) (*models.AdvancedOutreachSettings, error)
+}
+
 type Service struct {
 	asker      Asker
 	repo       repository.InboxTagRepository
 	categories Categories
 	mailboxes  MailboxAddresses
+	settings   SettingsSource
 	// enabled gates the whole feature. Off by default, and off whenever no API
 	// key is configured, so an instance that never heard of TypeSafe behaves
 	// exactly as it did before.
@@ -75,6 +87,48 @@ type Service struct {
 
 func NewService(asker Asker, repo repository.InboxTagRepository, categories Categories, mailboxes MailboxAddresses, enabled bool) *Service {
 	return &Service{asker: asker, repo: repo, categories: categories, mailboxes: mailboxes, enabled: enabled}
+}
+
+// WireSettings lets the service read each workspace's questions and language
+// hint. Without it every workspace gets the built-in set only.
+func (s *Service) WireSettings(src SettingsSource) {
+	if s != nil {
+		s.settings = src
+	}
+}
+
+// workspaceSettings is what one workspace adds to the classification: its own
+// questions and its tagging languages.
+type workspaceSettings struct {
+	questions []models.InboxTagQuestion
+	languages []string
+	// actionRequired asks whether automated mail needs the recipient to act.
+	actionRequired bool
+	// holdsOnOOO is a workspace that holds a lead on an out-of-office reply,
+	// the only reader of the return-date answer.
+	holdsOnOOO bool
+}
+
+// workspace reads them. A failed read costs the workspace's additions for this
+// message, never the classification, and keeps the defaults.
+func (s *Service) workspace(ctx context.Context, orgID uuid.UUID) workspaceSettings {
+	defaults := workspaceSettings{actionRequired: models.DefaultAdvancedOutreachSettings().InboxTagging.ActionRequiredInInbox}
+	if s.settings == nil || orgID == uuid.Nil {
+		return defaults
+	}
+	cfg, err := s.settings.GetOutreachSettings(ctx, orgID)
+	if err != nil || cfg == nil {
+		if err != nil {
+			log.Warn().Err(err).Str("org_id", orgID.String()).Msg("inbox tagging: workspace settings not read; built-in set only")
+		}
+		return defaults
+	}
+	return workspaceSettings{
+		questions:      cfg.InboxTagging.Questions,
+		languages:      cfg.InboxTagging.Languages,
+		actionRequired: cfg.InboxTagging.ActionRequiredInInbox,
+		holdsOnOOO:     cfg.ReplyIntent.Enabled && cfg.ReplyIntent.HoldOnOutOfOffice,
+	}
 }
 
 func (s *Service) Enabled() bool {
@@ -91,14 +145,22 @@ type Message struct {
 	ThreadID       string
 	Subject        string
 	BodyText       string
-	FromAddr       string
-	Headers        map[string][]string
+	// Snippet stands in for an empty BodyText where the out-of-office hold
+	// reads a return date, so the tagger asks about the same words.
+	Snippet  string
+	FromAddr string
+	Headers  map[string][]string
+	// InReplyTo names the message this one answers.
+	InReplyTo []string
 	// PreviousMessage is our last outbound in this thread, so a bare "yes" has
 	// something to be an answer to.
 	PreviousMessage string
 	Campaign        string
 	// Outbound is set by the caller from the folder, not guessed from content.
 	Outbound bool
+	// historical marks a backfill, which labels history and holds nobody, so
+	// nothing is asked on behalf of a hold.
+	historical bool
 }
 
 // Classify runs the whole pipeline for one inbound message. Safe to call on
@@ -130,21 +192,62 @@ func (s *Service) Classify(ctx context.Context, m Message) (Decision, error) {
 
 	// 3. Check deterministic subject, sender, and any supplied header signals
 	// before spending a model call.
-	facts := Facts{DeterministicKind: deterministicKind(m)}
+	ws := s.workspace(ctx, m.OrganizationID)
+	facts := Facts{DeterministicKind: deterministicKind(m, ws.languages)}
 
-	state := BuildState(m.Subject, m.BodyText, m.PreviousMessage, m.Campaign)
+	state := BuildState(m.Subject, m.BodyText, m.PreviousMessage, m.Campaign, ws.languages...)
+	var custom []models.InboxTagQuestion
+	back, confirm := returnDateToConfirm(m, ws, facts.DeterministicKind, time.Now())
 
 	var resp *Response
-	if facts.DeterministicKind == "" {
+	switch {
+	case facts.DeterministicKind == "":
 		if !HasContent(state) {
 			release()
 			return Decision{}, nil
 		}
-		// 4. Send every question in one request to avoid repeated state ingest.
-		resp, err = s.asker.Ask(ctx, state, Questions())
+		custom = ws.questions
+		state.Language = LanguageHint(ws.languages)
+		// 4. Send every question, the workspace's own included, in one request
+		// to avoid repeated state ingest.
+		questions := QuestionsFor(custom, ws.actionRequired)
+		// A phrase found only in the snippet is not in the body this call reads.
+		if confirm && strings.TrimSpace(m.BodyText) != "" {
+			state.ReturnPhrase = back.Phrase
+			questions[QReturnDate] = ReturnDateQuestion()
+		}
+		resp, err = s.asker.Ask(ctx, state, questions)
 		if err != nil {
 			release()
 			return Decision{}, err
+		}
+	case facts.DeterministicKind == KindAutoReplyOOO && confirm:
+		// Known to be an away message, so only its date is asked, over the
+		// message alone: our previous send holds dates of its own.
+		ooo := BuildState(m.Subject, m.holdBody(), "", "", ws.languages...)
+		ooo.Language = LanguageHint(ws.languages)
+		ooo.ReturnPhrase = back.Phrase
+		resp, err = s.asker.Ask(ctx, ooo, map[string]Question{QReturnDate: ReturnDateQuestion()})
+		if err != nil {
+			// The parser's date stands, as it did before the question existed.
+			log.Warn().Err(err).Str("message_id", m.MessageID).Msg("inbox tagging: return date not confirmed; parsed date stands")
+			resp = nil
+		}
+	case facts.DeterministicKind == KindNotification && HasContent(state):
+		// A notice decided offline is still asked whether it needs acting on.
+		if qs := NotificationQuestions(ws.questions, ws.actionRequired); len(qs) > 0 {
+			custom = ws.questions
+			state.Language = LanguageHint(ws.languages)
+			resp, err = s.asker.Ask(ctx, state, qs)
+			if err != nil && !ws.actionRequired {
+				release()
+				return Decision{}, err
+			}
+			if err != nil {
+				// Filed as before the check existed; --recheck-notifications asks it later.
+				log.Warn().Err(err).Str("message_id", m.MessageID).Msg("inbox tagging: action check failed; notification filed unasked")
+				resp = nil
+			}
 		}
 	}
 
@@ -158,9 +261,13 @@ func (s *Service) Classify(ctx context.Context, m Message) (Decision, error) {
 	}
 
 	// 5. Code decides. Nothing above this line chose a label.
-	decision := Decide(answers, facts)
+	decision := DecideWith(answers, facts, custom)
+	var returnDate *time.Time
+	if decision.ReturnDateAsked {
+		returnDate = &back.Back
+	}
 
-	if err := s.persist(ctx, m, decision, answers, model, tokens); err != nil {
+	if err := s.persist(ctx, m, decision, answers, model, tokens, returnDate); err != nil {
 		release()
 		return decision, err
 	}
@@ -193,17 +300,39 @@ func (s *Service) isOwn(ctx context.Context, m Message) bool {
 // deterministicKind maps the offline classifier's verdict onto this taxonomy.
 // Only the classes headers decide definitively are mapped; everything else
 // falls through to the model.
-func deterministicKind(m Message) string {
-	res := replyclassify.ClassifyOffline(replyclassify.Input{
-		Headers:  m.Headers,
-		Subject:  m.Subject,
-		BodyText: m.BodyText,
-	})
+func deterministicKind(m Message, langs []string) string {
+	headers := m.Headers
+	if len(headers["From"]) == 0 && m.FromAddr != "" {
+		headers = make(map[string][]string, len(m.Headers)+1)
+		for k, v := range m.Headers {
+			headers[k] = v
+		}
+		headers["From"] = []string{m.FromAddr}
+	}
+	in := replyclassify.Input{
+		Headers:   headers,
+		Subject:   m.Subject,
+		BodyText:  m.BodyText,
+		Languages: langs,
+	}
+	if replyclassify.IsDeliveryFailure(in) {
+		if dsn.IsTransientNotice(m.Subject, m.BodyText) {
+			return KindBounceSoft
+		}
+		return KindBounceHard
+	}
+	res := replyclassify.ClassifyOffline(in)
 	switch res.Class {
 	case replyclassify.ClassOutOfOffice:
 		return KindAutoReplyOOO
 	case replyclassify.ClassAutoReply:
-		return KindAutoReplyTicket
+		// The header layer's auto-reply is any machine mail. Only an answer to
+		// something is an auto-reply; a no-reply alert or a list mailing is a
+		// notification.
+		if isAnswer(m) {
+			return KindAutoReplyTicket
+		}
+		return KindNotification
 	default:
 		// Positive, negative and neutral are lexicon guesses about a human
 		// reply, not statements about what the message is. They are exactly
@@ -212,7 +341,16 @@ func deterministicKind(m Message) string {
 	}
 }
 
-func (s *Service) persist(ctx context.Context, m Message, d Decision, answers map[string]Answer, model string, tokens int) error {
+// isAnswer reports a message that replies to an earlier one.
+func isAnswer(m Message) bool {
+	if len(m.InReplyTo) > 0 {
+		return true
+	}
+	subject := strings.ToLower(strings.TrimSpace(m.Subject))
+	return strings.HasPrefix(subject, "re:") || strings.HasPrefix(subject, "aw:") || strings.HasPrefix(subject, "sv:")
+}
+
+func (s *Service) persist(ctx context.Context, m Message, d Decision, answers map[string]Answer, model string, tokens int, returnDate *time.Time) error {
 	raw, err := json.Marshal(answers)
 	if err != nil {
 		raw = json.RawMessage(`{}`)
@@ -231,6 +369,9 @@ func (s *Service) persist(ctx context.Context, m Message, d Decision, answers ma
 		Priority:         d.Priority,
 		NeedsReview:      d.NeedsReview,
 		ReviewReason:     d.ReviewReason,
+		Automated:        d.Automated(),
+		Campaign:         m.Campaign,
+		ReturnDate:       returnDate,
 		Answers:          raw,
 		Labels:           d.Labels,
 		Model:            model,
@@ -289,7 +430,8 @@ func MessageFrom(orgID, userID uuid.UUID, msg *models.EmailMessageStoreData, hea
 		from = strings.TrimSpace(msg.FromAddr[0])
 	}
 	if headers == nil {
-		headers = map[string][]string{}
+		// The sync carries the classification headers as pseudo-flags.
+		headers = replyclassify.FlagHeaders(msg.Flags)
 	}
 	if from != "" && len(headers["From"]) == 0 {
 		headers["From"] = []string{from}
@@ -302,8 +444,10 @@ func MessageFrom(orgID, userID uuid.UUID, msg *models.EmailMessageStoreData, hea
 		ThreadID:        msg.ThreadID,
 		Subject:         msg.Subject,
 		BodyText:        msg.BodyText,
+		Snippet:         msg.Snippet,
 		FromAddr:        from,
 		Headers:         headers,
+		InReplyTo:       msg.InReplyTo,
 		PreviousMessage: previous,
 		Campaign:        campaign,
 		Outbound:        !msg.MayBeInbound(),
@@ -335,7 +479,19 @@ type BackfillOptions struct {
 	DryRun bool
 	// OnProgress is called after each message. Optional.
 	OnProgress func(BackfillProgress, string)
+	// RecheckColdInbound re-classifies stored cold_inbound verdicts in threads
+	// that belong to a campaign, instead of untagged mail. Those verdicts were
+	// made without the campaign in the state.
+	RecheckColdInbound bool
+	// RecheckNotifications asks stored notifications whether they need acting
+	// on, instead of untagged mail. Those verdicts were made before the
+	// question existed, so a failed payment among them sits in Automated.
+	RecheckNotifications bool
 }
+
+// ErrNothingToAsk refuses a notification re-check for a workspace that asks
+// automated mail nothing.
+var ErrNothingToAsk = errors.New("this workspace does not ask notifications whether they need action: turn on \"Keep mail that needs action in the inbox\" under Settings > Sending first")
 
 // Backfill classifies historical inbound mail that has never been tagged.
 //
@@ -357,7 +513,26 @@ func (s *Service) Backfill(ctx context.Context, orgID uuid.UUID, opts BackfillOp
 		opts.Limit = 200
 	}
 
-	candidates, err := s.repo.ListUntagged(ctx, orgID, opts.Since, opts.Limit)
+	if opts.RecheckColdInbound && opts.RecheckNotifications {
+		return p, errors.New("re-check cold inbound mail and notifications in separate runs")
+	}
+
+	var candidates []repository.BackfillCandidate
+	var langs []string
+	var err error
+	switch {
+	case opts.RecheckColdInbound:
+		candidates, err = s.repo.ListColdInboundInCampaignThreads(ctx, orgID, opts.Since, opts.Limit)
+	case opts.RecheckNotifications:
+		ws := s.workspace(ctx, orgID)
+		if !ws.actionRequired {
+			return p, ErrNothingToAsk
+		}
+		langs = ws.languages
+		candidates, err = s.repo.ListUncheckedNotifications(ctx, orgID, opts.Since, opts.Limit)
+	default:
+		candidates, err = s.repo.ListUntagged(ctx, orgID, opts.Since, opts.Limit)
+	}
 	if err != nil {
 		return p, err
 	}
@@ -384,7 +559,46 @@ func (s *Service) Backfill(ctx context.Context, orgID uuid.UUID, opts BackfillOp
 
 		// Our previous message in the thread, looked up rather than asked:
 		// a reply cannot be read without the thing it replies to.
-		previous, campaign, _ := s.repo.PreviousOutbound(ctx, c.EmailAccountID, c.ThreadID, c.InternalDate)
+		previous, campaign, err := s.repo.PreviousOutbound(ctx, c.EmailAccountID, c.ThreadID, c.InReplyTo, c.InternalDate)
+		if err != nil {
+			log.Warn().Err(err).Str("message_id", c.MessageID).Msg("inbox tagging backfill: thread context not read")
+		}
+
+		var stale []string
+		if opts.RecheckColdInbound {
+			if campaign == "" {
+				p.Skipped++
+				if opts.OnProgress != nil {
+					opts.OnProgress(p, c.Subject)
+				}
+				continue
+			}
+			// The stored verdict is dropped so the claim below takes the
+			// message again. A failed call leaves it untagged, which the next
+			// plain backfill picks up.
+			stale, err = s.repo.Reopen(ctx, orgID, c.MessageID, KindColdInbound)
+			if err != nil {
+				p.Failed++
+				log.Warn().Err(err).Str("message_id", c.MessageID).Msg("inbox tagging recheck: verdict not reopened")
+				continue
+			}
+		}
+		if opts.RecheckNotifications {
+			// Nothing to read is never asked, so reopening it would loop forever.
+			if !HasContent(BuildState(c.Subject, c.BodyText, "", "", langs...)) {
+				p.Skipped++
+				if opts.OnProgress != nil {
+					opts.OnProgress(p, c.Subject)
+				}
+				continue
+			}
+			stale, err = s.repo.Reopen(ctx, orgID, c.MessageID, KindNotification)
+			if err != nil {
+				p.Failed++
+				log.Warn().Err(err).Str("message_id", c.MessageID).Msg("inbox tagging recheck: verdict not reopened")
+				continue
+			}
+		}
 
 		d, err := s.Classify(ctx, Message{
 			OrganizationID:  orgID,
@@ -395,13 +609,29 @@ func (s *Service) Backfill(ctx context.Context, orgID uuid.UUID, opts BackfillOp
 			Subject:         c.Subject,
 			BodyText:        c.BodyText,
 			FromAddr:        c.FromAddr,
+			Headers:         replyclassify.FlagHeaders(c.Flags),
+			InReplyTo:       c.InReplyTo,
 			PreviousMessage: previous,
 			Campaign:        campaign,
+			historical:      true,
 		})
+		// Whatever the old verdict wrote and the new one does not comes off,
+		// unless another verdict in the thread still carries it.
+		// Only a verdict that was actually stored may take labels away: a lost
+		// claim or an empty body returns no error and no verdict.
+		stored := err == nil && d.KindSource != "" && !d.Skipped()
+		if drop := labelsNotIn(stale, d.Labels); stored && len(drop) > 0 && s.categories != nil {
+			if rerr := s.categories.RemoveAutoLabels(ctx, orgID, c.ThreadID, drop); rerr != nil {
+				log.Warn().Err(rerr).Str("thread_id", c.ThreadID).Msg("inbox tagging recheck: stale labels kept")
+			}
+		}
+		_, asked := d.SignalStrength[SigActionRequired]
 		switch {
 		case err != nil:
 			p.Failed++
 			log.Warn().Err(err).Str("message_id", c.MessageID).Msg("inbox tagging backfill: message failed")
+		case opts.RecheckNotifications && stored && d.Kind == KindNotification && !asked:
+			p.Failed++
 		case d.Skipped() || d.KindSource == "":
 			p.Skipped++
 		default:
@@ -416,11 +646,16 @@ func (s *Service) Backfill(ctx context.Context, orgID uuid.UUID, opts BackfillOp
 	return p, nil
 }
 
-// PreviousOutbound exposes the thread lookup to callers that build a Message
-// themselves, so the live ingest path and the backfill give the model the same
-// context rather than one of them sending a reply with nothing to answer.
-// Nil-safe and never fatal: no previous message is the normal case for the
-// first inbound of a thread.
+func labelsNotIn(old, kept []string) []string {
+	var out []string
+	for _, l := range old {
+		if !slices.Contains(kept, l) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
 // RecordActions stores what a verdict was allowed to do, for the review page.
 func (s *Service) RecordActions(ctx context.Context, orgID uuid.UUID, messageID string, actions []string) error {
 	if s == nil || s.repo == nil {
@@ -429,75 +664,19 @@ func (s *Service) RecordActions(ctx context.Context, orgID uuid.UUID, messageID 
 	return s.repo.RecordActions(ctx, orgID, messageID, actions)
 }
 
-func (s *Service) PreviousContext(ctx context.Context, accountID uuid.UUID, threadID string, before time.Time) (string, string) {
-	if !s.Enabled() || threadID == "" {
+// PreviousContext exposes the thread lookup to callers that build a Message
+// themselves, so the live ingest path and the backfill give the model the same
+// context rather than one of them sending a reply with nothing to answer.
+// Nil-safe and never fatal: no previous message is the normal case for the
+// first inbound of a thread.
+func (s *Service) PreviousContext(ctx context.Context, accountID uuid.UUID, threadID string, inReplyTo []string, before time.Time) (string, string) {
+	if !s.Enabled() || (threadID == "" && len(inReplyTo) == 0) {
 		return "", ""
 	}
-	body, campaign, err := s.repo.PreviousOutbound(ctx, accountID, threadID, before)
+	body, campaign, err := s.repo.PreviousOutbound(ctx, accountID, threadID, inReplyTo, before)
 	if err != nil {
+		log.Warn().Err(err).Str("thread_id", threadID).Msg("inbox tagging: thread context not read")
 		return "", ""
 	}
 	return body, campaign
-}
-
-// ── Follow-up sweep ────────────────────────────────────────────────────────
-
-// FollowUpProgress reports what one sweep changed.
-type FollowUpProgress struct {
-	Threads  int
-	Labelled map[string]int
-	Cleared  int
-}
-
-// SweepFollowUps recomputes the follow-up label on every recently active thread.
-//
-// The sweep makes no model calls. It runs when tagging is enabled and reuses
-// trusted classifications so automated mail is not treated as a human reply.
-func (s *Service) SweepFollowUps(ctx context.Context, orgID uuid.UUID, since time.Time, limit int) (FollowUpProgress, error) {
-	p := FollowUpProgress{Labelled: map[string]int{}}
-	if s == nil || s.repo == nil || s.categories == nil {
-		return p, nil
-	}
-	if limit <= 0 {
-		limit = 2000
-	}
-
-	states, err := s.repo.ThreadStates(ctx, orgID, since, limit)
-	if err != nil {
-		return p, err
-	}
-	// The hourly sweep is also how a workspace that predates the feature
-	// gets its labels: the whole taxonomy when classification is on, the
-	// follow-up labels otherwise. Idempotent and cached, so it costs nothing
-	// after the first pass.
-	if err := s.categories.EnsureAll(ctx, orgID, SeedSet()); err != nil {
-		log.Warn().Err(err).Msg("inbox tagging: could not seed labels")
-	}
-
-	now := time.Now()
-	for _, st := range states {
-		if err := ctx.Err(); err != nil {
-			return p, err
-		}
-		want := FollowUp(ThreadState{
-			ThreadID:       st.ThreadID,
-			LastInboundAt:  st.LastInboundAt,
-			LastOutboundAt: st.LastOutboundAt,
-			BestIntent:     st.BestIntent,
-			LastKind:       st.LastKind,
-		}, now)
-
-		if err := s.categories.SyncExclusiveLabels(ctx, orgID, st.ThreadID, FollowUpLabels, want); err != nil {
-			log.Warn().Err(err).Str("thread_id", st.ThreadID).Msg("inbox tagging: follow-up label not applied")
-			continue
-		}
-
-		p.Threads++
-		if want == "" {
-			p.Cleared++
-		} else {
-			p.Labelled[want]++
-		}
-	}
-	return p, nil
 }

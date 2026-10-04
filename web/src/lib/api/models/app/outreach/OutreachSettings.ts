@@ -58,6 +58,39 @@ export interface InboxTaggingSettings {
     stop_on_declined: boolean;
     task_on_call_request: boolean;
     suppress_on_removal_request: boolean;
+    questions?: InboxTagQuestion[] | null;
+    // models.MailLanguageNames codes tagging reads mail in.
+    languages?: string[] | null;
+    // Ask automated notifications whether they need action, and keep the ones
+    // that do in the inbox instead of the Automated view.
+    action_required_in_inbox: boolean;
+}
+
+export type InboxTagActionType = "" | "hold" | "stop" | "task";
+
+export interface InboxTagQuestionAction {
+    type: InboxTagActionType;
+    hold_days?: number;
+}
+
+export interface InboxTagChoice {
+    label: string;
+    description: string;
+    action: InboxTagQuestionAction;
+}
+
+// A workspace question. Yes/no applies `label` on yes; a choice applies the
+// label of the option it picked.
+export interface InboxTagQuestion {
+    id: string;
+    type: "yes_no" | "choice";
+    question: string;
+    label?: string;
+    action: InboxTagQuestionAction;
+    choices?: InboxTagChoice[];
+    // Also asked of automated notifications; a match keeps the conversation in
+    // the inbox. Never acts on one.
+    automated?: boolean;
 }
 
 export const DEFAULT_INBOX_TAGGING: InboxTaggingSettings = {
@@ -66,7 +99,96 @@ export const DEFAULT_INBOX_TAGGING: InboxTaggingSettings = {
     stop_on_declined: true,
     task_on_call_request: true,
     suppress_on_removal_request: false,
+    questions: [],
+    languages: [],
+    action_required_in_inbox: true,
 };
+
+// Bounds matching internal/models/advanced_outreach.go.
+export const INBOX_TAG_QUESTIONS_MAX = 10;
+export const INBOX_TAG_QUESTION_MAX_LEN = 300;
+export const INBOX_TAG_CHOICE_DESC_MAX_LEN = 200;
+export const INBOX_TAG_LABEL_MAX_LEN = 40;
+export const INBOX_TAG_CHOICES_MIN = 2;
+export const INBOX_TAG_CHOICES_MAX = 8;
+export const INBOX_TAG_HOLD_MIN = 1;
+export const INBOX_TAG_HOLD_MAX = 365;
+export const INBOX_TAG_HOLD_DEFAULT = 30;
+
+// models.MailLanguageNames, sorted by name.
+export const MAIL_LANGUAGES: { code: string; name: string }[] = [
+    { code: "ar", name: "Arabic" },
+    { code: "bn", name: "Bengali" },
+    { code: "bg", name: "Bulgarian" },
+    { code: "ca", name: "Catalan" },
+    { code: "zh", name: "Chinese" },
+    { code: "hr", name: "Croatian" },
+    { code: "cs", name: "Czech" },
+    { code: "da", name: "Danish" },
+    { code: "nl", name: "Dutch" },
+    { code: "en", name: "English" },
+    { code: "et", name: "Estonian" },
+    { code: "fil", name: "Filipino" },
+    { code: "fi", name: "Finnish" },
+    { code: "fr", name: "French" },
+    { code: "de", name: "German" },
+    { code: "el", name: "Greek" },
+    { code: "he", name: "Hebrew" },
+    { code: "hi", name: "Hindi" },
+    { code: "hu", name: "Hungarian" },
+    { code: "id", name: "Indonesian" },
+    { code: "it", name: "Italian" },
+    { code: "ja", name: "Japanese" },
+    { code: "ko", name: "Korean" },
+    { code: "lv", name: "Latvian" },
+    { code: "lt", name: "Lithuanian" },
+    { code: "ms", name: "Malay" },
+    { code: "nb", name: "Norwegian" },
+    { code: "fa", name: "Persian" },
+    { code: "pl", name: "Polish" },
+    { code: "pt", name: "Portuguese" },
+    { code: "ro", name: "Romanian" },
+    { code: "ru", name: "Russian" },
+    { code: "sr", name: "Serbian" },
+    { code: "sk", name: "Slovak" },
+    { code: "sl", name: "Slovenian" },
+    { code: "es", name: "Spanish" },
+    { code: "sw", name: "Swahili" },
+    { code: "sv", name: "Swedish" },
+    { code: "ta", name: "Tamil" },
+    { code: "th", name: "Thai" },
+    { code: "tr", name: "Turkish" },
+    { code: "uk", name: "Ukrainian" },
+    { code: "ur", name: "Urdu" },
+    { code: "vi", name: "Vietnamese" },
+];
+
+// replyclassify.LanguagesWithRules: the languages whose reply formats, away
+// messages and dates are read offline. The rest are only named to the classifier.
+export const OFFLINE_RULE_LANGUAGES = new Set([
+    "ar", "bg", "bn", "ca", "cs", "da", "de", "el", "es", "et", "fa", "fi", "fil", "fr",
+    "he", "hi", "hr", "hu", "id", "it", "ja", "ko", "lt", "lv", "ms", "nb", "nl", "pl",
+    "pt", "ro", "ru", "sk", "sl", "sr", "sv", "sw", "ta", "th", "tr", "uk", "ur", "vi", "zh",
+]);
+
+// Mirrors models.InboxTagLabelName: plain words like the built-in labels,
+// letters and digits in any script with single spaces or hyphens between.
+export function inboxTagLabelName(name: string): string {
+    let out = "";
+    let pending = "";
+    for (const ch of name.normalize("NFC")) {
+        if (/[\p{L}\p{Nd}]/u.test(ch)) {
+            if (pending && out) out += pending;
+            pending = "";
+            out += ch;
+        } else if (ch === "-" && pending !== " ") {
+            pending = "-";
+        } else {
+            pending = " ";
+        }
+    }
+    return out;
+}
 
 // Matches models.DefaultCRMTaskIntents: every human intent, no automated one.
 export const DEFAULT_CRM_TASK_INTENTS: ReplyIntent[] = [

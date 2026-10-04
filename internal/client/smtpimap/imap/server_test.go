@@ -118,6 +118,14 @@ func (w *wireLog) commands(name string) []string {
 // half of the conversation.
 func recordingServer(t *testing.T, caps imap.CapSet, folders ...string) (*Client, *wireLog) {
 	t.Helper()
+	return interceptingServer(t, caps, nil, folders...)
+}
+
+// interceptingServer is recordingServer with a stand-in for a stricter server:
+// when refuse returns a non-empty reply for a command line, the proxy answers
+// with it instead of forwarding the command.
+func interceptingServer(t *testing.T, caps imap.CapSet, refuse func(line string) string, folders ...string) (*Client, *wireLog) {
+	t.Helper()
 	upstream := startMemServer(t, caps, folders...)
 	log := &wireLog{}
 
@@ -138,14 +146,24 @@ func recordingServer(t *testing.T, caps imap.CapSet, folders ...string) (*Client
 				_ = down.Close()
 				return
 			}
-			go func() { _, _ = io.Copy(down, up); _ = down.Close() }()
+			toClient := &lockedWriter{w: down}
+			go func() { _, _ = io.Copy(toClient, up); _ = down.Close() }()
 			go func() {
 				defer func() { _ = up.Close() }()
 				r := bufio.NewReader(down)
 				for {
 					line, err := r.ReadString('\n')
 					if line != "" {
-						log.add(strings.TrimRight(line, "\r\n"))
+						trimmed := strings.TrimRight(line, "\r\n")
+						log.add(trimmed)
+						if refuse != nil {
+							if reply := refuse(trimmed); reply != "" {
+								if _, werr := toClient.Write([]byte(reply + "\r\n")); werr != nil {
+									return
+								}
+								continue
+							}
+						}
 						if _, werr := up.Write([]byte(line)); werr != nil {
 							return
 						}
@@ -159,6 +177,19 @@ func recordingServer(t *testing.T, caps imap.CapSet, folders ...string) (*Client
 	}()
 
 	return clientTo(t, ln.Addr().String()), log
+}
+
+// lockedWriter keeps the proxy's own replies from interleaving with the
+// server's bytes.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }
 
 func atoi(s string) int {

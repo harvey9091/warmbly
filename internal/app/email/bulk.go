@@ -20,6 +20,8 @@ import (
 // connect path, so a row is never connected twice and every side effect of a
 // single connect (worker load, warmup pool, webhook) happens per mailbox.
 func (s *emailService) OnboardSMTPIMAPBulk(ctx context.Context, userID string, orgID *uuid.UUID, rows []models.NewSMTPIMAPAccount) *models.MailboxBulkResult {
+	// Rows are bounded one by one (OnboardSMTPIMAP), so the batch only drops the caller's cancellation.
+	ctx = context.WithoutCancel(ctx)
 	res := &models.MailboxBulkResult{Data: make([]models.MailboxBulkRow, len(rows))}
 	res.Summary.Total = len(rows)
 	if len(rows) == 0 {
@@ -71,10 +73,10 @@ func (s *emailService) OnboardSMTPIMAPBulk(ctx context.Context, userID string, o
 			continue
 		}
 		seen[key] = true
-		if exists, xerr := s.emailRepository.ExistsForUser(ctx, userID, strings.TrimSpace(rows[i].Email)); xerr != nil {
+		if existing, xerr := s.findExisting(ctx, userID, orgID, rows[i].Email); xerr != nil {
 			fail(i, xerr)
 			continue
-		} else if exists {
+		} else if existing != nil {
 			res.Data[i] = models.MailboxBulkRow{
 				Row: i, Email: rows[i].Email, Status: models.MailboxBulkSkipped,
 				Code: "already_connected", Message: errx.ErrEmailOnboardAlreadyExists.Message,

@@ -27,11 +27,11 @@ func (h *Handler) CreateOrganization(c *gin.Context) {
 
 	var req models.CreateOrganizationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
-	org, xerr := h.OrganizationService.Create(c.Request.Context(), userID, req.Name)
+	org, xerr := h.OrganizationService.Create(c.Request.Context(), userID, req.Name, req.Timezone)
 	if xerr != nil {
 		errx.JSON(c, xerr)
 		return
@@ -141,7 +141,7 @@ func (h *Handler) UpdateOrganization(c *gin.Context) {
 
 	var req models.UpdateOrganizationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -195,7 +195,7 @@ func (h *Handler) InviteMember(c *gin.Context) {
 
 	var req models.InviteMemberRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -262,7 +262,7 @@ func (h *Handler) UpdateMemberRole(c *gin.Context) {
 
 	var req models.UpdateMemberRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -323,7 +323,7 @@ func (h *Handler) TransferOwnership(c *gin.Context) {
 
 	var req models.TransferOwnershipRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -425,7 +425,7 @@ func (h *Handler) AcceptInvitation(c *gin.Context) {
 
 	var req models.AcceptInvitationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 

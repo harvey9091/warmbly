@@ -69,7 +69,7 @@ func (h *Handler) CreateWebhookEndpoint(c *gin.Context) {
 	}
 	var p webhookEndpointPayload
 	if err := c.ShouldBindJSON(&p); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	enabled := true
@@ -111,7 +111,7 @@ func (h *Handler) UpdateWebhookEndpoint(c *gin.Context) {
 	}
 	var p webhookEndpointPayload
 	if err := c.ShouldBindJSON(&p); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	enabled := true

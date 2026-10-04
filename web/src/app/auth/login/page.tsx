@@ -364,7 +364,8 @@ export default function LoginPage() {
         prepareExplicitPasskey(false, challenges.signal);
         void runConditionalPasskey(challenges.signal);
         return () => {
-            challenges.abort();
+            // A named reason keeps leaving the page recognisable as a cancellation wherever the rejection surfaces.
+            challenges.abort(new PasskeyCancelled("aborted"));
             cancelPasskeyCeremony();
         };
     }, [passkeysEnabled, prepareExplicitPasskey, runConditionalPasskey]);
@@ -413,6 +414,9 @@ export default function LoginPage() {
                 } else if (e.reason === "timeout") {
                     setPasskeyStatus("timeout");
                     toast.error("Safari didn't show a passkey prompt. Try again, or use password sign-in.");
+                } else {
+                    // Aborted: nothing to explain, but the button has to be usable again.
+                    setPasskeyStatus("ready");
                 }
             } else {
                 setPasskeyStatus("error");

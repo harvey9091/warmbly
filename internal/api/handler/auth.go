@@ -19,7 +19,7 @@ func (h *Handler) LoginStart(c *gin.Context) {
 	var data auth.AuthData
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -39,7 +39,7 @@ func (h *Handler) LoginConfirm(c *gin.Context) {
 	var data auth.ConfirmData
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, err)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -59,7 +59,7 @@ func (h *Handler) RegistrationStart(c *gin.Context) {
 	var data auth.AuthData
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -79,7 +79,7 @@ func (h *Handler) RegistrationConfirm(c *gin.Context) {
 	var data auth.ConfirmData
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, err)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -101,7 +101,7 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -188,7 +188,7 @@ func (h *Handler) ResetPasswordStart(c *gin.Context) {
 	var data auth.ResetPasswordStart
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -207,7 +207,7 @@ func (h *Handler) ResetPasswordConfirm(c *gin.Context) {
 	var data auth.ResetPasswordConfirm
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -234,7 +234,7 @@ func (h *Handler) ChangePassword(c *gin.Context) {
 
 	var data auth.ChangePassword
 	if berr := c.ShouldBindJSON(&data); berr != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(berr))
 		return
 	}
 

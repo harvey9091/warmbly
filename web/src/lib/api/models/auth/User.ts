@@ -21,6 +21,9 @@ export default interface User {
     // permission; the dashboard only uses it to link to the admin panel.
     is_admin?: boolean;
     admin_permissions?: number;
+    // Whether this session presented a second factor. Admin routes refuse a
+    // session that did not, so admin actions in the dashboard gate on it too.
+    session_mfa_verified?: boolean;
 
     tags: Tag[];
     categories: Category[];

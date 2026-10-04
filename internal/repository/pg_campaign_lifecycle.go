@@ -68,14 +68,22 @@ func (r *campaignRepository) Delete(ctx context.Context, campaignID uuid.UUID) e
 		return err
 	}
 
-	const del = `DELETE FROM campaigns WHERE id = $1`
-	cmd, err := tx.Exec(ctx, del, campaignID)
-	if err != nil {
-		db.CaptureError(err, del, []any{campaignID}, "exec")
+	const del = `DELETE FROM campaigns WHERE id = $1 RETURNING organization_id`
+	var orgID *uuid.UUID
+	if err := tx.QueryRow(ctx, del, campaignID).Scan(&orgID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errx.ErrResourceNotFound
+		}
+		db.CaptureError(err, del, []any{campaignID}, "queryrow")
 		return err
 	}
-	if cmd.RowsAffected() == 0 {
-		return errx.ErrResourceNotFound
+
+	// Parent matching also closes the findings on the campaign's own steps.
+	if orgID != nil {
+		if err := ResolveAdvisorFindingsFor(ctx, tx, *orgID, []uuid.UUID{campaignID}); err != nil {
+			db.CaptureError(err, "", nil, "exec")
+			return err
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -116,7 +124,7 @@ func (r *campaignRepository) Duplicate(ctx context.Context, in DuplicateCampaign
 			guardrail_reply_rate_min, guardrail_min_sample, guardrail_window_days,
 			guardrail_tripped_at, guardrail_reason,
 			utm_tracking, utm_source, utm_medium, utm_campaign,
-			last_status_change_at, updated_at, created_at, kind
+			last_status_change_at, updated_at, created_at
 		)
 		SELECT
 			$2, $3, organization_id, $4, description, 'draft',
@@ -135,7 +143,7 @@ func (r *campaignRepository) Duplicate(ctx context.Context, in DuplicateCampaign
 			guardrail_reply_rate_min, guardrail_min_sample, guardrail_window_days,
 			NULL, '',
 			utm_tracking, utm_source, utm_medium, utm_campaign,
-			NULL, NOW(), NOW(), kind
+			NULL, NOW(), NOW()
 		FROM campaigns
 		WHERE id = $1
 	`

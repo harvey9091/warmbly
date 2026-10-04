@@ -28,9 +28,11 @@ func (d Deps) registerCampaignTools(r *Registry) {
 
 	r.Register(Tool{
 		Name:        "get_campaign_stats",
-		Description: "Get send/open/click/reply stats for one campaign, plus the same numbers and rates per sequence step.",
+		Description: "Get send/open/click/reply stats for one campaign, plus the same numbers and rates per sequence step. Give from and to together to read only the emails sent on those days (with every open, click, reply and bounce they earned, whenever it came); leave both out for the campaign's whole history.",
 		InputSchema: objectSchema(map[string]any{
 			"campaign_id": strProp("The campaign's UUID."),
+			"from":        strProp("Optional first day of the period, YYYY-MM-DD (UTC). Requires to."),
+			"to":          strProp("Optional last day of the period, YYYY-MM-DD (UTC), included. Requires from."),
 		}, "campaign_id"),
 		Risk:            generation.RiskRead,
 		RequiredOrgPerm: models.PermViewAnalytics,
@@ -87,7 +89,6 @@ func (d Deps) registerCampaignTools(r *Registry) {
 		InputSchema: objectSchema(map[string]any{
 			"name":        strProp("Campaign name (required)."),
 			"description": strProp("Optional description."),
-			"kind":        strProp("Optional: 'sequence' (default, follow-ups allowed) or 'one_time' (a single message, at most one step)."),
 			"steps": arrProp("Optional email steps to seed the sequence.", objectSchema(map[string]any{
 				"subject":   strProp("Email subject (may contain {{merge}} vars). Follow-ups reply in the first email's thread and carry its subject, so only the first step's subject is used."),
 				"body":      strProp("Email body text (may contain {{merge}} vars)."),
@@ -406,7 +407,7 @@ func (d Deps) listCampaigns(ctx context.Context, inv Invocation, args json.RawMe
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
-	res, xerr := d.Campaigns.Search(ctx, inv.OrgID.String(), in.Query, "", "", in.Status, "", fmt.Sprintf("%d", limit))
+	res, xerr := d.Campaigns.Search(ctx, inv.OrgID.String(), in.Query, "", "", in.Status, fmt.Sprintf("%d", limit))
 	if xerr != nil {
 		return "", fromErrx(xerr)
 	}
@@ -420,6 +421,8 @@ func (d Deps) listCampaigns(ctx context.Context, inv Invocation, args json.RawMe
 func (d Deps) getCampaignStats(ctx context.Context, inv Invocation, args json.RawMessage) (string, error) {
 	in, err := decodeArgs[struct {
 		CampaignID string `json:"campaign_id"`
+		From       string `json:"from"`
+		To         string `json:"to"`
 	}](args)
 	if err != nil {
 		return "", err
@@ -428,7 +431,11 @@ func (d Deps) getCampaignStats(ctx context.Context, inv Invocation, args json.Ra
 	if err != nil {
 		return "", err
 	}
-	a, xerr := d.Analytics.GetCampaignAnalytics(ctx, inv.OrgID, cid)
+	period, err := parseDayRangeArgs(in.From, in.To)
+	if err != nil {
+		return "", err
+	}
+	a, xerr := d.Analytics.GetCampaignAnalytics(ctx, inv.OrgID, cid, period)
 	if xerr != nil {
 		return "", fromErrx(xerr)
 	}
@@ -458,6 +465,8 @@ func (d Deps) getCampaignStats(ctx context.Context, inv Invocation, args json.Ra
 		"campaign_id":    a.CampaignID.String(),
 		"name":           a.Name,
 		"status":         a.Status,
+		"from":           a.DateRange.From.Format("2006-01-02"),
+		"to":             a.DateRange.To.Format("2006-01-02"),
 		"total_contacts": s.TotalContacts,
 		"emails_sent":    s.EmailsSent,
 		"unique_opens":   s.UniqueOpens,
@@ -469,15 +478,25 @@ func (d Deps) getCampaignStats(ctx context.Context, inv Invocation, args json.Ra
 		"open_rate":      s.OpenRate,
 		"click_rate":     s.ClickRate,
 		"reply_rate":     s.ReplyRate,
+		"bounce_rate":    s.BounceRate,
 		"steps":          steps,
 	})
 }
 
+// parseDayRangeArgs reads an optional from/to pair of whole days; both empty
+// is nil (all time).
+func parseDayRangeArgs(from, to string) (*models.DateRange, error) {
+	period, err := models.ParseDayRange(from, to)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrInvalidArgs, err.Error())
+	}
+	return period, nil
+}
+
 func (d Deps) createCampaignDraft(ctx context.Context, inv Invocation, args json.RawMessage) (string, error) {
 	in, err := decodeArgs[struct {
-		Name        string  `json:"name"`
-		Description string  `json:"description"`
-		Kind        *string `json:"kind"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
 		Steps       []struct {
 			Subject  string `json:"subject"`
 			Body     string `json:"body"`
@@ -488,9 +507,6 @@ func (d Deps) createCampaignDraft(ctx context.Context, inv Invocation, args json
 		return "", err
 	}
 	if in.Name == "" {
-		return "", ErrInvalidArgs
-	}
-	if in.Kind != nil && *in.Kind != "" && !models.ValidCampaignKind(*in.Kind) {
 		return "", ErrInvalidArgs
 	}
 
@@ -508,7 +524,6 @@ func (d Deps) createCampaignDraft(ctx context.Context, inv Invocation, args json
 	camp, xerr := d.Campaigns.Create(ctx, inv.UserID.String(), &orgID, &models.CreateCampaign{
 		Name:        in.Name,
 		Description: in.Description,
-		Kind:        in.Kind,
 		Sequences:   seqs,
 	})
 	if xerr != nil {

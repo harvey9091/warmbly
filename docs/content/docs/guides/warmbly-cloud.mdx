@@ -5,7 +5,7 @@ description: "Warm the mailboxes on your own Warmbly instance in the hosted warm
 
 A self-hosted Warmbly instance warms mailboxes only against the other mailboxes on that same instance, which for most installs is a handful. Linking the instance to Warmbly Cloud lets those mailboxes warm in the hosted pool instead: thousands of real, monitored mailboxes exchanging natural-looking mail, with replies and inbox engagement handled for you.
 
-Only warmup moves to the cloud. Campaigns, contacts, the unibox, tracking and every stored message stay on your server exactly as before. Linked instances also get Google and Microsoft sign-in through Warmbly's own OAuth apps, so there is no client to register: see [Google and Microsoft mailboxes](#google-and-microsoft-mailboxes-sign-in-through-warmbly-cloud).
+Only warmup moves to the cloud. Campaigns, contacts, the unibox, tracking and every stored message stay on your server exactly as before. Linked instances also get Google and Microsoft sign-in through Warmbly's own OAuth apps, so there is no client to register: see [Google and Microsoft mailboxes](#google-and-microsoft-mailboxes-sign-in-through-warmbly-cloud). They can also have Cloud serve a sending domain's [root redirect](#root-redirects-served-by-warmbly-cloud), so the domain answers visitors without any proxy setup on your server.
 
 <Callout type="info" title="Pricing">
   A free Warmbly Cloud workspace holds up to 10 mailboxes, connected directly or through a linked instance, and warms them at no cost. The Warmup plan, $15 a month per workspace or $144 a year, moves the workspace's mailboxes to the premium pool for better deliverability, with reputation protection and no mailbox cap. Nothing else about self-hosting changes.
@@ -23,13 +23,13 @@ Your instance keeps a single link to a Warmbly Cloud workspace. When you enroll 
 Verification accepts a cloud token only for the mailbox that sent or received that warmup message. It also recognises recorded message identifiers when a provider strips the header, including older messages and mail the cloud has already processed. If the cloud cannot answer, inbox ingestion retries verification before publishing the message. This can delay ordinary inbox arrivals for enrolled mailboxes during a cloud outage. Existing Unibox entries are checked automatically in background batches, and confirmed warmup is removed locally without deleting provider mail.
 
 Arrivals awaiting verification are stored in your instance's database and retried automatically, including after a consumer restart. Once verification succeeds, ordinary messages enter Unibox and warmup messages are discarded from the pending queue. Pending verification belongs to the instance and is [not included in a workspace export](/guides/workspace-export-import/).
-- health, daily volume and 7 day totals show up in your instance's settings as the cloud reports them
+- health, daily volume and 7 day totals show up in your instance's settings as the cloud reports them, and the health also gates the mailbox's campaigns here (see [safety and enforcement](#safety-and-enforcement))
 
 Unenrolling an SMTP/IMAP mailbox, disconnecting the instance, or deleting the mailbox altogether deletes its credential on the cloud immediately. Deleting an enrolled mailbox revokes its enrollment before the record goes, so the pool cannot be left holding a password for a mailbox your instance no longer has; if the cloud cannot be reached at that moment the delete is refused, the mailbox is put back as it was, and retrying it once the cloud is reachable completes it. A mailbox that was signed in through Warmbly Cloud stays in the cloud workspace when you remove it from the instance; disconnecting the instance removes its mirrors of such mailboxes, since they cannot send without the link.
 
 ## Linking your instance
 
-The link is offered in three places on a self-hosted instance: as the last step of onboarding when you first sign in, as a banner on **Mailboxes** until you connect or dismiss it, and under **Settings > Warmbly Cloud** at any time. Whichever you use, the steps are the same:
+The link is offered on a self-hosted instance as the last step of onboarding when you first sign in, as a banner on **Mailboxes** until you connect or dismiss it, under **Settings > Warmbly Cloud** at any time, and on **Sending domains** when a [root redirect](#root-redirects-served-by-warmbly-cloud) could be served from Cloud. Whichever you use, the steps are the same:
 
 1. Press **Connect to Warmbly Cloud**. The instance shows an eight character code.
 2. Press **Open Warmbly Cloud**, or go to `app.warmbly.com/connect`, sign in with your Warmbly account (create one if you do not have it, it is free), enter the code and pick the workspace to link to. The workspace needs the manage settings permission.
@@ -39,7 +39,7 @@ The whole flow takes about a minute. A code expires after 15 minutes if nobody a
 
 ## Google and Microsoft mailboxes: sign in through Warmbly Cloud
 
-On a linked instance, **Add account > Gmail / Google Workspace** and **Outlook / Microsoft 365** no longer need an OAuth client of your own. The sign-in window opens on Warmbly's verified Google and Microsoft apps, and when you approve:
+On a linked instance, signing in one mailbox under **Add account > Google** or **Add account > Microsoft** no longer needs an OAuth client of your own. The sign-in window opens on Warmbly's verified Google and Microsoft apps, and when you approve:
 
 - the mailbox is created in your Warmbly Cloud workspace, where its sign-in lives, and starts warming in the pool right away
 - your instance gets a mirror of the mailbox with no credential on it. Campaigns, replies and the unibox work from your server as before; to send and sync, the instance asks the cloud for a short-lived access token (about an hour, cached) using its link token
@@ -53,13 +53,15 @@ A Google or Microsoft mailbox you connect directly on app.warmbly.com shows up i
 
 ### Which existing mailboxes can be enrolled
 
-Mailboxes connected with **SMTP/IMAP** (including Google Workspace and Microsoft 365 through an app password) can be enrolled as they are: the instance sends the credential to the cloud and keeps its own copy.
+Mailboxes connected with **SMTP/IMAP** (including Google Workspace and Microsoft 365 through an app password) can be enrolled as they are: the instance sends the credential to the cloud and keeps its own copy. Changing the mailbox's SMTP/IMAP settings on your instance later hands the new credential to the cloud as well.
+
+The cloud connects to your mail server over the internet, so both SMTP and IMAP need TLS or STARTTLS. A mailbox set to security `none`, which only works for a mail server on your instance's own machine, is refused at enrollment with `pool_link_cleartext_mailbox`.
 
 A Google or Microsoft mailbox that was signed in with your instance's own OAuth app cannot be enrolled, because that grant can only be refreshed by the app that issued it. Remove it and add it again through Warmbly Cloud to warm it there.
 
 ## What your instance shows
 
-Once linked, the **Mailboxes** page marks every enrolled mailbox with a blue **Cloud** badge, shows the cloud's daily count in the warmup column, and offers **Warm in Warmbly Cloud**, pause, resume and remove in each row's warmup menu. The mailbox drawer's Warmup tab shows the same block with the cloud's numbers in place of the local controls. Any member can see this; enrolling needs the manage mailboxes permission and linking needs manage settings.
+Once linked, the **Mailboxes** page marks every enrolled mailbox with a blue **Cloud** badge on its address and its avatar and a "Warmed by Warmbly Cloud" line under it (amber while paused), shows the cloud's daily count in the warmup column with the same warming animation local warmup uses, and offers **Warm in Warmbly Cloud**, pause, resume and remove in each row's warmup menu. The mailbox drawer's Warmup tab shows the same block with the cloud's numbers in place of the local controls. Any member can see this; enrolling needs the manage mailboxes permission and linking needs manage settings.
 
 **Settings > Warmbly Cloud** lists every active mailbox with a switch for whether it is in the pool. For enrolled mailboxes it shows the cloud's view:
 
@@ -71,12 +73,18 @@ Once linked, the **Mailboxes** page marks every enrolled mailbox with a blue **C
 
 Pause and resume per mailbox from the same row. Warmup settings (start volume, daily increase, ceiling, reply rate, window, days) are taken from the mailbox's own settings on your instance at enrollment time.
 
+### When the count stays at zero
+
+Warmbly Cloud sends the warmup mail itself, connecting to your mail server's SMTP from its own network rather than from your instance. A server that accepts only your instance's address, an SMTP host that resolves to a private or internal address, or a port your host blocks from outside will refuse it while your own sending keeps working. When that happens the warmup column turns red with a warning icon, and the mailbox's Warmup tab shows the server's own answer (for example a refused connection or a rejected login) until a send goes through again. Fix the SMTP host, port or allowlist on your mail server; nothing needs re-enrolling.
+
+The count can also hold below the target when the pool has fewer partners free for the mailbox today than the ramp asks for, since a mailbox never writes to the same partner twice in a day. The Warmup tab says so with how many partners are available, and the cloud checks again every few hours.
+
 ## Free and Premium
 
 | Tier | Mailboxes | Partners |
 |------|-----------|----------|
 | Free | Up to 10 per linked workspace | The pool's free tier, plus the paid mailboxes that wrote to it in the last 14 days, which a proven free mailbox writes back to |
-| Premium (the Warmup plan, $15 a month or $144 a year) | Unlimited | The premium tier first; up to 25 proven free mailboxes fill in when the premium tier runs thin, and those mailboxes write back |
+| Premium (the Warmup plan, $15 a month or $144 a year) | Unlimited | The premium tier first; when a mailbox has too few partners in other workspaces (fewer than 25, or its warmup ceiling if higher), that many of the best proven free mailboxes fill in, and those mailboxes write back |
 
 Premium workspaces are always served first. Borrowed partners are limited to mailboxes that have been healthy pool members for at least three days in a workspace in good standing, and only those may write back, so nothing unproven and nothing unsolicited ever reaches a paying mailbox. Every draw favours the inbox that has received the least for what it sent, so a paying mailbox in a thin tier is written to first rather than last. See [pools](/guides/warmup/#pools) for the full rule.
 
@@ -86,13 +94,49 @@ The Warmup plan is the same plan a hosted workspace buys when it only warms and 
 
 ## Safety and enforcement
 
-Enrolled mailboxes are ordinary members of the hosted pool and are held to the same rules: verification tokens on every warmup message, spam placement and complaint tracking, and automatic quarantine or blocking when a mailbox starts hurting partners. A mailbox that gets quarantined on the cloud shows that state on your instance, stops being offered to partners, and re-enters on the same probation terms as any hosted mailbox.
+Enrolled mailboxes are ordinary members of the hosted pool and are held to the same rules: verification tokens on every warmup message, complaint and bounce tracking with automatic quarantine or blocking when a mailbox starts hurting partners, and spam placement that slows a mailbox down. A mailbox that gets quarantined on the cloud stops being offered to partners and re-enters on the same probation terms as any hosted mailbox.
+
+Your instance holds the mailbox to the cloud's verdict as well, exactly as it would one from its own pool. It reads every enrolled mailbox's standing from the cloud every five minutes, and on enrolling, pausing or resuming, and from then on:
+
+| Cloud standing | On your instance |
+|----------------|------------------|
+| `watch` | Campaigns send from the mailbox at reduced volume |
+| `throttled` | Campaigns send from it at half volume until it recovers |
+| `quarantined` or `blocked` | Campaigns skip it until the hold ends |
+
+The same standing feeds the mailbox's health on the **Mailboxes** page, the **Warmup reputation** block in its drawer (marked **Warmbly Cloud**, with the reason and the end of any hold), a campaign's sending limits, the [Advisor](/guides/advisor/) and the dashboard's health summary. A change reaches your instance within five minutes and fires the same `warmup.health_changed`, `warmup.quarantined` and `warmup.blocked` [webhooks](/guides/webhooks/) a local transition does.
+
+If the cloud cannot be reached, the last standing it reported stays in force, and a quarantine or block still ends on its own date. Removing a mailbox from the cloud while it is quarantined or blocked does not lift the hold: when the mailbox rejoins your instance's own pool it keeps the same standing until that date (a block that requires review stays until an administrator lifts it), and from there [the standing follows the address](/guides/warmup/#pool-safety) as it does for any mailbox. Appeals go through the mailbox on Warmbly Cloud, where the verdict was reached.
 
 For mailboxes signed in through Warmbly Cloud the enforcement reaches sending too. Every access token the instance draws is checked on the cloud: a mailbox the cloud has **blocked**, one that is no longer active there, one that was removed from the workspace, or an instance whose link was revoked gets no token, and the instance stops sending and syncing from that mailbox as soon as its cached token expires.
 
+## Placement tests on Warmbly Cloud's seed panel
+
+A self-hosted instance's own seed panel holds whatever its administrator added, often nothing. A linked instance can borrow Warmbly Cloud's instead: pick **Warmbly Cloud** as the panel when you start an [inbox placement test](/guides/placement-tests/), or for a campaign's placement monitor.
+
+The split is the same as for warmup, only narrower:
+
+- **Your instance renders and sends every copy.** The cloud stores no template and never gets the mailbox's credentials; its seed inboxes receive the rendered copies like any recipient. A campaign step renders for a placeholder contact here, not the campaign's first lead, so no lead's details reach the cloud's seed inboxes unless you pick a contact for the test. Copies go out from your mailbox through your own workers, paced and charged to the mailbox's daily limit exactly like a test on any other panel.
+- **The cloud only hands out seed addresses and reports where each copy landed.** It picks seeds for the test (never one on your sender's domain), your instance tells it the Message-ID of each copy it sent, and the cloud answers with the folder each seed found it in. Seed addresses are shown masked, as on any shared panel.
+- **Tests use the linked cloud workspace's free tests**, the same monthly number a hosted workspace on the same plan gets, and a tracking comparison counts as two. Paying for more in credits is only offered on the hosted product's own panel, so past the free tests a test here waits for the next month. Tests on your instance's own panel and on your own seed inboxes are never counted.
+- **You can narrow a test to some providers**, as on any shared panel; the cloud then picks its seeds from those providers alone.
+
+The panel is offered only while the instance is linked. Without a link a test on it is refused with `placement_panel_unavailable`.
+
+## Root redirects served by Warmbly Cloud
+
+A [root redirect](/guides/sending-domains/#root-redirects) sends visitors to a sending domain on to your website. Served from your own instance, the domain has to reach Warmbly through whatever proxy sits in front of it, which on a server behind Traefik, nginx or a hosting panel means routing each domain by hand. A linked instance can pick **Warmbly Cloud** under the redirect's **Served from** instead: Cloud answers for the domain from its own tracking service and issues its certificate, and all you add is DNS.
+
+- Cloud proves the domain on its own terms: it lists its own ownership value for the `_warmbly` `TXT` record and its own addresses for the root, and serves nothing until it sees both.
+- Only the domain, the website and the `www` setting go to Cloud. Visitors to the domain reach Cloud, not your server; nothing about your mailboxes, contacts or mail is involved.
+- Cloud serves up to 200 redirects for one linked instance.
+- Unlinking stops every redirect Cloud served for the instance. Each one says so on your instance and can be moved back to it.
+
+See [serve it from Warmbly Cloud](/guides/sending-domains/#serve-it-from-warmbly-cloud) for how it looks on the sending domains page.
+
 ## Unlinking
 
-On your instance, **Settings > Warmbly Cloud > Disconnect** removes every enrolled mailbox from the pool, deletes their credentials on the cloud and lets local warmup take over. On Warmbly Cloud, **Settings > Linked instances** lists the instances linked to a workspace and can unlink any of them from the other side.
+On your instance, **Settings > Warmbly Cloud > Disconnect** removes every enrolled mailbox from the pool, deletes their credentials on the cloud and lets local warmup take over. Root redirects Cloud served for the instance stop at the same time. On Warmbly Cloud, **Settings > Linked instances** lists the instances linked to a workspace and can unlink any of them from the other side.
 
 ## Self-hosting notes
 

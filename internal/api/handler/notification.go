@@ -57,7 +57,7 @@ func (h *Handler) UpdateNotificationPreferences(c *gin.Context) {
 	}
 	var req models.UpdateNotificationPreferencesRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid payload"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	if req.Preferences.EmailDigestMinutes == 0 {

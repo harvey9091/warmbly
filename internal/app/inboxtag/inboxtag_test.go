@@ -1,14 +1,18 @@
 package inboxtag
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
@@ -24,33 +28,50 @@ import (
 // when the answer MOVES, not to encode an opinion about what it should be.
 
 type fixture struct {
-	Name         string `json:"name"`
-	Subject      string `json:"subject"`
-	Body         string `json:"body"`
-	Previous     string `json:"previous"`
+	Name     string `json:"name"`
+	Subject  string `json:"subject"`
+	Body     string `json:"body"`
+	Previous string `json:"previous"`
+	// Language is the workspace mail language the fixture was recorded with,
+	// as a models.MailLanguageNames code. Empty for the English set.
+	Language     string `json:"language,omitempty"`
 	ExpectKind   string `json:"expect_kind"`
 	ExpectIntent string `json:"expect_intent"`
 }
 
+// loadFixtures reads every testdata/fixtures*.json and responses*.json, so a
+// set in another language is its own file next to the English one.
 func loadFixtures(t *testing.T) ([]fixture, map[string]Response) {
 	t.Helper()
 
 	var fx []fixture
-	raw, err := os.ReadFile(filepath.Join("testdata", "fixtures.json"))
-	if err != nil {
-		t.Fatalf("read fixtures: %v", err)
-	}
-	if err := json.Unmarshal(raw, &fx); err != nil {
-		t.Fatalf("parse fixtures: %v", err)
+	files, _ := filepath.Glob(filepath.Join("testdata", "fixtures*.json"))
+	for _, name := range files {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		var set []fixture
+		if err := json.Unmarshal(raw, &set); err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		fx = append(fx, set...)
 	}
 
-	var responses map[string]Response
-	raw, err = os.ReadFile(filepath.Join("testdata", "responses.json"))
-	if err != nil {
-		t.Fatalf("read responses: %v", err)
-	}
-	if err := json.Unmarshal(raw, &responses); err != nil {
-		t.Fatalf("parse responses: %v", err)
+	responses := map[string]Response{}
+	files, _ = filepath.Glob(filepath.Join("testdata", "responses*.json"))
+	for _, name := range files {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		var set map[string]Response
+		if err := json.Unmarshal(raw, &set); err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for k, v := range set {
+			responses[k] = v
+		}
 	}
 	return fx, responses
 }
@@ -203,11 +224,33 @@ func (c *countingAsker) Ask(_ context.Context, _ any, q map[string]Question) (*R
 }
 
 type fakeRepo struct {
-	tagged   map[string]bool
-	saved    []*repository.InboxTagResult
-	untagged []repository.BackfillCandidate
-	previous string
-	states   []repository.ThreadFollowUpState
+	tagged    map[string]bool
+	saved     []*repository.InboxTagResult
+	untagged  []repository.BackfillCandidate
+	cold      []repository.BackfillCandidate
+	notices   []repository.BackfillCandidate
+	previous  string
+	campaign  string
+	inReplyTo []string
+	reopened  []string
+	states    []repository.ThreadFollowUpState
+	cursor    *repository.FollowUpPosition
+	pages     int
+	base      time.Time
+	// The follow-up sweep's persisted state and lease.
+	fresh         *repository.FollowUpMark
+	pageFailures  int
+	freshFailures int
+	leaseOwner    uuid.UUID
+	leasedUntil   time.Time
+	changes       []repository.FollowUpChange
+	failPage      func(mailbox uuid.UUID, after *repository.FollowUpPosition) error
+	failChanges   error
+	failPositions error
+	second        []repository.ThreadFollowUpState
+	// pageFailingSince and freshFailingSince are when the current run of failures began.
+	pageFailingSince  *time.Time
+	freshFailingSince *time.Time
 }
 
 func (f *fakeRepo) Claim(_ context.Context, _, _ uuid.UUID, id, _ string) (bool, error) {
@@ -242,12 +285,146 @@ func (f *fakeRepo) ReviewSummary(context.Context, uuid.UUID) (repository.InboxTa
 func (f *fakeRepo) ListUntagged(context.Context, uuid.UUID, time.Time, int) ([]repository.BackfillCandidate, error) {
 	return f.untagged, nil
 }
-func (f *fakeRepo) PreviousOutbound(context.Context, uuid.UUID, string, time.Time) (string, string, error) {
-	return f.previous, "", nil
+func (f *fakeRepo) PreviousOutbound(_ context.Context, _ uuid.UUID, _ string, inReplyTo []string, _ time.Time) (string, string, error) {
+	f.inReplyTo = inReplyTo
+	return f.previous, f.campaign, nil
+}
+func (f *fakeRepo) ListColdInboundInCampaignThreads(context.Context, uuid.UUID, time.Time, int) ([]repository.BackfillCandidate, error) {
+	return f.cold, nil
+}
+func (f *fakeRepo) ListUncheckedNotifications(context.Context, uuid.UUID, time.Time, int) ([]repository.BackfillCandidate, error) {
+	return f.notices, nil
+}
+func (f *fakeRepo) Reopen(_ context.Context, _ uuid.UUID, id, _ string) ([]string, error) {
+	delete(f.tagged, id)
+	f.reopened = append(f.reopened, id)
+	return []string{"cold-inbound", "needs-review"}, nil
 }
 
-func (f *fakeRepo) ThreadStates(context.Context, uuid.UUID, time.Time, int) ([]repository.ThreadFollowUpState, error) {
-	return f.states, nil
+// fakeMailbox holds the fake threads in states, fakeMailbox2 those in second; each in walk order, one message each.
+var (
+	fakeMailbox  = uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	fakeMailbox2 = uuid.MustParse("00000000-0000-0000-0000-000000000002")
+)
+
+// position puts thread i one minute older than thread i-1, counting back from base.
+func (f *fakeRepo) position(i int) repository.FollowUpPosition {
+	return f.positionIn(fakeMailbox, i)
+}
+
+func (f *fakeRepo) positionIn(mailbox uuid.UUID, i int) repository.FollowUpPosition {
+	base := f.base
+	if base.IsZero() {
+		base = time.Now()
+	}
+	return repository.FollowUpPosition{
+		MailboxID: mailbox,
+		At:        base.Add(-time.Duration(i) * time.Minute),
+		RowID:     uuid.NewSHA1(mailbox, []byte(strconv.Itoa(i))),
+	}
+}
+
+func (f *fakeRepo) FollowUpMailboxes(context.Context, uuid.UUID) ([]uuid.UUID, error) {
+	if len(f.second) > 0 {
+		return []uuid.UUID{fakeMailbox, fakeMailbox2}, nil
+	}
+	return []uuid.UUID{fakeMailbox}, nil
+}
+
+func (f *fakeRepo) FollowUpPage(_ context.Context, _, mailbox uuid.UUID, since time.Time, after *repository.FollowUpPosition, limit int) (repository.FollowUpPage, error) {
+	f.pages++
+	if f.failPage != nil {
+		if err := f.failPage(mailbox, after); err != nil {
+			return repository.FollowUpPage{}, err
+		}
+	}
+	return f.page(mailbox, since, after, limit), nil
+}
+
+func (f *fakeRepo) page(mailbox uuid.UUID, since time.Time, after *repository.FollowUpPosition, limit int) repository.FollowUpPage {
+	states := f.states
+	if mailbox == fakeMailbox2 {
+		states = f.second
+	}
+	start := 0
+	if after != nil {
+		for start < len(states) && f.positionIn(mailbox, start).RowID != after.RowID {
+			start++
+		}
+		start++
+	}
+	var page repository.FollowUpPage
+	for i := start; i < len(states) && i < start+limit && !f.positionIn(mailbox, i).At.Before(since); i++ {
+		st := states[i]
+		st.Position = f.positionIn(mailbox, i)
+		page.States = append(page.States, st)
+		page.Rows++
+		page.Last = &st.Position
+	}
+	return page
+}
+
+func (f *fakeRepo) FollowUpPagePositions(_ context.Context, _, mailbox uuid.UUID, since time.Time, after *repository.FollowUpPosition, limit int) (repository.FollowUpPage, error) {
+	if f.failPositions != nil {
+		return repository.FollowUpPage{}, f.failPositions
+	}
+	page := f.page(mailbox, since, after, limit)
+	page.States = nil
+	return page, nil
+}
+
+func (f *fakeRepo) FollowUpChanges(_ context.Context, _ uuid.UUID, after repository.FollowUpMark, until time.Time, limit int) ([]repository.FollowUpChange, error) {
+	if f.failChanges != nil {
+		return nil, f.failChanges
+	}
+	var out []repository.FollowUpChange
+	for _, c := range f.changes {
+		later := c.At.After(after.At) || (c.At.Equal(after.At) && bytes.Compare(c.RowID[:], after.RowID[:]) > 0)
+		if later && !c.At.After(until) && len(out) < limit {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeRepo) FollowUpThreadStates(_ context.Context, _ uuid.UUID, threads []string, _ time.Time) ([]repository.ThreadFollowUpState, error) {
+	var out []repository.ThreadFollowUpState
+	for _, st := range append(append([]repository.ThreadFollowUpState{}, f.states...), f.second...) {
+		if slices.Contains(threads, st.ThreadID) {
+			out = append(out, st)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeRepo) ClaimFollowUpSweep(_ context.Context, _, owner uuid.UUID, lease time.Duration) (*repository.FollowUpSweepState, error) {
+	now := time.Now()
+	if f.leaseOwner != uuid.Nil && f.leaseOwner != owner && f.leasedUntil.After(now) {
+		return nil, nil
+	}
+	f.leaseOwner, f.leasedUntil = owner, now.Add(lease)
+	return &repository.FollowUpSweepState{
+		Cursor: f.cursor, Fresh: f.fresh, PageFailures: f.pageFailures, FreshFailures: f.freshFailures,
+		PageFailingSince: f.pageFailingSince, FreshFailingSince: f.freshFailingSince, Now: now,
+	}, nil
+}
+
+func (f *fakeRepo) SaveFollowUpSweep(_ context.Context, _, owner uuid.UUID, lease time.Duration, st repository.FollowUpSweepState) (bool, error) {
+	now := time.Now()
+	if f.leaseOwner != owner {
+		return false, nil
+	}
+	f.cursor, f.fresh, f.pageFailures, f.freshFailures = st.Cursor, st.Fresh, st.PageFailures, st.FreshFailures
+	f.pageFailingSince, f.freshFailingSince = st.PageFailingSince, st.FreshFailingSince
+	f.leasedUntil = now.Add(lease)
+	return true, nil
+}
+
+func (f *fakeRepo) ReleaseFollowUpSweep(_ context.Context, _, owner uuid.UUID) error {
+	if f.leaseOwner == owner {
+		f.leasedUntil = time.Time{}
+	}
+	return nil
 }
 
 func (f *fakeRepo) GetByMessageID(_ context.Context, _ uuid.UUID, id string) (*repository.InboxTagResult, error) {
@@ -300,7 +477,7 @@ func TestOneCallPerEmailWithAllQuestions(t *testing.T) {
 	if asker.calls != 1 {
 		t.Fatalf("made %d calls, want exactly 1", asker.calls)
 	}
-	if want := len(Questions()); asker.questions != want {
+	if want := len(QuestionsFor(nil, true)); asker.questions != want {
 		t.Fatalf("sent %d questions, want all %d in the one call", asker.questions, want)
 	}
 }
@@ -397,5 +574,59 @@ func TestDisabledMakesNoCalls(t *testing.T) {
 	}
 	if asker.calls != 0 {
 		t.Fatalf("made %d calls while disabled", asker.calls)
+	}
+}
+
+// A failure notice is a bounce, not a helpdesk receipt, and a delay notice is
+// a soft one. Decided from the headers, with no model call.
+func TestDeterministicKindReadsBounces(t *testing.T) {
+	daemon := map[string][]string{"From": {"Mail Delivery Subsystem <mailer-daemon@googlemail.com>"}}
+	hard := deterministicKind(Message{Headers: daemon, Subject: "Delivery Status Notification (Failure)", BodyText: "The group may not exist."}, nil)
+	if hard != KindBounceHard {
+		t.Errorf("failure notice kind = %q, want %q", hard, KindBounceHard)
+	}
+	soft := deterministicKind(Message{Headers: daemon, Subject: "Delivery Status Notification (Delay)", BodyText: "Delivery is delayed; we will retry."}, nil)
+	if soft != KindBounceSoft {
+		t.Errorf("delay notice kind = %q, want %q", soft, KindBounceSoft)
+	}
+	if got := deterministicKind(Message{Headers: map[string][]string{"From": {"Jane <jane@example.org>"}}, Subject: "Re: Hi", BodyText: "Sounds good"}, nil); got != "" {
+		t.Errorf("a person's reply kind = %q, want it left to the model", got)
+	}
+}
+
+// The tagger sees the headers the sync carried as pseudo-flags, so a failure
+// notice is a bounce before any model is asked.
+func TestMessageFromReadsSyncedHeaders(t *testing.T) {
+	m := MessageFrom(uuid.New(), uuid.New(), &models.EmailMessageStoreData{
+		Folder:    models.FolderInbox,
+		FromAddr:  []string{"Notifier <alerts@example.org>"},
+		Subject:   "Your message",
+		Flags:     []string{"\\Seen", "X-Failed-Recipients:info@example.org"},
+		InReplyTo: []string{"<a@example.test>"},
+	}, nil, "", "")
+	if deterministicKind(m, nil) != KindBounceHard {
+		t.Errorf("kind = %q, want %q from the synced header", deterministicKind(m, nil), KindBounceHard)
+	}
+	if len(m.InReplyTo) != 1 {
+		t.Errorf("InReplyTo not carried: %v", m.InReplyTo)
+	}
+}
+
+// A no-reply security alert is a notification, and only machine mail that
+// answers something is an auto-reply. The sender alone decides it, which is
+// all the backfill has.
+func TestDeterministicKindTellsNoticesFromAutoReplies(t *testing.T) {
+	alert := deterministicKind(Message{FromAddr: "Google <no-reply@accounts.google.com>", Subject: "Security alert", BodyText: "2-Step Verification turned on"}, nil)
+	if alert != KindNotification {
+		t.Errorf("security alert kind = %q, want %q", alert, KindNotification)
+	}
+	ack := deterministicKind(Message{
+		FromAddr:  "Support <noreply@helpdesk.example>",
+		Subject:   "Re: Partnership",
+		BodyText:  "We received your request.",
+		InReplyTo: []string{"<ours@example.test>"},
+	}, nil)
+	if ack != KindAutoReplyTicket {
+		t.Errorf("ticket receipt kind = %q, want %q", ack, KindAutoReplyTicket)
 	}
 }

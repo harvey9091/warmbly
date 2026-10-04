@@ -38,20 +38,21 @@ func (w *WorkerService) HandleWarmupAction(ctx context.Context, action models.Wa
 		return nil
 	}
 
-	w.mailManager.RLock()
-	mail, exists := w.mailManager.Emails[action.EmailID]
-	w.mailManager.RUnlock()
+	mail, exists := w.loadedMailbox(ctx, action.EmailID)
 	var err error
 	switch {
 	case !exists:
 		// Engagement on a mailbox this worker is not holding is dropped; it
 		// is best effort and a mailbox mid-move earns its signal elsewhere.
-		// A retention delete is redelivered instead, because the control
-		// plane has already retired the row and will not send it again.
+		// A retention delete (its row is already retired) and a removal check
+		// are redelivered instead, in case the mailbox is still loading.
 		log.Warn().Str("email_id", action.EmailID.String()).Msg("Email account not found for warmup action")
-		if hasWarmupAction(action.Actions, models.WarmupActionDelete) {
+		if hasWarmupAction(action.Actions, models.WarmupActionDelete) ||
+			hasWarmupAction(action.Actions, models.WarmupActionVerifyRemoval) {
 			err = errors.New("mailbox not loaded on this worker")
 		}
+	case hasWarmupAction(action.Actions, models.WarmupActionVerifyRemoval):
+		err = w.verifyWarmupRemoval(ctx, mail, action)
 	case mail.GoogleData != nil && mail.GoogleData.Client != nil:
 		err = w.runGoogleWarmupActions(ctx, mail, action)
 	case mail.GraphData != nil && mail.GraphData.Client != nil:
@@ -67,22 +68,21 @@ func (w *WorkerService) HandleWarmupAction(ctx context.Context, action models.Wa
 		return nil
 	}
 	// Engagement is best effort and never returns here. A retention delete
-	// is not: the control plane has already retired the row, so a failure
-	// here is the only chance the message has of going. The bus redelivers
-	// on an error, bounded so a message the provider will never give up is
-	// not retried forever.
+	// (the row is already retired) and a removal check are redelivered, a
+	// bounded number of times.
 	if d := deliveryOf(ctx); d.redelivers && d.attempt < warmupDeleteRedeliveries {
 		return err
 	}
 	log.Error().Err(err).
 		Str("email_id", action.EmailID.String()).
 		Str("rfc_message_id", action.RFCMessageID).
-		Msg("Warmup delete gave up; the message stays in the mailbox")
+		Strs("actions", action.Actions).
+		Msg("Warmup action gave up")
 	return nil
 }
 
-// warmupDeleteRedeliveries bounds how many times a failed retention delete is
-// redelivered before the message is left in place.
+// warmupDeleteRedeliveries bounds how many times a failed retention delete or
+// removal check is redelivered before it is given up.
 const warmupDeleteRedeliveries = 5
 
 func (w *WorkerService) runGoogleWarmupActions(ctx context.Context, mail *wmail.WMail, action models.WarmupEmailAction) error {
@@ -313,6 +313,20 @@ func (w *WorkerService) runImapWarmupActions(ctx context.Context, mail *wmail.WM
 	// whatever message inherits the number.
 	moved := false
 
+	// A message still in Junk gets the not-junk keywords once, before either
+	// move takes it out, because its UID is void afterwards.
+	inJunk := sourceBox != nil && boxName == sourceBox.Name && imap.IsSpamMailbox(sourceBox.Name, sourceBox.Attrs)
+	unjunked := false
+	unjunk := func() {
+		if !inJunk || unjunked {
+			return
+		}
+		unjunked = true
+		if err := imapClient.MarkNotJunk(ctx, boxName, uid); err != nil {
+			log.Debug().Err(err).Uint32("uid", uid).Msg("Server refused not-junk keywords (IMAP)")
+		}
+	}
+
 	for _, act := range action.Actions {
 		if moved {
 			continue
@@ -322,6 +336,7 @@ func (w *WorkerService) runImapWarmupActions(ctx context.Context, mail *wmail.WM
 			if dst == "" {
 				continue
 			}
+			unjunk()
 			// A message already in the destination is not moved, and its UID is
 			// still good for the actions after this one.
 			did, err := imapClient.MoveToFolder(ctx, boxName, dst, uid)
@@ -338,9 +353,10 @@ func (w *WorkerService) runImapWarmupActions(ctx context.Context, mail *wmail.WM
 			// Only a message still sitting in a Junk folder is rescued. With any
 			// placement but "inbox" the filing move above already took it out of
 			// Junk, which is itself the not-spam signal the server learns from.
-			if sourceBox == nil || boxName != sourceBox.Name || !imap.IsSpamMailbox(sourceBox.Name, sourceBox.Attrs) {
+			if !inJunk {
 				continue
 			}
+			unjunk()
 			if err := imapClient.RemoveFromSpam(ctx, boxName, inboxName, uid); err != nil {
 				log.Error().Err(err).Uint32("uid", uid).Msg("Failed to remove from spam (IMAP)")
 				continue

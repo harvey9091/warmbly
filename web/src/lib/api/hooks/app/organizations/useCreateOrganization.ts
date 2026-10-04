@@ -5,7 +5,7 @@ export default function useCreateOrganization() {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: (data: { name: string }) => createOrganization(data),
+        mutationFn: (data: { name: string; timezone?: string }) => createOrganization(data),
         onSuccess: () => {
             queryClient.invalidateQueries({
                 queryKey: ["organizations", "list"],

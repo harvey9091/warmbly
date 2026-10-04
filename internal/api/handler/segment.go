@@ -75,7 +75,7 @@ func (h *Handler) CreateSegment(c *gin.Context) {
 	}
 	var in models.SegmentWrite
 	if err := c.ShouldBindJSON(&in); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 	var createdBy *uuid.UUID
@@ -98,7 +98,7 @@ func (h *Handler) UpdateSegment(c *gin.Context) {
 	}
 	var in models.SegmentWrite
 	if err := c.ShouldBindJSON(&in); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 	out, xerr := h.SegmentService.Update(c.Request.Context(), orgID, id, &in)
@@ -131,7 +131,7 @@ func (h *Handler) PreviewSegment(c *gin.Context) {
 	}
 	var in models.SegmentPreview
 	if err := c.ShouldBindJSON(&in); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 	n, xerr := h.SegmentService.Preview(c.Request.Context(), orgID, &in)
@@ -150,7 +150,7 @@ func (h *Handler) SetSegmentMembers(c *gin.Context) {
 	}
 	var in models.SegmentMembersWrite
 	if err := c.ShouldBindJSON(&in); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 	// "Select all matching" names a filter instead of listing ids; resolve it
@@ -180,7 +180,7 @@ func (h *Handler) GetSegmentMemberModes(c *gin.Context) {
 		Contacts []string `json:"contacts"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 	modes, xerr := h.SegmentService.MemberModes(c.Request.Context(), orgID, id, in.Contacts)
@@ -203,7 +203,7 @@ func (h *Handler) AddSegmentToCampaign(c *gin.Context) {
 	}
 	var in models.SegmentAddToCampaign
 	if err := c.ShouldBindJSON(&in); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 	res, xerr := h.SegmentService.AddToCampaign(c.Request.Context(), orgID, middleware.GetUserID(c), id, &in)
@@ -255,7 +255,7 @@ func (h *Handler) SetCampaignSegments(c *gin.Context) {
 	}
 	var in models.CampaignSegmentsWrite
 	if err := c.ShouldBindJSON(&in); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 	// An omitted field must not read as "detach everything"; only an

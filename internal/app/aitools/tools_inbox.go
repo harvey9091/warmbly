@@ -17,7 +17,7 @@ import (
 func (d Deps) registerInboxActionTools(r *Registry) {
 	r.Register(Tool{
 		Name:        "mark_thread_seen",
-		Description: "Mark all messages in a thread seen (or unseen).",
+		Description: "Mark a thread seen (every message) or unseen (its newest received message, as in Gmail).",
 		InputSchema: objectSchema(map[string]any{
 			"thread_id": strProp("The thread id."),
 			"seen":      boolProp("true to mark seen (default), false to mark unseen."),
@@ -30,7 +30,7 @@ func (d Deps) registerInboxActionTools(r *Registry) {
 
 	r.Register(Tool{
 		Name:        "set_thread_labels",
-		Description: "Replace a conversation thread's label (category) set. Pass the full desired set; an empty list clears labels.",
+		Description: "Replace a conversation thread's label set (labels are called categories in the API). Pass the full desired set; an empty list clears labels.",
 		InputSchema: objectSchema(map[string]any{
 			"thread_id":    strProp("The thread id."),
 			"category_ids": arrProp("Category (label) UUIDs to apply.", strProp("Category UUID.")),
@@ -68,7 +68,7 @@ func (d Deps) registerInboxActionTools(r *Registry) {
 
 	r.Register(Tool{
 		Name:            "list_scheduled_sends",
-		Description:     "List the user's queued (not-yet-sent) outbound messages, with their task ids.",
+		Description:     "List the workspace's queued (not-yet-sent) outbound messages, with their task ids.",
 		InputSchema:     objectSchema(map[string]any{}),
 		Risk:            generation.RiskRead,
 		RequiredOrgPerm: models.PermAccessUnibox,
@@ -120,7 +120,8 @@ func (d Deps) markThreadSeen(ctx context.Context, inv Invocation, args json.RawM
 	if in.Seen != nil {
 		seen = *in.Seen
 	}
-	if _, xerr := d.Unibox.MarkSeenBulk(ctx, inv.OrgID, &models.MarkSeen{EmailIDs: ids, Seen: seen}); xerr != nil {
+	// By thread, so unseen follows the same rule as the inbox's Mark as unread.
+	if _, xerr := d.Unibox.MarkSeenBulk(ctx, inv.OrgID, &models.MarkSeen{ThreadIDs: []string{in.ThreadID}, Seen: seen}); xerr != nil {
 		return "", fromErrx(xerr)
 	}
 	return jsonResult(map[string]any{"ok": true, "updated": len(ids), "seen": seen})
@@ -206,7 +207,7 @@ func (d Deps) listScheduledSends(ctx context.Context, inv Invocation, _ json.Raw
 	if err := d.requireUnibox(ctx, inv); err != nil {
 		return "", err
 	}
-	items, xerr := d.Unibox.ListScheduled(ctx, inv.UserID)
+	items, xerr := d.Unibox.ListScheduled(ctx, inv.OrgID, nil)
 	if xerr != nil {
 		return "", fromErrx(xerr)
 	}
@@ -227,7 +228,7 @@ func (d Deps) cancelScheduledSend(ctx context.Context, inv Invocation, args json
 	if err != nil {
 		return "", err
 	}
-	if xerr := d.Unibox.CancelScheduled(ctx, inv.UserID, tid); xerr != nil {
+	if xerr := d.Unibox.CancelScheduled(ctx, inv.OrgID, tid, nil); xerr != nil {
 		return "", fromErrx(xerr)
 	}
 	d.logAudit(ctx, inv, models.AuditActionUpdate, models.AuditEntityUnibox, &tid, nil)

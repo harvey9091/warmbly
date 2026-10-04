@@ -15,6 +15,7 @@ import (
 	"net/mail"
 	"net/smtp"
 	"net/textproto"
+	"sort"
 	"strings"
 	"time"
 
@@ -154,19 +155,64 @@ func (c *Client) Send(
 	return raw, c.sendRaw(ctx, from.Address, recipients, raw)
 }
 
-// writeAlternativeBody writes a multipart/alternative message (text/plain +
-// optional text/html) including the top-level headers.
+// writeAlternativeBody writes the message with its top-level headers: a single
+// text part when there is only one body, else multipart/alternative. An
+// alternative wrapper around one part is a filter signal (rspamd MIME_MA_MISSING_HTML).
 func (c *Client) writeAlternativeBody(msg *bytes.Buffer, headers map[string]string, bodyPlain, bodyHTML string) {
+	if bodyPlain == "" || bodyHTML == "" {
+		contentType, body := "text/plain; charset=UTF-8", bodyPlain
+		if bodyPlain == "" {
+			contentType, body = "text/html; charset=UTF-8", bodyHTML
+		}
+		headers["Content-Type"] = contentType
+		headers["Content-Transfer-Encoding"] = "quoted-printable"
+		writeHeaders(msg, headers)
+		qp := quotedprintable.NewWriter(msg)
+		qp.Write([]byte(body))
+		qp.Close()
+		return
+	}
+
 	writer := multipart.NewWriter(msg)
 	headers["Content-Type"] = fmt.Sprintf("multipart/alternative; boundary=%s", writer.Boundary())
-
-	for k, v := range headers {
-		fmt.Fprintf(msg, "%s: %s\r\n", k, v)
-	}
-	fmt.Fprint(msg, "\r\n")
+	writeHeaders(msg, headers)
 
 	writeTextParts(writer, bodyPlain, bodyHTML)
 	writer.Close()
+}
+
+// headerOrder is the order top-level headers go on the wire, the one mail
+// clients use. Anything not listed follows, sorted, so no two sends differ.
+var headerOrder = []string{
+	"Date", "From", "To", "Cc", "Message-ID", "In-Reply-To", "References", "Subject",
+	"MIME-Version", "Content-Type", "Content-Transfer-Encoding",
+}
+
+// writeHeaders writes headers in headerOrder, then a blank line.
+func writeHeaders(msg *bytes.Buffer, headers map[string]string) {
+	rank := make(map[string]int, len(headerOrder))
+	for i, k := range headerOrder {
+		rank[k] = i
+	}
+	keys := make([]string, 0, len(headers))
+	for k := range headers {
+		keys = append(keys, k)
+	}
+	sort.SliceStable(keys, func(i, j int) bool {
+		ri, iok := rank[keys[i]]
+		rj, jok := rank[keys[j]]
+		switch {
+		case iok && jok:
+			return ri < rj
+		case iok != jok:
+			return iok
+		}
+		return keys[i] < keys[j]
+	})
+	for _, k := range keys {
+		fmt.Fprintf(msg, "%s: %s\r\n", k, headers[k])
+	}
+	fmt.Fprint(msg, "\r\n")
 }
 
 // writeMixedBody writes a multipart/mixed message: a multipart/alternative
@@ -175,22 +221,22 @@ func (c *Client) writeAlternativeBody(msg *bytes.Buffer, headers map[string]stri
 func (c *Client) writeMixedBody(msg *bytes.Buffer, headers map[string]string, bodyPlain, bodyHTML string, attachments []Attachment) {
 	mixed := multipart.NewWriter(msg)
 	headers["Content-Type"] = fmt.Sprintf("multipart/mixed; boundary=%s", mixed.Boundary())
+	writeHeaders(msg, headers)
 
-	for k, v := range headers {
-		fmt.Fprintf(msg, "%s: %s\r\n", k, v)
+	if bodyPlain == "" || bodyHTML == "" {
+		// One body is a direct child: filters read nested parts too.
+		writeTextParts(mixed, bodyPlain, bodyHTML)
+	} else {
+		var altBuf bytes.Buffer
+		alt := multipart.NewWriter(&altBuf)
+		writeTextParts(alt, bodyPlain, bodyHTML)
+		alt.Close()
+
+		altPart, _ := mixed.CreatePart(textproto.MIMEHeader{
+			"Content-Type": {fmt.Sprintf("multipart/alternative; boundary=%s", alt.Boundary())},
+		})
+		altPart.Write(altBuf.Bytes())
 	}
-	fmt.Fprint(msg, "\r\n")
-
-	// multipart/alternative sub-tree for the text bodies.
-	var altBuf bytes.Buffer
-	alt := multipart.NewWriter(&altBuf)
-	writeTextParts(alt, bodyPlain, bodyHTML)
-	alt.Close()
-
-	altPart, _ := mixed.CreatePart(textproto.MIMEHeader{
-		"Content-Type": {fmt.Sprintf("multipart/alternative; boundary=%s", alt.Boundary())},
-	})
-	altPart.Write(altBuf.Bytes())
 
 	// One attachment part per file.
 	for _, a := range attachments {
@@ -293,6 +339,9 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 	// The socket may be 587 with STARTTLS when the mailbox's 465 never
 	// answered; the mode to speak is the one the dial reports.
 	dialed, err := DialSubmission(ctx, c.BindIP, host, port, security)
+	if errors.Is(err, ErrSMTPSEgressBlocked) {
+		return errx.ErrMailSMTPSEgressBlocked(addr)
+	}
 	if err != nil || dialed.Conn == nil {
 		if err == nil {
 			err = errors.New("dial returned no connection")
@@ -429,7 +478,9 @@ func (c *Client) sendRaw(ctx context.Context, from string, to []string, data []b
 			if !permanentReply(err) {
 				return errx.ErrMailServerUnreachableAt("rcpt to", err)
 			}
-			return errx.ErrMailRecipientRejected(err.Error())
+			refused := errx.ErrMailRecipientRejected(err.Error())
+			refused.Recipient = r
+			return refused
 		}
 	}
 	w, err := client.Data()

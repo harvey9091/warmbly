@@ -40,18 +40,18 @@ export const ACTION_LABELS: Record<string, string> = {
     "discord.notify": "Send a Discord message",
     "hubspot.upsert_contact": "Create / update HubSpot contact",
     "pipedrive.upsert_person": "Create / update Pipedrive person",
-    "salesforce.upsert_contact": "Create / update Salesforce contact",
+    "salesforce.upsert_contact": "Create / update Salesforce record",
     "close.upsert_lead": "Create / update Close lead",
     "webhook.ping": "Send a webhook",
     // Native (Warmbly built-in) actions — no external connection needed.
-    "warmbly.add_tag": "Add a tag",
-    "warmbly.remove_tag": "Remove a tag",
+    "warmbly.add_tag": "Add a label",
+    "warmbly.remove_tag": "Remove a label",
     "warmbly.create_task": "Create a task",
     "warmbly.create_deal": "Create a deal",
     "warmbly.move_deal_stage": "Move the deal stage",
     "warmbly.unsubscribe": "Unsubscribe the contact",
     "warmbly.run_automation": "Run another automation",
-    "warmbly.label_email": "Label the email",
+    "warmbly.label_email": "Label the conversation",
     "warmbly.set_variables": "Set variables",
     "warmbly.fire_event": "Fire event",
     "warmbly.upsert_contact": "Create or update contact",
@@ -235,7 +235,7 @@ export const CONTACT_SOURCES = [
     { value: "api", label: "API" },
     { value: "form", label: "Form submission" },
     { value: "automation", label: "Automation" },
-    { value: "ai_assistant", label: "AI assistant" },
+    { value: "ai_assistant", label: "Remie" },
 ];
 
 export const TRIGGER_FIELDS: Record<string, TriggerFieldDef[]> = {

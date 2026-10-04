@@ -109,6 +109,9 @@ func (s *Service) createOwner(ctx context.Context, address string) error {
 		if plain == "" {
 			return fmt.Errorf("bootstrap: WARMBLY_BOOTSTRAP_EMAIL is set but neither WARMBLY_BOOTSTRAP_PASSWORD_HASH nor WARMBLY_BOOTSTRAP_PASSWORD is")
 		}
+		if perr := crypt.PasswordError(plain); perr != nil {
+			return fmt.Errorf("bootstrap: WARMBLY_BOOTSTRAP_PASSWORD is refused: %s", perr.Message)
+		}
 		log.Printf("Warning: WARMBLY_BOOTSTRAP_PASSWORD is a plaintext password in an environment variable. Prefer WARMBLY_BOOTSTRAP_PASSWORD_HASH.")
 		hashed, herr := argon2.Hash(plain)
 		if herr != nil {
@@ -126,7 +129,7 @@ func (s *Service) createOwner(ctx context.Context, address string) error {
 	}
 
 	orgName := bootstrapOrgName(u.FirstName)
-	org, orgErr := s.orgSvc.Create(ctx, u.ID, orgName)
+	org, orgErr := s.orgSvc.Create(ctx, u.ID, orgName, "")
 	if orgErr != nil {
 		return fmt.Errorf("bootstrap: creating the organization: %w", orgErr)
 	}
@@ -320,7 +323,7 @@ func (s *Service) Claim(ctx context.Context, token, address, password, firstName
 	}
 
 	orgName := bootstrapOrgName(u.FirstName)
-	org, orgErr := s.orgSvc.Create(ctx, u.ID, orgName)
+	org, orgErr := s.orgSvc.Create(ctx, u.ID, orgName, "")
 	if orgErr != nil {
 		errs.CaptureException(orgErr)
 		return nil, errx.InternalError()

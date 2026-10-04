@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -18,21 +19,37 @@ import (
 // handlers make.
 type retentionWarmupRepo struct {
 	repository.WarmupRepository
-	rec *repository.WarmupReceived
+	rec  *repository.WarmupReceived
+	held *[]repository.WarmupSpamMove
 }
 
 func (r retentionWarmupRepo) GetWarmupReceived(context.Context, uuid.UUID, uuid.UUID) (*repository.WarmupReceived, error) {
 	return r.rec, nil
 }
 
+func (r retentionWarmupRepo) RecordWarmupSpamMove(_ context.Context, m repository.WarmupSpamMove) (bool, error) {
+	*r.held = append(*r.held, m)
+	return true, nil
+}
+
 // retentionWarmupService records which strikes the handlers asked for.
 type retentionWarmupService struct {
 	warmupapp.Service
 	strikes []string
+	held    []repository.WarmupSpamMove
+	fail    bool
 }
 
 func (s *retentionWarmupService) RecordTampering(_ context.Context, _ uuid.UUID, _, kind string) (*models.WarmupParticipantHealth, *errx.Error) {
+	if s.fail {
+		return nil, errx.InternalError()
+	}
 	s.strikes = append(s.strikes, kind)
+	return nil, nil
+}
+
+func (s *retentionWarmupService) WithdrawTampering(_ context.Context, _ uuid.UUID, _, kind string) (*models.WarmupParticipantHealth, *errx.Error) {
+	s.strikes = append(s.strikes, "withdraw:"+kind)
 	return nil, nil
 }
 
@@ -44,7 +61,7 @@ func (s *retentionWarmupService) ApplySpamReport(context.Context, uuid.UUID, uui
 func retentionService(rec *repository.WarmupReceived) (*JobsService, *retentionWarmupService) {
 	svc := &retentionWarmupService{}
 	return &JobsService{
-		WarmupRepo:      retentionWarmupRepo{rec: rec},
+		WarmupRepo:      retentionWarmupRepo{rec: rec, held: &svc.held},
 		WarmupService:   svc,
 		EmailRepository: warmupInboxEmailRepo{},
 	}, svc
@@ -83,63 +100,206 @@ func TestWarmupDeletionCounts(t *testing.T) {
 	}
 }
 
-// A removal of warmup mail is a strike only while the message is fresh. Later
-// it is the mailbox owner tidying, Gmail purging its Trash, a server retention
-// rule, or the platform's own retention, none of which is harm.
-func TestRemoveEmailStrikesOnlyFreshWarmupMail(t *testing.T) {
+// A removal of warmup mail is judged only while the message is fresh, and then
+// never on the removal itself: the worker is asked where the message went.
+// Later it is the mailbox owner tidying, Gmail purging its Trash, a server
+// retention rule, or the platform's own retention, none of which is harm.
+func TestRemoveEmailChecksOnlyFreshWarmupMail(t *testing.T) {
 	cases := []struct {
-		name    string
-		rec     *repository.WarmupReceived
-		strikes int
+		name   string
+		rec    *repository.WarmupReceived
+		checks int
 	}{
-		{"deleted an hour after arrival", receivedAgo(time.Hour), 1},
-		{"deleted a week after arrival", receivedAgo(7 * 24 * time.Hour), 0},
+		{"removed an hour after arrival", receivedAgo(time.Hour), 1},
+		{"removed a week after arrival", receivedAgo(7 * 24 * time.Hour), 0},
 		{"not warmup at all", nil, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s, svc := retentionService(tc.rec)
+			pub := &backfillPublisher{}
+			worker := uuid.New()
+			s.Publisher = pub
+			s.EmailRepository = &backfillEmailRepo{account: &models.Email{WorkerID: &worker}}
 			if err := s.HandleRemoveEmail(context.Background(), &models.JobEventRemoveEmail{
 				UserID: uuid.New(), EmailID: uuid.New(), ID: uuid.New(),
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if len(svc.strikes) != tc.strikes {
-				t.Fatalf("strikes = %v, want %d", svc.strikes, tc.strikes)
+			if len(svc.strikes) != 0 {
+				t.Fatalf("a removal was charged before the mailbox was searched: %v", svc.strikes)
+			}
+			if len(pub.actions) != tc.checks {
+				t.Fatalf("published %d checks, want %d", len(pub.actions), tc.checks)
+			}
+			if tc.checks == 1 {
+				a := pub.actions[0]
+				if len(a.Actions) != 1 || a.Actions[0] != models.WarmupActionVerifyRemoval ||
+					a.RFCMessageID != tc.rec.MessageID || a.Recheck || pub.workers[0] != worker {
+					t.Fatalf("check carried %+v to %v", a, pub.workers[0])
+				}
 			}
 		})
 	}
 }
 
-func TestRemoveEmailNeverStrikesARetiredMessage(t *testing.T) {
-	rec := receivedAgo(time.Hour)
-	retired := time.Now().Add(-time.Minute)
-	rec.RetiredAt = &retired
-	s, svc := retentionService(rec)
+// A mailbox with no worker to search it is not charged.
+func TestRemoveEmailWithNowhereToCheckChargesNothing(t *testing.T) {
+	s, svc := retentionService(receivedAgo(time.Hour))
+	pub := &backfillPublisher{}
+	s.Publisher = pub
 	if err := s.HandleRemoveEmail(context.Background(), &models.JobEventRemoveEmail{
 		UserID: uuid.New(), EmailID: uuid.New(), ID: uuid.New(),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(svc.strikes) != 0 {
-		t.Fatalf("the platform's own deletion was recorded as tampering: %v", svc.strikes)
+	if len(svc.strikes) != 0 || len(pub.actions) != 0 {
+		t.Fatalf("strikes %v, checks %d; want neither", svc.strikes, len(pub.actions))
+	}
+}
+
+// The strike follows where the worker found the message. A fresh check
+// records a strike for the trash or nowhere; a recheck never adds one, it
+// confirms the recorded strike or withdraws it when the message is still
+// there or retention removed it since.
+func TestRemovalCheckedJudgesOnWhereTheMessageIs(t *testing.T) {
+	cases := []struct {
+		name     string
+		outcome  string
+		recheck  bool
+		retired  bool
+		want     []string
+		verified int
+	}{
+		{"moved to another folder", models.WarmupRemovalPresent, false, false, []string{"withdraw:deletion"}, 0},
+		{"in the trash", models.WarmupRemovalTrashed, false, false, []string{"deletion"}, 0},
+		{"gone for good", models.WarmupRemovalGone, false, false, []string{"deletion"}, 0},
+		{"a fresh search that cannot tell charges nothing", models.WarmupRemovalUnknown, false, false, nil, 0},
+		{"recheck: still in the mailbox", models.WarmupRemovalPresent, true, false, []string{"withdraw:deletion"}, 0},
+		{"recheck: in the trash confirms without a new strike", models.WarmupRemovalTrashed, true, false, nil, 1},
+		{"recheck: gone after retention retired it", models.WarmupRemovalGone, true, true, []string{"withdraw:deletion"}, 0},
+		{"recheck: cannot tell leaves it and stops asking", models.WarmupRemovalUnknown, true, false, nil, 1},
+		{"an answer this consumer does not know", "sideways", false, false, nil, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, svc := retentionService(receivedAgo(time.Hour))
+			repo := &verifiedRepo{retired: tc.retired}
+			s.WarmupRepo = repo
+			if err := s.HandleWarmupRemovalChecked(context.Background(), &models.JobEventWarmupRemovalChecked{
+				UserID: uuid.New(), EmailID: uuid.New(), RFCMessageID: "<m@example.test>", Outcome: tc.outcome, Recheck: tc.recheck,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if len(svc.strikes) != len(tc.want) {
+				t.Fatalf("strikes = %v, want %v", svc.strikes, tc.want)
+			}
+			for i := range tc.want {
+				if svc.strikes[i] != tc.want[i] {
+					t.Fatalf("strikes = %v, want %v", svc.strikes, tc.want)
+				}
+			}
+			if repo.verified != tc.verified {
+				t.Fatalf("confirmed %d strikes, want %d", repo.verified, tc.verified)
+			}
+		})
+	}
+}
+
+// A strike the service could not record is redelivered, not acked.
+func TestRemovalCheckedRedeliversAFailedStrike(t *testing.T) {
+	s, svc := retentionService(nil)
+	svc.fail = true
+	if err := s.HandleWarmupRemovalChecked(context.Background(), &models.JobEventWarmupRemovalChecked{
+		UserID: uuid.New(), EmailID: uuid.New(), RFCMessageID: "<m@example.test>", Outcome: models.WarmupRemovalTrashed,
+	}); err == nil {
+		t.Fatal("a failed strike was acked")
+	}
+}
+
+// verifiedRepo counts the strikes a search confirmed.
+type verifiedRepo struct {
+	repository.WarmupRepository
+	retired  bool
+	verified int
+}
+
+func (r *verifiedRepo) WarmupReceiptRetired(context.Context, uuid.UUID, string) (bool, error) {
+	return r.retired, nil
+}
+
+func (r *verifiedRepo) MarkTamperingVerified(context.Context, uuid.UUID, string, string) error {
+	r.verified++
+	return nil
+}
+
+// unverifiedRepo serves one listing of strikes recorded before removals were
+// checked and records which searches were asked for.
+type unverifiedRepo struct {
+	repository.WarmupRepository
+	rows      []repository.WarmupTamperingToVerify
+	requested []string
+}
+
+func (r *unverifiedRepo) ListUnverifiedDeletions(context.Context, time.Time, time.Duration, int) ([]repository.WarmupTamperingToVerify, error) {
+	return r.rows, nil
+}
+
+func (r *unverifiedRepo) MarkTamperingVerifyRequested(_ context.Context, _ uuid.UUID, messageID string) error {
+	r.requested = append(r.requested, messageID)
+	return nil
+}
+
+// Every old strike is searched for, and marked asked only once its search is
+// on the bus, so a publish that fails is offered again next pass.
+func TestRecheckTamperingSearchesEachOldStrike(t *testing.T) {
+	rows := []repository.WarmupTamperingToVerify{
+		{EmailAccountID: uuid.New(), UserID: uuid.New(), WorkerID: uuid.New(), MessageID: "<a@example.test>"},
+		{EmailAccountID: uuid.New(), UserID: uuid.New(), WorkerID: uuid.New(), MessageID: "<b@example.test>"},
+	}
+	repo := &unverifiedRepo{rows: rows}
+	pub := &backfillPublisher{}
+	s := &JobsService{WarmupRepo: repo, Publisher: pub}
+	if err := s.recheckTamperingBatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(pub.actions) != 2 || len(repo.requested) != 2 {
+		t.Fatalf("published %d, marked %d; want 2 and 2", len(pub.actions), len(repo.requested))
+	}
+	if pub.actions[1].RFCMessageID != rows[1].MessageID || pub.workers[1] != rows[1].WorkerID ||
+		pub.actions[1].Actions[0] != models.WarmupActionVerifyRemoval || !pub.actions[1].Recheck {
+		t.Fatalf("checks carried %+v to %v", pub.actions, pub.workers)
+	}
+
+	failing := &unverifiedRepo{rows: rows}
+	s = &JobsService{WarmupRepo: failing, Publisher: &backfillPublisher{err: errors.New("bus down")}}
+	if err := s.recheckTamperingBatch(context.Background()); err == nil {
+		t.Fatal("a failed publish should be reported")
+	}
+	if len(failing.requested) != 0 {
+		t.Fatalf("marked %v asked without a search on the bus", failing.requested)
 	}
 }
 
 // Gmail reports Delete as gaining the TRASH label. That is the owner's act
-// and is judged on the same freshness rule; a spam flag is still the graver
-// strike and is never subject to the window.
+// and is judged on the same freshness rule. A spam label charges nobody on
+// sight: a move after arrival is held for attribution, and the label on mail
+// that arrived in spam is the filter's own and is not even held.
 func TestFlagsAddJudgesGmailTrashOnFreshness(t *testing.T) {
+	landedSpam := receivedAgo(time.Second)
+	landedSpam.LandedSpam = true
 	cases := []struct {
 		name  string
 		rec   *repository.WarmupReceived
 		flags []string
 		want  []string
+		held  int
 	}{
-		{"trashed an hour after arrival", receivedAgo(time.Hour), []string{"TRASH"}, []string{"deletion"}},
-		{"trashed a month after arrival", receivedAgo(30 * 24 * time.Hour), []string{"TRASH"}, nil},
-		{"flagged as spam a month after arrival", receivedAgo(30 * 24 * time.Hour), []string{"SPAM"}, []string{"spam_report", "spam_flag"}},
-		{"read is not a strike", receivedAgo(time.Hour), []string{models.FlagSeen}, nil},
+		{"trashed an hour after arrival", receivedAgo(time.Hour), []string{"TRASH"}, []string{"deletion"}, 0},
+		{"trashed a month after arrival", receivedAgo(30 * 24 * time.Hour), []string{"TRASH"}, nil, 0},
+		{"moved to spam a month after arrival is held", receivedAgo(30 * 24 * time.Hour), []string{"SPAM"}, nil, 1},
+		{"spam label on mail that arrived in spam", landedSpam, []string{"SPAM"}, nil, 0},
+		{"read is not a strike", receivedAgo(time.Hour), []string{models.FlagSeen}, nil, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -151,6 +311,9 @@ func TestFlagsAddJudgesGmailTrashOnFreshness(t *testing.T) {
 			}
 			if len(svc.strikes) != len(tc.want) {
 				t.Fatalf("strikes = %v, want %v", svc.strikes, tc.want)
+			}
+			if len(svc.held) != tc.held {
+				t.Fatalf("held %d moves, want %d", len(svc.held), tc.held)
 			}
 			for i := range tc.want {
 				if svc.strikes[i] != tc.want[i] {

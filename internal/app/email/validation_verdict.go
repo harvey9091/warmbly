@@ -6,6 +6,8 @@ import (
 
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/mailcause"
+	"github.com/warmbly/warmbly/internal/pkg/mailhost"
 )
 
 // Identifiers for a refused connect, one per kind of failure. The message
@@ -79,7 +81,27 @@ func validationError(v models.EmailValidationVerdict, creds *models.SmtpImap) *e
 	case models.MailProbeTLS:
 		id = ErrIDMailboxTLSFailed
 	}
-	return errx.NewWithIdentifier(errx.BadRequest, id, msg)
+	return withCause(errx.NewWithIdentifier(errx.BadRequest, id, msg), v, creds, lead)
+}
+
+// withCause attaches the grouping key an import reads; a single connect ignores it.
+func withCause(e *errx.Error, v models.EmailValidationVerdict, creds *models.SmtpImap, lead failedLeg) *errx.Error {
+	in := mailcause.Input{SMTP: causeLeg("SMTP", creds.SMTP, v.SMTP), IMAP: causeLeg("IMAP", creds.IMAP, v.IMAP)}
+	if creds.SMTP != nil {
+		in.MailHost = string(mailhost.FromServer(creds.SMTP.Host))
+		in.Password = creds.SMTP.Password
+	}
+	e.Cause = mailcause.Classify(in).Key
+	e.Detail = mailcause.Scrub(lead.res.Detail)
+	return e
+}
+
+func causeLeg(name string, svc *models.Service, res models.EmailValidationLeg) mailcause.Leg {
+	leg := mailcause.Leg{Name: name, OK: res.OK, Reason: res.Reason, Detail: res.Detail}
+	if svc != nil {
+		leg.Host, leg.Port = models.NormalizeMailHost(svc.Host), svc.Port
+	}
+	return leg
 }
 
 // timeoutError is the verdict where the leg that says the most stayed silent.
@@ -102,7 +124,8 @@ func timeoutError(v models.EmailValidationVerdict, creds *models.SmtpImap, faile
 			break
 		}
 	}
-	return errx.NewWithIdentifier(errx.BadRequest, errx.ErrEmailValidation.Identifier, msg)
+	lead := failed[0]
+	return withCause(errx.NewWithIdentifier(errx.BadRequest, errx.ErrEmailValidation.Identifier, msg), v, creds, lead)
 }
 
 // legWhere names a leg by its server when the caller gave one, and by the port

@@ -1,7 +1,8 @@
 use axum::{
     body::Bytes,
-    extract::{ConnectInfo, Path, State},
+    extract::{ConnectInfo, Path, Request as HttpRequest, State},
     http::{header, HeaderMap, StatusCode},
+    middleware::Next,
     response::{IntoResponse, Redirect, Response},
 };
 use chrono::Utc;
@@ -18,8 +19,11 @@ use crate::events::TrackingEvent;
 use crate::hits::{ForwardedHit, HitForwarder, HitPayload, Outcome};
 use crate::links::{LinkResolver, Resolution};
 use crate::producer::Producer;
+use crate::redirects::{normalize_host, Lookup, RedirectResolver};
 use crate::scanners::{AsnSources, Request, ScannerNetworks};
-use crate::unsubscribe::{body_content_type, invalid_token, valid_token, UnsubscribeProxy};
+use crate::unsubscribe::{
+    accept_language, body_content_type, invalid_token, valid_token, UnsubscribeProxy,
+};
 
 // 1x1 transparent GIF (43 bytes)
 const TRANSPARENT_GIF: &[u8] = &[
@@ -78,6 +82,8 @@ pub struct AppState {
     pub ip_hash_key: Arc<String>,
     /// Recipient opt-out, proxied to the backend that owns the pages
     pub unsubscribe: Arc<UnsubscribeProxy>,
+    /// Verified sending-domain redirects (backend internal API + layered caches)
+    pub redirects: Arc<RedirectResolver>,
 }
 
 impl AppState {
@@ -126,6 +132,10 @@ impl AppState {
             client_ip_header: Arc::new(config.client_ip_header.clone()),
             ip_hash_key: Arc::new(config.ip_hash_key.clone()),
             unsubscribe: Arc::new(UnsubscribeProxy::new(config.backend_internal_url.clone())),
+            redirects: Arc::new(RedirectResolver::new(
+                config.backend_internal_url.clone(),
+                config.internal_api_token.clone(),
+            )),
         }
     }
 
@@ -231,6 +241,95 @@ pub async fn track_open(
     });
 
     pixel_response()
+}
+
+/// Answers a request on a sending domain a workspace pointed here with its
+/// redirect, before any tracking, unsubscribe or form route can answer under
+/// that domain. Any other host continues to the routes.
+pub async fn redirect_first(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    req: HttpRequest,
+    next: Next,
+) -> Response {
+    if req.uri().path() != "/health" {
+        if let Some(host) = req
+            .headers()
+            .get(header::HOST)
+            .and_then(|h| h.to_str().ok())
+            .and_then(normalize_host)
+        {
+            let ip = client_ip(
+                peer,
+                req.headers(),
+                &state.trusted_proxies,
+                &state.client_ip_header,
+            );
+            let source = hash_ip(&state.ip_hash_key, &ip);
+            match state.redirects.lookup(&host, &source, false).await {
+                Lookup::Found(target) => return redirect_to(target),
+                Lookup::Unavailable => {
+                    // Unknown whether this host redirects, so a miss is an outage, not a 404.
+                    let res = next.run(req).await;
+                    if res.status() == StatusCode::NOT_FOUND {
+                        return (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            [
+                                (header::RETRY_AFTER, "30"),
+                                (header::HeaderName::from_static(SERVICE_HEADER), "tracking"),
+                            ],
+                            "Temporarily unavailable",
+                        )
+                            .into_response();
+                    }
+                    return res;
+                }
+                Lookup::NotFound => {}
+            }
+        }
+    }
+    next.run(req).await
+}
+
+/// Marks this service's own answers, so the redirect check can tell them from a proxy's.
+pub const SERVICE_HEADER: &str = "x-warmbly-service";
+
+/// The host a 404 was looked up under: a rewritten Host header, or a redirect not picked up yet.
+pub const HOST_HEADER: &str = "x-warmbly-host";
+
+/// A request no route matched: a redirect domain was already answered by
+/// redirect_first, so what is left is unknown.
+pub async fn not_found(headers: HeaderMap) -> Response {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .and_then(normalize_host)
+        .unwrap_or_default();
+    (
+        StatusCode::NOT_FOUND,
+        [
+            (SERVICE_HEADER, "tracking".to_string()),
+            (HOST_HEADER, host),
+        ],
+        "Not found",
+    )
+        .into_response()
+}
+
+fn redirect_to(target: String) -> Response {
+    // A redirect a workspace can change or remove must not be cached for long.
+    (
+        StatusCode::FOUND,
+        [
+            (header::LOCATION, target),
+            (header::CACHE_CONTROL, "public, max-age=300".to_string()),
+            (
+                header::HeaderName::from_static(SERVICE_HEADER),
+                "tracking".to_string(),
+            ),
+        ],
+    )
+        .into_response()
 }
 
 /// Click tracking redirect handler
@@ -353,12 +452,15 @@ pub async fn unsubscribe_page(
     headers: HeaderMap,
 ) -> Response {
     if !valid_token(&token) {
-        return invalid_token();
+        return invalid_token(&headers);
     }
     if let Some(limited) = spend_unsubscribe_budget(&state, peer, &headers).await {
         return limited;
     }
-    state.unsubscribe.get(&token).await
+    state
+        .unsubscribe
+        .get(&token, accept_language(&headers))
+        .await
 }
 
 /// POST /unsubscribe/{token} — the confirm button, or a provider's RFC 8058
@@ -371,10 +473,13 @@ pub async fn unsubscribe_submit(
     body: Bytes,
 ) -> Response {
     if !valid_token(&token) {
-        return invalid_token();
+        return invalid_token(&headers);
     }
     let content_type = body_content_type(&headers);
-    state.unsubscribe.post(&token, body, content_type).await
+    state
+        .unsubscribe
+        .post(&token, body, content_type, accept_language(&headers))
+        .await
 }
 
 /// POST /unsubscribe/{token}/resubscribe — the "unsubscribed by mistake" button.
@@ -386,7 +491,7 @@ pub async fn unsubscribe_undo(
     body: Bytes,
 ) -> Response {
     if !valid_token(&token) {
-        return invalid_token();
+        return invalid_token(&headers);
     }
     if let Some(limited) = spend_unsubscribe_budget(&state, peer, &headers).await {
         return limited;
@@ -394,7 +499,7 @@ pub async fn unsubscribe_undo(
     let content_type = body_content_type(&headers);
     state
         .unsubscribe
-        .resubscribe(&token, body, content_type)
+        .resubscribe(&token, body, content_type, accept_language(&headers))
         .await
 }
 

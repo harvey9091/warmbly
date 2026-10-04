@@ -27,10 +27,20 @@ type InboxTagResult struct {
 	Priority         string
 	NeedsReview      bool
 	ReviewReason     string
-	Answers          json.RawMessage
-	Labels           []string
-	Model            string
-	InputTokens      int
+	// Automated is a trusted verdict that no person wrote the message. It is
+	// mirrored onto unibox_emails.automated, which is what keeps the
+	// conversation out of the inbox.
+	Automated bool
+	// Campaign is the campaign the verdict was made with, "" when none was
+	// known.
+	Campaign string
+	// ReturnDate is the out-of-office return date the model was asked to
+	// confirm, nil when it was not asked. The answer is Answers["return_date"].
+	ReturnDate  *time.Time
+	Answers     json.RawMessage
+	Labels      []string
+	Model       string
+	InputTokens int
 	// Actions is what the workspace's switches let this verdict do: "hold",
 	// "stop", "task", "suppress". Empty for a verdict that only labelled.
 	Actions   []string
@@ -48,11 +58,25 @@ type InboxTagRepository interface {
 
 	// ListUntagged and PreviousOutbound back the historical backfill.
 	ListUntagged(ctx context.Context, orgID uuid.UUID, since time.Time, limit int) ([]BackfillCandidate, error)
-	PreviousOutbound(ctx context.Context, accountID uuid.UUID, threadID string, before time.Time) (string, string, error)
+	PreviousOutbound(ctx context.Context, accountID uuid.UUID, threadID string, inReplyTo []string, before time.Time) (string, string, error)
+	// ListColdInboundInCampaignThreads and Reopen back the re-check of
+	// verdicts made before the campaign behind a thread could be resolved.
+	ListColdInboundInCampaignThreads(ctx context.Context, orgID uuid.UUID, since time.Time, limit int) ([]BackfillCandidate, error)
+	Reopen(ctx context.Context, orgID uuid.UUID, messageID, kind string) ([]string, error)
+	// ListUncheckedNotifications backs the re-check of notifications stored
+	// before they were asked whether they need acting on.
+	ListUncheckedNotifications(ctx context.Context, orgID uuid.UUID, since time.Time, limit int) ([]BackfillCandidate, error)
 
-	// ThreadStates backs the follow-up sweep: who spoke last, when, and how far
-	// the thread ever got.
-	ThreadStates(ctx context.Context, orgID uuid.UUID, since time.Time, limit int) ([]ThreadFollowUpState, error)
+	// The FollowUp* methods back the follow-up sweep: a cycle that walks each
+	// mailbox newest first a page at a time, and a check of changed threads.
+	FollowUpMailboxes(ctx context.Context, orgID uuid.UUID) ([]uuid.UUID, error)
+	FollowUpPage(ctx context.Context, orgID, mailboxID uuid.UUID, since time.Time, after *FollowUpPosition, limit int) (FollowUpPage, error)
+	FollowUpPagePositions(ctx context.Context, orgID, mailboxID uuid.UUID, since time.Time, after *FollowUpPosition, limit int) (FollowUpPage, error)
+	FollowUpChanges(ctx context.Context, orgID uuid.UUID, after FollowUpMark, until time.Time, limit int) ([]FollowUpChange, error)
+	FollowUpThreadStates(ctx context.Context, orgID uuid.UUID, threadIDs []string, since time.Time) ([]ThreadFollowUpState, error)
+	ClaimFollowUpSweep(ctx context.Context, orgID, owner uuid.UUID, lease time.Duration) (*FollowUpSweepState, error)
+	SaveFollowUpSweep(ctx context.Context, orgID, owner uuid.UUID, lease time.Duration, st FollowUpSweepState) (bool, error)
+	ReleaseFollowUpSweep(ctx context.Context, orgID, owner uuid.UUID) error
 
 	// GetByMessageID reads one completed verdict, so the reply classifier, the
 	// inbox agent and the action executor can reuse a judgment already paid
@@ -106,30 +130,44 @@ func (r *inboxTagRepository) ReleaseClaim(ctx context.Context, orgID uuid.UUID, 
 }
 
 func (r *inboxTagRepository) Save(ctx context.Context, res *InboxTagResult) error {
+	// One statement, so the verdict and the inbox placement cannot disagree.
 	const q = `
-		INSERT INTO inbox_tag_results (
-			organization_id, email_account_id, message_id, thread_id,
-			kind, kind_confidence, kind_source, intent, intent_confidence,
-			relevance, priority, needs_review, review_reason, answers, labels, model, input_tokens
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-		ON CONFLICT (organization_id, message_id) DO UPDATE SET
-			email_account_id = EXCLUDED.email_account_id,
-			thread_id = EXCLUDED.thread_id,
-			kind = EXCLUDED.kind,
-			kind_confidence = EXCLUDED.kind_confidence,
-			kind_source = EXCLUDED.kind_source,
-			intent = EXCLUDED.intent,
-			intent_confidence = EXCLUDED.intent_confidence,
-			relevance = EXCLUDED.relevance,
-			priority = EXCLUDED.priority,
-			needs_review = EXCLUDED.needs_review,
-			review_reason = EXCLUDED.review_reason,
-			answers = EXCLUDED.answers,
-			labels = EXCLUDED.labels,
-			model = EXCLUDED.model,
-			input_tokens = EXCLUDED.input_tokens,
-			status = 'complete',
-			updated_at = NOW()
+		WITH saved AS (
+			INSERT INTO inbox_tag_results (
+				organization_id, email_account_id, message_id, thread_id,
+				kind, kind_confidence, kind_source, intent, intent_confidence,
+				relevance, priority, needs_review, review_reason, answers, labels, model, input_tokens,
+				automated, campaign, return_date
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+			ON CONFLICT (organization_id, message_id) DO UPDATE SET
+				email_account_id = EXCLUDED.email_account_id,
+				thread_id = EXCLUDED.thread_id,
+				kind = EXCLUDED.kind,
+				kind_confidence = EXCLUDED.kind_confidence,
+				kind_source = EXCLUDED.kind_source,
+				intent = EXCLUDED.intent,
+				intent_confidence = EXCLUDED.intent_confidence,
+				relevance = EXCLUDED.relevance,
+				priority = EXCLUDED.priority,
+				needs_review = EXCLUDED.needs_review,
+				review_reason = EXCLUDED.review_reason,
+				answers = EXCLUDED.answers,
+				labels = EXCLUDED.labels,
+				model = EXCLUDED.model,
+				input_tokens = EXCLUDED.input_tokens,
+				automated = EXCLUDED.automated,
+				campaign = EXCLUDED.campaign,
+				return_date = EXCLUDED.return_date,
+				status = 'complete',
+				updated_at = NOW()
+			RETURNING email_account_id, message_id, automated
+		)
+		UPDATE unibox_emails ue
+		SET automated = saved.automated
+		FROM saved
+		WHERE ue.email_id = saved.email_account_id
+		  AND ue.message_id = saved.message_id
+		  AND ue.automated IS DISTINCT FROM saved.automated
 	`
 	answers := res.Answers
 	if len(answers) == 0 {
@@ -143,6 +181,7 @@ func (r *inboxTagRepository) Save(ctx context.Context, res *InboxTagResult) erro
 		res.OrganizationID, res.EmailAccountID, res.MessageID, res.ThreadID,
 		res.Kind, res.KindConfidence, res.KindSource, res.Intent, res.IntentConfidence,
 		res.Relevance, res.Priority, res.NeedsReview, res.ReviewReason, answers, labels, res.Model, res.InputTokens,
+		res.Automated, res.Campaign, res.ReturnDate,
 	)
 	return err
 }
@@ -181,14 +220,14 @@ func (r *inboxTagRepository) ListForReview(ctx context.Context, orgID uuid.UUID,
 
 const inboxTagColumns = `id, organization_id, email_account_id, message_id, thread_id,
 		       kind, kind_confidence, kind_source, intent, intent_confidence,
-		       relevance, priority, needs_review, review_reason, answers, labels, model, input_tokens, actions, created_at`
+		       relevance, priority, needs_review, review_reason, answers, labels, model, input_tokens, actions, return_date, created_at`
 
 func scanInboxTag(row pgx.Row) (InboxTagResult, error) {
 	var x InboxTagResult
 	err := row.Scan(
 		&x.ID, &x.OrganizationID, &x.EmailAccountID, &x.MessageID, &x.ThreadID,
 		&x.Kind, &x.KindConfidence, &x.KindSource, &x.Intent, &x.IntentConfidence,
-		&x.Relevance, &x.Priority, &x.NeedsReview, &x.ReviewReason, &x.Answers, &x.Labels, &x.Model, &x.InputTokens, &x.Actions, &x.CreatedAt,
+		&x.Relevance, &x.Priority, &x.NeedsReview, &x.ReviewReason, &x.Answers, &x.Labels, &x.Model, &x.InputTokens, &x.Actions, &x.ReturnDate, &x.CreatedAt,
 	)
 	return x, err
 }
@@ -251,7 +290,10 @@ type BackfillCandidate struct {
 	Subject        string
 	BodyText       string
 	FromAddr       string
-	InternalDate   time.Time
+	InReplyTo      []string
+	// Flags carries the classification headers the sync stores as pseudo-flags.
+	Flags        []string
+	InternalDate time.Time
 }
 
 // ListUntagged returns inbound messages that have never been classified, newest
@@ -268,9 +310,64 @@ type BackfillCandidate struct {
 //   - anything already in inbox_tag_results, so a re-run resumes rather than
 //     repeats. Same key the live path is idempotent on.
 func (r *inboxTagRepository) ListUntagged(ctx context.Context, orgID uuid.UUID, since time.Time, limit int) ([]BackfillCandidate, error) {
-	const q = `
+	return r.listCandidates(ctx, `
+		  AND NOT EXISTS (
+		        SELECT 1 FROM inbox_tag_results r
+		        WHERE r.organization_id = $1 AND r.message_id = ue.message_id
+		          AND (r.status = 'complete' OR r.claimed_at >= NOW() - INTERVAL '15 minutes')
+		      )`, orgID, since, limit)
+}
+
+// ListColdInboundInCampaignThreads returns inbound messages stored as
+// cold_inbound, by a verdict made without a campaign, whose thread a campaign
+// send of the same mailbox answers for: by the Gmail thread handle, by a
+// Message-ID the reply names, or by the sent copy in the thread. A verdict
+// made with the campaign in front of it is not asked again.
+func (r *inboxTagRepository) ListColdInboundInCampaignThreads(ctx context.Context, orgID uuid.UUID, since time.Time, limit int) ([]BackfillCandidate, error) {
+	return r.listCandidates(ctx, `
+		  AND EXISTS (
+		        SELECT 1 FROM inbox_tag_results r
+		        WHERE r.organization_id = $1 AND r.message_id = ue.message_id
+		          AND r.status = 'complete' AND r.kind = 'cold_inbound' AND r.campaign = ''
+		      )
+		  AND EXISTS (
+		        SELECT 1
+		        FROM tasks t
+		        JOIN campaign_tasks ct ON ct.task_id = t.id
+		        JOIN campaigns c ON c.id = ct.campaign_id
+		        WHERE t.email_account_id = ue.email_id AND t.task_type = 'campaign'
+		          AND (
+		                (ue.thread_id <> '' AND t.thread_id = ue.thread_id)
+		             OR (t.message_id <> '' AND t.message_id IN (
+		                    SELECT v FROM (
+		                        SELECT BTRIM(ref, '<> ') AS id FROM unnest(COALESCE(ue.in_reply_to, '{}')) AS ref
+		                        UNION
+		                        SELECT BTRIM(s.message_id, '<> ') FROM unibox_emails s
+		                        WHERE s.email_id = ue.email_id AND s.thread_id = ue.thread_id
+		                          AND ue.thread_id <> '' AND s.folder = 'sent'
+		                    ) ids, LATERAL (VALUES (ids.id), ('<' || ids.id || '>')) AS forms(v)
+		                    WHERE ids.id <> ''
+		                ))
+		          )
+		      )`, orgID, since, limit)
+}
+
+// ListUncheckedNotifications returns inbound messages stored as notifications
+// by a verdict that never asked whether they need the recipient to act.
+func (r *inboxTagRepository) ListUncheckedNotifications(ctx context.Context, orgID uuid.UUID, since time.Time, limit int) ([]BackfillCandidate, error) {
+	return r.listCandidates(ctx, `
+		  AND EXISTS (
+		        SELECT 1 FROM inbox_tag_results r
+		        WHERE r.organization_id = $1 AND r.message_id = ue.message_id
+		          AND r.status = 'complete' AND r.kind = 'notification'
+		          AND NOT (r.answers ? 'action_required')
+		      )`, orgID, since, limit)
+}
+
+func (r *inboxTagRepository) listCandidates(ctx context.Context, filter string, orgID uuid.UUID, since time.Time, limit int) ([]BackfillCandidate, error) {
+	q := `
 		SELECT ue.email_id, ue.user_id, ue.message_id, ue.thread_id,
-		       ue.subject, ue.body_text, COALESCE(ue.from_addr[1], ''), ue.internal_date
+		       ue.subject, ue.body_text, COALESCE(ue.from_addr[1], ''), COALESCE(ue.in_reply_to, '{}'), ue.flags, ue.internal_date
 		FROM unibox_emails ue
 		JOIN email_accounts ea ON ea.id = ue.email_id
 		WHERE ea.organization_id = $1
@@ -282,12 +379,7 @@ func (r *inboxTagRepository) ListUntagged(ctx context.Context, orgID uuid.UUID, 
 		        NULLIF((regexp_match(COALESCE(ue.from_addr[1], ''), '\(([^()]+)\)\s*$'))[1], ''),
 		        TRIM(COALESCE(ue.from_addr[1], ''))
 		      ))
-		      NOT IN (SELECT LOWER(email) FROM email_accounts WHERE organization_id = $1)
-		  AND NOT EXISTS (
-		        SELECT 1 FROM inbox_tag_results r
-			        WHERE r.organization_id = $1 AND r.message_id = ue.message_id
-			          AND (r.status = 'complete' OR r.claimed_at >= NOW() - INTERVAL '15 minutes')
-		      )
+		      NOT IN (SELECT LOWER(email) FROM email_accounts WHERE organization_id = $1)` + filter + `
 		ORDER BY ue.internal_date DESC
 		LIMIT $3
 	`
@@ -301,7 +393,7 @@ func (r *inboxTagRepository) ListUntagged(ctx context.Context, orgID uuid.UUID, 
 	for rows.Next() {
 		var c BackfillCandidate
 		if err := rows.Scan(&c.EmailAccountID, &c.UserID, &c.MessageID, &c.ThreadID,
-			&c.Subject, &c.BodyText, &c.FromAddr, &c.InternalDate); err != nil {
+			&c.Subject, &c.BodyText, &c.FromAddr, &c.InReplyTo, &c.Flags, &c.InternalDate); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -309,132 +401,94 @@ func (r *inboxTagRepository) ListUntagged(ctx context.Context, orgID uuid.UUID, 
 	return out, rows.Err()
 }
 
+// Reopen drops one stored verdict of the given kind so the message can be
+// classified again, and returns the labels it had written. Only a complete
+// verdict of that kind is touched.
+// The message returns to the inbox with it, so a failed re-classification leaves it visible.
+func (r *inboxTagRepository) Reopen(ctx context.Context, orgID uuid.UUID, messageID, kind string) ([]string, error) {
+	var labels []string
+	err := r.db.QueryRow(ctx, `
+		WITH dropped AS (
+			DELETE FROM inbox_tag_results
+			WHERE organization_id = $1 AND message_id = $2 AND status = 'complete' AND kind = $3
+			RETURNING email_account_id, message_id, labels
+		), shown AS (
+			UPDATE unibox_emails ue
+			SET automated = false
+			FROM dropped
+			WHERE ue.email_id = dropped.email_account_id
+			  AND ue.message_id = dropped.message_id
+			  AND ue.automated
+		)
+		SELECT labels FROM dropped
+	`, orgID, messageID, kind).Scan(&labels)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return labels, err
+}
+
 // PreviousOutbound is the plain text of the last message we sent in a thread
-// before a given moment.
+// before a given moment, and the name of the campaign the thread belongs to.
 //
 // Without it a reply cannot be read: "yes", "that works" and "sounds good" are
 // answers, and the question they answer is not in them. Giving the model our
 // side of the exchange is what lets the reply mean anything.
-func (r *inboxTagRepository) PreviousOutbound(ctx context.Context, accountID uuid.UUID, threadID string, before time.Time) (string, string, error) {
-	if threadID == "" {
+//
+// The campaign resolves from any of three facts, all scoped to the mailbox: the
+// sent copy's Message-ID, a Message-ID the reply names in In-Reply-To, or the
+// provider thread handle the worker recorded on the send (Gmail only). The
+// handle is what holds when the Message-ID on the task is not the one the
+// provider put on the wire.
+func (r *inboxTagRepository) PreviousOutbound(ctx context.Context, accountID uuid.UUID, threadID string, inReplyTo []string, before time.Time) (string, string, error) {
+	if threadID == "" && len(inReplyTo) == 0 {
 		return "", "", nil
 	}
+	if inReplyTo == nil {
+		inReplyTo = []string{}
+	}
 	const q = `
-		SELECT ue.body_text, COALESCE(c.name, '')
-		FROM unibox_emails ue
-		LEFT JOIN tasks t
-		       ON t.email_account_id = ue.email_id
-		      AND t.task_type = 'campaign'
-		      AND BTRIM(t.message_id, '<> ') = BTRIM(ue.message_id, '<> ')
-		LEFT JOIN campaign_tasks ct ON ct.task_id = t.id
-		LEFT JOIN campaigns c ON c.id = ct.campaign_id
-		WHERE ue.email_id = $1 AND ue.thread_id = $2 AND ue.folder = 'sent' AND ue.internal_date < $3
-		ORDER BY ue.internal_date DESC
-		LIMIT 1
+		WITH prev AS (
+			SELECT ue.body_text, ue.message_id
+			FROM unibox_emails ue
+			WHERE $2 <> '' AND ue.email_id = $1 AND ue.thread_id = $2
+			  AND ue.folder = 'sent' AND ue.internal_date < $3
+			ORDER BY ue.internal_date DESC
+			LIMIT 1
+		),
+		ids AS (
+			SELECT DISTINCT x FROM (
+				SELECT BTRIM(message_id, '<> ') AS x FROM prev
+				UNION ALL
+				SELECT BTRIM(ref, '<> ') FROM unnest($4::text[]) AS ref
+			) raw
+			WHERE x <> ''
+		),
+		matched AS (
+			SELECT t.id, 0 AS rank, t.created_at
+			FROM tasks t
+			WHERE t.message_id <> ''
+			  AND t.message_id IN (SELECT x FROM ids UNION ALL SELECT '<' || x || '>' FROM ids)
+			  AND t.email_account_id = $1 AND t.task_type = 'campaign'
+			UNION ALL
+			SELECT t.id, 1 AS rank, t.created_at
+			FROM tasks t
+			WHERE $2 <> '' AND t.email_account_id = $1 AND t.thread_id = $2
+			  AND t.task_type = 'campaign'
+		)
+		SELECT COALESCE((SELECT body_text FROM prev), ''),
+		       COALESCE((
+		           SELECT c.name
+		           FROM matched m
+		           JOIN campaign_tasks ct ON ct.task_id = m.id
+		           JOIN campaigns c ON c.id = ct.campaign_id
+		           ORDER BY m.rank, m.created_at DESC
+		           LIMIT 1
+		       ), '')
 	`
 	var body, campaign string
-	if err := r.db.QueryRow(ctx, q, accountID, threadID, before).Scan(&body, &campaign); err != nil {
-		// No previous message is the normal case for the first inbound of a
-		// thread, not an error worth failing a classification over.
-		return "", "", nil
+	if err := r.db.QueryRow(ctx, q, accountID, threadID, before, inReplyTo).Scan(&body, &campaign); err != nil {
+		return "", "", err
 	}
 	return body, campaign, nil
-}
-
-// ThreadFollowUpState is one thread's follow-up facts. Every field is read from
-// the database; none of it is inferred, and none of it is asked of a model.
-type ThreadFollowUpState struct {
-	ThreadID       string
-	LastInboundAt  time.Time
-	LastOutboundAt time.Time
-	// BestIntent is the most recent trusted intent in this thread.
-	BestIntent string
-	// LastKind is the classified kind of the newest inbound message, which is
-	// what says whether the "reply" was a person or a mail server.
-	LastKind string
-}
-
-// ThreadStates returns follow-up facts for every thread with activity since a
-// cutoff.
-//
-// Scoped through email_accounts because unibox_emails carries no organization
-// of its own. Follow-up labels use the same organization-plus-thread key as the
-// rest of the unibox.
-func (r *inboxTagRepository) ThreadStates(ctx context.Context, orgID uuid.UUID, since time.Time, limit int) ([]ThreadFollowUpState, error) {
-	const q = `
-	WITH scoped_emails AS (
-		SELECT ue.*
-		FROM unibox_emails ue
-		JOIN email_accounts ea ON ea.id = ue.email_id
-		WHERE ea.organization_id = $1 AND ue.thread_id <> ''
-	),
-	active_threads AS (
-		SELECT DISTINCT thread_id
-		FROM scoped_emails
-		WHERE internal_date >= $2
-	),
-	threads AS (
-			SELECT ue.thread_id,
-			       MAX(ue.internal_date) FILTER (WHERE ue.folder = 'inbox') AS last_in,
-			       MAX(ue.internal_date) FILTER (WHERE ue.folder = 'sent')  AS last_out
-			FROM scoped_emails ue
-			JOIN active_threads active ON active.thread_id = ue.thread_id
-			GROUP BY ue.thread_id
-	),
-	latest_inbound AS (
-		SELECT DISTINCT ON (ue.thread_id)
-		       ue.thread_id, ue.email_id, ue.message_id
-		FROM scoped_emails ue
-		JOIN active_threads active ON active.thread_id = ue.thread_id
-		WHERE ue.folder = 'inbox'
-		ORDER BY ue.thread_id, ue.internal_date DESC
-		)
-		SELECT t.thread_id, t.last_in, t.last_out,
-		       COALESCE(best.intent, ''), COALESCE(newest.kind, '')
-		FROM threads t
-		LEFT JOIN LATERAL (
-			SELECT r.intent
-			FROM inbox_tag_results r
-			JOIN scoped_emails ue
-			  ON ue.email_id = r.email_account_id
-			 AND ue.thread_id = r.thread_id
-			 AND ue.message_id = r.message_id
-			WHERE r.organization_id = $1 AND r.thread_id = t.thread_id
-			  AND r.status = 'complete' AND r.review_reason <> 'intent' AND r.intent <> ''
-			ORDER BY ue.internal_date DESC, r.created_at DESC LIMIT 1
-		) best ON TRUE
-		LEFT JOIN latest_inbound latest ON latest.thread_id = t.thread_id
-		LEFT JOIN inbox_tag_results newest
-		  ON newest.organization_id = $1
-		 AND newest.email_account_id = latest.email_id
-		 AND newest.thread_id = latest.thread_id
-		 AND newest.message_id = latest.message_id
-		 AND newest.status = 'complete'
-		 AND newest.review_reason <> 'kind'
-		WHERE t.last_out IS NOT NULL
-		ORDER BY GREATEST(COALESCE(t.last_in, 'epoch'::timestamptz), t.last_out) DESC
-		LIMIT $3
-	`
-	rows, err := r.db.Query(ctx, q, orgID, since, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []ThreadFollowUpState
-	for rows.Next() {
-		var st ThreadFollowUpState
-		var lastIn, lastOut *time.Time
-		if err := rows.Scan(&st.ThreadID, &lastIn, &lastOut, &st.BestIntent, &st.LastKind); err != nil {
-			return nil, err
-		}
-		if lastIn != nil {
-			st.LastInboundAt = *lastIn
-		}
-		if lastOut != nil {
-			st.LastOutboundAt = *lastOut
-		}
-		out = append(out, st)
-	}
-	return out, rows.Err()
 }

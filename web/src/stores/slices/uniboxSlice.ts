@@ -12,9 +12,8 @@ export interface UniboxSlice {
   setUniboxEmails: (emails: UniboxEmail[]) => void;
   addUniboxEmail: (email: UniboxEmail) => void;
   setUniboxThreads: (threads: UniboxThread[]) => void;
+  // The server's count; realtime refetches it rather than counting.
   setUnseenCount: (count: number) => void;
-  incrementUnseenCount: () => void;
-  decrementUnseenCount: (by?: number) => void;
   setSelectedThreadId: (id: string | null) => void;
   setSelectedAccountId: (id: string | null) => void;
 }
@@ -46,10 +45,6 @@ export const createUniboxSlice: StateCreator<
     }),
   setUniboxThreads: (uniboxThreads) => set({ uniboxThreads }),
   setUnseenCount: (unseenCount) => set({ unseenCount }),
-  incrementUnseenCount: () =>
-    set((state) => ({ unseenCount: state.unseenCount + 1 })),
-  decrementUnseenCount: (by = 1) =>
-    set((state) => ({ unseenCount: Math.max(0, state.unseenCount - by) })),
   setSelectedThreadId: (selectedThreadId) => set({ selectedThreadId }),
   setSelectedAccountId: (selectedAccountId) => set({ selectedAccountId }),
 });

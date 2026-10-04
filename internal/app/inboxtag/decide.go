@@ -3,6 +3,8 @@ package inboxtag
 import (
 	"math"
 	"sort"
+
+	"github.com/warmbly/warmbly/internal/models"
 )
 
 // Facts are what the system already knows, established in code before anything
@@ -62,6 +64,28 @@ type Decision struct {
 	// is what the weights multiply. The raw score and every probability are
 	// persisted separately; these are what the arithmetic used.
 	Scores map[string]float64
+
+	// Custom are the workspace questions that fired. Their labels are already
+	// in Labels; they never move relevance.
+	Custom []CustomMatch
+
+	// ReturnDateAsked marks an out-of-office reply the return-date question was
+	// read for, and ReturnDateNoul is its answer; an unasked zero is not a no.
+	ReturnDateAsked bool
+	ReturnDateNoul  float64
+
+	// ActionRequired is automated mail that needs the recipient to act.
+	ActionRequired bool
+	// KeepInInbox is automated mail a check matched, the built-in one or a
+	// workspace question asked of automated mail, so it stays in the inbox.
+	KeepInInbox bool
+}
+
+// Automated reports a trusted verdict that no person wrote this message. An
+// untrusted kind is never automated, so a message the model was unsure about
+// stays in the inbox, and neither is one that needs acting on.
+func (d Decision) Automated() bool {
+	return IsAutomatedKind(d.Kind) && !d.KeepInInbox && d.ReviewReason != "kind" && !d.Skipped()
 }
 
 // Skipped reports a decision that did nothing because the message was ours.
@@ -81,6 +105,12 @@ func DecideOutbound() Decision {
 // re-tuned and re-verified offline for free. Re-running the model over history
 // costs money; re-running the arithmetic does not.
 func Decide(answers map[string]Answer, facts Facts) Decision {
+	return DecideWith(answers, facts, nil)
+}
+
+// DecideWith is Decide plus the workspace's own questions, which add labels
+// and nothing else to the built-in verdict.
+func DecideWith(answers map[string]Answer, facts Facts, custom []models.InboxTagQuestion) Decision {
 	if facts.Outbound {
 		return DecideOutbound()
 	}
@@ -151,7 +181,22 @@ func Decide(answers map[string]Answer, facts Facts) Decision {
 			d.Signals = append(d.Signals, id)
 		}
 	}
+	// Asked of a notification only; any other kind already reaches a person.
+	if a, ok := answers[SigActionRequired]; ok && d.Kind == KindNotification {
+		d.SignalStrength[SigActionRequired] = a.Noul
+		if a.Noul >= Yes {
+			d.Signals = append(d.Signals, SigActionRequired)
+			d.ActionRequired = true
+			d.KeepInInbox = true
+		}
+	}
 	sort.Strings(d.Signals)
+	// Read of an out-of-office reply only: on anything else the phrase is not
+	// a return date, whatever the parser matched.
+	if a, ok := answers[QReturnDate]; ok && d.Kind == KindAutoReplyOOO {
+		d.ReturnDateAsked = true
+		d.ReturnDateNoul = a.Noul
+	}
 
 	// ── Scores, normalised to 0..1 ─────────────────────────────────────────
 	// The score is a position on an ordered rubric, not a magnitude. Dividing
@@ -172,6 +217,7 @@ func Decide(answers map[string]Answer, facts Facts) Decision {
 	d.Relevance = relevance(d)
 	d.Priority = bucket(float64(d.Relevance))
 	d.Labels = labelsFor(d)
+	decideCustom(&d, answers, custom)
 	if d.NeedsReview {
 		d.Labels = append(d.Labels, LabelNeedsReview)
 	}
@@ -216,49 +262,39 @@ func relevance(d Decision) int {
 	return int(math.Round(clamp(total, 0, 100)))
 }
 
-// labelsFor is the slug list this decision writes. Every slug here must exist
-// as a workspace category before it can be applied; ensureCategories does that
-// mapping, and this function never invents a slug that is not in the taxonomy.
+// labelsFor is the label list this decision writes. Every title comes from
+// labelTitles in policy.go; this function never invents one.
 func labelsFor(d Decision) []string {
 	seen := map[string]bool{}
 	var out []string
-	add := func(s string) {
-		if s == "" || seen[s] {
+	add := func(id string) {
+		l := LabelFor(id)
+		if l == "" || seen[l] {
 			return
 		}
-		seen[s] = true
-		out = append(out, s)
+		seen[l] = true
+		out = append(out, l)
 	}
 
-	add(slug(d.Kind))
+	add(d.Kind)
+	if d.ActionRequired {
+		add(SigActionRequired)
+	}
 	if d.Kind == KindHumanReply && d.ReviewReason != "intent" {
-		add(slug(d.Intent))
+		add(d.Intent)
 	}
 
-	// Only the signals a human would want to find a thread by, and only where
-	// they can mean anything.
-	//
-	// Gated on a human reply because the first backfill over real mail put
-	// "needs-human-judgement" on nearly every row, bounces and platform
-	// notifications included. A label that is on everything is not a filter,
-	// and "a bounce needs a person to read it" is not true. The signals are
-	// still recorded and still feed the score for every kind; they just do not
-	// become labels on mail no person wrote.
+	// Signals become labels only on a human reply. The first backfill over
+	// real mail put signal labels on bounces and platform notices, and a label
+	// that is on everything is not a filter.
 	if d.Kind == KindHumanReply {
 		for _, sig := range d.Signals {
-			switch sig {
-			case SigRequestsRemoval, SigLegalThreat, SigAsksForCall, SigNeedsHumanJudgement:
-				add(slug(sig))
-			}
+			add(sig)
 		}
 	}
 
 	return out
 }
-
-// slug renders an identifier as the label a person reads: underscores become
-// hyphens, so `wants_pricing` files as `wants-pricing`.
-func slug(id string) string { return slugOf(id) }
 
 func clamp(v, lo, hi float64) float64 {
 	return math.Max(lo, math.Min(hi, v))

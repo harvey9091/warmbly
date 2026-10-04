@@ -77,7 +77,7 @@ func (h *Handler) Create(c *gin.Context) {
 	var data models.GroupCreate
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -101,7 +101,7 @@ func (h *Handler) Update(c *gin.Context) {
 	var data models.GroupUpdate
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -125,7 +125,7 @@ func (h *Handler) Move(c *gin.Context) {
 	var data models.Move
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 

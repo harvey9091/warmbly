@@ -19,16 +19,17 @@ export interface AIThreadDraft {
     confidence: number
     model: string
     status: "pending" | "approved" | "discarded"
-    created_at: string
-    updated_at: string
+    created_at: Date
+    updated_at: Date
 }
 
 // listAgentDrafts returns the org's pending inbox-agent drafts, newest first.
-export async function listAgentDrafts(): Promise<{ data: AIThreadDraft[] }> {
+export async function listAgentDrafts(signal?: AbortSignal): Promise<{ data: AIThreadDraft[] }> {
     return await Request<{ data: AIThreadDraft[] }>({
         method: "GET",
         url: "/unibox/agent-drafts",
         authorization: true,
+        signal,
     })
 }
 

@@ -171,7 +171,7 @@ func (s *schedulerService) CalculateNextWarmupTime(ctx context.Context, accountI
 
 	// STEP 1.6: Ensure today is a valid warmup day
 	if account.WarmupDays > 0 {
-		loc := loadLocation(account.Timezone)
+		loc := loadLocation(account.ClockTimezone())
 		now := time.Now().In(loc)
 		candidateDay := findNextValidDay(now, uint8(account.WarmupDays), loc)
 		if candidateDay.Day() != now.Day() || candidateDay.Month() != now.Month() || candidateDay.Year() != now.Year() {
@@ -220,7 +220,7 @@ func (s *schedulerService) CalculateNextWarmupTime(ctx context.Context, accountI
 	// day. Deterministic per (account, local day) so it's stable across the
 	// day's reschedules. Actively-warming mailboxes keep a floor of WarmupBase.
 	if activelyWarming && targetVolume > 0 {
-		factor := dailyVolumeFactor(accountID, time.Now().In(loadLocation(account.Timezone)))
+		factor := dailyVolumeFactor(accountID, time.Now().In(loadLocation(account.ClockTimezone())))
 		varied := int(float64(targetVolume)*factor + 0.5)
 		if varied < account.WarmupBase {
 			varied = account.WarmupBase
@@ -274,17 +274,17 @@ func (s *schedulerService) CalculateNextWarmupTime(ctx context.Context, accountI
 	// STEP 4: Check if we've hit today's limit
 	if emailsSentToday >= targetVolume {
 		// Move to tomorrow's first slot
-		return s.snapWarmupToBehavior(bhv, calculateFirstSlotTomorrowAt(account.Timezone, warmupStart)), nil
+		return s.snapWarmupToBehavior(bhv, calculateFirstSlotTomorrowAt(account.ClockTimezone(), warmupStart)), nil
 	}
 
 	// STEP 5: Calculate ideal spacing
 	// Distribute remaining emails across remaining business hours
 	remainingSlots := targetVolume - emailsSentToday
-	hoursRemaining := calculateHoursRemainingUntil(account.Timezone, warmupEnd)
+	hoursRemaining := calculateHoursRemainingUntil(account.ClockTimezone(), warmupEnd)
 
 	// If business hours are over, move to tomorrow
 	if hoursRemaining <= 0 {
-		return s.snapWarmupToBehavior(bhv, calculateFirstSlotTomorrowAt(account.Timezone, warmupStart)), nil
+		return s.snapWarmupToBehavior(bhv, calculateFirstSlotTomorrowAt(account.ClockTimezone(), warmupStart)), nil
 	}
 
 	idealIntervalHours := hoursRemaining / float64(remainingSlots)
@@ -328,7 +328,7 @@ func (s *schedulerService) CalculateNextWarmupTime(ctx context.Context, accountI
 	candidateTime = avoidRoundTimes(candidateTime)
 
 	// STEP 10: Ensure within configured warmup time window
-	candidateTime = ensureTimeWindow(candidateTime, warmupStart, warmupEnd, loadLocation(account.Timezone))
+	candidateTime = ensureTimeWindow(candidateTime, warmupStart, warmupEnd, loadLocation(account.ClockTimezone()))
 
 	// STEP 11: Check conflicts with other tasks on this account
 	scheduledTasks, err := s.taskRepo.GetScheduledTasksToday(ctx, accountID)
@@ -341,7 +341,7 @@ func (s *schedulerService) CalculateNextWarmupTime(ctx context.Context, accountI
 	// STEP 12: Apply human-like distribution curve. Skipped when a behaviour
 	// profile is driving the day — it already carries this mailbox's own peak
 	// hours and lunch break.
-	loc := loadLocation(account.Timezone)
+	loc := loadLocation(account.ClockTimezone())
 	if !bhv.Enabled {
 		candidateTime = applyDistributionCurve(candidateTime, loc)
 	}

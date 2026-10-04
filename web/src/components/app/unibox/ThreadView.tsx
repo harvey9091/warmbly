@@ -71,6 +71,8 @@ import type { UniboxThreadMessage } from "@/lib/api/models/app/unibox/UniboxThre
 interface ThreadViewProps {
   threadId: string;
   emailId?: string;
+  // Closes the reader. Shown from md up; below it the page has its own back.
+  onClose?: () => void;
 }
 
 function toUniboxEmail(m: UniboxThreadMessage): UniboxEmail {
@@ -85,6 +87,7 @@ function toUniboxEmail(m: UniboxThreadMessage): UniboxEmail {
     is_seen: m.seen,
     thread_id: m.thread_id,
     account_id: m.email_id,
+    answers_mailbox_id: m.answers_mailbox_id,
   };
 }
 
@@ -99,7 +102,7 @@ function defaultCustomSnoozeValue(): string {
   return toLocalInput(offsetHours(2));
 }
 
-export function ThreadView({ threadId, emailId }: ThreadViewProps) {
+export function ThreadView({ threadId, emailId, onClose }: ThreadViewProps) {
   const q = useThread(threadId, emailId);
   const scheduledQ = useThreadScheduled(threadId);
   const accounts = useAppStore((s) => s.emails);
@@ -214,6 +217,8 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
       bcc: pendingRestore.bcc,
       subject: pendingRestore.subject,
       body: pendingRestore.body,
+      ...(pendingRestore.bodyHtml ? { body_html: pendingRestore.bodyHtml } : {}),
+      email_account_id: pendingRestore.emailAccountId,
     });
   }, [pendingRestore, threadId, openReply]);
 
@@ -232,13 +237,17 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
   // is seen the id list is empty and this no-ops, so it self-terminates.
   const markSeen = useMarkSeen();
   const markSeenMutate = markSeen.mutate;
+  // The reader outlives a close by a render (the URL follows the store in an
+  // effect), and reading back the patch Mark as unread just wrote undoes it.
+  const selected = useAppStore((s) => s.selectedThreadId === threadId);
   React.useEffect(() => {
+    if (!selected) return;
     const unseenIds = (q.data?.data ?? [])
       .filter((m) => !m.seen)
       .map((m) => m.id);
     if (unseenIds.length === 0) return;
     markSeenMutate({ ids: unseenIds, threadIds: [threadId] });
-  }, [threadId, q.data, markSeenMutate]);
+  }, [selected, threadId, q.data, markSeenMutate]);
 
   // Header actions. Each one closes the thread: the effect above would
   // otherwise re-mark an "unread" thread as seen on the next refetch, and a
@@ -247,12 +256,13 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
   const setSelectedThreadId = useAppStore((s) => s.setSelectedThreadId);
   const threadIds = () => (q.data?.data ?? []).map((m) => m.id);
   const markUnread = () => {
-    markSeenMutate({ ids: threadIds(), seen: false, threadIds: [threadId] });
+    // By conversation: the server picks its newest received message.
+    markSeenMutate({ seen: false, threadIds: [threadId] });
     setSelectedThreadId(null);
   };
 
-  // Filing is store-side: the message keeps its place at the provider, and
-  // the sync knows not to undo this (migration 000146).
+  // Filing moves the message here first; the backend then moves it in the
+  // mailbox too, unless the mailbox turned that off.
   // The row leaves the list and the reader closes at once; the request runs
   // behind the toast, and a failure re-reads the list, which brings it back.
   // The copy, the undo and the cache handling are shared with the list row.
@@ -285,6 +295,12 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
   // let a thread re-render reset the reply composer; keep it memoised, and
   // above the early returns below so the hook order stays fixed.
   const messages = React.useMemo(() => (q.data?.data ?? []).map(toUniboxEmail), [q.data]);
+  // A forward never falls back: it would send a different message. With no
+  // target the Reply/Forward bar shows instead of an empty composer slot.
+  const replyTarget = replyState
+    ? messages.find((m) => m.id === replyState.messageId) ??
+      (replyState.mode === "reply" ? messages[messages.length - 1] : undefined)
+    : undefined;
 
   if (q.isPending) {
     return <ThreadSkeleton />;
@@ -301,13 +317,24 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
           <p className="text-[11.5px] text-slate-500 mb-3">
             {q.error?.message ?? "Request failed"}
           </p>
-          <button
-            type="button"
-            onClick={() => q.refetch()}
-            className="h-7 px-2.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-[12px] font-medium transition-colors"
-          >
-            Try again
-          </button>
+          <div className="flex items-center justify-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => q.refetch()}
+              className="h-7 px-2.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-[12px] font-medium transition-colors"
+            >
+              Try again
+            </button>
+            {onClose && (
+              <button
+                type="button"
+                onClick={onClose}
+                className="hidden md:inline-flex h-7 px-2.5 items-center rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[12px] font-medium transition-colors"
+              >
+                Close
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -315,8 +342,17 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
 
   if (messages.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-[12px] text-slate-400">
+      <div className="flex-1 flex flex-col items-center justify-center gap-2 text-[12px] text-slate-400">
         This conversation is empty.
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="hidden md:inline-flex h-7 px-2.5 items-center rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[12px] font-medium transition-colors"
+          >
+            Close
+          </button>
+        )}
       </div>
     );
   }
@@ -324,17 +360,22 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
   const subject = messages[0]?.subject || "(no subject)";
   const mailbox = accounts.find((a) => a.id === messages[0]?.account_id);
 
-  // The external party of the thread = the first message address that isn't
-  // our own mailbox. Headers arrive in all three shapes lib/helper/emailAddress
+  // The external party of the thread = the first sender that isn't one of
+  // the workspace's mailboxes, else (nobody has written back yet) the first
+  // such recipient. Headers arrive in all three shapes lib/helper/emailAddress
   // parses; reduce to the bare address so the comparison + the lookup work.
   const mailboxEmail = mailbox?.email?.toLowerCase();
+  const ownAddresses = new Set(accounts.map((a) => a.email?.toLowerCase()).filter(Boolean));
+  if (mailboxEmail) ownAddresses.add(mailboxEmail);
+  const isExternal = (addr: string) => {
+    const e = bareEmail(addr);
+    return !!e && !ownAddresses.has(e.toLowerCase());
+  };
+  const externalFrom = messages.map((m) => m.from).find(isExternal);
   const contactFrom =
-    messages
-      .map((m) => m.from)
-      .find((f) => {
-        const e = bareEmail(f);
-        return e && e.toLowerCase() !== mailboxEmail;
-      }) ?? (messages[0]?.from ?? "");
+    externalFrom ??
+    messages.flatMap((m) => m.recipients ?? [m.to]).find(isExternal) ??
+    (messages[0]?.from ?? "");
   const contactEmail = bareEmail(contactFrom);
   // Display name from the From header, so an "Add as contact" from the
   // panel does not create a nameless row. Empty when the header is bare.
@@ -584,6 +625,17 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
               )}
             </PopoverMenuContent>
           </PopoverMenu>
+          {onClose && (
+            <>
+              <span aria-hidden className="hidden md:block h-4 w-px bg-slate-200 mx-1" />
+              <IconAction
+                label="Close conversation"
+                className="hidden md:inline-flex"
+                icon={<XIcon className="w-[15px] h-[15px]" />}
+                onClick={onClose}
+              />
+            </>
+          )}
         </div>
       </div>
 
@@ -607,6 +659,11 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
             outbound={
               !!mailboxEmail && bareEmail(email.from).toLowerCase() === mailboxEmail
             }
+            answersMailbox={
+              email.answers_mailbox_id
+                ? accounts.find((a) => a.id === email.answers_mailbox_id)?.email
+                : undefined
+            }
             onReply={() => openReply(email.id, "reply")}
             onForward={() => openReply(email.id, "forward")}
           />
@@ -624,25 +681,18 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
       <AgentDraftCard threadId={threadId} />
 
       <AnimatePresence mode="wait" initial={false}>
-        {replyState ? (
-          (() => {
-            const target =
-              messages.find((m) => m.id === replyState.messageId) ??
-              messages[messages.length - 1];
-            return target ? (
-              <ReplyComposer
-                key={`${userId}-${orgId}-${replyState.messageId}-${replyState.mode}`}
-                threadId={threadId}
-                replyTo={target}
-                mode={replyState.mode}
-                seed={replySeed ?? undefined}
-                onClose={() => {
-                  setReplyState(null);
-                  setReplySeed(null);
-                }}
-              />
-            ) : null;
-          })()
+        {replyState && replyTarget ? (
+          <ReplyComposer
+            key={`${userId}-${orgId}-${replyState.messageId}-${replyState.mode}`}
+            threadId={threadId}
+            replyTo={replyTarget}
+            mode={replyState.mode}
+            seed={replySeed ?? undefined}
+            onClose={() => {
+              setReplyState(null);
+              setReplySeed(null);
+            }}
+          />
         ) : (
           <motion.div
             key="reply-rail"
@@ -685,7 +735,10 @@ export function ThreadView({ threadId, emailId }: ThreadViewProps) {
         <ContactContextPanel
           email={contactEmail}
           name={contactName}
-          mailboxId={mailbox?.id}
+          mailboxId={mailbox?.id ?? messages[0]?.account_id}
+          threadId={threadId}
+          threadMailboxId={emailId}
+          wroteBack={!!externalFrom}
           onClose={() => setCrmOpen(false)}
         />
       )}
@@ -744,12 +797,14 @@ function IconAction({
   icon,
   danger,
   disabled,
+  className,
   onClick,
 }: {
   label: string;
   icon: React.ReactNode;
   danger?: boolean;
   disabled?: boolean;
+  className?: string;
   onClick?: () => void;
 }) {
   return (
@@ -760,12 +815,13 @@ function IconAction({
           onClick={onClick}
           disabled={disabled}
           aria-label={label}
-          className={
-            "size-7 rounded-md inline-flex items-center justify-center transition-colors disabled:opacity-40 disabled:pointer-events-none " +
-            (danger
+          className={cn(
+            "size-7 rounded-md inline-flex items-center justify-center transition-colors disabled:opacity-40 disabled:pointer-events-none",
+            danger
               ? "text-slate-500 hover:text-red-600 hover:bg-red-50"
-              : "text-slate-500 hover:text-slate-900 hover:bg-slate-100")
-          }
+              : "text-slate-500 hover:text-slate-900 hover:bg-slate-100",
+            className,
+          )}
         >
           {icon}
         </button>
@@ -777,9 +833,9 @@ function IconAction({
 
 // Friendly relative-or-absolute time used for scheduled cards.
 // Examples: "in 12 min", "in 3 h", "tomorrow, 09:00", "Mar 5, 17:00".
-function formatScheduled(iso: string): string {
+function formatScheduled(iso: string | Date): string {
   const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return iso;
+  if (!Number.isFinite(d.getTime())) return String(iso);
   const now = new Date();
   const diffMs = d.getTime() - now.getTime();
   const diffMin = Math.round(diffMs / 60_000);

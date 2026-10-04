@@ -66,7 +66,7 @@ func (h *Handler) UpdateEmail(c *gin.Context) {
 	var data models.UpdateEmail
 
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -74,6 +74,11 @@ func (h *Handler) UpdateEmail(c *gin.Context) {
 	if err != nil {
 		errx.Handle(c, err)
 		return
+	}
+
+	// A mailbox switched back on resumes its warmup now, not on the next reconciler pass.
+	if data.Status != nil && *data.Status == "active" && resp != nil {
+		_ = h.TasksService.EnsureWarmupScheduled(c.Request.Context(), resp.ID)
 	}
 
 	// Audit log
@@ -97,7 +102,7 @@ func (h *Handler) BulkTagEmails(c *gin.Context) {
 
 	var data models.BulkEmailTags
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -343,7 +348,7 @@ func (h *Handler) UpdateEmailDirectTracking(c *gin.Context) {
 		Enabled *bool `json:"enabled" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 

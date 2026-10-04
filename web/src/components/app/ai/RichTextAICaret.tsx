@@ -22,6 +22,7 @@ import buildError from "@/lib/helper/buildError";
 import formatUsage from "@/components/app/ai/usage";
 import { useAnchoredFloating, caretReference } from "@/hooks/useAnchoredFloating";
 import { passageHTML, passageText, replacePassage } from "./richTextPassage";
+import AgentMark from "@/components/app/agent/AgentMark";
 
 const CONTEXT_WINDOW = 1500;
 
@@ -227,7 +228,7 @@ export default function RichTextAICaret({ editor }: { editor: Editor }) {
                         animate={{ opacity: 1, scale: 1 }}
                         exit={{ opacity: 0, scale: 0.9 }}
                         transition={{ duration: 0.12 }}
-                        style={{ position: "fixed", top: companion.top - 1, left: companion.left, zIndex: 55 }}
+                        style={{ position: "fixed", top: companion.top - 1, left: companion.left, zIndex: 145 }}
                         title="Write with AI (⌘J)"
                         aria-label="Write with AI"
                         className="inline-flex size-[22px] items-center justify-center rounded-md text-slate-300 transition-colors hover:bg-sky-50 hover:text-sky-600"
@@ -256,12 +257,12 @@ export default function RichTextAICaret({ editor }: { editor: Editor }) {
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
                         transition={{ duration: 0.12 }}
-                        className="z-[60] w-80 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_12px_32px_-8px_rgba(15,23,42,0.22)]"
+                        className="z-[150] w-80 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_12px_32px_-8px_rgba(15,23,42,0.22)]"
                     >
                         {phase === "busy" ? (
                             <div className="flex items-center gap-2 px-3 py-2.5">
-                                <SparklesIcon className="h-3.5 w-3.5 shrink-0 animate-pulse text-sky-500" />
-                                <span className="text-[12px] font-medium text-slate-600">Writing…</span>
+                                <AgentMark variant="bare" size={14} state="thinking" />
+                                <span className="ai-shimmer-text text-[12px] font-medium">Writing…</span>
                             </div>
                         ) : phase === "applied" ? (
                             <div className="flex items-center gap-1.5 px-2.5 py-2">

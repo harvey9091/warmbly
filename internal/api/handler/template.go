@@ -49,7 +49,7 @@ func (h *Handler) CreateTemplate(c *gin.Context) {
 
 	var data models.CreateReplyTemplate
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -105,7 +105,7 @@ func (h *Handler) UpdateTemplate(c *gin.Context) {
 
 	var data models.UpdateReplyTemplate
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -190,7 +190,7 @@ func (h *Handler) ReorderTemplates(c *gin.Context) {
 
 	var data models.ReorderReplyTemplates
 	if err := c.ShouldBindJSON(&data); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 

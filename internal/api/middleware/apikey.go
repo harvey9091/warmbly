@@ -182,8 +182,10 @@ func (h *Handler) validateJWT(c *gin.Context, token string) {
 	c.Set(UserIDKey, session.UserID.String())
 	c.Set(SessionKey, session)
 	c.Set(AccessTokenKey, token)
-	if session.CurrentOrganizationID != nil {
-		c.Set(OrganizationIDKey, *session.CurrentOrganizationID)
+	if xerr := h.setSessionOrganization(c, session); xerr != nil {
+		errx.JSON(c, xerr)
+		c.Abort()
+		return
 	}
 	c.Next()
 }
@@ -253,7 +255,7 @@ func (h *Handler) RequireAccess(orgPerm models.OrganizationPermission, apiPerm u
 				c.Abort()
 				return
 			}
-			has, xerr := h.OrganizationService.HasPermission(c.Request.Context(), *orgID, userID, orgPerm)
+			has, xerr := h.memberHasPermission(c, *orgID, userID, orgPerm)
 			if xerr != nil {
 				errx.JSON(c, xerr)
 				c.Abort()
@@ -266,6 +268,19 @@ func (h *Handler) RequireAccess(orgPerm models.OrganizationPermission, apiPerm u
 			}
 			c.Next()
 		}
+	}
+}
+
+// RequireAccessWithQuery applies RequireAccess only when the request carries
+// the named query parameter.
+func (h *Handler) RequireAccessWithQuery(param string, orgPerm models.OrganizationPermission, apiPerm uint64) gin.HandlerFunc {
+	gate := h.RequireAccess(orgPerm, apiPerm)
+	return func(c *gin.Context) {
+		if strings.TrimSpace(c.Query(param)) == "" {
+			c.Next()
+			return
+		}
+		gate(c)
 	}
 }
 
@@ -309,7 +324,7 @@ func (h *Handler) RequireAnyAccess(apiPerm uint64, orgPerms ...models.Organizati
 				return
 			}
 			for _, p := range orgPerms {
-				has, xerr := h.OrganizationService.HasPermission(c.Request.Context(), *orgID, userID, p)
+				has, xerr := h.memberHasPermission(c, *orgID, userID, p)
 				if xerr != nil {
 					errx.JSON(c, xerr)
 					c.Abort()

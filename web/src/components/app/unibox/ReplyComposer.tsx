@@ -8,7 +8,14 @@
 // Layout: a one-line target strip at the top (Reply/Forward to name and
 // subject, plus dismiss), then plain header rows (To with Cc/Bcc toggles,
 // From, unlabelled Subject), the body textarea, the optional signature
-// preview, and the action bar (Send / Schedule / Template / Discard).
+// preview, the forwarded message when forwarding, and the action bar
+// (Send / Schedule / Pause follow-ups / Template / Discard).
+//
+// A forward sends only its message's id; the server attaches the message, so the note is optional.
+//
+// From defaults to the mailbox holding the message and can be switched to any
+// active mailbox; the backend keeps the provider thread only for a mailbox
+// that holds it, so a switched reply threads on its headers alone.
 //
 // ⌘+Enter sends instantly. Each schedule preset calls /unibox/reply
 // with send_mode="scheduled" plus the concrete scheduled_at.
@@ -34,6 +41,12 @@ import useTemplates from "@/lib/api/hooks/app/templates/useTemplates";
 import TemplatePickerContent from "./TemplatePicker";
 import InsertBookingLink from "./InsertBookingLink";
 import ContactRecipientField from "./compose/ContactRecipientField";
+import ForwardedMessage from "./ForwardedMessage";
+import MailboxPicker from "./compose/MailboxPicker";
+import useComposeCandidates from "@/lib/api/hooks/app/unibox/useComposeCandidates";
+import usePauseFollowUps, { type FollowUpTargets } from "@/lib/api/hooks/app/campaigns/usePauseFollowUps";
+import PauseFollowUpsMenu from "./PauseFollowUpsMenu";
+import { followUpPauseUntil, tickedCampaigns, type FollowUpPause } from "@/lib/leadHold";
 import useUniboxOverview from "@/lib/api/hooks/app/unibox/useUniboxOverview";
 import { resolveSendAt, useOutboxStore } from "@/hooks/useOutboxStore";
 import { useUserProfile } from "@/hooks/context/user";
@@ -52,7 +65,19 @@ import {
     PopoverMenuSeparator,
 } from "@/components/ui/popover-menu";
 import { cn } from "@/lib/utils";
-import { plainToHtml } from "@/lib/email/body";
+import {
+    bodyHasContent,
+    bodyTooLong,
+    capPlain,
+    htmlHasContent,
+    outgoingParts,
+    restoreBody,
+    withTemplate,
+    withText,
+} from "@/lib/email/composerBody";
+import { useComposerBody } from "@/lib/email/useComposerBody";
+import { HtmlBody, HtmlModeToggle } from "./compose/HtmlBody";
+import type Template from "@/lib/api/models/app/templates/Template";
 import { bareEmail, nameFromAddr } from "@/lib/helper/emailAddress";
 import {
     loadReplyDraft,
@@ -62,6 +87,7 @@ import {
 } from "@/lib/unibox/replyDraft";
 
 import { useReplyDraft } from "@/lib/unibox/useReplyDraft";
+import { answerAddress, replyInboxSender } from "@/lib/unibox/replyInbox";
 
 export type { ReplyMode, ReplySeed } from "@/lib/unibox/replyDraft";
 
@@ -168,7 +194,9 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
         () => seed ?? (draftKey ? loadReplyDraft(draftKey) : null),
     );
 
-    const [body, setBody] = React.useState(restored?.body ?? "");
+    const bodyState = useComposerBody(restored?.body ?? "", restored?.body_html);
+    const { body, setBody, html } = bodyState;
+    const setBodyValue = bodyState.setValue;
     const [subject, setSubject] = React.useState(restored?.subject ?? initial.subject);
     const [to, setTo] = React.useState<string[]>(
         restored?.to ?? initial.to,
@@ -177,9 +205,39 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
     const [bcc, setBcc] = React.useState<string[]>(restored?.bcc ?? []);
     const [showCc, setShowCc] = React.useState((restored?.cc.length ?? 0) > 0);
     const [showBcc, setShowBcc] = React.useState((restored?.bcc.length ?? 0) > 0);
+    // The mailbox holding the message is the default sender, unless it is a
+    // shared reply inbox: then the mailbox that emailed them answers, so they
+    // keep hearing from one address. Picking another is a per-draft override.
+    const threadAccountId = replyTo.account_id ?? "";
+    const answersMailboxId = mode === "reply" ? replyTo.answers_mailbox_id : undefined;
+    const defaultAccountId = React.useMemo(
+        () => replyInboxSender(accounts, threadAccountId, answersMailboxId) ?? threadAccountId,
+        [accounts, threadAccountId, answersMailboxId],
+    );
+    // A saved pick whose mailbox has since gone falls back to the default.
+    const accountsRef = React.useRef(accounts);
+    accountsRef.current = accounts;
+    const resolveSender = React.useCallback(
+        (id: string | undefined) =>
+            id && (accountsRef.current.length === 0 || accountsRef.current.some((a) => a.id === id)) ? id : null,
+        [],
+    );
+    // Until someone chooses, From is the default, so it follows the mailbox list as it loads.
+    const [chosenSender, chooseSender] = React.useState<string | null>(() => resolveSender(restored?.email_account_id));
+    const accountId = chosenSender ?? defaultAccountId;
     const [isSending, setIsSending] = React.useState(false);
-    const draft = useReplyDraft(draftKey, { to, cc, bcc, subject, body }, {
-        to: initial.to, cc: [], bcc: [], subject: initial.subject, body: "",
+    // body_html only when there is HTML, so a plain or empty draft serializes as it always has.
+    const draftValue: ReplySeed = {
+        to,
+        cc,
+        bcc,
+        subject,
+        body,
+        ...(html ? { body_html: html } : {}),
+        email_account_id: accountId,
+    };
+    const draft = useReplyDraft(draftKey, draftValue, {
+        to: initial.to, cc: [], bcc: [], subject: initial.subject, body: "", email_account_id: defaultAccountId,
     });
     const closeKeepingDraft = () => {
         if (!draft.flush()) {
@@ -235,14 +293,61 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
         setBcc(seed.bcc);
         setShowCc(seed.cc.length > 0);
         setShowBcc(seed.bcc.length > 0);
-        setBody(seed.body);
-    }, [seed, resumeDraft]);
+        setBodyValue(restoreBody(seed.body, seed.body_html));
+        chooseSender(resolveSender(seed.email_account_id));
+    }, [seed, resumeDraft, resolveSender, setBodyValue]);
 
-    // Resolve the sending mailbox from the target message's
-    // account_id. We look it up in the global emails store so we have
-    // the full Inbox record (signature_html, signature_plain, etc).
-    const accountId = replyTo.account_id ?? "";
+    // The full Inbox record (signature_html, signature_plain, etc) of the
+    // chosen sender, from the global emails store.
     const mailbox = accounts.find((a) => a.id === accountId);
+    const switchedMailbox = !!defaultAccountId && accountId !== defaultAccountId;
+    // From is the mailbox that emailed them rather than the reply inbox holding the message.
+    const answeringFromSender = !switchedMailbox && defaultAccountId !== threadAccountId;
+    // A queued send from an inactive or removed mailbox cannot leave, so Send
+    // waits for a sender that can.
+    const senderProblem = !accountId
+        ? null
+        : mailbox
+          ? mailbox.status !== "active"
+              ? `${mailbox.email} is not active, so it cannot send. Pick another mailbox in From, or reconnect it under Emails.`
+              : null
+          : accounts.length > 0
+            ? "This mailbox is no longer connected. Pick another mailbox in From."
+            : null;
+    const threadMailbox = accounts.find((a) => a.id === threadAccountId);
+    const defaultMailbox = accounts.find((a) => a.id === defaultAccountId);
+
+    // Scored like compose (history with the recipient, today's budget, auth),
+    // fetched once From is opened: most replies keep the default mailbox.
+    const [wantCandidates, setWantCandidates] = React.useState(false);
+    const primary = to.length > 0 ? bareEmail(to[0]) : "";
+    const candidatesQ = useComposeCandidates(primary, wantCandidates);
+
+    // Holds the recipient's follow-ups once a reply is accepted; a forward goes to someone else.
+    // The thread's lead stands in only for the person who wrote the message being answered.
+    const answeringSender = !!primary && primary.toLowerCase() === bareEmail(replyTo.from ?? "").toLowerCase();
+    const followUps = usePauseFollowUps(
+        mode === "reply" && primary ? primary : undefined,
+        answeringSender ? { threadId } : undefined,
+    );
+    const [followUpPause, setFollowUpPause] = React.useState<FollowUpPause | null>(null);
+    // Unticked rather than ticked, so a campaign that appears later is included.
+    const [followUpSkip, setFollowUpSkip] = React.useState<string[]>([]);
+    const { pauseAll } = followUps;
+    const applyFollowUpPause = async (p: FollowUpPause, t: FollowUpTargets, sendsAt?: Date) => {
+        const { paused, failed } = await pauseAll(t, followUpPauseUntil(p, sendsAt));
+        if (failed > 0) {
+            toast.error(
+                paused > 0
+                    ? `Follow-ups paused in ${paused} of ${t.campaigns.length} campaigns. Check the contact panel.`
+                    : "Reply queued, but its follow-ups could not be paused. Check the contact panel.",
+            );
+        } else if (paused === 0) {
+            toast.success("Their follow-ups were already on hold");
+        } else {
+            toast.success(p.days == null ? "Follow-ups paused until you resume them" : `Follow-ups paused ${p.label.toLowerCase()}`);
+        }
+    };
 
     const templatesQuery = useTemplates();
 
@@ -254,12 +359,22 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
     const scheduledCap = overview.data?.scheduled_pending_max ?? 0;
     const scheduleAtCap = scheduledCap > 0 && scheduledUsed >= scheduledCap;
 
-    const trimmedBody = body.trim();
-    const canSend = !!trimmedBody && to.length > 0 && to.every(looksLikeEmail) && !!accountId && !isSending;
+    const htmlTooLong = React.useMemo(() => bodyTooLong(bodyState.value), [bodyState.value]);
+    // A forward's note is optional: the forwarded message is the content.
+    const hasBody = React.useMemo(() => bodyHasContent(bodyState.value), [bodyState.value]);
+    const hasContent = hasBody || mode === "forward";
+    const canSend =
+        hasContent &&
+        !htmlTooLong &&
+        to.length > 0 &&
+        to.every(looksLikeEmail) &&
+        !!accountId &&
+        !senderProblem &&
+        !isSending;
 
     const send = async (scheduledAt?: Date) => {
         if (!canSend && !isSending) {
-            if (!trimmedBody) {
+            if (!hasContent) {
                 toast.error("Body is empty");
                 return;
             }
@@ -275,9 +390,23 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
                 toast.error("Couldn't resolve the sending mailbox");
                 return;
             }
+            if (senderProblem) {
+                toast.error(senderProblem);
+                return;
+            }
+            if (htmlTooLong) {
+                toast.error("This email's HTML is too long to send");
+                return;
+            }
         }
 
-        const submittedDraft = { to, cc, bcc, subject, body };
+        const submittedDraft = draftValue;
+        const parts = outgoingParts(bodyState.value);
+        const pauseWith = mode === "reply" ? followUpPause : null;
+        const pauseTargets = {
+            ...followUps.targets,
+            campaigns: tickedCampaigns(followUps.targets.campaigns, followUpSkip),
+        };
         draft.flush();
         setIsSending(true);
         const sentSubject = subject.trim() || (mode === "forward" ? "Fwd:" : "Re:");
@@ -288,9 +417,9 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
                 cc: cc.length ? cc : undefined,
                 bcc: bcc.length ? bcc : undefined,
                 subject: sentSubject,
-                body_plain: trimmedBody,
-                body_html: plainToHtml(trimmedBody),
+                ...parts,
                 thread_id: mode === "reply" ? threadId : undefined,
+                forward_message_id: mode === "forward" ? replyTo.id : undefined,
                 ...(scheduledAt
                     ? {
                           send_mode: "scheduled" as const,
@@ -317,7 +446,9 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
                         cc,
                         bcc,
                         subject: sentSubject,
-                        body: trimmedBody,
+                        body: html === null ? parts.body_plain : body,
+                        ...(html !== null ? { bodyHtml: html } : {}),
+                        emailAccountId: accountId,
                     },
                 });
             } else {
@@ -331,6 +462,11 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
             }
             setScheduleOpen(false);
             setCustomMode(false);
+            if (pauseWith && pauseTargets.campaigns.length > 0) {
+                void applyFollowUpPause(pauseWith, pauseTargets, scheduledAt);
+                setFollowUpPause(null);
+                setFollowUpSkip([]);
+            }
             const completed = draft.complete(submittedDraft);
             if (!completed.cleared) toast.error("Reply queued, but the saved draft could not be removed. Discard it before sending again.");
             if (completed.close) onClose();
@@ -361,22 +497,28 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
         handleSchedule(new Date(customValue));
     };
 
-    const applyTemplate = (name: string, plain: string, subj: string) => {
-        // Replace body if empty; otherwise append under a separator so
-        // the user keeps whatever they already typed.
-        if (!body.trim()) {
-            setBody(plain);
-        } else {
-            setBody((b) => `${b.trimEnd()}\n\n${plain}`);
+    const applyTemplate = (t: Template) => {
+        // Replace body if empty; otherwise append under a separator so the
+        // user keeps whatever they already typed. An HTML body switches the
+        // composer to HTML.
+        if (aiDraft.phase !== "idle" && htmlHasContent(t.body_html ?? "")) {
+            toast.error("Keep or discard the AI draft before adding an HTML template");
+            return;
         }
+        const next = capPlain(withTemplate(bodyState.value, t));
+        if (bodyTooLong(next)) {
+            toast.error(`"${t.name}" is too long to add to this email`);
+            return;
+        }
+        setBodyValue(next);
         // Only overwrite subject when the user hasn't customised it
         // past the default "Re:" / "Fwd:" prefix.
         const subj0 = subject.trim();
-        if (subj && (/^re:\s*$/i.test(subj0) || /^fwd:\s*$/i.test(subj0))) {
-            setSubject(subj);
+        if (t.subject && (/^re:\s*$/i.test(subj0) || /^fwd:\s*$/i.test(subj0))) {
+            setSubject(t.subject);
         }
         setTemplateOpen(false);
-        toast.success(`Inserted "${name}"`);
+        toast.success(`Inserted "${t.name}"`);
     };
 
     // Three signature states the user might be in. Surfacing all
@@ -435,7 +577,7 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
                     <span className="font-semibold text-slate-800">
                         {mode === "forward" ? "Forward" : "Reply"}
                     </span>{" "}
-                    to {replyToName}
+                    {mode === "forward" ? "message from" : "to"} {replyToName}
                     <span className="text-slate-400"> · {replyTargetSubject}</span>
                 </span>
                 {draft.saved && (
@@ -526,21 +668,96 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
                 )}
 
                 <HeaderRow label="From">
-                    {mailbox ? (
-                        <div className="inline-flex items-center gap-2 min-w-0">
-                            <span className="text-[12.5px] text-slate-800 truncate">
-                                {mailbox.name || mailbox.email}
-                            </span>
-                            <span className="font-mono text-[10.5px] text-slate-400 min-w-0 truncate" title={mailbox.email}>
-                                {mailbox.email}
-                            </span>
-                        </div>
+                    {accountId ? (
+                        <MailboxPicker
+                            value={accountId}
+                            autoTag={null}
+                            allowAuto={false}
+                            onChange={chooseSender}
+                            onOpen={() => setWantCandidates(true)}
+                            candidates={candidatesQ.data}
+                            loading={candidatesQ.isPending}
+                        />
                     ) : (
                         <span className="text-[12px] text-amber-700">
                             No sending mailbox resolved
                         </span>
                     )}
                 </HeaderRow>
+                <AnimatePresence initial={false}>
+                    {senderProblem && (
+                        <motion.div
+                            key="inactive"
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: "auto", opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                            className="overflow-hidden"
+                        >
+                            <div
+                                role="status"
+                                className="px-4 py-1.5 flex items-start gap-1.5 border-b border-amber-100 bg-amber-50/60 text-[11px] text-amber-800"
+                            >
+                                <InfoIcon className="w-3 h-3 mt-px shrink-0 text-amber-600" />
+                                <span className="min-w-0 flex-1 leading-snug">{senderProblem}</span>
+                            </div>
+                        </motion.div>
+                    )}
+                    {!senderProblem && switchedMailbox && mode === "reply" && (
+                        <motion.div
+                            key="switched"
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: "auto", opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                            className="overflow-hidden"
+                        >
+                            <div className="px-4 py-1.5 flex items-start gap-1.5 border-b border-slate-100 bg-slate-50/60 text-[11px] text-slate-500">
+                                <InfoIcon className="w-3 h-3 mt-px shrink-0 text-slate-400" />
+                                <span className="min-w-0 flex-1 leading-snug">
+                                    Replying from another mailbox. It stays in the same conversation for the
+                                    recipient, and their answer comes back to {mailbox ? answerAddress(mailbox) : "this mailbox"}.
+                                </span>
+                                <button
+                                    type="button"
+                                    onClick={() => chooseSender(defaultAccountId)}
+                                    title={defaultMailbox ? `Reply from ${defaultMailbox.email}` : "Reply from the original mailbox"}
+                                    className="shrink-0 text-[11px] font-medium text-sky-700 hover:text-sky-800 transition-colors"
+                                >
+                                    Switch back
+                                </button>
+                            </div>
+                        </motion.div>
+                    )}
+                    {!senderProblem && answeringFromSender && mode === "reply" && (
+                        <motion.div
+                            key="reply-inbox"
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: "auto", opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                            className="overflow-hidden"
+                        >
+                            <div className="px-4 py-1.5 flex items-start gap-1.5 border-b border-slate-100 bg-slate-50/60 text-[11px] text-slate-500">
+                                <InfoIcon className="w-3 h-3 mt-px shrink-0 text-slate-400" />
+                                <span className="min-w-0 flex-1 leading-snug">
+                                    Replying from {mailbox?.email ?? "the mailbox"}, which sent the email they answered, so
+                                    they keep hearing from one address. Their answer comes back to {mailbox ? answerAddress(mailbox) : "this inbox"}.
+                                </span>
+                                {threadMailbox && (
+                                    <button
+                                        type="button"
+                                        onClick={() => chooseSender(threadAccountId)}
+                                        title={`Reply from ${threadMailbox.email}`}
+                                        className="shrink-0 max-w-[40%] truncate text-[11px] font-medium text-sky-700 hover:text-sky-800 transition-colors"
+                                    >
+                                        Use {threadMailbox.email}
+                                    </button>
+                                )}
+                            </div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
 
                 <div className="flex items-center gap-2 px-4 border-b border-slate-100">
                     <input
@@ -557,6 +774,17 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
                 light sheen sweeps the textarea while generating and the
                 status/review card floats over the bottom edge. */}
             <div className="relative">
+            {html !== null ? (
+                <HtmlBody
+                    id="reply-body"
+                    state={bodyState}
+                    onSend={() => {
+                        if (canSend) handleInstant();
+                    }}
+                    onEscape={closeKeepingDraft}
+                    className="max-h-[28rem] px-4 py-2.5"
+                />
+            ) : (
             <textarea
                 ref={bodyRef}
                 value={body}
@@ -578,6 +806,7 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
                 }}
                 className="w-full min-h-[120px] max-h-72 px-4 py-3 text-[13px] text-slate-800 placeholder:text-slate-400 bg-transparent resize-y focus:outline-none"
             />
+            )}
             {aiDraft.phase === "busy" && (
                 <div className="ai-sheen pointer-events-none absolute inset-0" aria-hidden />
             )}
@@ -596,6 +825,8 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
                 sparkle rides the current line (or ⌘J) and opens the write
                 menu at the cursor — ask AI to write, draft a full reply from
                 the thread, or continue the draft. */}
+            {html === null && (
+            <>
             <TextareaAIEdit
                 textareaRef={bodyRef}
                 value={body}
@@ -611,6 +842,8 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
                 contextHint={`It is a ${mode === "forward" ? "forward note" : "reply"} with the subject "${subject}".`}
                 maxLen={MAX_BODY_LEN}
             />
+            </>
+            )}
 
             {/* Signature preview / status. Three branches so the user
                 always knows what will (or will not) appear at the
@@ -653,6 +886,8 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
                     one in mailbox settings.
                 </div>
             )}
+
+            {mode === "forward" && <ForwardedMessage email={replyTo} />}
 
             {/* Action bar. flex-wrap so the Send + Schedule + Template
                 + Discard chain doesn't overflow on a 360px-wide phone;
@@ -761,6 +996,19 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
                     </PopoverMenuContent>
                 </PopoverMenu>
 
+                {mode === "reply" && followUps.targets.campaigns.length > 0 && (
+                    <PauseFollowUpsMenu
+                        campaigns={followUps.targets.campaigns.map((c) => ({ id: c.campaign_id, name: c.campaign_name }))}
+                        skipped={followUpSkip}
+                        onToggleCampaign={(id) =>
+                            setFollowUpSkip((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
+                        }
+                        value={followUpPause}
+                        onChange={setFollowUpPause}
+                        disabled={isSending}
+                    />
+                )}
+
                 {/* Template picker. Custom rich rows (not
                     PopoverMenuItem) so each row can run two lines
                     without the wrapper truncating them. */}
@@ -784,17 +1032,17 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
                     <PopoverMenuContent minWidth={340} className="max-w-[92vw]">
                         <TemplatePickerContent
                             query={templatesQuery}
-                            onPick={(t) => applyTemplate(t.name, t.body_plain, t.subject)}
+                            onPick={applyTemplate}
                             onClose={() => setTemplateOpen(false)}
                         />
                     </PopoverMenuContent>
                 </PopoverMenu>
 
+                <HtmlModeToggle state={bodyState} disabled={aiDraft.phase !== "idle"} />
+
                 <InsertBookingLink
                     email={to[0]}
-                    onInsert={(text) =>
-                        setBody((b) => (b.trim() ? `${b.trimEnd()}\n\n${text}` : text).slice(0, MAX_BODY_LEN))
-                    }
+                    onInsert={(text) => setBodyValue((b) => capPlain(withText(b, text)))}
                 />
 
                 <span
@@ -821,9 +1069,11 @@ export function ReplyComposer({ threadId, replyTo, mode, seed, onClose }: ReplyC
                     {signatureState.kind === "none" && "No signature"}
                 </span>
 
-                <span className="font-mono text-[10px] text-slate-400 tabular-nums">
-                    {body.length}/{MAX_BODY_LEN}
-                </span>
+                {html === null && (
+                    <span className="font-mono text-[10px] text-slate-400 tabular-nums">
+                        {body.length}/{MAX_BODY_LEN}
+                    </span>
+                )}
             </div>
         </motion.div>
     );

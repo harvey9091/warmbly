@@ -22,7 +22,7 @@ type scoreTemplateRequest struct {
 func (h *Handler) ScoreTemplateContent(c *gin.Context) {
 	var req scoreTemplateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 

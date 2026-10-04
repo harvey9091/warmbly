@@ -4,16 +4,16 @@ import (
 	"math"
 	"math/rand"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/warmbly/warmbly/internal/app/behavior"
+	"github.com/warmbly/warmbly/internal/bitmask"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/mailhost"
 	"github.com/warmbly/warmbly/internal/repository"
 )
 
-// findNextValidDay finds the next valid day based on campaign days bitmask
-// Bit 0 = Sunday, Bit 1 = Monday, ..., Bit 6 = Saturday
+// findNextValidDay finds the next day the Monday-first days mask allows.
 func findNextValidDay(from time.Time, daysBitmask uint8, tz *time.Location) time.Time {
 	if daysBitmask == 0 {
 		// If no days specified, allow all days
@@ -24,8 +24,7 @@ func findNextValidDay(from time.Time, daysBitmask uint8, tz *time.Location) time
 
 	// Try up to 7 days
 	for i := 0; i < 7; i++ {
-		dayOfWeek := int(candidate.Weekday())
-		if (daysBitmask & (1 << dayOfWeek)) != 0 {
+		if bitmask.HasWeekday(daysBitmask, candidate.Weekday()) {
 			return candidate
 		}
 		candidate = candidate.Add(24 * time.Hour)
@@ -409,24 +408,29 @@ func campaignRampCeiling(enabled bool, start, increment, ceiling, level int) int
 	return v
 }
 
-// providerForEmailDomain maps a recipient email address to a coarse ESP bucket
-// for provider matching. Pure string work — never dials MX. Unknown/other
-// domains return "" so matching never blocks the first contact.
-func providerForEmailDomain(email string) string {
-	at := strings.LastIndex(email, "@")
-	if at < 0 || at == len(email)-1 {
-		return ""
+// senderESP is a mailbox's family for ESP matching: its email_provider, or
+// for an smtp_imap mailbox on Google or Microsoft (an app-password import)
+// that host's family.
+func senderESP(acct models.Email) string {
+	if acct.Provider == "smtp_imap" {
+		if esp := mailhost.ESPFamily(mailhost.Host(acct.MailHost)); esp == "gmail" || esp == "outlook" {
+			return esp
+		}
 	}
-	domain := strings.ToLower(strings.TrimSpace(email[at+1:]))
-	switch domain {
-	case "gmail.com", "googlemail.com":
-		return "gmail"
-	case "outlook.com", "hotmail.com", "live.com", "msn.com", "office365.com", "microsoft.com":
-		return "outlook"
+	return acct.Provider
+}
+
+// recipientESP is the provider family ESP matching compares against a
+// mailbox's email_provider: "gmail", "outlook", or "" for anything else,
+// which matches every mailbox. A contact the provider sweep has not reached
+// yet is read from its domain alone.
+func recipientESP(c *models.Contact) string {
+	esp := c.ESPProvider
+	if c.MailHost == "" && esp == "" {
+		esp = mailhost.ESPFamily(mailhost.KnownDomain(c.Email))
 	}
-	// Subdomain / suffix heuristics for hosted Google/Microsoft mail.
-	if strings.HasSuffix(domain, ".onmicrosoft.com") {
-		return "outlook"
+	if esp == "gmail" || esp == "outlook" {
+		return esp
 	}
 	return ""
 }

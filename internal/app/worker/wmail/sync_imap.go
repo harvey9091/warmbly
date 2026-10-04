@@ -15,6 +15,7 @@ import (
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/repository"
 )
 
 // Sync is one IMAP pass: follow every folder's CONDSTORE mod-sequence for
@@ -31,6 +32,9 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 	}
 	w.beginTick()
 	stats := &tickStats{}
+	if !w.retryUnmap(ctx) {
+		return nil
+	}
 
 	client := w.SmtpImapData.ImapClient
 	// A mailbox left selected by the previous pass freezes LIST-STATUS on this
@@ -45,6 +49,22 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 	// costs nothing and keeps the pass correct against any listing: a view
 	// that reached it would re-file known mail as archive under a second UID.
 	folders = slices.DeleteFunc(folders, func(b models.Mailbox) bool { return imapVirtualFolder(&b) })
+
+	// The folders the owner excluded leave the listing here, before renames
+	// are followed and before the delete sweep: one already synced is retired
+	// like a folder the server dropped, and one never seen is never
+	// baselined. They are kept aside so mail that moves into one of them can
+	// be recognised as filed rather than lost.
+	var skipped []models.Mailbox
+	if skip := w.skipFolders(); len(skip) > 0 {
+		folders = slices.DeleteFunc(folders, func(b models.Mailbox) bool {
+			if !imap.SkipsFolder(b, skip) {
+				return false
+			}
+			skipped = append(skipped, b)
+			return true
+		})
+	}
 
 	// Before anything is matched by name, follow the folders whose name
 	// changed. A rename read as a delete plus a first sighting would orphan
@@ -61,6 +81,10 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 
 	for i := range folders {
 		box := &folders[i]
+		// The listing is remembered before anything is decided from it, so
+		// the departure check below reads the previous pass, never this one.
+		prevListing, listedBefore := w.listed[box.Name]
+		w.rememberListing(box)
 		befBox := w.SmtpImapData.FindPair(box)
 		if befBox == nil {
 			// First sight: baseline. Live sync starts from this cursor; the
@@ -93,15 +117,20 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 		}
 
 		changed := imapFolderChanged(befBox, box, condStore)
+		// A pass cut short by the search cap left rows unexamined, so the
+		// next pass looks again whether or not the count moved.
+		movedOut := len(skipped) > 0 && (w.skipPending[box.Name] || listedBefore && imapMovedOut(prevListing, box))
 		fullyProcessed := true
 		var touched map[string]struct{}
+		var view imap.Selected
 		if changed && !stats.aborted {
 			w.setWalking(box)
-			done, ids, err := w.imapIncremental(ctx, box, befBox, condStore, stats)
+			done, sel, ids, err := w.imapIncremental(ctx, box, befBox, condStore, stats)
 			if err != nil {
 				return err
 			}
 			fullyProcessed = done
+			view = sel
 			touched = ids
 		} else if changed {
 			// The pass was aborted before this folder; hold its cursor too.
@@ -115,6 +144,8 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 			if !fullyProcessed {
 				next.HighestModSeq = befBox.HighestModSeq
 				next.UIDNext = befBox.UIDNext
+			} else if changed {
+				advanceToView(&next, view)
 			}
 			if err := w.mboxEvent(&next); err != nil {
 				return nil
@@ -131,6 +162,10 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 		// full pass has to clean up rows older workers left behind.
 		if imapCanonicalFolder(box) == models.FolderDrafts && !stats.aborted {
 			if err := w.imapReconcileDrafts(ctx, box, touched, stats); err != nil {
+				return err
+			}
+		} else if movedOut && !stats.aborted {
+			if err := w.imapReconcileSkipped(ctx, box, skipped, touched, stats); err != nil {
 				return err
 			}
 		}
@@ -153,6 +188,7 @@ func (w *WMail) Sync(ctx context.Context) *errx.MailError {
 	// Renames were already followed above, so a name missing from the listing
 	// at this point really is a folder that is gone.
 	var deleted []string
+	var gone []*models.Mailbox
 outer:
 	for _, box := range w.SmtpImapData.Mailboxes {
 		for _, f := range folders {
@@ -160,12 +196,17 @@ outer:
 				continue outer
 			}
 		}
-
+		gone = append(gone, box)
+	}
+	for _, box := range gone {
 		if err := w.onEvent(models.JobEventTypeMailboxDelete, &models.JobEventMailboxDelete{
 			UserID:      w.UserID,
 			EmailID:     w.ID,
 			Mailbox:     box.Name,
 			UIDValidity: box.UIDValidity,
+			// A folder that is still on the server but now excluded takes
+			// the mail already stored from it along.
+			Skipped: imapRetiredIntoSkipped(box, gone, skipped),
 		}); err != nil {
 			return nil
 		}
@@ -175,6 +216,8 @@ outer:
 	if len(deleted) > 0 {
 		for _, name := range deleted {
 			delete(w.flagScan, name)
+			delete(w.listed, name)
+			delete(w.skipPending, name)
 			// The backfill floor goes with the folder. A name is reusable,
 			// and a floor left behind would be inherited by whatever is
 			// created under it next.
@@ -199,6 +242,214 @@ outer:
 	return nil
 }
 
+// imapRetiredIntoSkipped reports whether a folder leaving the listing is one
+// the owner excluded: listed under the same name in the skipped set, or
+// renamed into the skipped subtree, which the rename matcher could not see
+// because skipped folders leave the listing before it runs. The rename is
+// claimed on the matcher's own terms: exactly one folder gone and exactly
+// one skipped folder carrying its UIDVALIDITY, so a server that stamps a
+// whole tree from one creation time cannot make an unrelated deletion look
+// like a move.
+func imapRetiredIntoSkipped(box *models.Mailbox, gone []*models.Mailbox, skipped []models.Mailbox) bool {
+	if slices.ContainsFunc(skipped, func(s models.Mailbox) bool { return s.Name == box.Name }) {
+		return true
+	}
+	// A folder without a UIDVALIDITY cannot be matched on it, as in
+	// imapFollowRenames.
+	if box.UIDValidity == 0 {
+		return false
+	}
+	sameGone, sameSkipped := 0, 0
+	for _, g := range gone {
+		if g.UIDValidity == box.UIDValidity {
+			sameGone++
+		}
+	}
+	for i := range skipped {
+		if skipped[i].UIDValidity == box.UIDValidity {
+			sameSkipped++
+		}
+	}
+	return sameGone == 1 && sameSkipped == 1
+}
+
+// skipFolders is the owner's exclusion list as the policy in force carries
+// it; a republished ADD_EMAIL changes it between passes.
+func (w *WMail) skipFolders() []string {
+	if w.gov == nil {
+		return nil
+	}
+	return w.gov.Policy().SkipFolders
+}
+
+// imapListed is what one listing said about a folder: the two numbers the
+// departure check compares between passes.
+type imapListed struct {
+	Messages uint32
+	UIDNext  uint32
+}
+
+func (w *WMail) rememberListing(box *models.Mailbox) {
+	if w.listed == nil {
+		w.listed = make(map[string]imapListed)
+	}
+	w.listed[box.Name] = imapListed{Messages: box.Messages, UIDNext: box.UIDNext}
+}
+
+// imapMovedOut reports whether messages left the folder between two
+// listings: the count is below the previous count plus the arrivals the
+// UIDNEXT advance accounts for. An expunge moves neither cursor on every
+// server, so the count is the one signal that always carries it. Both
+// numbers come from the listing, never from the SELECT view a walked
+// folder's cursor advances to.
+func imapMovedOut(before imapListed, now *models.Mailbox) bool {
+	if now.UIDNext < before.UIDNext {
+		return false
+	}
+	arrivals := now.UIDNext - before.UIDNext
+	return now.Messages < before.Messages+arrivals
+}
+
+// imapReconcileSkipped retires the platform's rows for mail that left this
+// folder for one the owner excluded from sync. A row goes only when its
+// Message-ID is found in a skipped folder: mail can leave for somewhere the
+// sync does not follow (Gmail's All Mail) and still be wanted. Bounded per
+// pass by imapSkipSearchesPerPass searches; what is left is continued next
+// pass. A row looked for and found nowhere is remembered for the session; a
+// lookup that failed is not, so the row is looked for again.
+func (w *WMail) imapReconcileSkipped(ctx context.Context, box *models.Mailbox, skipped []models.Mailbox, touched map[string]struct{}, stats *tickStats) *errx.MailError {
+	if w.SyncContext == nil || len(skipped) == 0 {
+		return nil
+	}
+	if w.skipPending == nil {
+		w.skipPending = make(map[string]bool)
+	}
+	delete(w.skipPending, box.Name)
+	stored, err := w.SyncContext.ListFolderMessages(ctx, w.UserID, w.ID, box.Name, box.UIDValidity)
+	if err != nil {
+		return w.controlPlaneError(err, stats)
+	}
+	if len(stored) == 0 {
+		return nil
+	}
+	client := w.SmtpImapData.ImapClient
+	_, gen, serr := client.SelectForSyncGen(box.Name)
+	if serr != nil {
+		return serr
+	}
+	// UIDs only mean anything inside one generation.
+	if gen != box.UIDValidity {
+		return nil
+	}
+	present, aerr := client.SearchAll()
+	if aerr != nil {
+		return aerr
+	}
+	live := make(map[uint32]struct{}, len(present))
+	for _, uid := range present {
+		live[uint32(uid)] = struct{}{}
+	}
+	if w.skipChecked == nil || len(w.skipChecked) > imapSkipCheckedMax {
+		w.skipChecked = make(map[string]struct{})
+	}
+
+	// The rows worth a lookup: gone from the folder, not re-fetched this
+	// pass under a new UID, not settled earlier this session, and with a
+	// Message-ID that was ever on the wire.
+	var candidates []repository.StoredFolderMessage
+	for _, m := range stored {
+		if _, ok := live[m.UID]; ok {
+			continue
+		}
+		if _, refiled := touched[m.MessageID]; refiled {
+			continue
+		}
+		if _, done := w.skipChecked[w.skipKey(box, m.UID)]; done {
+			continue
+		}
+		if m.MessageID == "" || strings.HasPrefix(m.MessageID, "no-msgid/") {
+			w.skipChecked[w.skipKey(box, m.UID)] = struct{}{}
+			continue
+		}
+		candidates = append(candidates, m)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	// One SEARCH per row per skipped folder is the cost; the cap is on that.
+	batch := max(1, imapSkipSearchesPerPass/len(skipped))
+	if len(candidates) > batch {
+		w.skipPending[box.Name] = true
+		candidates = candidates[:batch]
+	}
+	ids := make([]string, 0, len(candidates))
+	for _, m := range candidates {
+		ids = append(ids, m.MessageID)
+	}
+
+	foundIn := make(map[string]string, len(ids))
+	complete := true
+	for i := range skipped {
+		if ctx.Err() != nil {
+			w.skipPending[box.Name] = true
+			return nil
+		}
+		found, ferr := client.FindUIDsByMessageIDs(ctx, skipped[i].Name, ids)
+		if ferr != nil {
+			log.Debug().Err(ferr).Str("email_id", w.ID.String()).Str("folder", skipped[i].Name).Msg("sync: search in skipped folder failed")
+			complete = false
+			continue
+		}
+		for id := range found {
+			if _, ok := foundIn[id]; !ok {
+				foundIn[id] = skipped[i].Name
+			}
+		}
+	}
+
+	for _, m := range candidates {
+		folder, ok := foundIn[m.MessageID]
+		if !ok {
+			// Settled only when every skipped folder answered.
+			if complete {
+				w.skipChecked[w.skipKey(box, m.UID)] = struct{}{}
+			} else {
+				w.skipPending[box.Name] = true
+			}
+			continue
+		}
+		if err := w.onEvent(models.JobEventTypeRemoveEmail, &models.JobEventRemoveEmail{
+			UserID:        w.UserID,
+			EmailID:       w.ID,
+			ID:            m.ID,
+			SkippedFolder: folder,
+		}); err != nil {
+			return w.controlPlaneError(err, stats)
+		}
+		// The map entry goes with the row, or the message could never be
+		// imported again after moving back into a synced folder.
+		if err := w.EmailMessageMapRepository.Del(ctx, w.UserID, w.ID, m.MessageID, m.ID); err != nil {
+			return w.controlPlaneError(err, stats)
+		}
+		w.skipChecked[w.skipKey(box, m.UID)] = struct{}{}
+	}
+	return nil
+}
+
+// skipKey identifies one stored row for the session memory: folder,
+// generation and UID.
+func (w *WMail) skipKey(box *models.Mailbox, uid uint32) string {
+	return fmt.Sprintf("%s\x00%d\x00%d", box.Name, box.UIDValidity, uid)
+}
+
+// imapSkipCheckedMax bounds the per-session memory of rows already looked
+// for in the skipped folders; past it the memory starts over.
+const imapSkipCheckedMax = 250_000
+
+// imapSkipSearchesPerPass caps the searches one folder's reconciliation
+// spends in one pass, across every skipped folder.
+const imapSkipSearchesPerPass = 50
+
 // imapFolderChanged reports whether a folder has anything new since the
 // cursor we hold for it. With CONDSTORE the mod-sequence answers for new mail
 // AND flag changes; without it only arrivals are visible here, and flag
@@ -213,16 +464,22 @@ func imapFolderChanged(before, now *models.Mailbox, condStore bool) bool {
 // imapIncremental stores what changed in one folder since the held cursor.
 // Known messages relay their flags unbudgeted; new ones are admitted newest
 // first. It reports whether every change was stored, which is what lets the
-// folder's cursor advance, plus the Message-IDs it fetched so the drafts
+// folder's cursor advance, the selected view the search ran against, which is
+// where it advances to, and the Message-IDs it fetched so the drafts
 // reconciliation can tell a re-appended draft from an expunged one.
-func (w *WMail) imapIncremental(ctx context.Context, box, before *models.Mailbox, condStore bool, stats *tickStats) (bool, map[string]struct{}, *errx.MailError) {
+func (w *WMail) imapIncremental(ctx context.Context, box, before *models.Mailbox, condStore bool, stats *tickStats) (bool, imap.Selected, map[string]struct{}, *errx.MailError) {
 	client := w.SmtpImapData.ImapClient
-	count, err := client.SelectForSync(box.Name)
+	view, err := client.SelectForSyncState(box.Name)
 	if err != nil {
-		return false, nil, err
+		return false, view, nil, err
 	}
-	if count == 0 {
-		return true, nil, nil
+	// The listing and this view name different generations, so the search
+	// would answer about UIDs the cursor does not; the next pass re-baselines.
+	if view.UIDValidity != 0 && view.UIDValidity != box.UIDValidity {
+		return false, view, nil, nil
+	}
+	if view.Count == 0 {
+		return true, view, nil, nil
 	}
 	var uids []goimap.UID
 	if condStore {
@@ -231,18 +488,18 @@ func (w *WMail) imapIncremental(ctx context.Context, box, before *models.Mailbox
 		uids, err = client.SearchNewSince(before.UIDNext)
 	}
 	if err != nil {
-		return false, nil, err
+		return false, view, nil, err
 	}
 	if len(uids) == 0 {
-		return true, nil, nil
+		return true, view, nil, nil
 	}
 	// Newest first: when budget is short, the freshest mail lands first.
 	sort.Slice(uids, func(i, j int) bool { return uids[i] > uids[j] })
 
-	// Only the drafts folder needs the fetched ids back, so nothing else pays
-	// for the set.
+	// Only the two reconciliations need the fetched ids back (drafts, and
+	// mail that left for a skipped folder), so nothing else pays for the set.
 	var touched map[string]struct{}
-	if imapCanonicalFolder(box) == models.FolderDrafts {
+	if imapCanonicalFolder(box) == models.FolderDrafts || len(w.skipFolders()) > 0 {
 		touched = make(map[string]struct{}, len(uids))
 	}
 
@@ -250,11 +507,11 @@ func (w *WMail) imapIncremental(ctx context.Context, box, before *models.Mailbox
 		hi := min(lo+config.ImapFetchBatchSize, len(uids))
 		fetched, err := client.FetchEnvelopes(ctx, uids[lo:hi])
 		if err != nil {
-			return false, touched, err
+			return false, view, touched, err
 		}
 		done, err := w.imapApply(ctx, fetched, false, stats)
 		if err != nil {
-			return false, touched, err
+			return false, view, touched, err
 		}
 		for _, f := range fetched {
 			if touched != nil {
@@ -266,10 +523,25 @@ func (w *WMail) imapIncremental(ctx context.Context, box, before *models.Mailbox
 		// unfrozen on a long backlog would deactivate itself walking mail it
 		// cannot keep. Stop here; the held mod-sequence re-offers the rest.
 		if !done || stats.aborted || ctx.Err() != nil {
-			return false, touched, nil
+			return false, view, touched, nil
 		}
 	}
-	return true, touched, nil
+	return true, view, touched, nil
+}
+
+// advanceToView moves a fully walked folder's cursor to the view its search
+// ran against. The listing's STATUS is taken before the SELECT, and a server
+// whose selected view lags it (a session snapshot, an APPEND from the send
+// path in between) would otherwise record a cursor past mail the search never
+// returned, and that mail would never be synced. A view that reports no
+// cursor keeps the listing's.
+func advanceToView(next *models.Mailbox, view imap.Selected) {
+	if view.UIDNext != 0 {
+		next.UIDNext = view.UIDNext
+	}
+	if view.HighestModSeq != 0 {
+		next.HighestModSeq = view.HighestModSeq
+	}
 }
 
 // imapReconcileDrafts removes the platform's rows for drafts the server no
@@ -737,6 +1009,14 @@ func (w *WMail) imapFollowRenames(folders []models.Mailbox) error {
 		if scan, ok := w.flagScan[from.Name]; ok {
 			delete(w.flagScan, from.Name)
 			w.flagScan[to[0].Name] = scan
+		}
+		if l, ok := w.listed[from.Name]; ok {
+			delete(w.listed, from.Name)
+			w.listed[to[0].Name] = l
+		}
+		if w.skipPending[from.Name] {
+			delete(w.skipPending, from.Name)
+			w.skipPending[to[0].Name] = true
 		}
 		w.tracker.renameFolder(from.Name, to[0].Name)
 		from.Name = to[0].Name

@@ -33,6 +33,7 @@ func (w *JobsService) InitEvents() {
 	Register(w, models.JobEventTypeRemoveEmail, w.HandleRemoveEmail)
 	Register(w, models.JobEventTypeFlagsAdd, w.HandleFlagsAdd)
 	Register(w, models.JobEventTypeFlagsRemove, w.HandleFlagsRemove)
+	Register(w, models.JobEventTypeFolderUpdate, w.HandleFolderUpdate)
 	Register(w, models.JobEventTypeMailboxUpdate, w.HandleMailboxUpdate)
 	Register(w, models.JobEventTypeMailboxDelete, w.HandleMailboxDelete)
 	Register(w, models.JobEventTypeMailboxRename, w.HandleMailboxRename)
@@ -40,6 +41,7 @@ func (w *JobsService) InitEvents() {
 	Register(w, models.JobEventTypeGraphDeltaUpdate, w.HandleGraphDeltaUpdate)
 	Register(w, models.JobEventTypeSyncState, w.HandleSyncState)
 	Register(w, models.JobEventTypeTokenUpdate, w.HandleTokenUpdate)
+	Register(w, models.JobEventTypeWarmupRemovalChecked, w.HandleWarmupRemovalChecked)
 
 	// Send outcomes. A worker reports every send it was handed; a failure
 	// walks back what the control plane stamped at hand-off.

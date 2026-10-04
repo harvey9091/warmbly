@@ -3,6 +3,7 @@ package emailsend
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,6 +13,7 @@ import (
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/mailhtml"
 	"github.com/warmbly/warmbly/internal/repository"
 	"github.com/warmbly/warmbly/internal/scheduler"
 	"github.com/warmbly/warmbly/internal/tasks"
@@ -40,6 +42,9 @@ type SendEmailRequest struct {
 	//   "scheduled" → use ScheduledAt verbatim (must be in the future)
 	SendMode    string     `json:"send_mode"`
 	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
+	// Forward is the stored message this send forwards, carried under the
+	// body and signature. The caller has already checked it is the org's.
+	Forward *models.ForwardedMessage `json:"-"`
 }
 
 type SendEmailResponse struct {
@@ -66,6 +71,24 @@ type emailSendService struct {
 	// trackedLinkRepo stores the click tickets a tracked direct send mints.
 	// Optional: without it the pixel still goes on and links ship untouched.
 	trackedLinkRepo repository.TrackedLinkRepository
+	// replyObserver hears about queued replies in an inbox thread. Optional.
+	replyObserver ReplyObserver
+}
+
+// ReplyObserver is told about a reply queued into an existing inbox thread,
+// after the send task is stored. It must not block.
+type ReplyObserver interface {
+	ReplyQueued(ctx context.Context, orgID, userID uuid.UUID, threadID, bodyPlain string, scheduledAt time.Time)
+}
+
+// ReplyObserverAware is the optional capability the caller uses to attach one.
+type ReplyObserverAware interface {
+	WireReplyObserver(o ReplyObserver)
+}
+
+// WireReplyObserver attaches the reply observer (the Slack inbox mirror).
+func (s *emailSendService) WireReplyObserver(o ReplyObserver) {
+	s.replyObserver = o
 }
 
 // WireTrackedLinks attaches the click-ticket store. Off the constructor for the
@@ -189,7 +212,7 @@ func (s *emailSendService) SendEmail(ctx context.Context, userID, orgID, account
 		// Redis INCR; checked first because it's faster than a SELECT
 		// COUNT and rejects bursts before they touch the DB.
 		//
-		// Layer 2 (pending-count) — MaxPendingScheduledSendsPerUser
+		// Layer 2 (pending-count) — MaxPendingScheduledSendsPerOrg
 		// bounds total queued state, so the DB doesn't accumulate
 		// terabytes of pending message bodies even from a user who
 		// schedules slowly over months.
@@ -209,11 +232,11 @@ func (s *emailSendService) SendEmail(ctx context.Context, userID, orgID, account
 			}
 		}
 		if s.taskRepo != nil {
-			pending, perr := s.taskRepo.CountScheduledForUser(ctx, userID)
-			if perr == nil && pending >= int64(config.MaxPendingScheduledSendsPerUser) {
+			pending, perr := s.taskRepo.CountScheduledInOrg(ctx, orgID)
+			if perr == nil && pending >= int64(config.MaxPendingScheduledSendsPerOrg) {
 				return nil, errx.New(errx.TooManyRequests, fmt.Sprintf(
-					"you have %d scheduled sends queued (max %d). Cancel some from the Scheduled view before adding more.",
-					pending, config.MaxPendingScheduledSendsPerUser,
+					"this workspace has %d scheduled sends queued (max %d). Cancel some from the Scheduled view before adding more.",
+					pending, config.MaxPendingScheduledSendsPerOrg,
 				))
 			}
 		}
@@ -260,22 +283,37 @@ func (s *emailSendService) SendEmail(ctx context.Context, userID, orgID, account
 		threadID = &req.ThreadID
 	}
 
-	bodyHTML, tracked := s.applyDirectTracking(ctx, account, taskID, req.BodyHTML)
+	bodyHTML, bodyPlain := req.BodyHTML, req.BodyPlain
+	// An HTML-only body still ships a text part, rendered from the HTML.
+	if strings.TrimSpace(bodyPlain) == "" && mailhtml.HasContent(bodyHTML) {
+		bodyPlain = mailhtml.ToPlainText(bodyHTML)
+	}
+	var forwardedHTML, forwardedPlain string
+	if req.Forward != nil {
+		forwardedHTML, forwardedPlain = renderForwarded(req.Forward, mailboxLocation(account))
+		forwardedHTML, forwardedPlain = s.untrackForwarded(ctx, forwardedHTML, forwardedPlain)
+		bodyHTML, bodyPlain = forwardNote(bodyHTML, bodyPlain)
+	}
+
+	// Only the note is tracked: the forwarded message's links are someone else's.
+	bodyHTML, tracked := s.applyDirectTracking(ctx, account, taskID, bodyHTML, bodyHTML != "" || forwardedHTML != "")
 
 	emailTask := &repository.EmailTask{
-		TaskID:    taskID,
-		To:        req.To,
-		CC:        req.CC,
-		BCC:       req.BCC,
-		InReplyTo: req.InReplyTo,
-		Subject:   req.Subject,
-		Body:      req.BodyPlain,
-		BodyHTML:  bodyHTML,
-		BodyPlain: req.BodyPlain,
-		ThreadID:  threadID,
-		SendMode:  sendMode,
-		Encrypted: false,
-		Tracked:   tracked,
+		TaskID:         taskID,
+		To:             req.To,
+		CC:             req.CC,
+		BCC:            req.BCC,
+		InReplyTo:      req.InReplyTo,
+		Subject:        req.Subject,
+		Body:           bodyPlain,
+		BodyHTML:       bodyHTML,
+		BodyPlain:      bodyPlain,
+		ThreadID:       threadID,
+		SendMode:       sendMode,
+		Encrypted:      false,
+		Tracked:        tracked,
+		ForwardedHTML:  forwardedHTML,
+		ForwardedPlain: forwardedPlain,
 	}
 
 	if err := s.taskRepo.CreateEmailTaskFull(ctx, task, emailTask); err != nil {
@@ -299,6 +337,10 @@ func (s *emailSendService) SendEmail(ctx context.Context, userID, orgID, account
 		}
 	}
 
+	if s.replyObserver != nil && req.ThreadID != "" && req.Forward == nil {
+		s.replyObserver.ReplyQueued(ctx, orgID, userID, req.ThreadID, bodyPlain, scheduledAt)
+	}
+
 	return &SendEmailResponse{
 		TaskID:      taskID,
 		ScheduledAt: scheduledAt,
@@ -308,14 +350,15 @@ func (s *emailSendService) SendEmail(ctx context.Context, userID, orgID, account
 
 // applyDirectTracking adds the open pixel and click tickets to a hand-written
 // send, when the sending mailbox has opted in. Returns the body to send and
-// whether anything was actually injected.
+// whether anything was actually injected. htmlPart says the send carries an
+// HTML part at all; a plain-text send must not gain one just for a pixel.
 //
 // Unlike a campaign, a direct send has no contact or sequence, so clicks are
 // counted on the send itself rather than written to email_link_clicks. The
 // tickets still need a row to resolve against, minted with a nil campaign id;
 // tracked_links carries no foreign key on that column.
-func (s *emailSendService) applyDirectTracking(ctx context.Context, account *models.Email, taskID uuid.UUID, bodyHTML string) (string, bool) {
-	if account == nil || !account.TrackDirectMail || bodyHTML == "" {
+func (s *emailSendService) applyDirectTracking(ctx context.Context, account *models.Email, taskID uuid.UUID, bodyHTML string, htmlPart bool) (string, bool) {
+	if account == nil || !account.TrackDirectMail || !htmlPart {
 		return bodyHTML, false
 	}
 	host := tasks.MailboxTrackingHost(account)

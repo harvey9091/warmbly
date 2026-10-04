@@ -36,12 +36,71 @@ A `catalog` array of provider entries.
       "events": ["email.replied", "meeting.booked"],
       "action_types": ["hubspot.upsert_contact"],
       "supports_push": true,
-      "configured": true
+      "configured": true,
+      "rank": 1
     }
     // ... one entry per provider
   ]
 }
 ```
+
+`rank` is the provider's popularity on this instance, `1` being the most used: the number of workspaces with a live connection, ties broken by a curated order so a new instance still has one. The array keeps catalog order; sort by `rank` to show the most used first.
+
+## List community apps
+
+`GET /integrations/community`
+
+Returns the [community directory](/guides/integrations/#community-apps) listings shown in discovery: featured apps first, then published apps installed in at least 25 workspaces other than the publisher's, each at least two weeks old, most installed first. A link-only app is never returned here.
+
+Auth: **Scope** `INTEGRATIONS` (or session with **Org permission** `manage_settings` or `use_integrations`).
+
+| Parameter | In | Type | Description |
+| --- | --- | --- | --- |
+| `limit` | query | integer | Between 1 and 200, defaults to 100. Out-of-range values return `400`. |
+| `cursor` | query | string | Opaque cursor from `pagination.next_cursor`. A cursor this API did not issue returns `400`. |
+
+### Response
+
+```json
+{
+  "data": [
+    {
+      "application_id": "5a8f0c1e-2b3d-4e5f-8a9b-0c1d2e3f4a5b",
+      "slug": "acme-sync",
+      "name": "Acme Sync",
+      "tagline": "Push positive replies into Acme as deals",
+      "description": "",
+      "category": "crm",
+      "logo_url": "",
+      "website_url": "https://acme.com",
+      "install_url": "https://acme.com/warmbly/install",
+      "support_url": "https://acme.com/support",
+      "privacy_url": "",
+      "developer": "Acme Inc",
+      "scopes": 1,
+      "permissions": [
+        { "name": "READ_EMAILS", "value": 1, "description": "View email accounts and settings", "category": "read" }
+      ],
+      "status": "featured",
+      "listed": true,
+      "installs": 12,
+      "installed": false,
+      "published_at": "2026-10-03T09:00:00Z"
+    }
+  ],
+  "pagination": { "total": 1, "next_cursor": null, "has_more": false }
+}
+```
+
+`status` is `featured` or `published`, and `listed` says whether it shows in discovery. `developer` is the publishing workspace's name. `installs` counts workspaces on this instance with an active grant, and `installed` says whether anyone in the caller's workspace has one. No credential, redirect URI or webhook setting is ever included.
+
+## Get a community app
+
+`GET /integrations/community/{slug}`
+
+Returns one listing by its slug, listed or link only, in the same shape as a list item. This is how a shared link resolves. A hidden or unpublished listing, or one whose app is disabled, returns `404`.
+
+Auth: **Scope** `INTEGRATIONS` (or session with **Org permission** `manage_settings` or `use_integrations`).
 
 ## List connections
 
@@ -493,7 +552,7 @@ Auth: **Scope** `INTEGRATIONS` · **Org permission** `manage_settings`.
 
 `POST /integrations/connections/:id/push`
 
-Synchronously upserts the given org contacts into a connected CRM (HubSpot, Pipedrive, Salesforce, Close). Retries are naturally safe: every provider upsert is keyed by email, so a repeated push converges rather than duplicating records. No `Idempotency-Key` is required. Per-record results are returned.
+Synchronously upserts the given org contacts into a connected CRM (HubSpot, Pipedrive, Salesforce, Close). Retries are naturally safe: every provider upsert is keyed by email, so a repeated push converges rather than duplicating records. No `Idempotency-Key` is required. Per-record results are returned. For Salesforce, each contact is matched to its Lead or Contact, created as the connection's **Create as** when missing, and updated through its [field rules](/guides/salesforce/#field-mapping).
 
 Auth: **Scope** `INTEGRATIONS` · **Org permission** `use_integrations`.
 
@@ -533,11 +592,41 @@ Auth: **Scope** `INTEGRATIONS` · **Org permission** `use_integrations`.
 
 A connection whose token can no longer be refreshed returns `409 Conflict` with a "needs to be reconnected" message.
 
+## Salesforce sync
+
+Every route below takes the Salesforce connection id as `:id` and is scoped to the caller's organization. See the [Salesforce guide](/guides/salesforce/) for what each setting does.
+
+| Method | Path | Org permission | Purpose |
+|--------|------|----------------|---------|
+| GET | `/integrations/salesforce/:id/overview` | read | Health, API usage and budget, outbox counts, last pull. `?checks=1` also probes what the connected user can create and edit |
+| GET | `/integrations/salesforce/:id/settings` | read | `{ settings, warmbly_fields, defaults }` |
+| PUT | `/integrations/salesforce/:id/settings` | `manage_settings` | Replace the settings. A whole-document write, so a retry converges |
+| GET | `/integrations/salesforce/:id/metadata` | read | Lead and Contact fields, Lead Status and Lead Source picklists |
+| GET | `/integrations/salesforce/:id/users?q=` | read | Active Salesforce users, for owner pickers |
+| GET | `/integrations/salesforce/:id/list-views?object=Lead\|Contact` | read | List views the connected user can see |
+| GET | `/integrations/salesforce/:id/campaigns?q=` | read | Salesforce Campaigns |
+| POST | `/integrations/salesforce/:id/import/preview` | `use_integrations` | `{ source_kind, object, source_id }` to `{ total, sample }`. Writes nothing |
+| GET | `/integrations/salesforce/:id/import-sources` | read | Saved imports with their last result |
+| POST | `/integrations/salesforce/:id/import-sources` | `manage_settings` | Save an import and start its first run |
+| PATCH | `/integrations/salesforce/:id/import-sources/:sourceId` | `manage_settings` | Edit name, `campaign_id` (`null` clears it), `category_ids`, `recurring`, `enabled` |
+| POST | `/integrations/salesforce/:id/import-sources/:sourceId/run` | `use_integrations` | Run now. `409 import_running` while one is running |
+| DELETE | `/integrations/salesforce/:id/import-sources/:sourceId` | `manage_settings` | Remove the import. Contacts it brought in stay |
+| GET | `/integrations/salesforce/:id/activity?status=&contact_id=&cursor=&limit=` | read | The activity log, newest first, `{ data, pagination }` |
+| POST | `/integrations/salesforce/:id/activity/retry` | `manage_settings` | `{ ids }` re-queues those failed or skipped rows; no ids re-queues every failed row |
+| POST | `/integrations/salesforce/:id/sync-now` | `use_integrations` | Log pending activity and pull changes now |
+| GET | `/contacts/:id/salesforce` | `view_contacts` | The contact's Salesforce card: linked records, owner, status, opportunities, recent Tasks, sync state |
+| POST | `/contacts/:id/salesforce/sync` | `use_integrations` | `{ connection_id?, create_as? }`: match (or create as `lead` or `contact`) and push mapped fields; returns the card |
+| DELETE | `/contacts/:id/salesforce/links/:linkId` | `use_integrations` | Unlink the contact from a record. Nothing changes in Salesforce |
+
+"read" is any of `manage_settings` or `use_integrations`. API keys need the `INTEGRATIONS` permission, except `GET /contacts/:id/salesforce`, which shows opportunities and needs `READ_CRM`.
+
+Creating an import is not deduplicated by request: a retried create saves a second import, whose run brings in nobody new because people are matched by address.
+
 ## List meeting bookings (integrations view)
 
 `GET /integrations/bookings`
 
-Returns up to 50 recent booked meetings, surfaced on the integrations page. For the full Meetings page list with filters and pagination, use `GET /meetings`.
+Returns up to 50 recent booked meetings. For the full Meetings page list with filters and pagination, use `GET /meetings`.
 
 Auth: **Scope** `INTEGRATIONS` (or session with **Org permission** `manage_settings` or `use_integrations`).
 
@@ -1018,7 +1107,7 @@ Auth: **Scope** `WRITE_CONTACTS` · **Org permission** `manage_contacts`.
 
 `POST /lead-sync/google/preview`
 
-Returns an import-preview-shaped payload (columns, sample rows, total rows, header detection, suggested mapping) so the frontend reuses its contact-import column mapper verbatim.
+Returns an import-preview-shaped payload (columns, sample rows, total rows, header detection, suggested mapping) so the frontend reuses its contact-import column mapper verbatim. The mapping is suggested exactly as the [file import preview](/api/reference/contacts/#preview-an-import) suggests it, including headers matched to the workspace's existing custom fields.
 
 Auth: **Scope** `WRITE_CONTACTS` · **Org permission** `manage_contacts`.
 
@@ -1123,7 +1212,7 @@ Auth: **Scope** `WRITE_CONTACTS` · **Org permission** `manage_contacts`.
 | `column_mapping` | array | Yes | Column-to-target mappings ([same shape as contact import](/api/reference/contacts/)). Validated on save, not on the next sync: a mapping with no `email` column, or a custom field whose name Warmbly cannot use, is a `400` here. |
 | `dedup` | string | No | Collision strategy: `skip`, `update`, or `create_duplicate`. |
 | `target_campaign_id` | uuid | No | Enrol new/updated leads into this campaign on each sync. |
-| `category_ids` | string[] | No | Categories to assign to synced leads. |
+| `category_ids` | string[] | No | Label IDs to put on synced leads. |
 | `segment_ids` | string[] | No | Segments every synced row is pinned into as a manual include override, on every run. Each id must name a segment in the organization or the save is a `400`; a segment deleted later is dropped from the run instead of failing it. |
 | `subscribed_default` | boolean | No | Default subscription state for new contacts. |
 | `label` | string | No | Friendly name. |
@@ -1215,7 +1304,7 @@ Auth: **Scope** `WRITE_CONTACTS` · **Org permission** `manage_contacts`.
 | `dedup` | string | No | Collision strategy. |
 | `target_campaign_id` | uuid | No | New target campaign. |
 | `clear_campaign` | boolean | No | When `true`, unsets the target campaign. |
-| `category_ids` | string[] | No | Replacement category set. |
+| `category_ids` | string[] | No | Replacement set of label IDs. |
 | `segment_ids` | string[] | No | Replacement segment target set. An unknown id is a `400`; an empty array clears the targets. |
 | `subscribed_default` | boolean | No | Default subscription state. |
 | `label` | string | No | New label. |

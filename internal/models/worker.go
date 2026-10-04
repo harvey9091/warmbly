@@ -111,6 +111,9 @@ type EmailSendError struct {
 	UserTitle      string `json:"user_title,omitempty" avro:"user_title"`
 	UserMessage    string `json:"user_message,omitempty" avro:"user_message"`
 	ActionRequired string `json:"action_required,omitempty" avro:"action_required"`
+	// Recipient is the address a refusal named, when the server refused one
+	// recipient rather than the message.
+	Recipient string `json:"recipient,omitempty" avro:"recipient"`
 }
 
 // SendEmailResult is the result from worker after sending email
@@ -147,6 +150,8 @@ type AddWorkerEmailSmtpImapData struct {
 type AddWorkerEmailGraphData struct {
 	Token      *oauth2.Token     `json:"token" avro:"token"`
 	DeltaLinks map[string]string `json:"delta_links" avro:"delta_links"`
+	// User is the Graph user id an application token acts for; "" means the signed-in user (/me).
+	User string `json:"user,omitempty" avro:"user"`
 }
 
 type AddWorkerEmail struct {

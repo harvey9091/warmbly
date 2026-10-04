@@ -7,19 +7,23 @@
 "use client";
 
 import React from "react";
+import { Link, useLocation } from "react-router-dom";
 import {
     AlertTriangleIcon,
+    ArrowRightIcon,
     CheckCircle2Icon,
     CopyIcon,
     EyeIcon,
     Loader2Icon,
     RefreshCwIcon,
     SendIcon,
+    Settings2Icon,
     UnplugIcon,
 } from "lucide-react";
 import toast from "react-hot-toast";
 
 import { TextInput } from "@/components/ui/field";
+import { HubSpotMark } from "@/components/app/crm/HubSpot";
 import { useConfirm } from "@/hooks/context/confirm";
 import { usePresenceResource } from "@/hooks/PresenceProvider";
 import ResourceViewers from "@/components/app/presence/ResourceViewers";
@@ -36,13 +40,20 @@ import {
     type IntegrationConnection,
 } from "@/lib/api/models/app/integrations/Integration";
 import { useFieldMappings, useUpdateConnectionConfig } from "@/lib/api/hooks/app/integrations/useFieldMappings";
-import { useRevealWebhookSecret, useTestConnection } from "@/lib/api/hooks/app/integrations/useConnectionWebhookTools";
+import {
+    useRevealWebhookSecret,
+    useRotateInboundUrl,
+    useSetConnectionSigningKey,
+    useTestConnection,
+} from "@/lib/api/hooks/app/integrations/useConnectionWebhookTools";
 import { useAutomations } from "@/lib/api/hooks/app/automations/useAutomations";
 import type { IntegrationAction } from "@/lib/api/models/app/integrations/Integration";
 import { cn } from "@/lib/utils";
 
 import { Drawer, SectionLabel } from "./ConnectDrawer";
 import FieldMapEditor from "./FieldMapEditor";
+import InboundUrlDialog from "./InboundUrlDialog";
+import { SlackStatusBanner, SlackTabBar, SlackTabContent, type SlackTab } from "./SlackPanel";
 import StatusPill, { HealthDot } from "./StatusPill";
 
 // Providers whose deliveries we can test (notify + generic webhook). Automation
@@ -70,6 +81,7 @@ export default function ConnectionDetail({
 
     const [busy, setBusy] = React.useState(false);
     const confirm = useConfirm();
+    const [slackTab, setSlackTab] = React.useState<SlackTab>("overview");
 
     const conn = detail.data?.connection ?? connection;
     const runs = detail.data?.runs ?? [];
@@ -96,6 +108,9 @@ export default function ConnectionDetail({
     const crmObject = capability?.objects?.[0];
     const isOAuth = conn.auth_method === "oauth";
     const needsReauth = conn.status === "reauth_required";
+    const isSlack = conn.provider === "slack";
+    const isHubSpot = conn.provider === "hubspot";
+    const onHubSpotPage = useLocation().pathname.startsWith("/app/integrations/hubspot");
 
     async function handleReauth() {
         setBusy(true);
@@ -138,114 +153,167 @@ export default function ConnectionDetail({
                 />
             }
         >
+            {isSlack && <SlackTabBar tab={slackTab} onTab={setSlackTab} />}
             <div className="flex-1 overflow-auto">
-                {/* Status header */}
-                <div className="px-5 py-4 border-b border-slate-200 space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                        <StatusPill status={conn.status} />
-                        <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
-                            <HealthDot health={conn.health} />
-                            {conn.health}
-                        </div>
-                    </div>
-                    {conn.external_account_name && <Row label="Account" value={conn.external_account_name} />}
-                    <Row label="Auth" value={conn.auth_method.replace("_", " ")} mono />
-                    <Row
-                        label="Last sync"
-                        value={conn.last_synced_at ? new Date(conn.last_synced_at).toLocaleString() : "never"}
-                    />
-                    {conn.last_error && (
-                        <div className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-2 flex items-start gap-2">
-                            <AlertTriangleIcon className="w-3.5 h-3.5 text-rose-500 mt-0.5 shrink-0" />
-                            <p className="text-[11px] text-rose-700 leading-relaxed break-words">{conn.last_error}</p>
-                        </div>
-                    )}
-                    {needsReauth && (
-                        <button
-                            type="button"
-                            onClick={handleReauth}
-                            disabled={busy}
-                            className="w-full h-8 rounded-md bg-amber-500 hover:bg-amber-600 text-white text-[12px] font-medium inline-flex items-center justify-center gap-1.5 transition-colors"
-                        >
-                            {busy ? <Loader2Icon className="w-3.5 h-3.5 animate-spin" /> : <RefreshCwIcon className="w-3.5 h-3.5" />}
-                            Reconnect to fix
-                        </button>
-                    )}
-                </div>
-
-                {/* Granted access */}
-                {conn.granted_scopes && conn.granted_scopes.length > 0 && (
-                    <div className="px-5 py-4 border-b border-slate-200 space-y-2">
-                        <SectionLabel>Granted access</SectionLabel>
-                        <div className="flex flex-wrap gap-1">
-                            {conn.granted_scopes.map((s) => (
-                                <span
-                                    key={s}
-                                    className="px-1.5 h-5 inline-flex items-center rounded bg-slate-100 text-[10px] font-mono text-slate-600"
-                                >
-                                    {s}
-                                </span>
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                {/* Field mapping — control exactly what each CRM record gets */}
-                {crmObject && (
-                    <div className="px-5 py-4 border-b border-slate-200 space-y-2.5">
-                        <SectionLabel>Field mapping</SectionLabel>
-                        <FieldMappingsBlock connectionId={conn.id} object={crmObject} />
-                    </div>
-                )}
-
-                {/* Booking link — for scheduling providers (Calendly / Cal.com) */}
-                {capability?.supports_booking_link && (
-                    <div className="px-5 py-4 border-b border-slate-200 space-y-2">
-                        <SectionLabel>Booking link</SectionLabel>
-                        <BookingLinkBlock connection={conn} onSaved={() => detail.refetch()} />
-                    </div>
-                )}
-
-                {/* Webhook delivery — test wiring + (automation tools) signature */}
-                {isWebhookTool && (
+                {isSlack && <SlackStatusBanner onReconnect={handleReauth} reconnecting={busy} />}
+                {isSlack && slackTab !== "overview" ? (
+                    <SlackTabContent tab={slackTab} />
+                ) : (
+                    <>
+                    {/* Status header */}
                     <div className="px-5 py-4 border-b border-slate-200 space-y-3">
-                        <SectionLabel>Webhook delivery</SectionLabel>
-                        <WebhookToolsBlock
-                            connectionId={conn.id}
-                            provider={conn.provider}
-                            hasAutomations={hasAutomations}
+                        <div className="flex items-center justify-between gap-2">
+                            <StatusPill status={conn.status} />
+                            <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                                <HealthDot health={conn.health} />
+                                {conn.health}
+                            </div>
+                        </div>
+                        {conn.external_account_name && <Row label="Account" value={conn.external_account_name} />}
+                        <Row label="Auth" value={conn.auth_method.replace("_", " ")} mono />
+                        <Row
+                            label="Last sync"
+                            value={conn.last_synced_at ? new Date(conn.last_synced_at).toLocaleString() : "never"}
                         />
+                        {conn.last_error && (
+                            <div className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-2 flex items-start gap-2">
+                                <AlertTriangleIcon className="w-3.5 h-3.5 text-rose-500 mt-0.5 shrink-0" />
+                                <p className="text-[11px] text-rose-700 leading-relaxed break-words">{conn.last_error}</p>
+                            </div>
+                        )}
+                        {needsReauth && (
+                            <button
+                                type="button"
+                                onClick={handleReauth}
+                                disabled={busy}
+                                className="w-full h-8 rounded-md bg-amber-500 hover:bg-amber-600 text-white text-[12px] font-medium inline-flex items-center justify-center gap-1.5 transition-colors"
+                            >
+                                {busy ? <Loader2Icon className="w-3.5 h-3.5 animate-spin" /> : <RefreshCwIcon className="w-3.5 h-3.5" />}
+                                Reconnect to fix
+                            </button>
+                        )}
                     </div>
-                )}
 
-                {/* Activity */}
-                <div className="px-5 py-4 space-y-2">
-                    <SectionLabel>Recent activity</SectionLabel>
-                    {runs.length === 0 ? (
-                        <p className="text-[11.5px] text-slate-400">Nothing yet.</p>
-                    ) : (
-                        <div className="space-y-1">
-                            {runs.map((r) => (
-                                <div key={r.id} className="flex items-center gap-2 text-[11px]">
-                                    {r.status === "success" ? (
-                                        <CheckCircle2Icon className="w-3 h-3 text-emerald-500 shrink-0" />
-                                    ) : r.status === "error" ? (
-                                        <AlertTriangleIcon className="w-3 h-3 text-rose-500 shrink-0" />
-                                    ) : (
-                                        <Loader2Icon className="w-3 h-3 text-slate-400 animate-spin shrink-0" />
-                                    )}
-                                    <span className="text-slate-600 truncate flex-1">
-                                        {r.kind}
-                                        {r.detail ? ` · ${r.detail}` : ""}
-                                    </span>
-                                    <span className="text-slate-400 tabular-nums shrink-0">
-                                        {new Date(r.started_at).toLocaleTimeString()}
-                                    </span>
-                                </div>
-                            ))}
+                    {/* Salesforce has its own page: sync rules, field map, imports, activity log. */}
+                    {conn.provider === "salesforce" && (
+                        <div className="px-5 py-4 border-b border-slate-200 space-y-2">
+                            <Link
+                                to={`/app/integrations/salesforce/${conn.id}`}
+                                className="w-full h-8 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-[12px] font-medium inline-flex items-center justify-center gap-1.5 transition-colors"
+                            >
+                                <Settings2Icon className="w-3.5 h-3.5" />
+                                Open Salesforce settings
+                            </Link>
+                            <p className="text-[10.5px] text-slate-400 leading-relaxed">
+                                Sync rules, field mapping, imports from list views and campaigns, and the activity log.
+                            </p>
                         </div>
                     )}
-                </div>
+
+                    {/* Granted access */}
+                    {conn.granted_scopes && conn.granted_scopes.length > 0 && (
+                        <div className="px-5 py-4 border-b border-slate-200 space-y-2">
+                            <SectionLabel>Granted access</SectionLabel>
+                            <div className="flex flex-wrap gap-1">
+                                {conn.granted_scopes.map((s) => (
+                                    <span
+                                        key={s}
+                                        className="px-1.5 h-5 inline-flex items-center rounded bg-slate-100 text-[10px] font-mono text-slate-600"
+                                    >
+                                        {s}
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* HubSpot: CRM mode, field mapping and rules live on the HubSpot page */}
+                    {isHubSpot && !onHubSpotPage && (
+                        <div className="px-5 py-4 border-b border-slate-200">
+                            <Link
+                                to="/app/integrations/hubspot"
+                                onClick={onClose}
+                                className="flex items-center gap-3 rounded-md border border-slate-200 hover:border-slate-300 hover:bg-slate-50/60 px-3 py-2.5 transition-colors group"
+                            >
+                                <HubSpotMark className="w-4 h-4" />
+                                <span className="min-w-0 flex-1">
+                                    <span className="block text-[12.5px] font-medium text-slate-900">HubSpot settings</span>
+                                    <span className="block text-[11px] text-slate-500 leading-relaxed">
+                                        Use HubSpot as your CRM, field mapping, activity logging, owners, rules and sync health.
+                                    </span>
+                                </span>
+                                <ArrowRightIcon className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-700 shrink-0" />
+                            </Link>
+                        </div>
+                    )}
+
+                    {/* Field mapping — control exactly what each CRM record gets */}
+                    {crmObject && !isHubSpot && conn.provider !== "salesforce" && (
+                        <div className="px-5 py-4 border-b border-slate-200 space-y-2.5">
+                            <SectionLabel>Field mapping</SectionLabel>
+                            <FieldMappingsBlock connectionId={conn.id} object={crmObject} />
+                        </div>
+                    )}
+
+                    {/* Booking link — for scheduling providers (Calendly / Cal.com) */}
+                    {capability?.supports_booking_link && (
+                        <div className="px-5 py-4 border-b border-slate-200 space-y-2">
+                            <SectionLabel>Booking link</SectionLabel>
+                            <BookingLinkBlock connection={conn} onSaved={() => detail.refetch()} />
+                        </div>
+                    )}
+
+                    {/* Inbound URL: rotation + signature for Calendly / Cal.com deliveries */}
+                    {(conn.provider === "calendly" || conn.provider === "cal_com") && (
+                        <div className="px-5 py-4 border-b border-slate-200 space-y-3">
+                            <SectionLabel>Inbound URL</SectionLabel>
+                            <InboundRotateBlock connection={conn} />
+                            <InboundSigningBlock connection={conn} />
+                        </div>
+                    )}
+
+                    {/* Webhook delivery — test wiring + (automation tools) signature */}
+                    {isWebhookTool && (
+                        <div className="px-5 py-4 border-b border-slate-200 space-y-3">
+                            <SectionLabel>Webhook delivery</SectionLabel>
+                            <WebhookToolsBlock
+                                connectionId={conn.id}
+                                provider={conn.provider}
+                                hasAutomations={hasAutomations}
+                            />
+                        </div>
+                    )}
+
+                    {/* Activity */}
+                    <div className="px-5 py-4 space-y-2">
+                        <SectionLabel>Recent activity</SectionLabel>
+                        {runs.length === 0 ? (
+                            <p className="text-[11.5px] text-slate-400">Nothing yet.</p>
+                        ) : (
+                            <div className="space-y-1">
+                                {runs.map((r) => (
+                                    <div key={r.id} className="flex items-center gap-2 text-[11px]">
+                                        {r.status === "success" ? (
+                                            <CheckCircle2Icon className="w-3 h-3 text-emerald-500 shrink-0" />
+                                        ) : r.status === "error" ? (
+                                            <AlertTriangleIcon className="w-3 h-3 text-rose-500 shrink-0" />
+                                        ) : (
+                                            <Loader2Icon className="w-3 h-3 text-slate-400 animate-spin shrink-0" />
+                                        )}
+                                        <span className="text-slate-600 truncate flex-1">
+                                            {r.kind}
+                                            {r.detail ? ` · ${r.detail}` : ""}
+                                        </span>
+                                        <span className="text-slate-400 tabular-nums shrink-0">
+                                            {new Date(r.started_at).toLocaleTimeString()}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                    </>
+                )}
             </div>
 
             <div className="mt-auto border-t border-slate-200 px-5 py-3 flex items-center justify-between shrink-0">
@@ -338,6 +406,138 @@ function BookingLinkBlock({ connection, onSaved }: { connection: IntegrationConn
                     </button>
                 </div>
             )}
+        </div>
+    );
+}
+
+// InboundRotateBlock replaces a leaked inbound URL. The new one is shown once.
+function InboundRotateBlock({ connection }: { connection: IntegrationConnection }) {
+    const confirm = useConfirm();
+    const rotate = useRotateInboundUrl();
+    const [fresh, setFresh] = React.useState<string | null>(null);
+
+    function run() {
+        confirm.show(
+            "Rotate the inbound URL? The current URL stops working immediately, so bookings are missed until you paste the new one into the provider.",
+            async () => {
+                try {
+                    const r = await rotate.mutateAsync(connection.id);
+                    setFresh(r.inbound_webhook_url);
+                } catch (err: unknown) {
+                    toast.error(msg(err) ?? "Could not rotate the URL");
+                }
+            },
+        );
+    }
+
+    return (
+        <div className="space-y-1.5">
+            <p className="text-[11.5px] text-slate-500 leading-relaxed">
+                The URL contains a secret. If it was exposed, rotate it and paste the new one into the provider.
+            </p>
+            <button
+                type="button"
+                onClick={run}
+                disabled={rotate.isPending}
+                className="h-7 px-2.5 rounded-md border border-slate-200 hover:border-slate-300 text-slate-700 hover:text-slate-900 text-[12px] inline-flex items-center gap-1.5 transition-colors disabled:opacity-60"
+            >
+                {rotate.isPending ? (
+                    <Loader2Icon className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                    <RefreshCwIcon className="w-3.5 h-3.5" />
+                )}
+                Rotate URL
+            </button>
+            {fresh && (
+                <InboundUrlDialog provider={connection.provider} url={fresh} onClose={() => setFresh(null)} />
+            )}
+        </div>
+    );
+}
+
+const SIGNING_HINTS: Record<string, string> = {
+    calendly:
+        "Paste the signing key of your Calendly webhook subscription (the signing_key you set, or the one Calendly returned when it was created).",
+    cal_com: "Paste the secret you set on the Cal.com webhook (Settings, Developer, Webhooks, Secret).",
+};
+
+// InboundSigningBlock sets the key Calendly / Cal.com deliveries must be signed
+// with. Once set, a delivery without a valid signature is refused.
+function InboundSigningBlock({ connection }: { connection: IntegrationConnection }) {
+    const confirm = useConfirm();
+    const setKey = useSetConnectionSigningKey();
+    const [key, setKeyValue] = React.useState("");
+    const signed = connection.display_fields?.inbound_signing === true;
+
+    async function save() {
+        const v = key.trim();
+        if (v.length < 8) {
+            toast.error("A signing key is at least 8 characters");
+            return;
+        }
+        try {
+            await setKey.mutateAsync({ connectionId: connection.id, signing_key: v });
+            setKeyValue("");
+            toast.success("Signing key saved. Unsigned deliveries are now refused.");
+        } catch (err: unknown) {
+            toast.error(msg(err) ?? "Could not save the signing key");
+        }
+    }
+
+    function remove() {
+        confirm.show(
+            "Remove the signing key? Deliveries will be accepted on the inbound URL alone.",
+            async () => {
+                try {
+                    await setKey.mutateAsync({ connectionId: connection.id, signing_key: "" });
+                    toast.success("Signing key removed");
+                } catch (err: unknown) {
+                    toast.error(msg(err) ?? "Could not remove the signing key");
+                }
+            },
+        );
+    }
+
+    return (
+        <div className="space-y-1.5">
+            <p className="text-[11.5px] text-slate-500 leading-relaxed">
+                {signed
+                    ? "Deliveries must carry a valid signature. Paste a new key to replace it."
+                    : SIGNING_HINTS[connection.provider]}
+            </p>
+            <TextInput
+                type="password"
+                value={key}
+                onChange={setKeyValue}
+                placeholder={signed ? "Replace signing key" : "Signing key"}
+                className="font-mono"
+            />
+            <div className="flex items-center justify-end gap-1.5">
+                {signed && (
+                    <button
+                        type="button"
+                        onClick={remove}
+                        disabled={setKey.isPending}
+                        className="h-6 px-2.5 rounded border border-slate-200 hover:border-slate-300 text-[11.5px] text-slate-600 hover:text-slate-900 transition-colors disabled:opacity-60"
+                    >
+                        Remove
+                    </button>
+                )}
+                {key.trim() !== "" && (
+                    <button
+                        type="button"
+                        onClick={save}
+                        disabled={setKey.isPending}
+                        className={cn(
+                            "h-6 px-2.5 rounded text-[11.5px] font-medium text-white bg-sky-600 hover:bg-sky-700 inline-flex items-center gap-1.5 transition-colors",
+                            setKey.isPending && "opacity-60",
+                        )}
+                    >
+                        {setKey.isPending && <Loader2Icon className="w-3 h-3 animate-spin" />}
+                        Save key
+                    </button>
+                )}
+            </div>
         </div>
     );
 }

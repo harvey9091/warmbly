@@ -38,7 +38,7 @@ func (h *Handler) CreateSkill(c *gin.Context) {
 	}
 	var req models.CreateAISkill
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	sk, xerr := h.SkillsService.Create(c.Request.Context(), *orgID, &req)
@@ -64,7 +64,7 @@ func (h *Handler) UpdateSkill(c *gin.Context) {
 	}
 	var req models.UpdateAISkill
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	sk, xerr := h.SkillsService.Update(c.Request.Context(), *orgID, id, &req)

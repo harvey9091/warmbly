@@ -188,6 +188,97 @@ const TRACKING_FIELDS = [
 
 type TrackingFieldKey = (typeof TRACKING_FIELDS)[number]["key"];
 
+// Inbox placement test allowance and pacing, mirroring internal/config/constants.go.
+const PLACEMENT_FIELDS = [
+    {
+        key: "testsTrial",
+        setting: "tests_per_month_trial",
+        label: "Free tests per month on trial",
+        min: 1,
+        max: 100000,
+        help: "How many free tests a workspace without a paid plan may run on the metered panels each calendar month. A trial has no credits, so it waits for next month after these.",
+    },
+    {
+        key: "testsPaid",
+        setting: "tests_per_month_paid",
+        label: "Free tests per month on paid plans",
+        min: 1,
+        max: 100000,
+        help: "The same free allowance for a workspace with an active subscription. Past it, a test on the instance panel costs credits.",
+    },
+    {
+        key: "seedsPerTest",
+        setting: "seeds_per_test",
+        label: "Seeds per test",
+        min: 1,
+        max: 100,
+        help: "The most seeds one test sends to, which is also how many sends it takes from the sending mailbox's daily limit. A test is sized down to what the mailbox has left today, and refused below five seeds.",
+    },
+    {
+        key: "spacingSeconds",
+        setting: "spacing_seconds",
+        label: "Spacing between copies (seconds)",
+        min: 5,
+        max: 600,
+        help: "The gap between two copies from one mailbox, jittered, so a test never leaves as a burst. A test someone starts as quick uses the smaller of this and 8 seconds.",
+    },
+    {
+        key: "creditsPerTest",
+        setting: "credits_per_test",
+        label: "Credits per paid test",
+        min: 0,
+        max: 10000,
+        help: "What a test costs in credits once a workspace has used its free tests for the month. The workspace agrees to the price before each paid test, and a test that delivers no copy is refunded. 0 turns paid tests off, so a workspace waits for next month instead. Only a hosted (DEPLOYMENT_MODE=cloud) instance charges.",
+    },
+    {
+        key: "batchSendersMax",
+        setting: "batch_senders_max",
+        label: "Most senders in one batch",
+        min: 1,
+        max: 100000,
+        help: "The largest sender list one placement batch may hold. It limits how big a batch can be, not how many senders run at once, so it can sit well above any fleet a workspace runs.",
+    },
+    {
+        key: "batchSenderConcurrency",
+        setting: "batch_sender_concurrency",
+        label: "Batch senders sending at once",
+        min: 1,
+        max: 500,
+        help: "How many of one workspace's batch senders may be sending their copies at the same time, across all its batches. The next sender starts when one has sent every copy. Each mailbox still keeps its own daily limit and spacing.",
+    },
+    {
+        key: "batchInstanceConcurrency",
+        setting: "batch_instance_concurrency",
+        label: "Batch senders sending at once, instance-wide",
+        min: 1,
+        max: 5000,
+        help: "The same limit across every workspace together. It bounds how much batch mail the instance seed panel receives at once, so a seed never takes in enough in an hour to trip the sync flood rule that deactivates a mailbox.",
+    },
+    {
+        key: "batchStartsPerMinute",
+        setting: "batch_starts_per_minute",
+        label: "Batch senders started per minute",
+        min: 1,
+        max: 600,
+        help: "How fast one batch starts its senders, so a large batch ramps up instead of starting its whole concurrency at once.",
+    },
+] as const;
+
+type PlacementFieldKey = (typeof PLACEMENT_FIELDS)[number]["key"];
+
+// A backend from before the placement section omits it; the form shows the compiled defaults.
+const PLACEMENT_DEFAULTS: InstanceSettings["placement"] = {
+    tests_per_month_trial: 3,
+    tests_per_month_paid: 40,
+    seeds_per_test: 20,
+    spacing_seconds: 60,
+    credits_per_test: 25,
+    batch_senders_max: 10000,
+    batch_sender_concurrency: 20,
+    batch_instance_concurrency: 200,
+    batch_starts_per_minute: 10,
+};
+
 interface FormState {
     linksEnabled: boolean;
     ttlHours: string;
@@ -195,11 +286,13 @@ interface FormState {
     sync: Record<SyncFieldKey, string>;
     retention: Record<RetentionFieldKey, string>;
     tracking: Record<TrackingFieldKey, string>;
+    placement: Record<PlacementFieldKey, string>;
     enforceDomainAuth: boolean;
     authGraceHours: string;
 }
 
 function toForm(s: InstanceSettings): FormState {
+    const placement = s.placement ?? PLACEMENT_DEFAULTS;
     return {
         linksEnabled: s.invitations.links_enabled,
         ttlHours: String(s.invitations.ttl_hours),
@@ -221,6 +314,17 @@ function toForm(s: InstanceSettings): FormState {
             machineWindowOpen: String(s.tracking.machine_window_open_seconds),
             machineWindowClick: String(s.tracking.machine_window_click_seconds),
             machineWindowProbable: String(s.tracking.machine_window_probable_seconds),
+        },
+        placement: {
+            testsTrial: String(placement.tests_per_month_trial),
+            testsPaid: String(placement.tests_per_month_paid),
+            seedsPerTest: String(placement.seeds_per_test),
+            spacingSeconds: String(placement.spacing_seconds),
+            creditsPerTest: String(placement.credits_per_test ?? PLACEMENT_DEFAULTS.credits_per_test),
+            batchSendersMax: String(placement.batch_senders_max ?? PLACEMENT_DEFAULTS.batch_senders_max),
+            batchSenderConcurrency: String(placement.batch_sender_concurrency ?? PLACEMENT_DEFAULTS.batch_sender_concurrency),
+            batchInstanceConcurrency: String(placement.batch_instance_concurrency ?? PLACEMENT_DEFAULTS.batch_instance_concurrency),
+            batchStartsPerMinute: String(placement.batch_starts_per_minute ?? PLACEMENT_DEFAULTS.batch_starts_per_minute),
         },
         enforceDomainAuth: s.deliverability.enforce_domain_auth,
         authGraceHours: String(s.deliverability.auth_grace_hours),
@@ -280,6 +384,13 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
         !!server &&
         !!form &&
         TRACKING_FIELDS.some((f) => form.tracking[f.key] !== String(server.tracking[f.setting]));
+    const placementDirty =
+        !!server &&
+        !!form &&
+        PLACEMENT_FIELDS.some(
+            (f) =>
+                form.placement[f.key] !== String(server.placement?.[f.setting] ?? PLACEMENT_DEFAULTS[f.setting]),
+        );
     const dirty =
         !!server &&
         !!form &&
@@ -290,6 +401,7 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
             form.authGraceHours !== String(server.deliverability.auth_grace_hours) ||
             retentionDirty ||
             trackingDirty ||
+            placementDirty ||
             syncDirty);
 
     useEffect(() => {
@@ -305,6 +417,10 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
     const trackingValid =
         form !== null &&
         TRACKING_FIELDS.every((f) => syncFieldValid(form.tracking[f.key], f.min, f.max));
+
+    const placementValid =
+        form !== null &&
+        PLACEMENT_FIELDS.every((f) => syncFieldValid(form.placement[f.key], f.min, f.max));
 
     const authGrace = form ? Number(form.authGraceHours) : NaN;
     const authGraceValid =
@@ -346,6 +462,10 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
             );
             return;
         }
+        if (!placementValid) {
+            toast.error("Every placement test setting must be a whole number inside the range shown under it");
+            return;
+        }
         if (!authGraceValid) {
             toast.error(
                 `The authentication grace period must be a whole number of hours between ${AUTH_GRACE_MIN_HOURS} and ${AUTH_GRACE_MAX_HOURS}`,
@@ -376,6 +496,17 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
             deliverability: {
                 enforce_domain_auth: form.enforceDomainAuth,
                 auth_grace_hours: authGrace,
+            },
+            placement: {
+                tests_per_month_trial: Number(form.placement.testsTrial),
+                tests_per_month_paid: Number(form.placement.testsPaid),
+                seeds_per_test: Number(form.placement.seedsPerTest),
+                spacing_seconds: Number(form.placement.spacingSeconds),
+                credits_per_test: Number(form.placement.creditsPerTest),
+                batch_senders_max: Number(form.placement.batchSendersMax),
+                batch_sender_concurrency: Number(form.placement.batchSenderConcurrency),
+                batch_instance_concurrency: Number(form.placement.batchInstanceConcurrency),
+                batch_starts_per_minute: Number(form.placement.batchStartsPerMinute),
             },
         });
     }
@@ -693,6 +824,59 @@ export function SettingsTab({ onDirtyChange, onSwitchTab }: SettingsTabProps) {
                                             <p className="mt-1 text-xs text-red-600">
                                                 Enter a whole number between {f.min} and{" "}
                                                 {f.max.toLocaleString()}.
+                                            </p>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </CardContent>
+                    </Card>
+
+                    <Card className="lg:col-span-2">
+                        <CardHeader>
+                            <CardTitle>Inbox placement tests</CardTitle>
+                            <CardDescription>
+                                A placement test sends one copy of a template to each seed on a
+                                panel and reports where it landed. The monthly allowances count
+                                tests on the instance panel and on Warmbly Cloud&apos;s; tests on a
+                                workspace&apos;s own seed inboxes are never counted, and a
+                                self-hosted instance does not meter tests at all. A tracking
+                                comparison counts as two tests. The seeds themselves are managed on
+                                the Seed panel page.
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent className="grid grid-cols-1 gap-3 pt-0 md:grid-cols-2">
+                            {PLACEMENT_FIELDS.map((f) => {
+                                const valid = syncFieldValid(form.placement[f.key], f.min, f.max);
+                                return (
+                                    <div key={f.key}>
+                                        <Label htmlFor={`placement-${f.key}`}>{f.label}</Label>
+                                        <Input
+                                            id={`placement-${f.key}`}
+                                            type="text"
+                                            inputMode="numeric"
+                                            autoComplete="off"
+                                            value={form.placement[f.key]}
+                                            onChange={(e) =>
+                                                setForm({
+                                                    ...form,
+                                                    placement: {
+                                                        ...form.placement,
+                                                        [f.key]: e.target.value,
+                                                    },
+                                                })
+                                            }
+                                            aria-invalid={!valid}
+                                            className="mt-1"
+                                        />
+                                        <p className="mt-1 text-xs text-muted-foreground">
+                                            {f.help} Between {f.min.toLocaleString()} and{" "}
+                                            {f.max.toLocaleString()}.
+                                        </p>
+                                        {!valid && (
+                                            <p className="mt-1 text-xs text-red-600">
+                                                Enter a whole number between {f.min.toLocaleString()}{" "}
+                                                and {f.max.toLocaleString()}.
                                             </p>
                                         )}
                                     </div>

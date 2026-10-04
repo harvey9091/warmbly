@@ -62,6 +62,20 @@ const (
 	// by the retention sweep alone, and only for a message it has retired
 	// first, so the removal the sync then observes is never a strike.
 	WarmupActionDelete = "delete"
+	// WarmupActionVerifyRemoval asks where a removed warmup message went,
+	// answered by WARMUP_REMOVAL_CHECKED; it changes nothing in the mailbox.
+	WarmupActionVerifyRemoval = "verify_removal"
+)
+
+// Where a verify_removal found the message. Present means it is still in the
+// mailbox outside the trash, whatever folder it was moved to.
+const (
+	WarmupRemovalPresent = "present"
+	WarmupRemovalTrashed = "trashed"
+	WarmupRemovalGone    = "gone"
+	// WarmupRemovalUnknown is a search that cannot tell, such as IMAP not
+	// finding the message in any synced folder.
+	WarmupRemovalUnknown = "unknown"
 )
 
 // WarmupEmailAction represents actions to perform on a detected warmup email.
@@ -101,6 +115,10 @@ type WarmupEmailAction struct {
 	// know it (the sender's own copy of a send), in which case the worker
 	// resolves it from the provider id it acted on.
 	InternalID string `json:"internal_id,omitempty" avro:"internal_id"`
+
+	// Recheck marks a verify_removal for a strike recorded before removals
+	// were searched; the answer echoes it.
+	Recheck bool `json:"recheck,omitempty" avro:"recheck"`
 
 	// DelaySeconds is retained for wire compatibility but is now always 0: the
 	// recipient-side "dwell" is owned by the consumer's durable schedule
@@ -178,6 +196,10 @@ type WarmupPartnerCandidate struct {
 	// pinned to it, never to the sender's pool (#495).
 	PoolType string
 	Origin   WarmupPartnerOrigin
+	// Provider and MailHost resolve who runs the candidate's mail, which is
+	// what the sender's per-host placement record is keyed by.
+	Provider string
+	MailHost string
 	// Sent7d and Received7d are the candidate's verified warmup sends and
 	// arrivals over the last seven days, so the draw can favour an inbox that
 	// gives more than it gets. The inbound cap that keeps a candidate out of
@@ -185,6 +207,8 @@ type WarmupPartnerCandidate struct {
 	// sample is taken.
 	Sent7d     int
 	Received7d int
+	// Junked7d is how many of those arrivals its own filter put in spam.
+	Junked7d int
 }
 
 // Borrowed reports whether the candidate was drawn from the tier the sender's
@@ -200,6 +224,20 @@ func (c WarmupPartnerCandidate) Starvation() float64 {
 		return 0
 	}
 	return float64(c.Sent7d-c.Received7d) / float64(c.Sent7d)
+}
+
+// warmupFilterMinReceived is the sample a recipient's filter is judged on.
+const warmupFilterMinReceived = 10
+
+// FilterJunkRate is the share of verified warmup mail this candidate's own
+// filter put in spam over seven days (0..1). Only a small host's filter is
+// read: at Google, Microsoft and Yahoo the verdict is the senders' reputation,
+// not a quirk of the recipient. 0 below the sample.
+func (c WarmupPartnerCandidate) FilterJunkRate() float64 {
+	if WarmupRecipientGroup(c.MailHost, c.Provider) != WarmupRecipientOther || c.Received7d < warmupFilterMinReceived {
+		return 0
+	}
+	return min(1, float64(c.Junked7d)/float64(c.Received7d))
 }
 
 type WarmupHealthState string
@@ -269,16 +307,23 @@ type WarmupHealthCounts struct {
 	// because a deletion is usually housekeeping and a spam flag never is.
 	DeletionsLast7d int
 	SpamFlagsLast7d int
+	// Placement is the last seven days of verified deliveries.
+	Placement WarmupPlacementEvidence
 }
 
 type WarmupHealthMetrics struct {
 	SentLast7d int `json:"sent_last_7d"`
 
-	// SpamPlacementsLast7d counts warmup messages that landed in the
-	// recipient's Junk/Spam folder on delivery. SpamPlacementRate is the
-	// ratio against SentLast7d.
-	SpamPlacementsLast7d int     `json:"spam_placements_last_7d"`
-	SpamPlacementRate    float64 `json:"spam_placement_rate"`
+	// SpamPlacementsLast7d counts every warmup message that landed in a
+	// recipient's Junk/Spam folder on delivery, whoever filed it.
+	SpamPlacementsLast7d int `json:"spam_placements_last_7d"`
+	// SpamPlacementRate is the rate the placement band acts on: spam over
+	// verified deliveries at Google, Microsoft and Yahoo, the PlacementSample.
+	// Other hosts are carried for the reason text and never judged.
+	SpamPlacementRate float64 `json:"spam_placement_rate"`
+	PlacementSample   int     `json:"placement_sample"`
+	OtherSpamRate     float64 `json:"other_spam_rate"`
+	OtherDelivered    int     `json:"other_delivered"`
 
 	// UserComplaintsLast7d counts warmup messages the recipient explicitly
 	// flagged as spam. WarmupComplaintRate is the ratio against SentLast7d.
@@ -294,13 +339,13 @@ type WarmupHealthMetrics struct {
 	BounceRate        float64 `json:"bounce_rate"`
 
 	// DeletionsLast7d and SpamFlagsLast7d are warmup messages this mailbox
-	// received and then deleted or flagged as spam. TamperingStrikes weighs
-	// them: a spam flag counts double, because nobody flags mail by accident.
+	// received and then deleted or moved to spam. TamperingStrikes weighs them
+	// equally: no provider says who moved a message into spam.
 	DeletionsLast7d int `json:"deletions_last_7d"`
 	SpamFlagsLast7d int `json:"spam_flags_last_7d"`
 }
 
 // TamperingStrikes is the weighted harm count the tampering band reads.
 func (m *WarmupHealthMetrics) TamperingStrikes() int {
-	return m.DeletionsLast7d + 2*m.SpamFlagsLast7d
+	return m.DeletionsLast7d + m.SpamFlagsLast7d
 }

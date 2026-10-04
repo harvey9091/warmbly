@@ -21,6 +21,25 @@ type SyncPolicy struct {
 	// OrgDailyMessages caps new plus backfilled messages stored across the
 	// whole organization per UTC day.
 	OrgDailyMessages int `json:"org_daily_messages" avro:"org_daily_messages"`
+	// SkipFolders names the folders the sync leaves alone, as the server
+	// lists them; each also covers its subfolders. Per mailbox, unlike the
+	// budgets above, and only meaningful on IMAP.
+	SkipFolders []string `json:"skip_folders,omitempty" avro:"skip_folders"`
+}
+
+// SyncFolder is one folder the sync has seen on the server, as GET
+// /emails/:id/sync reports it: the name to use in skip_folders and the
+// canonical folder it files under, so a client can tell which ones are the
+// special folders that cannot be skipped.
+type SyncFolder struct {
+	Name   string `json:"name"`
+	Folder string `json:"folder"`
+}
+
+// UpdateSyncSettings is the body of PUT /emails/:id/sync. The list is the
+// desired state, so a retry converges.
+type UpdateSyncSettings struct {
+	SkipFolders []string `json:"skip_folders"`
 }
 
 // SyncBackfillStatus is where the initial import stands.

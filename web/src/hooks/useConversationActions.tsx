@@ -25,9 +25,10 @@ import {
     unsnoozeThreads,
 } from "@/lib/api/client/app/unibox/snoozeThread";
 import { SNOOZE_MAX_MS } from "@/lib/unibox/snooze";
+import { useAppStore } from "@/stores";
 
 // Filing copy, per destination. "Deleted" is deliberately not said anywhere:
-// the message is moved to Trash here and still sits in the mail client.
+// Delete moves the message to Trash, here and in the mailbox.
 const FILE_COPY: Record<FilableFolder, { done: string; failed: string }> = {
     archive: { done: "Archived", failed: "Couldn't archive" },
     trash: { done: "Moved to Trash", failed: "Couldn't move to Trash" },
@@ -95,7 +96,13 @@ export function useConversationActions(): ConversationActions {
                 if (folder === "inbox") toast.success(done);
                 else offerUndo(done, threadIds);
             } catch {
-                toast.error(copy.failed);
+                // The rows left the list on click; the refetch is putting them
+                // back, and the toast has to say so or it reads as a glitch.
+                toast.error(
+                    threadIds.length === 1
+                        ? `${copy.failed}. It's back in the list.`
+                        : `${copy.failed} ${threadIds.length.toLocaleString()} conversations. They're back in the list.`,
+                );
             }
         },
         [moveFolder, offerUndo],
@@ -104,6 +111,11 @@ export function useConversationActions(): ConversationActions {
     const setSeen = React.useCallback(
         (threadIds: string[], seen: boolean) => {
             if (threadIds.length === 0) return;
+            // An open reader marks what it shows as read, so unread closes it.
+            const store = useAppStore.getState();
+            if (!seen && store.selectedThreadId && threadIds.includes(store.selectedThreadId)) {
+                store.setSelectedThreadId(null);
+            }
             markSeen.mutate({ threadIds, seen });
             if (threadIds.length > 1) {
                 toast.success(
@@ -130,7 +142,7 @@ export function useConversationActions(): ConversationActions {
             }
             // Gone from the list the moment it is snoozed; the refetch confirms
             // it, and on error that same refetch is the rollback.
-            await removeThreadsFromLists(queryClient, threadIds);
+            await removeThreadsFromLists(queryClient, threadIds, "snooze");
             try {
                 await snoozeThreads(threadIds, until);
                 toast.success(

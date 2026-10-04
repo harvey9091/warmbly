@@ -24,12 +24,13 @@ const REASON_LABELS: Record<string, string> = {
     writing_assistant: "Writing assistant",
     writing_edit: "Selection edits",
     reply_draft: "Reply drafts",
-    agent_iteration: "Dashboard assistant",
+    agent_iteration: "Remie",
     inbox_agent_draft: "Inbox agent",
     research_run: "Contact research",
     automation_ai: "Automation AI",
     campaign_ai: "Campaign switches",
     spam_analysis: "Spam analysis",
+    placement_test: "Placement tests",
 };
 
 type WindowKey = "day" | "week" | "month";
@@ -181,7 +182,7 @@ export default function AIUsageCard() {
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
                         <Breakdown title="By feature" rows={u.by_reason} labelFor={(k) => REASON_LABELS[k] ?? k} />
-                        <Breakdown title="By model" rows={u.by_model} labelFor={(k) => k || "unmetered"} />
+                        <Breakdown title="By model" rows={u.by_model} labelFor={(k) => k || "No AI model"} />
                     </div>
                 </>
             ) : (

@@ -7,7 +7,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/warmbly/warmbly/internal/config"
-	"github.com/warmbly/warmbly/internal/infrastructure/pubsub"
 	"github.com/warmbly/warmbly/internal/models"
 	"github.com/warmbly/warmbly/internal/repository"
 )
@@ -15,15 +14,18 @@ import (
 // HandleRemoveEmail processes a message removal observed during mailbox sync.
 //
 // Tampering protection: if the removed message was a warmup email (tracked in
-// warmup_received) and it went soon after it arrived, the recipient deleted
-// pool warmup mail before its engagement was earned. That is recorded as a
-// strike and the health bands decide: one deletion warns, more pauses or
-// blocks. The owner can appeal a block. A removal later than that is
-// housekeeping (see warmupDeletionCounts) and is not held against anyone.
+// warmup_received) and it went soon after it arrived, the worker is asked
+// where it went (checkWarmupRemoval). Only a message found in the trash or
+// gone for good is a strike; one moved to any other folder is still in the
+// mailbox. A removal later than the window is housekeeping (see
+// warmupDeletionCounts) and is not held against anyone.
 //
 // It also drops the local unibox entry for the removed message (best-effort).
 func (s *JobsService) HandleRemoveEmail(ctx context.Context, e *models.JobEventRemoveEmail) error {
-	if s.WarmupRepo != nil {
+	var checkErr error
+	// A message the sync found in a folder the owner excluded is filed, not
+	// deleted: it is still in the mailbox, so nothing is held against anyone.
+	if s.WarmupRepo != nil && e.SkippedFolder == "" {
 		if rec, _ := s.WarmupRepo.GetWarmupReceived(ctx, e.EmailID, e.ID); rec != nil {
 			switch {
 			case s.consumeSelfMove(ctx, e.EmailID, rec.MessageID):
@@ -39,9 +41,8 @@ func (s *JobsService) HandleRemoveEmail(ctx context.Context, e *models.JobEventR
 					Str("email_id", e.EmailID.String()).
 					Str("message_id", rec.MessageID).
 					Msg("Warmup message removed after its engagement window; housekeeping, not tampering")
-			case s.WarmupService != nil:
-				health, _ := s.WarmupService.RecordTampering(ctx, e.EmailID, rec.MessageID, "deletion")
-				s.markRiskBandFromWarmupHealth(ctx, e.EmailID, health)
+			default:
+				checkErr = s.checkWarmupRemoval(ctx, e.UserID, e.EmailID, rec.MessageID)
 			}
 		}
 	}
@@ -50,21 +51,8 @@ func (s *JobsService) HandleRemoveEmail(ctx context.Context, e *models.JobEventR
 		_ = s.UniboxRepository.Delete(ctx, e.UserID, e.ID)
 	}
 
-	// Tell open dashboards the row is gone (org-scoped so every teammate's
-	// unibox drops it live, not just the mailbox owner's).
-	if s.StreamingPublisher != nil {
-		var orgID string
-		if account, err := s.EmailRepository.GetByID(ctx, e.EmailID); err == nil && account != nil && account.OrganizationID != nil {
-			orgID = account.OrganizationID.String()
-		}
-		s.StreamingPublisher.PublishEmailDeleted(ctx, &pubsub.EmailInboxEvent{
-			BaseEvent:      pubsub.BaseEvent{UserID: e.UserID.String()},
-			OrgID:          orgID,
-			EmailAccountID: e.EmailID.String(),
-			MessageID:      e.ID.String(),
-		})
-	}
-	return nil
+	s.publishInboxDeleted(ctx, e.UserID, e.EmailID, e.ID.String())
+	return checkErr
 }
 
 // warmupDeletionCounts decides whether a deletion of a received warmup message

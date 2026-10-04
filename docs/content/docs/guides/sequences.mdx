@@ -7,7 +7,7 @@ A campaign sends a sequence of steps to each contact: the first email, then foll
 
 ## The flow canvas
 
-Steps lay out top to bottom, the first marked `Start`. Above it sits the **Trigger** card, `Contact enters`: every contact starts there, and it carries how long their first email waits after they entered. Click its control to change that (the same setting as **Schedule** > **Before the first email**; see [the campaign guide](/guides/campaigns/#delay-before-the-first-email)). The trigger card is not a step: it cannot be moved, deleted or connected from.
+Steps lay out top to bottom, the first marked `Start`. Above it sits the **Trigger** card, `Contact enters`: every contact starts there, and it carries how long their first email waits after they entered. Click its control to change that (the same setting as the campaign's **Settings** > **First email**; see [the campaign guide](/guides/campaigns/#delay-before-the-first-email)). The trigger card is not a step: it cannot be moved, deleted or connected from.
 
 - Steps never connect themselves on the canvas. You drag a connector dot from one card to another. The only exception is the campaign wizard: follow-ups written there arrive already connected in order, with their waits set.
 - A step with no outgoing line ends the sequence for that contact (`Ends here`; unconnected paths show `Stop`).
@@ -127,10 +127,10 @@ Upload attachments for a step below its composer by dragging and dropping files 
 
 ### Action steps
 
-A step can perform an action instead of sending: add or remove a tag, label email, create a task, create a deal or move its stage, unsubscribe the contact, notify (fires your webhooks and integrations), run an automation, or switch. They connect like email steps and work best at the end of a reply branch, for example creating a deal and notifying your team on a positive reply.
+A step can perform an action instead of sending: add or remove a label, label the conversation, create a task, create a deal or move its stage, unsubscribe the contact, notify (fires your webhooks and integrations), run an automation, or switch. They connect like email steps and work best at the end of a reply branch, for example creating a deal and notifying your team on a positive reply.
 
 <Callout type="info">
-**Label email** is reply-only. It labels the conversation the contact replied on, so place it on a reply branch; anywhere else it is a no-op because there is no thread to label.
+**Label conversation** is reply-only. It labels the conversation the contact replied on, so place it on a reply branch; anywhere else it is a no-op because there is no thread to label.
 </Callout>
 
 ### Switch steps
@@ -166,7 +166,8 @@ A follow-up is the next email step, sent as a **reply on the conversation the co
 
 Each email step has a **Reply in thread** switch, on by default. Turn it off for a step that should deliberately start a fresh conversation.
 
-- A step that replies in the thread has no subject of its own: a reply carries the conversation's subject, which is the one the step that opened the thread used. The composer shows that subject instead of a subject box.
+- A step that replies in the thread has no subject of its own: a reply carries the conversation's subject, which is the one the email that opened the thread was sent with. The composer shows that subject instead of a subject box.
+- The conversation follows what each contact actually received. When the step that opened the thread is A/B tested, a contact who got Variant B is replied to under Variant B's subject and a contact who got the Original under the Original's, on every follow-up. The composer lists each version's subject. A follow-up repeats the subject the opening email was actually sent with, word for word, so editing the opening step or the contact later does not change the subject of a conversation it already started.
 - A step with **Reply in thread** off writes its own subject and opens a new conversation. Every threading step after it then replies on *that* conversation.
 - The switch does nothing on a contact's first email. There is nothing to reply to, so it opens the thread.
 - A/B variants on a threading step vary the body only, for the same reason.
@@ -182,7 +183,7 @@ Open a step's editor and click **A/B test this step**.
 - The step's own subject and body are the **Original** control arm; adding a variant makes it one weighted arm among several.
 - Up to 5 variants (B through F) on top of the Original.
 - The **traffic-split bar** shows one segment per arm. Drag a divider or type an exact percent; shares always total 100%, and **Even split** balances every active arm.
-- Select an arm to edit its name, subject, and body. Leave a variant's subject or body blank to reuse the step's own. On a step that replies in the thread, a variant's subject is ignored: the conversation owns it.
+- Select an arm to edit its name, subject, and body. Leave a variant's subject or body blank to reuse the step's own. On a step that replies in the thread, a variant's subject is ignored: the conversation owns it. On a step that opens a conversation, the variant's subject becomes the conversation's for every contact it is sent to, so the follow-ups threading on it reply under that subject.
 - A first variant starts at 50/50. Marking one **inactive** drops it from the split without deleting it; deleting the last one returns the step to a single send.
 
 Once variants have sent, each card shows Sent, Open rate, Reply rate, and Bounce rate. When Warmbly finds a **winner**, a banner names it with the rule and confidence used, and the winning card gets a trophy.
@@ -223,6 +224,8 @@ A campaign-level toggle in the flow toolbar. When on and a contact replies, the 
 Only inbound mail from that campaign contact to the sending mailbox counts. A threaded follow-up synchronized from Sent or Drafts stays outbound even though its `In-Reply-To` header points at an earlier campaign step.
 
 When a campaign rotates between sender accounts, a real inbound reply still links to the campaign if the mail client references an earlier step from another mailbox in the same workspace.
+
+A reply that lands in the mailbox a send's reply-to named counts the same way, although that mailbox never wrote to the contact. That is what a [shared reply inbox](/guides/mailboxes/#a-shared-reply-inbox) relies on: the reply stops the sequence, runs the reply branch, and is credited to the mailbox that sent the email.
 
 When an upgrade repairs a reply marker that was provably created by a synchronized Sent message, the contact resumes at the next due step and the campaign reply totals update with it. An upgrade also restores provable human replies that were received by one campaign mailbox but referenced a thread started by another mailbox in the workspace. Warmbly recalculates address verification from the corrected delivery, open, click, reply, and bounce evidence. It leaves ambiguous historical replies untouched.
 

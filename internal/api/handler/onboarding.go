@@ -50,7 +50,7 @@ var validTeamSizes = map[string]bool{
 func (h *Handler) CompleteOnboarding(c *gin.Context) {
 	var req completeOnboardingRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -102,7 +102,7 @@ type updateProfileRequest struct {
 func (h *Handler) UpdateUserProfile(c *gin.Context) {
 	var req updateProfileRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -138,7 +138,7 @@ type updateSendPreferencesRequest struct {
 func (h *Handler) UpdateSendPreferences(c *gin.Context) {
 	var req updateSendPreferencesRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 	if req.UndoSendSeconds < config.UndoSendSecondsMin || req.UndoSendSeconds > config.UndoSendSecondsMax {

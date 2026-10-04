@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net/mail"
 	"strings"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/warmbly/warmbly/internal/observability/analytics"
 	"github.com/warmbly/warmbly/internal/pkg/displayname"
 	"github.com/warmbly/warmbly/internal/pkg/signuprisk"
+	"github.com/warmbly/warmbly/internal/repository"
 )
 
 // createAccount provisions a user, their organization and their trial. Both
@@ -58,6 +60,9 @@ func (s *authService) createAccount(ctx context.Context, address, passwordHash s
 
 	u, xerr := s.userRepository.CreateUser(ctx, email, passwordHash)
 	if xerr != nil {
+		if errors.Is(xerr, repository.ErrUserEmailTaken) {
+			return nil, errx.ErrAccountExists
+		}
 		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
@@ -104,7 +109,7 @@ func (s *authService) createAccount(ctx context.Context, address, passwordHash s
 	if s.organizationService != nil {
 		orgName := displayname.DefaultWorkspace(u.FirstName)
 		var orgErr *errx.Error
-		org, orgErr = s.organizationService.Create(ctx, u.ID, orgName)
+		org, orgErr = s.organizationService.Create(ctx, u.ID, orgName, "")
 		if orgErr != nil {
 			errs.CaptureException(orgErr)
 			// Don't fail registration if org creation fails

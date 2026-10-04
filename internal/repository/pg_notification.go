@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/warmbly/warmbly/internal/config"
@@ -103,18 +104,35 @@ func (r *notificationRepository) Create(ctx context.Context, n *models.Notificat
 	if n.GroupKey != "" {
 		groupKey = &n.GroupKey
 	}
+	// A message already read is announced as read, with no email. FOR SHARE
+	// waits out a read in flight, so the read trigger cannot miss this row.
 	err := r.db.QueryRow(ctx, `
+		WITH msg AS (SELECT seen FROM unibox_emails WHERE id = $13 FOR SHARE),
+		seen AS (SELECT COALESCE((SELECT seen FROM msg), false) AS v)
 		INSERT INTO notifications (id, user_id, organization_id, category, title, body, link, metadata,
-			group_key, email_state, email_due_at, read_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CASE WHEN $12 THEN now() END)
-		RETURNING created_at`,
+			group_key, email_state, email_due_at, read_at, unibox_email_id)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9,
+			CASE WHEN seen.v AND $10 = 'pending' THEN 'skipped' ELSE $10 END,
+			CASE WHEN seen.v AND $10 = 'pending' THEN NULL ELSE $11::timestamptz END,
+			CASE WHEN $12 OR seen.v THEN now() END,
+			$13
+		FROM seen
+		RETURNING created_at, (SELECT v FROM seen)`,
 		n.ID, n.UserID, n.OrganizationID, n.Category, n.Title, n.Body, n.Link, meta,
-		groupKey, n.EmailState, n.EmailDueAt, n.PreRead).Scan(&n.CreatedAt)
+		groupKey, n.EmailState, n.EmailDueAt, n.PreRead, n.UniboxEmailID).Scan(&n.CreatedAt, &n.MessageSeen)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.ConstraintName == "notifications_unibox_email_id_fkey" {
+			return nil, ErrNotificationMessageGone
+		}
 		return nil, err
 	}
 	return n, nil
 }
+
+// ErrNotificationMessageGone is a message notification whose message left the
+// unibox before the notification was written.
+var ErrNotificationMessageGone = errors.New("notification: message no longer in the unibox")
 
 func (r *notificationRepository) List(ctx context.Context, userID uuid.UUID, limit int, unreadOnly bool) ([]models.Notification, error) {
 	if limit <= 0 || limit > 100 {

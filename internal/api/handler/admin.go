@@ -88,7 +88,7 @@ func (h *Handler) AdminBanUser(c *gin.Context) {
 
 	var req models.BanUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -117,7 +117,7 @@ func (h *Handler) AdminUnbanUser(c *gin.Context) {
 
 	var req models.UnbanUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -226,7 +226,7 @@ func (h *Handler) AdminUpdateUserRateLimits(c *gin.Context) {
 
 	var req models.UpdateUserRateLimitsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -291,7 +291,7 @@ func (h *Handler) AdminUpdateWorker(c *gin.Context) {
 
 	var req models.AdminUpdateWorker
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -361,7 +361,7 @@ func (h *Handler) AdminReassignEmails(c *gin.Context) {
 
 	var req models.ReassignEmailsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -453,7 +453,7 @@ func (h *Handler) AdminBlockAccount(c *gin.Context) {
 
 	var req models.BlockAccountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -542,7 +542,7 @@ func (h *Handler) AdminApproveAppeal(c *gin.Context) {
 
 	var req models.ReviewAppealRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -571,7 +571,7 @@ func (h *Handler) AdminRejectAppeal(c *gin.Context) {
 
 	var req models.ReviewAppealRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.ErrInvalid)
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 
@@ -763,7 +763,7 @@ func (h *Handler) AdminGrantPermissions(c *gin.Context) {
 
 	var req models.GrantAdminRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 

@@ -16,9 +16,9 @@ Scope everything to `7d`, `30d`, or `90d` with the range tabs. It updates live, 
 | Headline rates | Deliverability score, bounce rate, complaint rate, spam placement, suppressed count |
 | Over time | One metric per day: bounces, complaints, opens, replies, or sent. Use it to find the day something spiked |
 | Window totals | Raw counts behind the rates |
-| Seed inbox placement | Inbox vs spam share from test deliveries, with the sample count |
-| Placement by provider | The same split per Gmail, Outlook, and IMAP/SMTP |
-| Warmup placement by domain | Continuous placement per recipient domain, amber at `10%` spam, red at `20%` |
+| Seed inbox placement | Inbox vs spam share across your [placement tests](/guides/placement-tests/) in the window, with the number of copies behind it |
+| Warmup inbox placement | Where warmup mail landed each day (inbox, Gmail tabs, spam), the inbox rate over time, the split per recipient provider and each mail host inside it, and every mailbox ranked by its seven-day inbox rate |
+| Seed test placement by provider | Where placement test copies landed per provider family (Gmail, Google Workspace, Outlook.com, Microsoft 365, Yahoo Mail and the rest): inbox, Promotions, other Gmail tabs, spam, and copies that never arrived |
 | At risk | Mailboxes and campaigns with bounce or complaint activity, worst first |
 
 The **score** is a `0-100` composite starting at `100`: bounce rate subtracts up to `40` points (maxed at `10%`), complaint rate up to `30` (maxed at `0.30%`), spam placement up to `40` (maxed at `40%`). Bounce rate is highlighted at `5%`, complaint rate at `0.1%`.
@@ -26,12 +26,12 @@ The **score** is a `0-100` composite starting at `100`: bounce rate subtracts up
 Use **Customize** to pick which sections show. Your choices and time window persist per browser.
 
 <Callout type="info" title="Placement needs a sample">
-Placement figures only appear once seed data exists, and a small sample is a hint rather than a verdict. Warmbly waits for a meaningful sample before acting.
+Seed placement figures only appear once a placement test has results in the window, and a small sample is a hint rather than a verdict. Warmbly waits for a meaningful sample before acting.
 </Callout>
 
-**Placement by provider is the check before scaling a campaign.** An aggregate rate can look fine while one provider quietly junks everything: Gmail at `95%` inbox with Outlook at `40%` is a provider-specific problem, usually authentication or content, not volume.
+**Seed test placement by provider is the check before scaling a campaign.** An aggregate rate can look fine while one provider quietly junks everything: Gmail at `95%` inbox with Outlook.com at `40%` is a provider-specific problem, usually authentication or content, not volume. The rates are shares of every copy that left the sender, so a copy that never arrived counts against the inbox rate rather than dropping out of the sample; a provider with many missing copies is usually refusing or deferring your mail. Run a test from **Placement tests**, or let a campaign's monitor run one on a schedule; see [inbox placement tests](/guides/placement-tests/) for how copies are sent, found and classified, and how to read one test against several.
 
-**Warmup placement is your continuous signal.** Seed tests are point-in-time probes, but every verified warmup delivery reports inbox or spam, so drift appears here before it becomes complaints on a campaign.
+**Warmup placement is your continuous signal.** Seed tests are point-in-time probes, but every verified warmup delivery reports inbox, tab or spam, so drift appears here before it becomes complaints on a campaign. Click a mailbox in **Warmup inbox placement** to open its own history; see [seeing where warmup lands](/guides/warmup/#seeing-where-warmup-lands) for how the rate is counted.
 
 ## Health bands
 
@@ -40,19 +40,23 @@ Each mailbox sits in a band, shown as a colored chip. The band controls how Warm
 | Band | Spam placement | Complaint rate | Bounce rate | Other triggers |
 | --- | --- | --- | --- | --- |
 | Watch | `>= 10%` | `>= 0.03%` | n/a | n/a |
-| Quarantine | `>= 20%` | `>= 0.10%` | `>= 5%` | Repeated tampering with received warmup mail |
-| Blocked | `>= 40%` | `>= 0.30%` | `>= 10%` | Clear abuse signals (repeated spam flags on received warmup mail) |
-| Catastrophic | `>= 80%` | n/a | n/a | n/a |
+| Throttled | `>= 20%` | n/a | n/a | n/a |
+| Quarantine | n/a | `>= 0.10%` | `>= 5%` | Repeated tampering with received warmup mail |
+| Blocked | n/a | `>= 0.30%` | `>= 10%` | Clear abuse signals (four or more deletions or spam moves of received warmup mail in 7 days) |
 
 A mailbox enters a band by crossing any single threshold. What each band does:
 
 - **Healthy**: sending normally, nothing to do.
-- **Watch**: warmup volume lowered and spacing increased. Cold volume is dampened by the same factor, so it slows across both before reaching quarantine.
-- **Quarantine**: out of the shared paid warmup pool for `7 days`, as neither sender nor recipient. Cold sending is throttled or paused.
-- **Blocked**: out of the shared pool for `30 days`, review required before re-entry.
-- **Catastrophic**: immediate long block and a full reputation reset. No automatic return.
+- **Watch**: warmup volume lowered and spacing increased. Cold volume is dampened by the same factor, so it slows across both before anything stricter. Lifts once spam placement is back below `7.5%`.
+- **Throttled**: warmup keeps running at half volume with double spacing, because warming is how placement recovers, and cold volume is halved. Lifts once spam placement is back below `15%`.
+- **Quarantine**: out of the shared paid warmup pool for `7 days`, as neither sender nor recipient. Cold sending is paused.
+- **Blocked**: out of the shared pool for `30 days`.
 
-**Sample floors** stop one bad event flipping a new mailbox: spam placement needs `20+` warmup deliveries in `7 days`, complaints need `100+` delivered emails in `30 days`.
+Spam placement never goes past throttled. It is a reading of reputation, and warming is how a mailbox recovers, so it slows the mailbox down and lifts on its own; there is nothing to appeal.
+
+**Sample floors** stop one bad event flipping a new mailbox: spam placement needs `20+` verified warmup deliveries in `7 days`, complaints need `100+` delivered emails in `30 days`.
+
+Spam placement is judged at Google, Microsoft and Yahoo only. Other mail hosts run their own filters, so their spam folders are shown and never held against a mailbox; see [how spam placement is judged](/guides/warmup/#how-spam-placement-is-judged).
 
 <Callout type="info" title="Different metrics, different failure modes">
 Warmbly never acts on the composite score alone. Complaint rate, spam placement, and bounce rate are tracked separately because they fail for different reasons, so any one can move a mailbox even while the score still looks fine.
@@ -69,6 +73,8 @@ Gmail, Yahoo, and Outlook all require SPF, DKIM, and DMARC, and failed alignment
 - **Passing**: SPF and DMARC both present, the two records readable authoritatively from DNS.
 - **Failing**: SPF or DMARC missing.
 - **Unknown**: not checked yet, or the lookup could not complete. A DNS hiccup never looks like a misconfiguration.
+
+A record is only reported missing once the domain's own nameservers agree. When the instance's resolver does not return SPF or DMARC, the check asks the nameservers the domain delegates to directly, and their answer stands. That covers a resolver still caching a "no such record" from before you published it, one that drops `TXT` answers, and one that fails: none of them can mark a correctly configured domain as Failing. Lookups use the domain's fully qualified name, so a failure is never retried under the host's search domains and turned into a "not found".
 
 DKIM is reported separately as **Found** or **Not verified**, never as missing. A DKIM key lives at a selector its owner chose, and DNS has no way to list the selectors under a domain, so nothing answering proves nothing. The check does better than guessing blindly: it reads the domain's own SPF and MX records, which name the provider handling its mail, and probes the selectors that provider publishes, on top of a default set covering the common ones. Providers that mint a random per-account selector, Amazon SES among them, stay unverifiable by design.
 
@@ -90,7 +96,7 @@ The gate covers cold campaigns and warmup only. Manual sends and replies from th
 
 ### Getting sending back
 
-Add the missing records at your registrar, then open the mailbox and press **Re-check** under Domain authentication. That records the new verdict immediately and sending resumes on the next scheduled send. Waiting for the background check works too, it is just slower: it reaches each domain about once a day.
+Add the missing records at your registrar, then open the mailbox and press **Check** (or **Re-check**) under Domain authentication. For anyone who can manage mailboxes, that records the new verdict immediately and sending resumes on the next scheduled send. A teammate without that permission sees the live result, and the banner tells them when the records already check out. Waiting for the background check works too, it is just slower: it reaches each domain about once a day.
 
 Re-check is also worth pressing after reconnecting a mailbox that was disconnected while Failing, since its stored state is refreshed from scratch when it comes back.
 
@@ -106,7 +112,7 @@ If a campaign has already been paused because every one of its mailboxes was gat
 
 The list is held per workspace, and the check runs against the sending campaign's workspace before every send. If a campaign somehow has no workspace, that check cannot be applied, so the campaign is paused with the reason in its activity feed instead of sending unchecked.
 
-Bounces are detected from the delivery-status report the recipient's server sends back. Only permanent failures (`5.x.x`, such as a nonexistent address) record a bounce and suppress; temporary ones (`4.x.x`, such as a full mailbox or greylisting) never do. This works the same for Gmail and Microsoft Graph mailboxes, where the send reports success and the bounce arrives later.
+Bounces are detected from the delivery-status report the recipient's server sends back. Only permanent failures (`5.x.x`, such as a nonexistent address) record a bounce and suppress; temporary ones (`4.x.x`, such as a full mailbox or greylisting) never do. This works the same for Gmail and Microsoft Graph mailboxes, where the send reports success and the bounce arrives later. Some failure notices carry no status code at all, such as Gmail's notice when a Google Group refuses a post. Those are read from the failed-recipient header the notice carries, and count as permanent unless the notice says delivery is still being retried.
 
 **Spam complaints** arrive the same way. When a recipient presses "mark as spam", their provider mails an abuse report back to the sending mailbox. Warmbly reads those reports, resolves them to the campaign send they name, and records a complaint: the recipient is suppressed and the number reaches your complaint rate. Providers that redact who complained still identify the message, so the right lead is suppressed anyway. Only genuine abuse reports count. A "not spam" report, where someone rescued your email from junk, is not recorded as a complaint. Who gets suppressed is always taken from the send the report names, never from an address written in the report, so a forged report cannot reach a contact that send never went to.
 
@@ -123,7 +129,7 @@ Every address gets one of four verdicts. **Deliverable** and **unverified** are 
 Verdicts come from the following sources, and the source is shown on the contact:
 
 - **The built-in check**, included on every plan: syntax, the domain's mail server, known disposable domains, and a mailbox probe against the recipient's server. It only records an address as undeliverable when that server rejects the address itself; a server that rejects the check for its own reasons (a policy block, a rate limit, a greeting it does not accept) leaves the address unverified. Microsoft 365 and Yahoo answer every probe the same way, so their addresses stay unverified rather than being called deliverable. The check also watches itself: when it starts rejecting an unusual share of addresses, its rejections are filed as unverified for an hour instead of being trusted, because a real list is never mostly dead. Self-hosted instances should set `EMAIL_VERIFY_HELO_HOST`, described in the [configuration reference](/development/configuration/#pre-send-verification).
-- **MillionVerifier**, pay as you go: connect it once under Integrations with your own API key, and every check from then on uses your MillionVerifier credits (one per address) instead of the built-in probe. Its verdicts cover the catch-all and Microsoft cases the probe cannot. When the balance runs out or the key stops working, the connection is marked and the built-in check takes over until it is fixed. Nothing else changes.
+- **MillionVerifier**: connect it once under Integrations with your own API key, and every check from then on uses your MillionVerifier credits (one per address) instead of the built-in probe. Pay-as-you-go credits and a subscription's renewing allowance both count. Its verdicts cover the catch-all and Microsoft cases the probe cannot. When the balance runs out or the key stops working, the connection is marked and the built-in check takes over until it is fixed. Nothing else changes.
 - **CleanMyList**: connect a workspace API key under Integrations to verify new contacts and re-check existing ones through your CleanMyList account. Checks use plan allowance first, then credits. The built-in check takes over when verification fails. The balance stays in CleanMyList because its API does not expose it. See [setup instructions](/guides/integrations/#connect-cleanmylist).
 
 A workspace uses one of these at a time. Connecting a second service is refused until the first is disconnected, so a check never moves to a different bill on its own.
@@ -139,11 +145,17 @@ A check sees an address once. The platform sees what happens after every send, a
 
 Every contact carries a **confidence** (0 to 100) next to its verdict, and the contact drawer's Deliverability card lists the reasons in plain words with the observations behind them. Newer evidence outranks older: a bounce after a reply makes the address undeliverable, a reply after a bounce makes it deliverable again, and old observations fade over months rather than switching off.
 
+A paid verifier's answer is newer evidence too. When MillionVerifier or CleanMyList says an address is deliverable or undeliverable more than 30 days after the last real mail to it, its answer stands, because mailboxes get closed and a fresh check about one outranks a stale sign of life. Inside those 30 days, real mail still wins. The built-in probe never outranks real mail.
+
 Verdicts age: an address is checked again after 90 days (30 for an inconclusive verdict), because mailboxes get created and closed, but one that real mail reached in the last six months is left alone. A verdict a teammate set by hand never expires and is never outvoted by evidence.
 
 ### When verification is wrong
 
-Select the contacts and choose **Verify** in the selection bar: **Re-verify** queues a fresh check, and each row's mark updates as its verdict lands; **Mark deliverable** overrides the verdict for a list you know is good. Both are also available on a campaign's Leads tab.
+Open a contact and press **Re-verify** on its Deliverability card, or select several and choose **Verify** in the selection bar: **Re-verify** queues a fresh check through the verifier the workspace uses, and **Mark deliverable** overrides the verdict for a list you know is good. Both are also available on a campaign's Leads tab.
+
+A re-verify runs ahead of every other check, whatever the contact's history: a recent verdict, recent mail, or a verdict a teammate set by hand. The current verdict stays in force until the new one lands, so campaigns keep routing on it meanwhile, and the card shows **Re-verifying with MillionVerifier** until the result appears on its own. If the connected verifier cannot be used at that moment (no credits left, a rejected key), the toast and the card say so and the built-in check runs instead.
+
+The Deliverability card always says who produced the verdict and when: **Verified with MillionVerifier**, **Checked by Warmbly's built-in check**, **Imported from ZeroBounce**, or **Marked by a teammate**. When real mail decided otherwise, it also says what the check itself answered.
 
 A campaign never quietly finishes because of verification. When every remaining lead has been refused, the campaign shows **needs verification** and pauses, with two buttons on it: **Re-verify leads** checks them again and resumes sending automatically as soon as any pass, and **Send anyway** marks them deliverable and resumes at once. The [launch check](/guides/campaigns/#adding-leads) likewise offers **Launch anyway** when a list is refused for its projected bounce rate, for a list verified elsewhere.
 
@@ -182,7 +194,7 @@ If your workspace is restricted or suspended and you believe it is wrong, reply 
 
 1. Start with the headline numbers. Bounce at `5%` and complaints at `0.1%` are the highlighted danger lines.
 2. If a rate looks off, switch the chart to that metric and find the spike day. It usually points at one campaign or one imported list.
-3. Check placement by provider and by domain to see whether mail actually reaches inboxes.
+3. Check placement by provider, and the hosts inside each one, to see whether mail actually reaches inboxes.
 4. Read the at-risk lists. The chips show which senders Warmbly is already acting on.
 5. Slow down anything in Watch and let it recover. Leave Quarantine and Blocked out of sending until they requalify.
 
@@ -192,6 +204,7 @@ The habit that matters: keep complaint rate and spam placement low. A clean repu
 
 <Cards>
   <Card title="Warmup" href="/guides/warmup/" />
+  <Card title="Inbox placement tests" href="/guides/placement-tests/" />
   <Card title="Personalization & expressions" href="/guides/expressions/" />
   <Card title="Error codes" href="/api/error-codes/" />
 </Cards>

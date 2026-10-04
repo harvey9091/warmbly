@@ -22,6 +22,11 @@ type Mailbox struct {
 	// ("/" on Gmail, "." on many Dovecots). Empty when the server reported
 	// none, where the leaf is guessed instead.
 	Delim string `json:"delim,omitempty" avro:"delim"`
+	// Messages is the folder's message count at the last listing. Held by the
+	// worker between passes and not persisted: a drop that the arrivals do
+	// not explain is what makes a pass look for mail moved into a folder the
+	// sync does not follow.
+	Messages uint32 `json:"messages,omitempty" avro:"messages"`
 
 	UpdatedAt time.Time `json:"updated_at" avro:"updated_at"`
 }

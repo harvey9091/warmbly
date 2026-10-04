@@ -423,3 +423,19 @@ func (s *JobsService) evictDeletedMailbox(ctx context.Context, userID, emailAcco
 		}
 	}
 }
+
+// dropForDeletedMailbox reports whether a worker event's write was refused
+// because its mailbox row is gone, and if so evicts the mailbox from every
+// worker. The event is then done: no retry can bring the row back.
+func (s *JobsService) dropForDeletedMailbox(ctx context.Context, userID, emailAccountID uuid.UUID, err error) bool {
+	if !repository.IsForeignKeyViolation(err) || s.EmailRepository == nil {
+		return false
+	}
+	// Confirmed against the row, not inferred from the refusal: the write may
+	// have tripped a different foreign key, such as the owner's user_id.
+	if _, xerr := s.EmailRepository.GetWorkerID(ctx, emailAccountID); xerr == nil || !errors.Is(xerr, errx.ErrNotFound) {
+		return false
+	}
+	s.evictDeletedMailbox(ctx, userID, emailAccountID)
+	return true
+}

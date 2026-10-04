@@ -13,6 +13,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ArrowUpCircleIcon, Loader2Icon } from "lucide-react";
 import useInstanceVersion from "@/lib/api/hooks/auth/useInstanceVersion";
 import useUser from "@/lib/api/hooks/auth/useUser";
+import { showAdminMFARequired } from "@/hooks/usePermission";
 import { isUpdateRunning, runningLabel, useInstanceUpdate } from "@/lib/api/hooks/auth/useInstanceUpdate";
 import { clearUpdateStarted, readUpdateStarted } from "@/lib/updateSession";
 import { cn } from "@/lib/utils";
@@ -26,11 +27,16 @@ export function VersionPill() {
     const versionQ = useInstanceVersion();
     const { data: user } = useUser();
     // Mirrors the backend gates: view_analytics reads the update state,
-    // manage_settings is what check and apply require. An admin without the
-    // latter sees the same read-only badge as a member.
+    // manage_settings is what check and apply require, and every admin route
+    // refuses a session that never presented a second factor. An admin without
+    // the latter sees the same read-only badge as a member; one whose session
+    // lacks 2FA gets told so on click instead of a refused request.
     const perms = user?.admin_permissions ?? 0;
-    const canView = (perms & ADMIN_VIEW_ANALYTICS) === ADMIN_VIEW_ANALYTICS;
-    const isAdmin = (perms & ADMIN_MANAGE_SETTINGS) === ADMIN_MANAGE_SETTINGS;
+    const mfaOK = user?.session_mfa_verified === true;
+    const holdsAdmin = (perms & ADMIN_MANAGE_SETTINGS) === ADMIN_MANAGE_SETTINGS;
+    const canView = mfaOK && (perms & ADMIN_VIEW_ANALYTICS) === ADMIN_VIEW_ANALYTICS;
+    const isAdmin = mfaOK && holdsAdmin;
+    const needsMFA = holdsAdmin && !mfaOK;
     const v = versionQ.data;
     const selfHosted = !!v?.self_hosted;
 
@@ -81,10 +87,14 @@ export function VersionPill() {
     let title = available
         ? isAdmin
             ? `Warmbly ${latest ?? "newer"} is available; this instance runs ${running}. Click to update.`
-            : `Warmbly ${latest ?? "newer"} is available; this instance runs ${running}. Ask a platform admin to update.`
+            : needsMFA
+              ? `Warmbly ${latest ?? "newer"} is available; this instance runs ${running}. Updating needs a session with two-factor authentication.`
+              : `Warmbly ${latest ?? "newer"} is available; this instance runs ${running}. Ask a platform admin to update.`
         : isAdmin
           ? `Warmbly ${running}, up to date. Click for details.`
-          : `Warmbly ${running}, up to date.`;
+          : needsMFA
+            ? `Warmbly ${running}, up to date. Update details need a session with two-factor authentication.`
+            : `Warmbly ${running}, up to date.`;
 
     if (isAdmin && (updating || restarting)) {
         label = restarting ? "Reconnecting" : "Updating";
@@ -96,9 +106,17 @@ export function VersionPill() {
     const className = cn(
         "inline-flex items-center gap-1.5 h-6 px-2 rounded border text-[11px] font-semibold tracking-[0.02em] transition-colors",
         tone,
-        isAdmin && (available ? "hover:bg-amber-100" : "hover:text-slate-900 hover:bg-white"),
+        (isAdmin || needsMFA) && (available ? "hover:bg-amber-100" : "hover:text-slate-900 hover:bg-white"),
     );
 
+    if (needsMFA) {
+        return (
+            <button type="button" onClick={showAdminMFARequired} title={title} className={className}>
+                {icon}
+                {label}
+            </button>
+        );
+    }
     if (!isAdmin) {
         return (
             <span title={title} className={cn(className, "cursor-default")}>

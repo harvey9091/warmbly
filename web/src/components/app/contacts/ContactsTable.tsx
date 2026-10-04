@@ -46,6 +46,7 @@ import useSearchContacts from "@/lib/api/hooks/app/contacts/useSearchContacts";
 import type SearchContacts from "@/lib/api/models/app/contacts/SearchContacts";
 import useDeleteContacts from "@/lib/api/hooks/app/contacts/useDeleteContacts";
 import { useRequestContactVerification } from "@/lib/api/hooks/app/contacts/useContactVerification";
+import { reverifyNotice } from "@/lib/api/client/app/contacts/verification";
 import { useBatchResearch } from "@/lib/api/hooks/app/contacts/useContactResearch";
 import useIntegrationConnections from "@/lib/api/hooks/app/integrations/useIntegrationConnections";
 import { usePushContacts } from "@/lib/api/hooks/app/integrations/usePushContacts";
@@ -68,13 +69,15 @@ import type { CampaignLeadCounts } from "@/lib/api/models/app/contacts/SearchCon
 import ContactsEditBulk from "./ContactsEditBulk";
 import PauseLeadDialog from "./PauseLeadDialog";
 import { useResumeLead } from "@/lib/api/hooks/app/campaigns/useLeadHold";
+import { CC_RESUME_CONFIRM } from "@/lib/leadHold";
 import { selectionOf } from "@/lib/api/models/app/contacts/ContactSelection";
 import type ContactSelection from "@/lib/api/models/app/contacts/ContactSelection";
 import * as rowSelection from "./selection";
 import type { RowSelection } from "./selection";
 import { NewContactDialog } from "./NewContactDialog";
 import ExportDialog from "./ExportDialog";
-import ImportWizard from "./ImportWizard";
+import ImportWizard, { type ImportStep } from "./ImportWizard";
+import RunningImportChip from "./import/RunningImportChip";
 import AddFromContactsDialog from "./AddFromContactsDialog";
 import AddToSegmentMenu from "@/components/app/segments/AddToSegmentMenu";
 import SegmentEditor from "@/components/app/segments/SegmentEditor";
@@ -89,12 +92,12 @@ import type { ExportScopeContext } from "./ExportDialog";
 import useUpdateContactsBulk from "@/lib/api/hooks/app/contacts/useUpdateContactsBulk";
 import useAiMetered from "@/hooks/useAiMetered";
 import SyncSourcesPanel from "./SyncSourcesPanel";
-import { columnClass, sortOptions, type ContactColumn, type ContactRow } from "./columns";
+import { columnClass, emptyColumnIds, sortOptions, type ContactColumn, type ContactRow } from "./columns";
 import { ColumnChooser, SortMenu, type ViewSortState } from "./ViewControls";
 import { useContactView } from "./useContactView";
 import { readCachedView } from "@/lib/api/hooks/app/views/useViewPreferences";
 import type { SearchContactsSortBy } from "@/lib/api/models/app/contacts/search-contacts.types";
-import type { ViewName } from "@/lib/api/models/app/views/ViewPreferences";
+import type { ColumnViewName } from "@/lib/api/models/app/views/ViewPreferences";
 
 import {
     EmptyBlock,
@@ -115,12 +118,18 @@ import {
     PopoverMenuTrigger,
     SelectButton,
 } from "@/components/ui/popover-menu";
+import { Checkbox } from "@/components/ui/checkbox";
+import useCrmProvider from "@/hooks/useCrmProvider";
+import { HubSpotMark } from "@/components/app/crm/HubSpot";
+import HubSpotImportDialog from "./import/HubSpotImportDialog";
 
 type SubFilter = "all" | "subscribed" | "unsubscribed";
 
 // Mirrors maxIntegrationPushSize on the backend: one synchronous push is a
 // live call per contact against the CRM's API.
 const MAX_CRM_PUSH = 500;
+// Mirrors research.MaxBatch: every contact is a metered AI run.
+const MAX_RESEARCH_BATCH = 500;
 
 export default function ContactsTable({
     current_campaign,
@@ -149,7 +158,6 @@ export default function ContactsTable({
     const [bulkEdit, setBulkEdit] = React.useState<boolean>(false);
     const [newOpen, setNewOpen] = React.useState<boolean>(false);
     const [exportOpen, setExportOpen] = React.useState<boolean>(false);
-    const [importOpen, setImportOpen] = React.useState<boolean>(false);
     const [syncOpen, setSyncOpen] = React.useState<boolean>(false);
     const [fromContactsOpen, setFromContactsOpen] = React.useState<boolean>(false);
     const [fromSegmentOpen, setFromSegmentOpen] = React.useState<boolean>(false);
@@ -157,11 +165,81 @@ export default function ContactsTable({
     const [segmentPreset, setSegmentPreset] = React.useState<{ conditions: SegmentCondition[] } | null>(null);
     const navigate = useNavigate();
     // ?category=<id> pre-filters the list (the Categories tab links here).
-    const [params] = useSearchParams();
+    const [params, setParams] = useSearchParams();
+
+    // An open import lives in the URL (?import=<id>&importStep=<step>), so a
+    // reload reopens it where it was. "new" is the upload step before a draft exists.
+    const [importOpen, setImportOpen] = React.useState<boolean>(() => params.has("import"));
+    const [importId, setImportId] = React.useState<string | null>(() => {
+        const id = params.get("import");
+        return id && id !== "new" ? id : null;
+    });
+    const [importStep, setImportStep] = React.useState<ImportStep | undefined>(
+        () => (params.get("importStep") as ImportStep) ?? undefined,
+    );
+    // HubSpot mode adds a list import; its draft continues in the same wizard.
+    const { isHubSpot } = useCrmProvider();
+    const [hubspotImportOpen, setHubspotImportOpen] = React.useState(false);
+    const continueImport = React.useCallback((id: string, step: ImportStep) => {
+        setHubspotImportOpen(false);
+        setImportId(id);
+        setImportStep(step);
+        setImportOpen(true);
+    }, []);
+    const routeImport = React.useCallback(
+        (id: string | null, step: ImportStep) => {
+            setParams(
+                (prev) => {
+                    const next = new URLSearchParams(prev);
+                    next.set("import", id ?? "new");
+                    next.set("importStep", step);
+                    return next;
+                },
+                { replace: true },
+            );
+        },
+        [setParams],
+    );
+    const closeImport = React.useCallback(() => {
+        setImportOpen(false);
+        setImportId(null);
+        setImportStep(undefined);
+        setParams(
+            (prev) => {
+                const next = new URLSearchParams(prev);
+                next.delete("import");
+                next.delete("importStep");
+                return next;
+            },
+            { replace: true },
+        );
+    }, [setParams]);
+
+    // ?contact=<id> opens that contact's drawer (HubSpot's "Open in Warmbly" links here).
+    const deepContact = params.get("contact");
+    React.useEffect(() => {
+        if (deepContact) openContact(deepContact);
+    }, [deepContact, openContact]);
+    // Closing the drawer drops the param, so a reload does not reopen it.
+    const prevEdit = React.useRef(edit);
+    React.useEffect(() => {
+        const was = prevEdit.current;
+        prevEdit.current = edit;
+        if (!was || edit) return;
+        setParams(
+            (prev) => {
+                if (!prev.has("contact")) return prev;
+                const next = new URLSearchParams(prev);
+                next.delete("contact");
+                return next;
+            },
+            { replace: true },
+        );
+    }, [edit, setParams]);
 
     // The member's saved layout for this list: its columns and its sort. The
     // Leads tab and the contacts page are two views with two layouts.
-    const viewName: ViewName = current_campaign ? "campaign_leads" : "contacts";
+    const viewName: ColumnViewName = current_campaign ? "campaign_leads" : "contacts";
     const view = useContactView(viewName);
 
     const [searchProps, setSearchProps] = React.useState<SearchContacts>(() => {
@@ -210,18 +288,6 @@ export default function ContactsTable({
         appliedSortRef.current = "default";
         setSearchProps((s) => ({ ...s, sort_by: "created_at", reverse: false }));
     }
-    const viewControls = (
-        <>
-            <SortMenu sort={sortState} options={sortOptions(viewName)} customKeys={view.customKeys} onChange={changeSort} />
-            <ColumnChooser
-                visible={view.columns}
-                available={view.available}
-                customized={view.customized}
-                onChange={view.setColumns}
-                onReset={resetView}
-            />
-        </>
-    );
 
     function saveAsSegment(draft: SearchContacts) {
         const { conditions, dropped } = filtersToSegment(draft, current_campaign?.id);
@@ -348,9 +414,11 @@ export default function ContactsTable({
             (connectionsQuery.data?.connections ?? []).filter(
                 (c) =>
                     PUSHABLE_PROVIDERS.includes(c.provider) &&
-                    (c.status === "connected" || c.status === "degraded"),
+                    (c.status === "connected" || c.status === "degraded") &&
+                    // In HubSpot mode contacts sync to HubSpot on their own.
+                    !(isHubSpot && c.provider === "hubspot"),
             ),
-        [connectionsQuery.data],
+        [connectionsQuery.data, isHubSpot],
     );
 
     async function pushToCRM(connectionId: string, providerLabel: string) {
@@ -382,6 +450,28 @@ export default function ContactsTable({
     const contacts = contactsData.contacts;
     const total = contactsData.data?.pages[0]?.pagination.total ?? 0;
     const rows = React.useMemo(() => contacts ?? [], [contacts]);
+
+    // Optional-data columns (phone, company, custom fields) that no contact in
+    // this list has a value for step aside instead of showing a column of dashes.
+    const emptyColumns = React.useMemo(() => emptyColumnIds(view.columns, rows), [rows, view.columns]);
+    const tableColumns = React.useMemo(
+        () => view.columns.filter((col) => !emptyColumns.has(col.id)),
+        [view.columns, emptyColumns],
+    );
+
+    const viewControls = (
+        <>
+            <SortMenu sort={sortState} options={sortOptions(viewName)} customKeys={view.customKeys} onChange={changeSort} />
+            <ColumnChooser
+                visible={view.columns}
+                empty={emptyColumns}
+                available={view.available}
+                customized={view.customized}
+                onChange={view.setColumns}
+                onReset={resetView}
+            />
+        </>
+    );
 
     // What every bulk action applies to, and how many contacts that is. In
     // select-all mode the server resolves the filter, so the count here is the
@@ -450,6 +540,10 @@ export default function ContactsTable({
     const metered = useAiMetered();
     function bulkResearch() {
         if (selectionCount === 0) return;
+        if (selectionCount > MAX_RESEARCH_BATCH) {
+            toast.error(`Research takes up to ${MAX_RESEARCH_BATCH.toLocaleString()} contacts at a time. Narrow the selection and try again.`);
+            return;
+        }
         confirm?.show(
             `Research ${selectionCount.toLocaleString()} ${selectionCount === 1 ? "contact" : "contacts"}? ${
                 metered
@@ -470,12 +564,14 @@ export default function ContactsTable({
     function bulkVerify() {
         if (selectionCount === 0) return;
         confirm?.show(
-            `Re-verify ${selectionCount.toLocaleString()} ${selectionCount === 1 ? "address" : "addresses"}? Verdicts land in the background${
+            `Re-verify ${selectionCount.toLocaleString()} ${selectionCount === 1 ? "address" : "addresses"}? Current verdicts stand until the new ones land in the background${
                 selectionCount > 50 ? " over the next few minutes" : ""
             }.`,
             async () => {
                 const res = await verification.mutateAsync({ ...selection, action: "verify" });
-                toast.success(`Re-checking ${res.affected.toLocaleString()} ${res.affected === 1 ? "address" : "addresses"}`);
+                const notice = reverifyNotice(res, "address", "addresses");
+                if (notice.warn) toast(notice.text, { icon: "⚠️" });
+                else toast.success(notice.text);
                 clearSelection();
             },
         );
@@ -499,22 +595,26 @@ export default function ContactsTable({
     const [pauseTarget, setPauseTarget] = React.useState<{ id: string; name: string } | null>(null);
     const resumeLead = useResumeLead();
     const resumeOne = React.useCallback(
-        async (contactId: string) => {
+        (contactId: string, copied?: boolean) => {
             if (!current_campaign) return;
-            try {
-                await toast.promise(
-                    resumeLead.mutateAsync({ campaignId: current_campaign.id, contactId }),
-                    {
-                        loading: "Resuming lead…",
-                        success: "Lead resumed",
-                        error: (err: AppError) => buildError(err),
-                    },
-                );
-            } catch {
-                /* toast.promise already surfaced it */
-            }
+            const run = async () => {
+                try {
+                    await toast.promise(
+                        resumeLead.mutateAsync({ campaignId: current_campaign.id, contactId }),
+                        {
+                            loading: "Resuming lead…",
+                            success: "Lead resumed",
+                            error: (err: AppError) => buildError(err),
+                        },
+                    );
+                } catch {
+                    /* toast.promise already surfaced it */
+                }
+            };
+            if (copied) confirm.show(CC_RESUME_CONFIRM, run);
+            else void run();
         },
-        [current_campaign, resumeLead],
+        [current_campaign, resumeLead, confirm],
     );
 
     // Leads-view scope chips write straight into the search request, so the
@@ -549,7 +649,7 @@ export default function ContactsTable({
             onRetry={() => contactsData.refetch()}
             isRefetching={contactsData.isFetching && !contactsData.isPending}
             contacts={rows}
-            columns={view.columns}
+            columns={tableColumns}
             sort={sortState}
             onSort={sortByColumn}
             isRowSelected={isRowSelected}
@@ -735,6 +835,15 @@ export default function ContactsTable({
                     >
                         Import
                     </TopbarAction>
+                    {isHubSpot && (
+                        <TopbarAction
+                            variant="ghost"
+                            icon={<HubSpotMark className="w-3 h-3" />}
+                            onClick={() => setHubspotImportOpen(true)}
+                        >
+                            From HubSpot
+                        </TopbarAction>
+                    )}
                     <TopbarAction
                         variant="ghost"
                         icon={<SheetIcon className="w-3 h-3" />}
@@ -845,9 +954,20 @@ export default function ContactsTable({
                 />
                 <ImportWizard
                     open={importOpen}
-                    onClose={() => setImportOpen(false)}
+                    onClose={closeImport}
                     lockedCampaign={current_campaign}
+                    initialImportId={importId}
+                    initialStep={importStep}
+                    onRoute={routeImport}
                 />
+                {isHubSpot && (
+                    <HubSpotImportDialog
+                        open={hubspotImportOpen}
+                        onClose={() => setHubspotImportOpen(false)}
+                        onContinue={continueImport}
+                        target={current_campaign ? `Adding to ${current_campaign.name}` : undefined}
+                    />
+                )}
                 <AddFromContactsDialog
                     open={fromContactsOpen}
                     onClose={() => setFromContactsOpen(false)}
@@ -893,6 +1013,12 @@ export default function ContactsTable({
                         Add contacts
                     </TopbarAction>
                 )}
+                <RunningImportChip
+                    onOpen={(id) => {
+                        setImportId(id);
+                        setImportOpen(true);
+                    }}
+                />
                 <div className="hidden md:contents">
                     <TopbarAction
                         variant="ghost"
@@ -901,6 +1027,15 @@ export default function ContactsTable({
                     >
                         Import
                     </TopbarAction>
+                    {isHubSpot && (
+                        <TopbarAction
+                            variant="ghost"
+                            icon={<HubSpotMark className="w-3 h-3" />}
+                            onClick={() => setHubspotImportOpen(true)}
+                        >
+                            Import from HubSpot
+                        </TopbarAction>
+                    )}
                     <TopbarAction
                         variant="ghost"
                         icon={<SheetIcon className="w-3 h-3" />}
@@ -928,6 +1063,14 @@ export default function ContactsTable({
                             <PopoverMenuItem onSelect={() => setImportOpen(true)}>
                                 Import
                             </PopoverMenuItem>
+                            {isHubSpot && (
+                                <PopoverMenuItem
+                                    icon={<HubSpotMark className="w-3.5 h-3.5" />}
+                                    onSelect={() => setHubspotImportOpen(true)}
+                                >
+                                    Import from HubSpot
+                                </PopoverMenuItem>
+                            )}
                             <PopoverMenuItem onSelect={() => setSyncOpen(true)}>
                                 Sheet sync
                             </PopoverMenuItem>
@@ -1058,9 +1201,20 @@ export default function ContactsTable({
             />
             <ImportWizard
                 open={importOpen}
-                onClose={() => setImportOpen(false)}
+                onClose={closeImport}
                 lockedSegment={segment}
+                initialImportId={importId}
+                initialStep={importStep}
+                onRoute={routeImport}
             />
+            {isHubSpot && (
+                <HubSpotImportDialog
+                    open={hubspotImportOpen}
+                    onClose={() => setHubspotImportOpen(false)}
+                    onContinue={continueImport}
+                    target={segment ? `Adding to ${segment.name}` : undefined}
+                />
+            )}
             <SyncSourcesPanel open={syncOpen} onClose={() => setSyncOpen(false)} segment={segment} />
         </Page>
     );
@@ -1123,7 +1277,7 @@ function ContactsTableBody({
     // member without campaign write access, which takes the control off the
     // row rather than offering one that fails.
     onPauseLead?: (id: string, name: string) => void;
-    onResumeLead?: (id: string) => void;
+    onResumeLead?: (id: string, copied?: boolean) => void;
     emptyTitle: string;
     emptyBody: string;
     emptyCta: React.ReactNode;
@@ -1266,9 +1420,7 @@ function ContactsTableBody({
                 <thead className="sticky top-0 bg-white z-[1]">
                     <tr className="border-b border-slate-200">
                         <th className="pl-5 pr-2 py-2 w-11">
-                            <input
-                                type="checkbox"
-                                className="w-3.5 h-3.5 rounded accent-sky-600"
+                            <Checkbox
                                 checked={isSelectedAll}
                                 onChange={onToggleAll}
                             />
@@ -1324,9 +1476,7 @@ function ContactsTableBody({
                                     className="pl-5 pr-2"
                                     onClick={(e) => e.stopPropagation()}
                                 >
-                                    <input
-                                        type="checkbox"
-                                        className="w-3.5 h-3.5 rounded accent-sky-600"
+                                    <Checkbox
                                         checked={isSel}
                                         onChange={() => onToggle(c.id, !isSel)}
                                     />
@@ -1347,7 +1497,7 @@ function ContactsTableBody({
                                                 type="button"
                                                 aria-label="Resume lead"
                                                 title={`${holdSummary(lead.hold)}. Resume now`}
-                                                onClick={() => onResumeLead(c.id)}
+                                                onClick={() => onResumeLead(c.id, lead.hold?.source === "cc")}
                                                 className="size-6 rounded text-violet-500 hover:text-violet-700 hover:bg-violet-50 flex items-center justify-center transition-colors"
                                             >
                                                 <PlayIcon className="w-3 h-3" />

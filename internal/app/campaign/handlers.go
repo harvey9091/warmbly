@@ -89,7 +89,7 @@ func (s *campaignService) Get(ctx context.Context, orgID, id string) (*models.Ca
 	return resp, nil
 }
 
-func (s *campaignService) Search(ctx context.Context, orgID, query, cursor, folder, status, kind, limit string) (*models.CampaignsResult, *errx.Error) {
+func (s *campaignService) Search(ctx context.Context, orgID, query, cursor, folder, status, limit string) (*models.CampaignsResult, *errx.Error) {
 	cursorId, err := paging.DecodeCursor(cursor)
 	if err != nil {
 		return nil, err
@@ -107,11 +107,8 @@ func (s *campaignService) Search(ctx context.Context, orgID, query, cursor, fold
 	default:
 		return nil, errx.New(errx.BadRequest, "invalid status filter: must be draft, active, paused, or completed")
 	}
-	if kind != "" && !models.ValidCampaignKind(kind) {
-		return nil, errx.New(errx.BadRequest, "invalid kind filter: must be sequence or one_time")
-	}
 
-	resp, xerr := s.campaignRepository.Search(ctx, orgID, query, cursorId, folderId, status, kind, limitN)
+	resp, xerr := s.campaignRepository.Search(ctx, orgID, query, cursorId, folderId, status, limitN)
 	if xerr != nil {
 		return nil, errx.InternalError()
 	}
@@ -571,11 +568,9 @@ func (s *campaignService) StartCampaign(ctx context.Context, orgID uuid.UUID, ca
 // leads are attached to a campaign, pull its parked wakeup forward if the
 // campaign can now act sooner than where it sits.
 //
-// It only ever moves a wakeup EARLIER, and only when the parked one is beyond
-// the deferral horizon, so a campaign already ticking on its send pacing is left
-// alone. Everything here is best effort: the reconciler and the capped deferral
-// horizon are the backstops, so a failure delays the new leads rather than
-// losing them.
+// It only ever moves a wakeup EARLIER, and never one a sending tick parked:
+// that park is the campaign's send spacing. Best effort: the reconciler and the
+// capped deferral horizon are the backstops.
 func (s *campaignService) WakeCampaigns(ctx context.Context, orgID uuid.UUID, campaignIDs []string) {
 	if s.scheduler == nil || s.tasksClient == nil || s.taskRepo == nil {
 		return
@@ -611,25 +606,29 @@ func (s *campaignService) WakeCampaigns(ctx context.Context, orgID uuid.UUID, ca
 			continue
 		}
 		var parked *time.Time
+		var parkedTask repository.Task
 		for i := range pending {
 			at := pending[i].ScheduledAt
 			if at != nil && (parked == nil || at.Before(*parked)) {
-				parked = at
+				parked, parkedTask = at, pending[i]
 			}
 		}
-		// Already about to wake: leave the chain's own pacing alone.
-		if parked != nil && !parked.After(time.Now().Add(config.CampaignMaxDeferMinutes*time.Minute)) {
+		// Already about to fire.
+		if parked != nil && !parked.After(time.Now().Add(config.CampaignNotDueGraceSeconds*time.Second)) {
 			continue
+		}
+		if parked != nil {
+			if paced, perr := s.campaignRepository.IsPacedSuccessor(ctx, id, parkedTask); perr != nil || paced {
+				continue
+			}
 		}
 
 		nextTime, _, _, cerr := s.scheduler.CalculateNextCampaignTime(ctx, id)
 		if cerr != nil && !errors.Is(cerr, scheduler.ErrCampaignDeferred) {
 			continue
 		}
-		if errors.Is(cerr, scheduler.ErrCampaignDeferred) {
-			nextTime = scheduler.DeferSlot(nextTime)
-		}
-		if nextTime.IsZero() || (parked != nil && !nextTime.Before(*parked)) {
+		nextTime = scheduler.WakeSlot(nextTime, cerr)
+		if parked != nil && !nextTime.Before(*parked) {
 			continue
 		}
 
@@ -745,11 +744,10 @@ func (s *campaignService) enqueueCampaignWakeup(ctx context.Context, campaignID 
 	}
 
 	nextTime, _, accountID, err := s.scheduler.CalculateNextCampaignTime(ctx, campaignID)
-	// A deferral still yields a usable first-send slot (nextTime) and a nominal
-	// pool mailbox (accountID), so fall through and schedule the first wakeup at
-	// the defer time rather than failing the campaign start.
-	if errors.Is(err, scheduler.ErrCampaignDeferred) {
-		nextTime = scheduler.DeferSlot(nextTime)
+	// A deferral still yields a nominal pool mailbox (accountID), so it wakes
+	// at the defer slot rather than failing the campaign start.
+	if err == nil || errors.Is(err, scheduler.ErrCampaignDeferred) {
+		nextTime = scheduler.WakeSlot(nextTime, err)
 	}
 	if err != nil && !errors.Is(err, scheduler.ErrCampaignDeferred) {
 		switch {
@@ -1039,10 +1037,10 @@ func modelOrgID(orgID *uuid.UUID) string {
 // longer than this reports no finish date rather than a meaningless one.
 const estimateHorizonDays = 2 * 366
 
-// Estimate projects an audience against a sender pool. It applies the same
-// cap rule as the scheduler (the smaller of the mailbox cap and the campaign
-// limit, per mailbox, per day) but none of its pacing, so the result is the
-// earliest the last send can land, not a promise.
+// Estimate projects an audience against a sender pool. With the scheduler
+// wired it simulates the campaign day by day under the send path's clamps and
+// the warmup mail running alongside; without it, it applies only the cap rule
+// and the result is the earliest the last send can land.
 func (s *campaignService) Estimate(ctx context.Context, orgID uuid.UUID, in *models.CampaignEstimate) (*models.CampaignEstimateResult, *errx.Error) {
 	out := &models.CampaignEstimateResult{}
 
@@ -1061,13 +1059,21 @@ func (s *campaignService) Estimate(ctx context.Context, orgID uuid.UUID, in *mod
 		seen[raw] = true
 		segmentIDs = append(segmentIDs, raw)
 	}
-	// One preview over "in any of these segments" counts each contact once
-	// however many of the segments they belong to.
-	if len(segmentIDs) > 0 && s.segments != nil {
-		n, xerr := s.segments.Preview(ctx, orgID, &models.SegmentPreview{
-			Match:      models.SegmentMatchAny,
-			Conditions: []models.SegmentCondition{{Field: "segment", Operator: models.SegOpIn, Values: segmentIDs}},
-		})
+	var saved *models.Campaign
+	if in.CampaignID != nil && *in.CampaignID != "" {
+		c, _, xerr := s.campaignForOrg(ctx, orgID, *in.CampaignID)
+		if xerr != nil {
+			return nil, xerr
+		}
+		saved = c
+	}
+	// Each contact once, whether on several segments or already a lead.
+	if (len(segmentIDs) > 0 || saved != nil) && s.segments != nil {
+		var savedID *uuid.UUID
+		if saved != nil {
+			savedID = &saved.ID
+		}
+		n, xerr := s.segments.CountAudience(ctx, orgID, segmentIDs, savedID)
 		if xerr != nil {
 			return nil, xerr
 		}
@@ -1075,27 +1081,87 @@ func (s *campaignService) Estimate(ctx context.Context, orgID uuid.UUID, in *mod
 	}
 
 	dailyLimit := config.CampaignLimitDefault
+	if saved != nil && saved.DailyLimit > 0 {
+		dailyLimit = saved.DailyLimit
+	}
 	if in.DailyLimit != nil {
 		if xerr := validate.CampaignDailyLimit(*in.DailyLimit); xerr != nil {
 			return nil, xerr
 		}
 		dailyLimit = *in.DailyLimit
 	}
+	if len(in.StepWaits) > models.CampaignEstimateStepsMax {
+		return nil, errx.New(errx.BadRequest, fmt.Sprintf("an estimate covers at most %d follow-ups", models.CampaignEstimateStepsMax))
+	}
+	for _, w := range in.StepWaits {
+		if w < 0 || w > 365 {
+			return nil, errx.New(errx.BadRequest, "step_waits must be between 0 and 365 days")
+		}
+	}
+	// Unsent times fall back to the saved campaign's usable window, then to a new campaign's.
+	startTime, endTime := "08:00", "18:00"
+	if saved != nil {
+		if s, e := models.ClockMinutes(saved.StartTime, -1), models.ClockMinutes(saved.EndTime, -1); s >= 0 && e > s {
+			startTime, endTime = saved.StartTime, saved.EndTime
+		}
+	}
+	timesSent := false
+	if in.StartTime != nil && *in.StartTime != "" {
+		startTime, timesSent = *in.StartTime, true
+	}
+	if in.EndTime != nil && *in.EndTime != "" {
+		endTime, timesSent = *in.EndTime, true
+	}
+	startMin, endMin := models.ClockMinutes(startTime, -1), models.ClockMinutes(endTime, -1)
+	if startMin < 0 || endMin < 0 {
+		return nil, errx.New(errx.BadRequest, "start_time and end_time must be HH:MM")
+	}
+	if endMin <= startMin {
+		return nil, errx.New(errx.BadRequest, "end_time must be after start_time")
+	}
 
-	// Same pool resolution as the scheduler: tags when given, otherwise
-	// every active mailbox in the workspace.
+	// Same pool as the scheduler: hand-picked senders, else tags, else every active mailbox.
 	scope := repository.NewAccountScope(&orgID)
 	var accounts []models.Email
 	var xerr *errx.Error
-	if len(in.EmailTagIDs) > 0 {
+	switch {
+	case saved != nil && repository.ExplicitSenderPool(saved):
+		pool, perr := repository.ResolveCampaignSenderPool(ctx, s.emailRepo, saved)
+		accounts, xerr = pool.Accounts, perr
+	case len(in.EmailTagIDs) > 0:
 		accounts, xerr = s.emailRepo.GetByTags(ctx, scope, in.EmailTagIDs)
-	} else {
+	default:
 		accounts, xerr = s.emailRepo.GetAllActiveInScope(ctx, scope)
 	}
 	if xerr != nil {
 		return nil, xerr
 	}
 	out.Mailboxes = len(accounts)
+	out.Steps = 1 + len(in.StepWaits)
+	out.TotalSends = out.Recipients * out.Steps
+	out.Timeline, out.Senders = []models.CampaignEstimateDay{}, []models.CampaignEstimateSender{}
+
+	days := bitmask.DefaultDays()
+	if saved != nil && saved.Days != 0 {
+		days = saved.Days
+	}
+	if in.Days != nil && *in.Days != 0 {
+		days = *in.Days
+	}
+	// No timezone, or an empty one, means the campaign will follow the workspace.
+	zone := s.campaignRepository.WorkspaceTimezone(ctx, orgID)
+	if saved != nil && in.Timezone == nil && saved.Timezone != "" {
+		zone = saved.Timezone
+	}
+	if in.Timezone != nil && *in.Timezone != "" && tz.Valid(*in.Timezone) {
+		zone = *in.Timezone
+	}
+	draft := &models.Campaign{OrganizationID: &orgID, DailyLimit: dailyLimit, Days: days, Timezone: zone, StartDate: in.StartDate, StartTime: startTime, EndTime: endTime}
+	// A saved campaign's own per-day windows stand unless a window is sent.
+	if saved != nil && !timesSent && !saved.ScheduleWindows.IsEmpty() {
+		draft.ScheduleWindows = saved.ScheduleWindows
+	}
+
 	// The pool's day under the same clamps the scheduler applies (the
 	// graduation ceiling, the workspace's risk band, a warmup health hold,
 	// domain authentication, cold rotation), so the wizard promises what the
@@ -1106,20 +1172,29 @@ func (s *campaignService) Estimate(ctx context.Context, orgID uuid.UUID, in *mod
 			errs.CaptureException(err)
 			return nil, errx.InternalError()
 		}
-		out.DailyCapacity, out.RemainingToday = capacity.Capacity, capacity.Remaining
-	} else {
-		for _, acct := range accounts {
-			lim := max(0, min(acct.CampaignLimit, dailyLimit))
-			out.DailyCapacity += lim
-			sent, err := s.taskRepo.CountCampaignEmailsSentToday(ctx, acct.ID)
-			if err != nil {
-				// A counter blip must not blank the whole estimate, but it must
-				// not flatter it either: a mailbox whose sends today are unknown
-				// contributes nothing to today and only counts from tomorrow.
-				continue
-			}
-			out.RemainingToday += max(0, lim-sent)
+		projected, err := planner.ProjectCampaign(ctx, scheduler.CampaignProjectionInput{
+			Campaign: draft, Accounts: accounts, Recipients: out.Recipients, StepWaits: in.StepWaits,
+			OrgDailyLimit: s.orgDailyLimit(ctx, orgID),
+		})
+		if err != nil {
+			errs.CaptureException(err)
+			return nil, errx.InternalError()
 		}
+		projected.DailyCapacity, projected.RemainingToday = capacity.Capacity, capacity.Remaining
+		return projected, nil
+	}
+
+	for _, acct := range accounts {
+		lim := max(0, min(acct.CampaignLimit, dailyLimit))
+		out.DailyCapacity += lim
+		sent, err := s.taskRepo.CountCampaignEmailsSentToday(ctx, acct.ID)
+		if err != nil {
+			// A counter blip must not blank the whole estimate, but it must
+			// not flatter it either: a mailbox whose sends today are unknown
+			// contributes nothing to today and only counts from tomorrow.
+			continue
+		}
+		out.RemainingToday += max(0, lim-sent)
 	}
 	if limit := s.orgDailyLimit(ctx, orgID); limit >= 0 {
 		out.DailyCapacity = min(out.DailyCapacity, limit)
@@ -1133,18 +1208,12 @@ func (s *campaignService) Estimate(ctx context.Context, orgID uuid.UUID, in *mod
 		return out, nil
 	}
 
-	// Walk calendar days from the start, spending each sending day's
-	// capacity, until the audience is covered. Today only has what the pool
+	// Without the scheduler, walk calendar days spending each sending day's
+	// capacity until the audience is covered. Today only has what the pool
 	// has not already sent.
-	days := bitmask.DefaultDays()
-	if in.Days != nil && *in.Days != 0 {
-		days = *in.Days
-	}
 	loc := time.UTC
-	if in.Timezone != nil && tz.Valid(*in.Timezone) {
-		if l, err := time.LoadLocation(*in.Timezone); err == nil {
-			loc = l
-		}
+	if l, err := time.LoadLocation(zone); err == nil {
+		loc = l
 	}
 	now := time.Now().In(loc)
 	start := now
@@ -1153,7 +1222,7 @@ func (s *campaignService) Estimate(ctx context.Context, orgID uuid.UUID, in *mod
 	}
 	startDay := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc)
 	startsToday := startDay.Equal(time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc))
-	remaining := out.Recipients
+	remaining := out.TotalSends
 	sendingDays := 0
 	for i := 0; i < estimateHorizonDays; i++ {
 		d := startDay.AddDate(0, 0, i)
@@ -1284,30 +1353,102 @@ func (s *campaignService) orgDailyLimit(ctx context.Context, orgID uuid.UUID) in
 	return limit
 }
 
+// sendPlanStageTimings is the read path's elapsed time split into the stages a
+// timeout can hide in: lookup (campaign load, snapshot read, connection/pool
+// acquisition) and the expensive planner walk.
+type sendPlanStageTimings struct {
+	lookup  time.Duration
+	planner time.Duration
+	total   time.Duration
+}
+
+// safeDetail renders the stage timings as a one-line diagnostic carrying no
+// secret, credential, or underlying error text, safe to log against a request id.
+func (t sendPlanStageTimings) safeDetail(timeout bool) string {
+	return fmt.Sprintf("send plan failed (timeout=%t): lookup=%dms planner=%dms total=%dms",
+		timeout, t.lookup.Milliseconds(), t.planner.Milliseconds(), t.total.Milliseconds())
+}
+
+// SendPlan returns today's send plan for a campaign, serving the background
+// snapshot when one exists and computing a bounded cold fallback otherwise.
 func (s *campaignService) SendPlan(ctx context.Context, orgID uuid.UUID, campaignID string) (*models.CampaignSendPlan, *errx.Error) {
+	start := time.Now()
 	campaign, xerr := s.Get(ctx, orgID.String(), campaignID)
 	if xerr != nil {
 		return nil, xerr
 	}
-	planner, ok := s.planner()
-	if !ok {
+	if _, ok := s.planner(); !ok {
 		return nil, errx.New(errx.Internal, "send planning is not available")
 	}
 	// Keyed on the campaign's own version, so an edit or a start/stop is
 	// answered fresh while two viewers of an unchanged campaign share a read.
-	key := campaign.ID.String() + "|" + campaign.Status + "|" + campaign.UpdatedAt.UTC().Format(time.RFC3339Nano)
-	if s.planCache != nil {
-		if plan, ok := s.planCache.get(key); ok {
+	key := planVersionKey(campaign)
+
+	// Fast path: serve the background snapshot. The planner walk (lead supply,
+	// per-mailbox history) is what makes a huge campaign slow, and it runs in
+	// the snapshotter loop, not here, so a read is a single row fetch whatever
+	// the campaign's size. A snapshot the campaign has outrun (an edit, or a new
+	// budget day) is still served, marked stale, while a fresh walk runs in the
+	// background: a read is always fast and never recomputes a 70k-lead plan
+	// inline.
+	if s.planSnapshotRepo != nil {
+		if snap, err := s.planSnapshotRepo.Get(ctx, orgID, campaign.ID); err == nil && snap != nil && snap.Plan != nil {
+			plan := snap.Plan
+			// Also stale when the snapshot has aged past the freshness window:
+			// the version key alone never changes on intra-day drift, so a
+			// stalled snapshotter would otherwise serve old figures as fresh.
+			now := time.Now()
+			plan.Stale = snap.VersionKey != key || snap.Day != planBudgetDay(now) ||
+				now.Sub(snap.ComputedAt) > sendPlanSnapshotMaxAge
+			if plan.Stale {
+				s.refreshPlanAsync(campaign, orgID, key)
+			}
 			return plan, nil
+		} else if err != nil {
+			// A snapshot read that failed is logged and falls through to a
+			// bounded compute rather than failing the request.
+			log.Warn().Err(err).Str("campaign_id", campaign.ID.String()).Msg("send plan: snapshot read failed; computing inline")
 		}
 	}
-	plan, err := planner.PlanCampaignDay(ctx, campaign.ID, s.orgDailyLimit(ctx, orgID))
-	if err != nil {
-		errs.CaptureException(err)
-		return nil, errx.InternalError()
+
+	// Cold: no snapshot yet (a brand-new campaign, or the snapshotter has not
+	// reached it). Compute once, shared across concurrent viewers, and persist
+	// so the next read is a snapshot hit. A never-snapshotted campaign's lead
+	// supply is the small case; the bounded single-flight is the backstop.
+	walk := func(walkCtx context.Context) (*models.CampaignSendPlan, error) {
+		return s.computeAndStore(walkCtx, campaign, orgID, key)
 	}
+	var (
+		plan *models.CampaignSendPlan
+		err  error
+	)
+	// Pre-walk work (campaign load, snapshot read, connection acquisition) is the
+	// lookup stage; the planner walk below is the expensive stage a read times out in.
+	timings := sendPlanStageTimings{lookup: time.Since(start)}
+	walkStart := time.Now()
 	if s.planCache != nil {
-		s.planCache.put(key, plan)
+		plan, err = s.planCache.getOrCompute(ctx, key, walk)
+	} else {
+		plan, err = walk(ctx)
+	}
+	timings.planner = time.Since(walkStart)
+	timings.total = time.Since(start)
+	if err != nil {
+		// Retain safe timing diagnostics for a planner failure or deadline: the
+		// caller still gets the generic sentence and request id, the stage timings
+		// are logged server-side against that id (errx.Internal blanks the detail
+		// in the response but logs it), never the underlying error text.
+		timeout := errors.Is(err, context.DeadlineExceeded)
+		log.Warn().
+			Err(err).
+			Str("campaign_id", campaign.ID.String()).
+			Dur("lookup", timings.lookup).
+			Dur("planner", timings.planner).
+			Dur("total", timings.total).
+			Bool("timeout", timeout).
+			Msg("send plan: compute failed; retaining timing diagnostics")
+		errs.CaptureException(err)
+		return nil, errx.New(errx.Internal, timings.safeDetail(timeout))
 	}
 	return plan, nil
 }

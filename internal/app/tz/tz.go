@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -76,8 +77,18 @@ type Client struct {
 	Timezones   []TimezoneOption
 }
 
+// Valid reports whether name is a usable IANA zone. The curated list is only
+// what the picker offers; a browser or an API caller may name any zone the
+// runtime resolves, such as Europe/Budapest.
 func Valid(name string) bool {
-	return slices.Contains(tzs, name)
+	if slices.Contains(tzs, name) {
+		return true
+	}
+	if name == "" || len(name) > 64 || (!strings.Contains(name, "/") && name != "UTC") {
+		return false
+	}
+	_, err := time.LoadLocation(name)
+	return err == nil
 }
 
 func NewTZ() *Client {

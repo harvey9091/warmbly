@@ -20,6 +20,7 @@ import { Link2Icon, XIcon, CheckIcon } from "lucide-react";
 import { useForms } from "@/lib/api/hooks/app/forms";
 import { useAnchoredFloating } from "@/hooks/useAnchoredFloating";
 import { buildFormLinkToken } from "@/lib/templateVars";
+import useClickOutside from "@/hooks/useClickOutside";
 
 declare module "@tiptap/core" {
     interface Commands<ReturnType> {
@@ -99,9 +100,9 @@ export const FormLinkNode = TiptapNode.create({
 // styles because the base look comes from `.tiptap-body .tpl-var` in global.css
 // and a plain class would lose that specificity fight.
 const WARN_STYLE: React.CSSProperties = {
-    borderColor: "#fde68a", // amber-200
-    background: "#fffbeb", // amber-50
-    color: "#b45309", // amber-700
+    borderColor: "light-dark(#fde68a, rgb(251 191 36 / 0.35))", // amber-200
+    background: "light-dark(#fffbeb, rgb(245 158 11 / 0.14))", // amber-50
+    color: "light-dark(#b45309, #fcd34d)", // amber-700
 };
 
 // Compact chip showing the target form's name, with a click-to-edit popover to
@@ -190,25 +191,7 @@ function FormLinkChipEditor({
         [setFloating],
     );
 
-    React.useEffect(() => {
-        const onDown = (e: MouseEvent | TouchEvent) => {
-            if (!localRef.current?.contains(e.target as Node)) onClose();
-        };
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === "Escape") {
-                e.stopPropagation();
-                onClose();
-            }
-        };
-        document.addEventListener("mousedown", onDown, true);
-        document.addEventListener("touchstart", onDown, true);
-        document.addEventListener("keydown", onKey, true);
-        return () => {
-            document.removeEventListener("mousedown", onDown, true);
-            document.removeEventListener("touchstart", onDown, true);
-            document.removeEventListener("keydown", onKey, true);
-        };
-    }, [onClose]);
+    useClickOutside(true, onClose, localRef);
 
     return (
         <motion.div
@@ -219,7 +202,7 @@ function FormLinkChipEditor({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.1 }}
-            className="z-[60] w-64 overflow-hidden rounded-lg border border-slate-200 bg-white p-2 text-left shadow-[0_10px_30px_-10px_rgba(15,23,42,0.25)]"
+            className="z-[150] w-64 overflow-hidden rounded-lg border border-slate-200 bg-white p-2 text-left shadow-[0_10px_30px_-10px_rgba(15,23,42,0.25)]"
         >
             <div className="px-0.5 pb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-slate-400">
                 Form

@@ -1,4 +1,4 @@
-// ComposeDraftsItem — the "Drafts (n)" row under the rail's Compose button.
+// ComposeDraftsItem — the "Drafts (n)" row at the top of the unibox rail.
 // Opens a small popover listing autosaved compose drafts; clicking one resumes
 // it in the compose window, the trash deletes it. Renders nothing while there
 // are no drafts, so the rail stays clean for most users.
@@ -15,7 +15,7 @@ function draftTitle(d: ComposeDraft): string {
     return d.subject.trim() || d.to[0] || "(no subject)";
 }
 
-function formatWhen(iso: string): string {
+function formatWhen(iso: string | Date): string {
     const d = new Date(iso);
     const now = new Date();
     const sameDay =
@@ -29,7 +29,7 @@ function formatWhen(iso: string): string {
 export default function ComposeDraftsItem() {
     const [open, setOpen] = React.useState(false);
     const boxRef = React.useRef<HTMLDivElement>(null);
-    useClickOutside(boxRef, () => setOpen(false));
+    useClickOutside(open, () => setOpen(false), boxRef);
 
     const draftsQ = useComposeDrafts();
     const deleteMut = useDeleteComposeDraft();
@@ -38,7 +38,7 @@ export default function ComposeDraftsItem() {
     if (drafts.length === 0) return null;
 
     return (
-        <div ref={boxRef} className="relative mt-1">
+        <div ref={boxRef} className="relative">
             <button
                 type="button"
                 onClick={() => setOpen((o) => !o)}

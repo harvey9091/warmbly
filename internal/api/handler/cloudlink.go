@@ -189,7 +189,7 @@ func (h *Handler) CloudLinkOAuthStart(c *gin.Context) {
 		Provider models.InboxProvider `json:"provider"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	res, xerr := h.CloudLinkService.StartOAuth(c.Request.Context(), *orgID, userID, req.Provider)
@@ -214,7 +214,7 @@ func (h *Handler) CloudLinkOAuthFinish(c *gin.Context) {
 		Session string `json:"session"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.JSON(c, errx.New(errx.BadRequest, "invalid request body"))
+		errx.JSON(c, errx.InvalidBody(err))
 		return
 	}
 	acc, xerr := h.CloudLinkService.FinishOAuth(c.Request.Context(), *orgID, userID, req.Session)
@@ -264,13 +264,26 @@ func (h *Handler) CloudLinkAdopt(c *gin.Context) {
 //
 //	GET /api/v1/internal/cloud-link/token/:id -> 200 {"access_token","expires_at"} | 4xx with the cloud's reason
 func (h *Handler) InternalCloudLinkToken(c *gin.Context) {
-	if h.CloudLinkService == nil {
-		errx.JSON(c, errx.ErrNotFound)
-		return
-	}
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		errx.JSON(c, errx.ErrUuid)
+		return
+	}
+	// A mailbox under an administrator's grant is minted for here, not by the cloud.
+	if h.DelegationService != nil {
+		tok, handled, xerr := h.DelegationService.AccessToken(c.Request.Context(), id)
+		if handled {
+			if xerr != nil {
+				errx.JSON(c, xerr)
+				return
+			}
+			c.Header("Cache-Control", "no-store")
+			c.JSON(http.StatusOK, tok)
+			return
+		}
+	}
+	if h.CloudLinkService == nil {
+		errx.JSON(c, errx.ErrNotFound)
 		return
 	}
 	tok, xerr := h.CloudLinkService.AccessToken(c.Request.Context(), id)

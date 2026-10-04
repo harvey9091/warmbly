@@ -55,7 +55,7 @@ Five values protect the whole instance. Compose ships a working default for each
 
 | Variable | Format | What it protects | Restart needed |
 |---|---|---|---|
-| `AUTH_SECRET` | 32 characters or more, enforced at boot | JWT and session signing. The realtime service reads the same value as `JWT_SECRET` and applies the same floor. Both refuse to start below it: a shorter HS256 key can be recovered offline from any token the service has issued | yes |
+| `AUTH_SECRET` | 32 characters or more, enforced at boot | JWT and session signing. The realtime service reads the same value as `JWT_SECRET` and applies the same floor. Both refuse to start below it: a shorter HS256 key can be recovered offline from any token the service has issued. It also keys the `warmbly-verify=` values workspaces publish in `_warmbly` `TXT` records to prove a domain, so changing it changes every one of them: [root redirects](/guides/sending-domains/#root-redirects) stop at their next check until the new value is published | yes |
 | `INTERNAL_API_TOKEN` | any random string | The backend's `/api/v1/internal/` routes, which workers and the tracking service authenticate against | yes |
 | `NODE_BROKER_TOKEN` | any random string | The routes that perform a privileged operation for the caller: opening a sealed data key, signing a blob operation, and minting a provider access token for a mailbox Warmbly Cloud manages. Optional, and falls back to `INTERNAL_API_TOKEN`. The same value has to be set on the control plane and on every node that calls those routes, or they answer 401. Worth setting in a split deployment, where the tracking and forms services are internet-facing and hold the shared token | yes |
 | `SECRET_KEY_BASE` | 64 characters or more | Phoenix session signing in the realtime service | yes |
@@ -105,7 +105,7 @@ Every emailed link (password reset, invitation, the first-run claim link) is bui
 | `APP_URL` | The dashboard origin. The source of every emailed link | guessed from `CORS_ALLOW_ORIGINS`, then `PUBLIC_HOST` | no (read per request) |
 | `FRONTEND_BASE_URL` | Alternative name for the same value, read when `APP_URL` is unset | unset | no |
 | `API_PUBLIC_URL` | The backend's public base. Frontends, blob URLs and the OIDC redirect derive from it | derived from `PUBLIC_HOST` under compose | yes |
-| `BACKEND_PUBLIC_URL` | The backend base used in generated worker configuration | falls back to `API_PUBLIC_URL` | yes |
+| `BACKEND_PUBLIC_URL` | The backend's public URL as third parties call it: generated worker configuration, the integration OAuth redirect and the [Slack app](/development/slack-app/) request URLs. Only needed when that differs from `API_PUBLIC_URL` | falls back to `API_PUBLIC_URL` | yes |
 | `APP_ORIGIN` | The exact origin the mailbox OAuth callback page posts the authorization code back to. Only needed when the dashboard is served somewhere other than `APP_URL` | derived from `APP_URL` | yes |
 | `API_HOST` | The listen address | `0.0.0.0:8080` | yes |
 | `PUBLIC_HOST` | Compose only. A hostname or LAN IP that every other URL derives from | `localhost` | yes |
@@ -147,14 +147,14 @@ TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12
 | `PUBLIC_IP_RATE_LIMIT` | Requests allowed per source IP per 15 minutes on the remaining public routes: unsubscribe, invitation preview, fleet enrolment and the analytics proxy. Each carries its authorization in a high-entropy token, so this bounds unmetered writes and relayed bandwidth rather than guessing. Counts reads as well as writes, unlike the auth limiter | `600` | yes |
 | `WARMBLY_BOOTSTRAP_EMAIL` | First owner's address, read only while the users table is empty | unset | yes |
 | `WARMBLY_BOOTSTRAP_PASSWORD_HASH` | Argon2 PHC string for that owner. Preferred over the plaintext form | unset | yes |
-| `WARMBLY_BOOTSTRAP_PASSWORD` | Plaintext convenience form. Warns at boot, and leaves a password in your process environment | unset | yes |
+| `WARMBLY_BOOTSTRAP_PASSWORD` | Plaintext convenience form. Held to the same rules as any password (length, breached list); one that fails them is refused and no owner is created. Warns at boot, and leaves a password in your process environment | unset | yes |
 | `WARMBLY_BOOTSTRAP_ORG` | Name of the organization created with that owner. A value that breaks the [naming rules](/api/error-codes/#name-refusals) is ignored with a warning | derived from the name | yes |
 | `TWOFA_SECRET` | Key that encrypts stored TOTP secrets. Falls back to `AUTH_SECRET`, so existing deployments keep working; rotating it invalidates every enrolled TOTP secret | `AUTH_SECRET` | yes |
 | `WEBAUTHN_RP_ID` | Passkey relying party id. Derived from `APP_URL` when unset. Changing it invalidates every enrolled passkey | derived | yes |
 | `WEBAUTHN_RP_ORIGINS` | Origins accepted for passkey ceremonies | derived from `APP_URL` | yes |
 | `WEBAUTHN_RP_DISPLAY_NAME` | The name the passkey prompt shows | `Warmbly` | yes |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Sign in with Google in the browser. Both are required; unrelated to the `BOX_GOOGLE_*` mailbox client | unset | yes |
-| `GOOGLE_REDIRECT_URI` | Redirect URI registered at Google. Served by the API, not the dashboard | `API_PUBLIC_URL` plus `/v1/auth/google/callback` | yes |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Sign in with Google in the browser. Both are required; unrelated to the `BOX_GOOGLE_*` mailbox client. The same client carries a Google Workspace administrator's sign-in that [proves a domain](/development/whole-domain-connect/#proving-the-domain) for a whole-domain connect, asking only for `openid` and `email`; that sign-in signs nobody in | unset | yes |
+| `GOOGLE_REDIRECT_URI` | Redirect URI registered at Google. Served by the API, not the dashboard. An administrator's domain proof returns here too and is handed back to the dashboard window that opened it, so no second URI is registered | `API_PUBLIC_URL` plus `/v1/auth/google/callback` | yes |
 | `GOOGLE_IOS_CLIENT_ID` | Additional Google client id accepted from the iOS app. Native only: it does not enable the browser button | unset | yes |
 | `APPLE_APP_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_KEY_SECRET` | Sign in with Apple. `APPLE_APP_ID` is the Services ID | unset | yes |
 | `APPLE_REDIRECT_URI` | Return URL registered at Apple. Must be HTTPS | `API_PUBLIC_URL` plus `/v1/auth/apple/callback` | yes |
@@ -308,11 +308,11 @@ On `filesystem`, a remote worker writes blobs to its own disk rather than a volu
 | `GCP_PROJECT_ID` | Project when `PUBSUB_ENABLED=true` | unset | yes |
 
 <Callout title="Topics are created by the bus, not by hand">
-A worker's command topic is named after the node id issued when it joined, so the set of topics is not knowable in advance. The Kafka backend creates what it uses, once per topic per process, rather than depending on the broker's `auto.create.topics.enable` — which is off by default on Confluent Cloud and configurable only on Dedicated clusters, not on Basic, Standard, Enterprise or Freight. The credential therefore needs `CREATE` on topics as well as read and write.
+A worker's command topic is named after the node id issued when it joined, so the set of topics is not knowable in advance. The Kafka backend creates what it uses, once per topic per process, rather than depending on the broker's `auto.create.topics.enable`, which is off by default on Confluent Cloud and configurable only on Dedicated clusters, not on Basic, Standard, Enterprise or Freight. The credential therefore needs `CREATE` on topics as well as read and write.
 </Callout>
 
 
-`json` needs nothing and is the default. `avro` resolves every event against `SCHEMA_REGISTRY_URL` and ships only in the `-kafka` images. Producers and consumers have to agree on one: there is no in-band marker, so a consumer on the other codec cannot read what is already on the bus. Change it by draining the bus, not in place. `PUBSUB_ENABLED` must agree across backend, consumer and realtime.
+`json` needs nothing and is the default. `avro` resolves every event against `SCHEMA_REGISTRY_URL` and ships only in the `-kafka` images. Producers and consumers have to agree on one: there is no in-band marker, so a consumer on the other codec cannot read what is already on the bus. Change it by draining the bus, not in place. The envelope subjects need `BACKWARD` compatibility, because a new event type adds a union branch; a publisher that meets `FORWARD` or `FULL` sets its subject to `BACKWARD` itself. `PUBSUB_ENABLED` must agree across backend, consumer and realtime.
 
 <Callout type="warn" title="The tracking topic is read by two languages">
 `KAFKA_TRACKING_TOPIC` is read by the Rust publisher and the Go subscriber. Override it in one place only and opens and clicks stop being consumed, with no error anywhere.
@@ -460,18 +460,84 @@ Needed on the backend **and** every worker: the backend starts the OAuth flow, a
 
 | Variable | What it does | Default |
 |---|---|---|
-| `BOX_GOOGLE_CLIENT_ID`, `BOX_GOOGLE_CLIENT_SECRET` | The Google app used by Gmail mailboxes connected with Google sign-in: the ones already connected that way, and new ones once `BOX_GOOGLE_OAUTH_CONNECT` is on. Redirect URI is your API base plus `/addresses/google/callback` | unset |
+| `BOX_GOOGLE_CLIENT_ID`, `BOX_GOOGLE_CLIENT_SECRET` | The Google app used by Gmail mailboxes connected with per-mailbox Google sign-in: the ones already connected that way, and new ones once `BOX_GOOGLE_OAUTH_CONNECT` is on. That method is [being retired](/guides/mailboxes/#moving-off-per-mailbox-google-sign-in), so keep these set while any mailbox still uses it. Also carries a Workspace administrator's domain proof when `GOOGLE_CLIENT_ID` is not set. Redirect URI is your API base plus `/addresses/google/callback` | unset |
 | `BOX_GOOGLE_OAUTH_CONNECT` | `true` lets a new Gmail mailbox connect with Google sign-in. Off, the connect dialog walks through an app password over IMAP and SMTP instead, which needs no Google app; mailboxes already on Google sign-in keep working and can be re-authorized either way. Announced to clients as `gmail_oauth_connect` on `GET /auth/config` | `false` |
 | `BOX_OUTLOOK_CLIENT_ID`, `BOX_OUTLOOK_CLIENT_SECRET` | Connect Outlook and Microsoft 365 mailboxes. Redirect URI is your API base plus `/addresses/outlook/callback` | unset |
 
 Plain SMTP and IMAP mailboxes need none of this. If a worker is missing these values, the mailbox connects fine and then silently stops about an hour later, when its first access token expires.
+
+### Whole-domain connects
+
+A workspace can connect every mailbox on a [Google Workspace domain or Microsoft 365 organization](/guides/mailbox-import/#connect-a-whole-google-workspace-domain) through one administrator's grant (**Add account > Google > Whole Workspace domain**, **Add account > Microsoft > Whole organization**). These are read by the backend only: it mints every token for those mailboxes itself and hands them to workers per use, so workers need nothing here. The complete setup, step by step, is in [whole-domain mailbox connects](/development/whole-domain-connect/).
+
+| Variable | What it does | Default |
+|---|---|---|
+| `GOOGLE_WORKSPACE_DELEGATION_KEY` | The JSON key of a Google Cloud service account with domain-wide delegation. Its `client_id` is what a Workspace super admin authorizes. Unset, Google Workspace grants are off. A value that is not a service account key logs one line at boot and leaves them off | unset |
+| `GOOGLE_WORKSPACE_DELEGATION_KEY_FILE` | A path to the same key as a file, for a mounted secret. Read when `GOOGLE_WORKSPACE_DELEGATION_KEY` is empty | unset |
+
+Google, once per instance:
+
+1. In the [Google Cloud console](https://console.cloud.google.com/), create a project or pick the one you will keep. Its project ID is permanent.
+2. Under **APIs & Services > Library**, enable the **Gmail API** and the **Admin SDK API**.
+3. Under **IAM & Admin > Service accounts**, create a service account (for example `warmbly-workspace`). Grant it no roles on the project.
+4. On its **Keys** tab, choose **Add key > Create new key > JSON**. A new Google Cloud organization blocks this by default with the **Disable service account key creation** policy, which an Organization Policy Administrator can lift for this project.
+5. Put the key's path in `GOOGLE_WORKSPACE_DELEGATION_KEY_FILE` (mounted read only) or its JSON in `GOOGLE_WORKSPACE_DELEGATION_KEY`, and restart the backend.
+
+Each customer's authorization is tied to the service account's Client ID, so create the service account once and rotate its keys, never the account: a recreated one has a new Client ID and every domain would have to authorize it again. The key can mint a token for any address on any domain that has authorized it, so treat it like `CREDENTIALS_ENCRYPTION_KEY`: it is the one credential behind every such mailbox.
+
+A Google grant is recorded only for the workspace that proves it controls the domain, and only when the directory lists the admin address as a super administrator. The proof is one of:
+
+- **The administrator's Google sign-in**, through the dashboard's own sign-in client (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`) and its existing redirect URI (`GOOGLE_REDIRECT_URI`, or `API_PUBLIC_URL` plus `/v1/auth/google/callback`), with the `openid` and `email` scopes only. The callback recognizes the proof and hands it back to the dashboard window rather than signing anyone in, so no new redirect URI needs registering. When that client is not configured, the `BOX_GOOGLE_*` mailbox client is used instead, the same way. Neither depends on `BOX_GOOGLE_OAUTH_CONNECT`.
+- **A `TXT` record** at `_warmbly.<domain>` holding a `warmbly-verify=` value unique to the workspace and domain, always available and the only proof when neither client is set. The value is keyed by `AUTH_SECRET`.
+
+Microsoft 365 organizations reuse the Outlook app, `BOX_OUTLOOK_CLIENT_ID` and `BOX_OUTLOOK_CLIENT_SECRET`, and are on whenever those are set. The app registration needs three additions for them:
+
+- **Supported account types**: accounts in any organizational directory (multitenant), so another organization can consent to it.
+- **Redirect URI**: the existing one, your API base plus `/addresses/outlook/callback`. Admin consent returns there too.
+- **API permissions**: the Microsoft Graph **application** permissions `Mail.ReadWrite`, `Mail.Send` and `User.Read.All`, next to the delegated ones single-mailbox sign-in already uses.
+
+Do not grant admin consent for those in your own tenant unless you are testing with it. Consent is given per customer organization, by that organization's Global Administrator, through the dashboard. The organization a grant names is the one the administrator signed in to, read from the consent sign-in itself, never from the request. Publisher verification is optional.
+
+Application permissions reach every mailbox in a consenting organization. We recommend that each organization scope the app to the mailboxes Warmbly should reach with an Exchange Online `ApplicationAccessPolicy` (or RBAC for Applications); a mailbox outside the policy is refused when it connects. The customer steps are in [connect a whole Microsoft 365 organization](/guides/mailbox-import/#connect-a-whole-microsoft-365-organization).
+
+`GET /emails/grants/config` reports what is still missing, as `google_missing` and `microsoft_missing`: the names of the settings above that are unset, and an empty list once a provider is ready.
 
 ## Integrations
 
 | Variable | What it does | Default |
 |---|---|---|
 | `<PROVIDER>_OAUTH_CLIENT_ID`, `<PROVIDER>_OAUTH_CLIENT_SECRET` | OAuth clients for the CRM and messaging integrations | unset |
-| `INTEGRATIONS_OAUTH_REDIRECT_URL` | Shared redirect URI for those flows | derived from `API_PUBLIC_URL` |
+| `HUBSPOT_OAUTH_CLIENT_ID`, `HUBSPOT_OAUTH_CLIENT_SECRET` | Your HubSpot app. Needed on the backend and on every consumer: the consumer runs the [HubSpot mode](/guides/hubspot/) pull and sync queue and refreshes the token as it goes. The secret also verifies HubSpot's webhook signatures | unset |
+| `SALESFORCE_OAUTH_CLIENT_ID`, `SALESFORCE_OAUTH_CLIENT_SECRET` | Your Salesforce app (see [Salesforce self-hosting](/guides/salesforce/#self-hosting)). Needed on the backend, which runs the sync, and on every consumer, which runs Salesforce automation actions and refreshes the token for them | unset |
+| `INTEGRATIONS_OAUTH_REDIRECT_URL` | Shared redirect URI for those flows | `BACKEND_PUBLIC_URL` (else `API_PUBLIC_URL`) plus `/integrations/oauth/callback` |
+| `SLACK_OAUTH_CLIENT_ID`, `SLACK_OAUTH_CLIENT_SECRET` | The instance's own [Slack app](/development/slack-app/). Unset, the dashboard reports Slack as not set up and no workspace can connect it | unset |
+| `SLACK_SIGNING_SECRET` | Verifies every request Slack sends to the events, interactivity and slash command URLs. Without it Slack still posts notifications and inbox conversations, but the assistant, buttons and `/warmbly` are off, and those URLs answer `503` `slack_not_configured` | unset |
+
+The three Slack values come from the Slack app's **Basic Information** page. Set them on the backend and the consumer and restart both; the shipped `docker-compose.yml` passes all three to both. The request URLs are built on `BACKEND_PUBLIC_URL` when it is set, otherwise on `API_PUBLIC_URL`. See [Slack app](/development/slack-app/) for creating the app from its manifest.
+
+### HubSpot app
+
+[HubSpot mode](/guides/hubspot/) on a self-hosted instance uses a HubSpot app you create in your own HubSpot developer account:
+
+- **Redirect URL**: the value of `INTEGRATIONS_OAUTH_REDIRECT_URL`, or `BACKEND_PUBLIC_URL` (else `API_PUBLIC_URL`) plus `/integrations/oauth/callback` when it is unset
+- **Required scopes**: `oauth`, `crm.objects.contacts.read`, `crm.objects.contacts.write`, `crm.objects.companies.read`, `crm.objects.companies.write`, `crm.objects.deals.read`, `crm.objects.deals.write`, `crm.objects.owners.read`, `crm.schemas.contacts.read`, `crm.schemas.contacts.write`
+- **Optional scopes**: `crm.lists.read` (import from HubSpot lists) and `sales-email-read`. An account that cannot grant them still connects
+- **Webhooks** (optional): target URL `<backend>/api/v1/integrations/hubspot/webhooks`, subscribed to `contact.creation`, `contact.propertyChange`, `contact.deletion`, `deal.creation`, `deal.propertyChange` and `deal.deletion`. Deliveries are verified against the URL HubSpot signed, which behind a proxy is the public one, so set `BACKEND_PUBLIC_URL`. Without webhooks the consumer's one-minute pull keeps everything current
+
+`APP_URL` is also what the `warmbly_link` property on HubSpot contacts links to. A consumer that joined the fleet with `warmbly join` is handed the HubSpot variables and `APP_URL` with the rest of its environment; a worker never is.
+
+The repository's `hubspot-app/` directory is the same app as a HubSpot developer project: the app definition, the Warmbly card on contact records, the "Add to Warmbly campaign" workflow action and the webhook subscriptions. Replace `https://api.warmbly.com` with your backend URL in its `*-hsmeta.json` files and in `src/app/cards/WarmblyCard.tsx`, then upload it with the HubSpot CLI (`hs project upload` from that directory). The CLI leaves out files under a hidden directory, so upload from a path with no dot-folder in it; otherwise the card build reports its entrypoint as missing. The card and the workflow action call these public routes, each verified with the app's client secret:
+
+| Route | Called by |
+|---|---|
+| `POST /api/v1/integrations/hubspot/webhooks` | HubSpot webhooks |
+| `POST /api/v1/integrations/hubspot/app/card` | The Warmbly card, to show a contact |
+| `POST /api/v1/integrations/hubspot/app/enroll` | The card's "Add to campaign" |
+| `POST /api/v1/integrations/hubspot/app/pause` | The card's pause and resume |
+| `POST /api/v1/integrations/hubspot/actions/enroll` | The "Add to Warmbly campaign" workflow action |
+| `POST /api/v1/integrations/hubspot/actions/campaigns` | The workflow action's campaign list |
+
+Salesforce reads `SALESFORCE_OAUTH_CLIENT_ID` and `SALESFORCE_OAUTH_CLIENT_SECRET`, from an External Client App or Connected App in your own org with PKCE required and the `api`, `refresh_token` and `id` scopes. One app serves production, sandbox and My Domain logins; each member picks theirs when connecting. See [Salesforce self-hosting](/guides/salesforce/#self-hosting).
 
 ## AI and search
 
@@ -483,7 +549,9 @@ Plain SMTP and IMAP mailboxes need none of this. If a worker is missing these va
 | `AI_BASE_URL` | Required for `custom`. Any OpenAI compatible endpoint | unset |
 | `AI_FREE` | Treats AI usage as uncharged | derived |
 | `SEARCH_PROVIDER`, `SEARCH_API_URL`, `SEARCH_API_KEY` | Web search for the assistant (`serper` or `searxng`) | unset |
-| `TYPESAFE_API_KEY` | TypeSafe API key. Turns on the typed judgments: reply classification, the copy judgment in the Advisor and the editor, warmup content lint, bounce classification and per-form triage. Inbox tagging needs the switch below as well. See [data control](/development/data-control/#typesafe-judgments) for what each one sends | unset |
+| `MAILHOST_ISPDB` | `true` lets mailbox server detection ask Mozilla's Thunderbird ISPDB (`autoconfig.thunderbird.net`) about a domain whose MX records and own autoconfig file name no known provider. Only the domain name is sent. See [data control](/development/data-control/#outbound-calls) | `false` on a self-host, `true` on Warmbly Cloud |
+| `MAILVENDOR_SANDBOX_URL` | Development only. Points every inbox vendor client at the [sandbox's mock vendor API](/development/sandbox/#mock-inbox-vendors) (`<url>/inboxkit`, `<url>/mailforge`) instead of the real vendors. Ignored unless `APP_ENV` is `dev` | unset |
+| `TYPESAFE_API_KEY` | TypeSafe API key. Turns on the typed judgments: reply classification, the copy judgment in the Advisor and the editor, warmup content lint, bounce classification, import column mapping and per-form triage. Inbox tagging needs the switch below as well. See [data control](/development/data-control/#typesafe-judgments) for what each one sends | unset |
 | `INBOX_TAGGING_ENABLED` | `true` enables automatic inbox tagging when `TYPESAFE_API_KEY` is also set. Message subject, current body, and the previous outbound body are sent to TypeSafe | `false` |
 
 <Callout type="warn" title="An unset provider still uses a key">
@@ -550,6 +618,7 @@ Set both and every error goes to both. Each variable is read by one process, so 
 | `WARMBLY_POSTHOG_HOST` | web, admin containers, forms service | Capture host for the browser | `https://us.i.posthog.com` |
 | `WARMBLY_POSTHOG_ERROR_TRACKING` | web, admin containers, forms service | `false` reports no browser exceptions to PostHog anywhere, including the form pages the forms service stamps. Everything else the key turns on keeps running | `true` |
 | `WARMBLY_POSTHOG_SESSION_REPLAY` | web, admin containers | `false` records no sessions and keeps everything else. Form pages never record, whatever this says | `true` |
+| `WARMBLY_COMPANY_LOGOS` | web container | `on` shows a company logo on each contact whose address is on a company domain, fetched by the browser from DuckDuckGo's favicon service with only the domain sent; `off` shows initials. Unset is off on a self-host and on for Warmbly Cloud. See [outbound calls](/development/data-control/#outbound-calls) | unset |
 | `WARMBLY_SENTRY_DSN` | web, admin containers | The Sentry half of the same thing. Unset means the SDK is never fetched and no host is contacted | unset |
 | `WARMBLY_SENTRY_DSN` | forms service | Stamped into the public form page, along with the service's `APP_ENV` as the environment | unset |
 | `WARMBLY_SENTRY_ENVIRONMENT` | web, admin containers | The environment label browser events carry, whichever backend receives them. Defaults to the build mode. Form pages do not read it: the forms service stamps its own `APP_ENV` into the page instead | unset |
@@ -753,8 +822,17 @@ These are the only settings a browser can change, and no environment variable ow
 | `tracking.machine_window_probable_seconds` | integer, 1 to 86400 | `600` | The window used instead of the two above when the tracking service recognised the source as a mail-security network that also renders clicked pages for people, which Proofpoint, Mimecast and Cisco do through browser isolation. Such a match cannot settle whether a person is behind the request, so it widens the window rather than deciding: inside it the event is the delivery-time scan, past it the recipient who got to the mail later. Never applied shorter than the window for the kind of event in hand, so naming a network can only ever catch more scans. Its ceiling reaches a day because how long a vendor takes to detonate a link is the vendor's property, not the instance's |
 | `deliverability.enforce_domain_auth` | boolean | `true` | Whether a sending domain that fails SPF or DMARC stops cold campaign sending and warmup sending from every mailbox on it. Off keeps the check running and still shows the state and the Advisor card, it just never blocks |
 | `deliverability.auth_grace_hours` | integer, 1 to 720 | `72` | How long a domain must stay failing before the gate applies. The clock starts when the background check first sees the failure, so this is also how much warning the owner gets |
+| `placement.tests_per_month_trial` | integer, 1 to 100000 | `3` | How many free [placement tests](/guides/placement-tests/) a workspace on a free trial may run per calendar month on the instance seed panel. Only an instance running with `DEPLOYMENT_MODE=cloud` meters; a self-hosted instance never counts its own tests. Tests on a workspace's own seed inboxes are never counted |
+| `placement.tests_per_month_paid` | integer, 1 to 100000 | `40` | The same free allowance for a workspace on a paid plan. Past it, a test costs `placement.credits_per_test` credits |
+| `placement.seeds_per_test` | integer, 1 to 100 | `20` | The most seed inboxes one test sends to. Every copy is a send from the sending mailbox's daily limit, so this is also how much of that limit one test takes. A test is sized down to what the mailbox has left that day, and refused below five seeds |
+| `placement.spacing_seconds` | integer, 5 to 600 | `60` | The average gap between two copies of a test from one mailbox, varied by up to a third either way. A test started as quick uses the smaller of this and 8 seconds |
+| `placement.credits_per_test` | integer, 0 to 10000 | `25` | What a test on the instance panel costs in credits once a paid workspace has used its free tests for the month. The workspace agrees to the price before each paid test, and a test that delivers no copy is refunded. `0` turns paid tests off. Only an instance running with `DEPLOYMENT_MODE=cloud` meters, so a self-hosted instance never charges |
+| `placement.batch_senders_max` | integer, 1 to 100000 | `10000` | The most sending mailboxes one [placement batch](/guides/placement-tests/#testing-a-fleet-with-batches) may hold. An infrastructure safeguard on batch size only; how many run at once is the next setting |
+| `placement.batch_sender_concurrency` | integer, 1 to 500 | `20` | How many of one workspace's batch mailboxes may be sending their copies at the same time, across all its batches. The next mailbox starts when one has sent every copy; each mailbox keeps its own daily limit and minimum gap |
+| `placement.batch_instance_concurrency` | integer, 1 to 5000 | `200` | The same limit across every workspace together. It bounds how much batch mail the instance seed panel takes in at once, so a seed never receives enough in an hour to trip the sync flood rule, which deactivates a mailbox |
+| `placement.batch_starts_per_minute` | integer, 1 to 600 | `10` | How many mailboxes one batch starts per minute, so a large batch ramps up instead of starting its whole concurrency at once |
 
-The four `sync.*` values are read by the backend when a mailbox is loaded onto a worker (on connect, on reassignment, and by the reconciler's periodic republish), so a change reaches every mailbox within a few minutes without a restart. The fixed pacing numbers around them (burst per five minutes, hourly, backfill pace, the flood threshold and the chronic-overage rule) are compiled constants listed under **Instance > Configuration > Effective limits**; see [Mailboxes](/guides/mailboxes/#what-gets-synced) for how the budgets behave. The four `sync.*` values also have a companion read view on **Operations > Sync**, which shows each mailbox's backfill progress and fair-use throttle against them and can clear a throttle or restart a backfill.
+The four `sync.*` values are read by the backend when a mailbox is loaded onto a worker (on connect, on reassignment, and by the reconciler's periodic republish), so a change reaches every mailbox within 30 minutes without a restart (the republish gives each mailbox one turn per 30 minutes, spread out so no worker gets them all at once). The fixed pacing numbers around them (burst per five minutes, hourly, backfill pace, the flood threshold and the chronic-overage rule) are compiled constants listed under **Instance > Configuration > Effective limits**; see [Mailboxes](/guides/mailboxes/#what-gets-synced) for how the budgets behave. The four `sync.*` values also have a companion read view on **Operations > Sync**, which shows each mailbox's backfill progress and fair-use throttle against them and can clear a throttle or restart a backfill.
 
 The five `retention.*` values are read by the pruning sweeps on every pass, so shortening one takes effect on the next sweep rather than at the next restart. Deletion is permanent and there is no grace period: what already sits outside a shortened window goes on that sweep. The warmup mail window is the one that reaches into customers' mailboxes: the consumer retires each message and the worker holding the mailbox deletes it there, so shortening it empties the warmup folders of the whole instance down to the new window within a few hours. See [data control](/development/data-control/#what-is-kept-and-for-how-long) for what each log holds and what a shorter window costs.
 
@@ -767,6 +845,8 @@ WARMBLY_SETTINGS_BOOTSTRAP={"sync":{"backfill_days":30},"retention":{"audit_log_
 It is applied only while the settings row has never been written, so from the first save in the panel onwards the panel is authoritative and the variable is a no-op. That is what [`install.sh --wizard`](/development/install/) writes when you answer its retention questions.
 
 The two `deliverability.*` values are read on every scheduling pass and every warmup send, so turning the gate off releases blocked mailboxes within the 30 second cache window. Turning it back on does not stop anything retroactively: a domain still has to spend its whole grace window failing first. Only a sustained failure gates, so a domain reading `unknown` (never checked, DNS could not answer, or a special-use domain that cannot resolve) always sends. Manual sends and unibox replies are never gated; see [domain authentication](/guides/deliverability/#domain-authentication).
+
+The `placement.*` allowance, seed and spacing values are read when a test starts, so a change applies to the next test and never to one already sending. The four `placement.batch_*` values are read on every pass of the batch runner, about every 30 seconds, so a change reaches running batches within a minute; lowering the concurrency never stops a mailbox already sending, it only delays the next start. A value of zero or below resolves to the default, and one above the range to its ceiling. Which mailboxes form the instance seed panel is not a setting: an administrator marks them from the admin panel.
 
 Changing them is audited, and every value is validated and clamped server side on write as well as on read, so a row written by an older version still resolves.
 

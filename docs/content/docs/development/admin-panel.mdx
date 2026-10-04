@@ -31,13 +31,14 @@ The landing page. Instance-wide counters and their trends, acquisition by channe
 
 | Page | What it answers |
 |---|---|
-| **Workers** | Every worker, its heartbeat, region and the mailboxes placed on it. Detail pages carry stats, the assigned mailbox list, and reassignment |
+| **Workers** | Every worker, its heartbeat, region and the mailboxes placed on it, with a **Has node error** filter for any standing problem a node reports, such as its network blocking outbound port `465`. Detail pages carry stats, the assigned mailbox list, and reassignment |
 | **Fleet** | Capacity per worker with utilization, the control loops' decision log (what the placement and rotation loops did and why), and isolated-egress reservations, with reserve and release |
 | **Mailboxes** | Every connected mailbox across every workspace, with its state and the worker it sits on |
 | **Sync** | The platform copy of each mailbox's backfill progress and fair-use throttle, with clear-throttle and restart-backfill. The budgets it enforces are the four `sync.*` values under [Configuration > Settings](/development/configuration/#settings-stored-in-the-database); the worker-side engine is the sync governor described under [anti-abuse layers](/development/architecture/#anti-abuse-layers) |
 | **Warmup** | The pools, the blocked list, and the block and unblock history |
 | **Warmup Appeals** | Appeals from blocked mailboxes, to approve or reject |
 | **Warmup Content** | The generated and reviewed warmup conversation bank, its library and generation jobs |
+| **Seed panel** | The instance's placement seed inboxes by provider, adding and removing them, every workspace's recent [placement tests](/guides/placement-tests/) with their results, and an operator test that counts against no allowance |
 | **Campaigns** | Every campaign on the instance with its state and owner |
 | **Sends** | In-flight reservations no worker has answered, and the reclaimer that resolves them after 30 minutes; dead letters with replay; task failures; customer webhook delivery health, with reclaim |
 
@@ -48,6 +49,7 @@ The landing page. Instance-wide counters and their trends, acquisition by channe
 | **Users** | Every account, with ban and unban, ban history and rate-limit overrides |
 | **Organizations** | Every workspace, with its members, plan, abuse posture, API keys, webhooks and transfer tabs |
 | **Limit requests** | Customer requests for a higher allowance, to approve or decline |
+| **Developer apps** | Every OAuth app on the instance, its community directory listing, and who may build apps. Suspend an app, revoke its tokens, remove its logo, feature or hide a listing, and block a workspace or a person from building apps |
 | **Promo codes** | Every discount code on the instance, who has redeemed each one, and the builder that creates them |
 | **Outreach** | Mail an operator sends from the instance to a user, a workspace or an address, and the delivery state of each message sent so far |
 | **Admins** | Who holds platform admin bits, and grant and revoke by preset or per bit. This replaces the CLI-only path; `warmblyctl user grant-admin` still works |
@@ -69,13 +71,30 @@ Deleting a code stops new redemptions and removes it from the list. Workspaces t
 
 Reading the list needs `view_organizations`; creating, editing and deleting need `manage_organizations`.
 
+### Developer apps
+
+Three tabs.
+
+**Apps** lists every OAuth app workspaces have registered, suspended ones first, with its workspace, the person who registered it, its permissions, installs and directory state. The menu on each app:
+
+- **Suspend** needs a reason the developer sees. A suspended app signs nobody in, its access and refresh tokens stop working, its webhook deliveries stop and it leaves the directory. Its owner cannot lift a suspension; **Unsuspend** does.
+- **Revoke every token** ends every workspace's grant; each has to authorize the app again.
+- **Remove logo** clears a logo that should not be shown, and deletes the image.
+- **Block workspace** and **Block person** stop that workspace, or that person in any workspace, from registering and publishing apps. The block can also suspend the apps they already have.
+
+**Directory** is the community directory. A workspace that publishes an [OAuth app](/api/oauth/#publish-to-the-community-directory) creates a link-only listing: it opens from its link and stays out of every workspace's directory. It is listed when you **Feature** it, or on its own once it is installed in 25 workspaces other than the publisher's, each at least two weeks old. Before featuring, check that the install URL, website and description belong to the same product, that the permissions fit what it claims to do, and that it does not borrow another product's name or logo. Any later edit to the listing, or to its app's name, logo, website or permissions, removes the feature. **Hide** takes a listing down everywhere, link included, and needs a note the developer sees; **Restore** returns it to link only.
+
+**Blocked** lists every block with its reason and who set it. **Unblock** lets them build apps again; apps suspended with the block stay suspended until you unsuspend each one.
+
+Reading the tabs needs `view_organizations`; every action needs `manage_organizations`.
+
 ## Insight
 
 | Page | What it answers |
 |---|---|
 | **Live Events** | The event bus as it happens |
 | **Audit Log** | Who did what, from where, across the instance |
-| **Jobs** | Every background loop on the instance with its last run, next run and last error, and a **Run now** that the owning process picks up within about 15 seconds. The backend's and the consumer's loops are in the same list |
+| **Jobs** | Every background loop on the instance with its last run, next run and last error, and a **Run now** that the owning process picks up within about 15 seconds. The backend's and the consumer's loops are in the same list. The next run is stored, so a restart or deploy resumes the schedule instead of starting a fresh interval, a job that came due while the process was down runs shortly after boot, and when several processes host the same job each slot runs once |
 
 ## Instance
 
@@ -92,10 +111,10 @@ Reading the list needs `view_organizations`; creating, editing and deleting need
 | Overview, Live Events | none beyond signing in as an admin |
 | Workers, Fleet | `view_workers` |
 | Mailboxes, Sync, Users | `view_users` |
-| Warmup, Warmup Content | `view_warmup_pool` |
+| Warmup, Warmup Content, Seed panel | `view_warmup_pool` (changing seeds or running a test needs `manage_warmup_bans`) |
 | Warmup Appeals | `review_appeals` |
 | Campaigns, Sends | `view_campaigns` |
-| Organizations, Limit requests, Promo codes, Outreach, Transfers | `view_organizations` |
+| Organizations, Limit requests, Developer apps, Promo codes, Outreach, Transfers | `view_organizations` |
 | Admins | `grant_admin_access` |
 | Audit Log | `view_audit_logs` |
 | Jobs, Setup and health | `view_analytics` |

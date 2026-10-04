@@ -277,7 +277,7 @@ function CodeSnippet({ prefix }: { prefix: string }) {
         );
     }
     return (
-        <div className="rounded-md border border-slate-200 bg-slate-950 overflow-hidden">
+        <div className="rounded-md border border-slate-200 dark:border-slate-800 bg-slate-950 overflow-hidden">
             <div className="h-8 px-3 flex items-center gap-2 border-b border-slate-800/60">
                 <div className="size-1.5 rounded-full bg-red-400/70" />
                 <div className="size-1.5 rounded-full bg-amber-400/70" />
@@ -332,7 +332,7 @@ function Legend({ color, label }: { color: string; label: string }) {
     );
 }
 
-function fmtRelative(iso: string): string {
+function fmtRelative(iso: string | Date): string {
     try {
         const d = new Date(iso);
         const diff = Date.now() - d.getTime();
@@ -350,7 +350,7 @@ function fmtRelative(iso: string): string {
     }
 }
 
-function fmtFull(iso: string): string {
+function fmtFull(iso: string | Date): string {
     try {
         return new Date(iso).toLocaleString("en-US", {
             month: "short",

@@ -56,7 +56,7 @@ export default function CreditsCard({ isPaid }: { isPaid: boolean }) {
     return (
         <Section
             eyebrow="AI credits"
-            description="Credits power AI features (writing, research, the assistant, automation steps). Your plan grants a monthly allowance that resets each cycle; top-ups never expire."
+            description="Credits power AI features (writing, research, Remie, automation steps). Your plan grants a monthly allowance that resets each cycle; top-ups never expire."
         >
             {credits.isPending ? (
                 <div className="h-24 rounded bg-slate-100 animate-pulse" />
@@ -251,7 +251,7 @@ function describeContext(row: CreditTransaction): string {
     if (c.contact_email) parts.push(c.contact_email);
     if (c.automation_name || c.automation_id) parts.push(`Automation “${c.automation_name || c.automation_id}”`);
     if (c.thread_id) parts.push(`thread ${c.thread_id.slice(0, 8)}`);
-    if (c.session_id) parts.push("assistant session");
+    if (c.session_id) parts.push("Remie session");
     if (c.detail) parts.push(c.detail);
     if (row.actor_user_id) parts.push("triggered by a teammate");
     return parts.join(" · ");
@@ -264,7 +264,7 @@ function describeReason(reason: string): string {
         writing_assistant_refund: "Writing assistant refund",
         writing_edit: "Selection edit",
         writing_edit_refund: "Selection edit refund",
-        agent_iteration: "AI assistant",
+        agent_iteration: "Remie",
         reply_draft: "Reply draft",
         research_run: "Contact research",
         automation_ai: "Automation AI step",
@@ -273,10 +273,12 @@ function describeReason(reason: string): string {
         campaign_ai_refund: "Campaign switch refund",
         campaign_ai_search: "Campaign switch web search",
         reply_draft_refund: "Reply draft refund",
-        agent_iteration_refund: "AI assistant refund",
+        agent_iteration_refund: "Remie refund",
         inbox_agent_draft: "Inbox agent",
         spam_analysis: "Spam analysis",
         spam_analysis_refund: "Spam analysis refund",
+        placement_test: "Placement test",
+        placement_test_refund: "Placement test refund",
         credit_topup: "Top-up purchase",
         credit_auto_topup: "Auto top-up",
         monthly_reset: "Monthly allowance",
@@ -285,14 +287,14 @@ function describeReason(reason: string): string {
     return map[reason] ?? reason.replace(/_/g, " ");
 }
 
-function formatReset(value: string | null | undefined): string {
+function formatReset(value: string | Date | null | undefined): string {
     if (!value) return "on renewal";
     const d = new Date(value);
     if (Number.isNaN(d.getTime())) return "on renewal";
     return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-function formatWhen(value: string): string {
+function formatWhen(value: string | Date): string {
     const d = new Date(value);
     if (Number.isNaN(d.getTime())) return "—";
     return d.toLocaleDateString("en-US", {

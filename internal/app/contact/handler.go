@@ -3,6 +3,7 @@ package contact
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/models"
+	"github.com/warmbly/warmbly/internal/pkg/mailhost"
 	"github.com/warmbly/warmbly/internal/utils"
 	"github.com/warmbly/warmbly/internal/utils/paging"
 	"github.com/warmbly/warmbly/internal/utils/validate"
@@ -118,6 +120,9 @@ func (s *contactService) Search(ctx context.Context, orgID, cursor, category, li
 	if err := validateSort(filters); err != nil {
 		return nil, err
 	}
+	if err := validateMailHosts(filters); err != nil {
+		return nil, err
+	}
 
 	return s.contactRepository.Search(ctx, orgID, categoryId, cursorPos, filters, limitN)
 }
@@ -132,6 +137,17 @@ func validateSort(filters models.SearchContacts) *errx.Error {
 	}
 	if !utils.IsValidJSONKey(key) {
 		return errx.NewWithIdentifier(errx.BadRequest, "invalid_sort_by", "invalid sort_by: custom field name must "+utils.JSONKeyRules)
+	}
+	return nil
+}
+
+// validateMailHosts refuses a provider filter naming no known host; "" is
+// allowed and matches contacts the provider sweep has not reached yet.
+func validateMailHosts(filters models.SearchContacts) *errx.Error {
+	for _, h := range filters.MailHosts {
+		if !mailhost.Valid(h) {
+			return errx.NewWithIdentifier(errx.BadRequest, "invalid_mail_host", "invalid mail_hosts: unknown provider "+strconv.Quote(h))
+		}
 	}
 	return nil
 }
@@ -231,6 +247,31 @@ func (s *contactService) GetByEmail(ctx context.Context, orgID *uuid.UUID, email
 	// The repo already returns (nil, nil) when no contact matches, so an
 	// unknown sender flows through as a clean "no contact" rather than an error.
 	return s.contactRepository.GetByEmailAndOrganization(ctx, *orgID, email)
+}
+
+func (s *contactService) LookupSender(ctx context.Context, orgID *uuid.UUID, email string, thread models.ContactLookupThread) (*models.ContactLookup, *errx.Error) {
+	out := &models.ContactLookup{}
+	if orgID == nil {
+		return out, nil
+	}
+	if strings.TrimSpace(email) != "" {
+		contact, xerr := s.contactRepository.GetByEmailAndOrganization(ctx, *orgID, email)
+		if xerr != nil {
+			return nil, xerr
+		}
+		if contact != nil {
+			out.Contact, out.Match = contact, models.ContactLookupMatchEmail
+			return out, nil
+		}
+	}
+	contact, xerr := s.contactRepository.GetByThreadAndOrganization(ctx, *orgID, thread)
+	if xerr != nil {
+		return nil, xerr
+	}
+	if contact != nil {
+		out.Contact, out.Match = contact, models.ContactLookupMatchThread
+	}
+	return out, nil
 }
 
 func (s *contactService) ListSentEmails(ctx context.Context, orgID, contactID uuid.UUID, limit int, beforeSentAt *time.Time, beforeTaskID *uuid.UUID) (*models.ContactSentEmailsResult, *errx.Error) {

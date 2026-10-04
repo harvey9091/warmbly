@@ -27,6 +27,7 @@ import useCreateCategory from "@/lib/api/hooks/app/categories/useCreateCategory"
 import type Category from "@/lib/api/models/app/Category";
 import { TagMeaningTooltip } from "@/components/ui/tag-meaning-tooltip";
 import { errorMessage } from "@/lib/errors/message";
+import { labelInk } from "@/lib/utils";
 
 interface Props {
     // Selected ids — kept as ids so the consumer can store them in the
@@ -44,7 +45,7 @@ interface Props {
 export default function CategoryPicker({
     value,
     onChange,
-    placeholder = "Click to add categories…",
+    placeholder = "Click to add labels…",
     className,
     allowCreate = true,
 }: Props) {
@@ -56,7 +57,7 @@ export default function CategoryPicker({
     const [query, setQuery] = React.useState("");
     const ref = React.useRef<HTMLDivElement>(null);
     const triggerRef = React.useRef<HTMLDivElement>(null);
-    useClickOutside(ref, () => setOpen(false));
+    useClickOutside(open, () => setOpen(false), ref);
     // ~270px: 33px search input + 56 max-h list (224px) + borders.
     const placement = useFlipPlacement(triggerRef, open, 270);
 
@@ -101,7 +102,7 @@ export default function CategoryPicker({
             onChange([...value, c.id]);
             setQuery("");
         } catch (err) {
-            toast.error(errorMessage(err, "Failed to create category"));
+            toast.error(errorMessage(err, "Failed to create label"));
         }
     }
 
@@ -160,7 +161,7 @@ export default function CategoryPicker({
                         <div className="max-h-56 overflow-y-auto py-1">
                             {filtered.length === 0 && !allowCreate && (
                                 <div className="px-3 py-3 text-[11.5px] text-slate-400 text-center">
-                                    No categories.
+                                    No labels.
                                 </div>
                             )}
                             {filtered.map((c) => {
@@ -232,7 +233,7 @@ export function CategoryChip({
                 className={`inline-flex items-center gap-1 min-w-0 ${compact ? "h-4 pl-1 pr-1 text-[10px]" : "h-5 pl-1.5 pr-1 text-[11px]"} rounded font-medium`}
                 style={{
                     backgroundColor: hexToRgba(category.color, 0.12),
-                    color: category.color,
+                    color: labelInk(category.color),
                     border: `1px solid ${hexToRgba(category.color, 0.25)}`,
                 }}
             >

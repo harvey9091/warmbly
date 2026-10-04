@@ -26,6 +26,8 @@ type UpdateUniboxEntry struct {
 	// ProviderFolder is the provider's own placement. It moves on every real
 	// provider move; Folder only follows when the message was not filed here.
 	ProviderFolder *string `json:"provider_folder"`
+	// ProviderID is the provider's message id (gmail_id), which a Graph move changes.
+	ProviderID *string `json:"provider_id"`
 	// Seen is the provider's read state. Set whenever a sync event carries a
 	// change to it, so mail read in the customer's own client stops showing
 	// as unread here.
@@ -52,28 +54,43 @@ type UniboxRepository interface {
 	// ids that actually changed, which is what gets relayed to the provider.
 	MarkSeenBulk(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID, seen bool) ([]uuid.UUID, error)
 	// MarkSeenByThreads is MarkSeenBulk addressed by conversation, for callers
-	// that hold a list row rather than the ids inside it.
+	// that hold a list row rather than the ids inside it. Unread reaches only
+	// each conversation's newest received message.
 	MarkSeenByThreads(ctx context.Context, orgID uuid.UUID, threadIDs []string, seen bool) ([]uuid.UUID, error)
 	// MarkSeenByFolder flips the read state of every message in one canonical
 	// folder for the whole workspace (the sidebar's "mark all as read").
 	MarkSeenByFolder(ctx context.Context, orgID uuid.UUID, folder string, seen bool) ([]uuid.UUID, error)
 	// MoveToFolderBulk re-files the given messages into one canonical folder,
-	// org-scoped like MarkSeenBulk.
-	MoveToFolderBulk(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID, folder string) error
+	// org-scoped like MarkSeenBulk, and returns every row it matched.
+	MoveToFolderBulk(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID, folder string) ([]models.FiledMessage, error)
 	// MoveThreadsToFolder files whole conversations. Filing part of one leaves
 	// it in the view it was filed out of, which reads as the action having
 	// done nothing.
-	MoveThreadsToFolder(ctx context.Context, orgID uuid.UUID, threadIDs []string, folder string) error
+	MoveThreadsToFolder(ctx context.Context, orgID uuid.UUID, threadIDs []string, folder string) ([]models.FiledMessage, error)
+	// FolderRelayTargets resolves filed messages for the folder relay: only
+	// mailboxes with a worker and relay_folder_moves on, and never a warmup
+	// receipt, whose removal the warmup ladder would read as tampering.
+	FolderRelayTargets(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) ([]models.FolderRelayTarget, error)
 	// SeenRelayTargets names the given messages the way their provider does,
 	// with the worker holding each mailbox. Rows whose mailbox has no worker
 	// are left out: there is nothing to relay through.
 	SeenRelayTargets(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) ([]models.SeenRelayTarget, error)
 	Delete(ctx context.Context, userID, id uuid.UUID) error
+	// DeleteByFolderPaths drops every stored message one mailbox synced from
+	// the named source folders, for folders the owner has excluded from sync.
+	// Exact names only; the worker names each subfolder it retires itself.
+	DeleteByFolderPaths(ctx context.Context, emailID uuid.UUID, folderPaths []string) (int64, error)
 	ListWarmupReviewCandidates(ctx context.Context, afterID uuid.UUID, limit int) ([]models.JobEventNewEmail, error)
 	// ListUnprocessedCampaignReplies pages inbound messages that reply
 	// processing never claimed and that look like campaign replies: they
 	// answer a campaign send, or come from one of the workspace's contacts.
 	ListUnprocessedCampaignReplies(ctx context.Context, since time.Time, afterID uuid.UUID, limit int) ([]models.JobEventNewEmail, error)
+	// ListInboundFrom returns a workspace's inbound mail from one address,
+	// newest first: the evidence behind an opt-out that address triggered.
+	ListInboundFrom(ctx context.Context, orgID uuid.UUID, address string, limit int) ([]InboundMessage, error)
+	// HasWrittenTo reports whether any of the workspace's mailboxes holds a
+	// sent message addressed to the address.
+	HasWrittenTo(ctx context.Context, orgID uuid.UUID, address string) (bool, error)
 	DeferWarmupVerification(ctx context.Context, e *models.JobEventNewEmail) error
 	ClaimPendingWarmupVerification(ctx context.Context, limit int) ([]models.JobEventNewEmail, error)
 	ProcessPendingWarmupVerification(ctx context.Context, id uuid.UUID, process func(*models.JobEventNewEmail) error) error
@@ -161,7 +178,29 @@ var mailFieldsPreview = []string{
 const (
 	foldersOutsideWorkingViews = `('spam', 'trash', 'archive')`
 	foldersOutsideAllMail      = `('spam', 'trash')`
+	// Our own copies. Nothing marks one unread: nobody has a sent message to read.
+	foldersOutbound = `('sent', 'drafts')`
 )
+
+// automatedThreadSQL is the predicate "no person wrote in this conversation":
+// one of its messages was judged automated and every message that is not ours
+// or junk was too. A new message is not automated until judged, so a reply
+// brings the conversation back to the inbox the moment it lands.
+func automatedThreadSQL(threadExpr, rowAutomatedExpr, orgArg string) string {
+	return fmt.Sprintf(`(CASE WHEN %[1]s = '' THEN %[2]s ELSE (
+			EXISTS (
+				SELECT 1 FROM unibox_emails am
+				WHERE am.thread_id = %[1]s AND am.automated
+				  AND am.email_id IN (SELECT id FROM email_accounts WHERE organization_id = %[3]s)
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM unibox_emails pm
+				WHERE pm.thread_id = %[1]s AND NOT pm.automated
+				  AND pm.folder NOT IN ('sent', 'drafts', 'spam', 'trash')
+				  AND pm.email_id IN (SELECT id FROM email_accounts WHERE organization_id = %[3]s)
+			)
+		) END)`, threadExpr, rowAutomatedExpr, orgArg)
+}
 
 // bareAddrSQL extracts the exact address out of a raw header entry: the
 // bracketed form every provider writes ("Name <a@b.com>"), the parenthesised
@@ -193,14 +232,21 @@ func (r *uniboxRepository) CreateEntry(ctx context.Context, userID uuid.UUID, e 
 			flags, bcc, cc, from_addr, in_reply_to, reply_to,
 			to_addr, subject, size, internal_date, sent_date,
 			snippet, seen, created_at, updated_at, body_text, folder,
-			provider_folder
+			provider_folder, automated
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9, $10, $11,
 			$12, $13, $14, $15, $16, $17,
 			$18, $19, $20, $21, $22,
 			$23, $24, $25, $26, $27, $28,
-			$28
+			$28,
+			-- A row re-created by a sync keeps the verdict its message already has.
+			EXISTS (
+				SELECT 1 FROM inbox_tag_results r
+				WHERE r.organization_id = (SELECT organization_id FROM email_accounts WHERE id = $3)
+				  AND r.message_id = $7 AND $7 <> ''
+				  AND r.automated
+			)
 		)
 		ON CONFLICT (id) DO NOTHING
 	`
@@ -268,6 +314,11 @@ func (r *uniboxRepository) UpdateEntry(ctx context.Context, userID, emailID, id 
 	if e.ProviderFolder != nil {
 		setClauses = append(setClauses, fmt.Sprintf("provider_folder = $%d", argPos))
 		args = append(args, *e.ProviderFolder)
+		argPos++
+	}
+	if e.ProviderID != nil {
+		setClauses = append(setClauses, fmt.Sprintf("gmail_id = $%d", argPos))
+		args = append(args, *e.ProviderID)
 		argPos++
 	}
 	if e.Seen != nil {
@@ -419,7 +470,7 @@ func (r *uniboxRepository) GetByThread(ctx context.Context, orgID, emailID uuid.
 		cursorID, err := uuid.Parse(cursor)
 		if err == nil {
 			query += fmt.Sprintf(`
-				AND (internal_date, id) < (
+				AND (internal_date, id) > (
 					SELECT internal_date, id FROM unibox_emails WHERE id = $%d
 				)`, argPos)
 			args = append(args, cursorID)
@@ -432,7 +483,70 @@ func (r *uniboxRepository) GetByThread(ctx context.Context, orgID, emailID uuid.
 	query += fmt.Sprintf(` ORDER BY internal_date ASC, id ASC LIMIT $%d`, argPos)
 	args = append(args, limit+1)
 
-	return r.queryPreviewList(ctx, query, args, limit)
+	res, err := r.queryPreviewList(ctx, query, args, limit)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.annotateAnsweredMailboxes(ctx, orgID, res.Data); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// annotateAnsweredMailboxes marks each message that replies to a send from
+// another workspace mailbox with that mailbox, read from the task whose
+// Message-ID its In-Reply-To names.
+func (r *uniboxRepository) annotateAnsweredMailboxes(ctx context.Context, orgID uuid.UUID, emails []models.EmailMessageStoreDataPreview) error {
+	if len(emails) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(emails))
+	for i, e := range emails {
+		ids[i] = e.ID
+	}
+	const q = `
+		SELECT ue.id, answered.email_account_id
+		FROM unibox_emails ue
+		CROSS JOIN LATERAL (
+			SELECT t.email_account_id
+			FROM tasks t
+			JOIN email_accounts sender ON sender.id = t.email_account_id AND sender.organization_id = $1
+			WHERE t.task_type <> 'warmup'
+			  AND t.email_account_id <> ue.email_id
+			  AND t.message_id = ANY(ARRAY(
+			        SELECT v
+			        FROM unnest(ue.in_reply_to) AS parent(raw),
+			             LATERAL (VALUES (btrim(parent.raw, '<> ')), ('<' || btrim(parent.raw, '<> ') || '>')) AS form(v)
+			        WHERE btrim(parent.raw, '<> ') <> ''
+			  ))
+			ORDER BY t.created_at DESC
+			LIMIT 1
+		) answered
+		WHERE ue.id = ANY($2)
+		  AND ue.email_id IN (SELECT id FROM email_accounts WHERE organization_id = $1)
+	`
+	rows, err := r.db.Query(ctx, q, orgID, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	answered := make(map[uuid.UUID]uuid.UUID, len(emails))
+	for rows.Next() {
+		var id, mailbox uuid.UUID
+		if err := rows.Scan(&id, &mailbox); err != nil {
+			return err
+		}
+		answered[id] = mailbox
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range emails {
+		if mailbox, ok := answered[emails[i].ID]; ok {
+			emails[i].AnswersMailboxID = &mailbox
+		}
+	}
+	return nil
 }
 
 func (r *uniboxRepository) GetBySender(ctx context.Context, userID uuid.UUID, sender string, limit int, cursor string) (*models.MailSearchResult, error) {
@@ -493,7 +607,7 @@ func (r *uniboxRepository) Search(ctx context.Context, orgID uuid.UUID, params *
 	// singleton keyed by row id — otherwise every unthreaded message
 	// would collapse into one bogus "conversation".
 	inner := fmt.Sprintf(`
-		SELECT %s,
+		SELECT %s, ue.automated,
 			ROW_NUMBER() OVER (PARTITION BY COALESCE(NULLIF(ue.thread_id, ''), ue.id::text) ORDER BY ue.internal_date DESC, ue.id DESC) AS rn,
 			COUNT(*)              OVER (PARTITION BY COALESCE(NULLIF(ue.thread_id, ''), ue.id::text)) AS message_count,
 			bool_or(NOT ue.seen)  OVER (PARTITION BY COALESCE(NULLIF(ue.thread_id, ''), ue.id::text)) AS has_unread
@@ -687,6 +801,16 @@ func (r *uniboxRepository) Search(ctx context.Context, orgID uuid.UUID, params *
 		argPos++
 	}
 
+	if params.Automated != nil {
+		if *params.Automated {
+			query += `
+			AND ` + automatedThreadSQL("b.thread_id", "b.automated", "$1")
+		} else {
+			query += `
+			AND NOT ` + automatedThreadSQL("b.thread_id", "b.automated", "$1")
+		}
+	}
+
 	if params.Uncategorized != nil && *params.Uncategorized {
 		query += `
 			AND NOT EXISTS (
@@ -715,29 +839,28 @@ func (r *uniboxRepository) Search(ctx context.Context, orgID uuid.UUID, params *
 }
 
 func (r *uniboxRepository) GetUnseenCount(ctx context.Context, orgID uuid.UUID, emailAccountID *uuid.UUID) (int64, error) {
-	var count int64
-
-	// Count unread THREADS (distinct, empty-thread-safe), not messages,
-	// so the badge agrees with the collapsed list + Overview.Unread.
+	// Unread threads exactly as the Inbox view (where the badge links) lists
+	// them: inbox folder only, snoozed and automated left out.
+	query := `SELECT COUNT(DISTINCT COALESCE(NULLIF(ue.thread_id, ''), ue.id::text))
+		FROM unibox_emails ue
+		WHERE ue.email_id IN (SELECT id FROM email_accounts WHERE organization_id = $1)
+		  AND ue.seen = FALSE
+		  AND ue.folder = '` + models.FolderInbox + `'
+		  AND NOT EXISTS (
+			SELECT 1 FROM unibox_snoozes s
+			WHERE s.user_id = ue.user_id
+			  AND s.thread_id = ue.thread_id
+			  AND s.snoozed_until > NOW()
+		  )
+		  AND NOT ` + automatedThreadSQL("ue.thread_id", "ue.automated", "$1")
+	args := []any{orgID}
 	if emailAccountID != nil {
-		err := r.db.QueryRow(ctx,
-			`SELECT COUNT(DISTINCT COALESCE(NULLIF(thread_id, ''), id::text))
-			 FROM unibox_emails
-			 WHERE email_id IN (SELECT id FROM email_accounts WHERE organization_id = $1)
-			   AND email_id = $2 AND seen = FALSE
-			   AND folder NOT IN `+foldersOutsideWorkingViews,
-			orgID, *emailAccountID,
-		).Scan(&count)
-		return count, err
+		query += ` AND ue.email_id = $2`
+		args = append(args, *emailAccountID)
 	}
 
-	err := r.db.QueryRow(ctx,
-		`SELECT COUNT(DISTINCT COALESCE(NULLIF(thread_id, ''), id::text))
-		 FROM unibox_emails
-		 WHERE email_id IN (SELECT id FROM email_accounts WHERE organization_id = $1) AND seen = FALSE
-		   AND folder NOT IN `+foldersOutsideWorkingViews,
-		orgID,
-	).Scan(&count)
+	var count int64
+	err := r.db.QueryRow(ctx, query, args...).Scan(&count)
 	return count, err
 }
 
@@ -763,6 +886,7 @@ func (r *uniboxRepository) MarkSeenBulk(ctx context.Context, orgID uuid.UUID, id
 	rows, err := r.db.Query(ctx,
 		`UPDATE unibox_emails SET seen = $1, updated_at = NOW()
 		 WHERE id = ANY($3) AND seen <> $1
+		   AND ($1 OR folder NOT IN `+foldersOutbound+`)
 		   AND email_id IN (SELECT id FROM email_accounts WHERE organization_id = $2)
 		 RETURNING id`,
 		seen, orgID, ids,
@@ -785,18 +909,31 @@ func (r *uniboxRepository) MarkSeenBulk(ctx context.Context, orgID uuid.UUID, id
 
 // MarkSeenByThreads is MarkSeenBulk addressed by conversation. The key is the
 // same one the list collapses on, so an id that never got a thread still
-// resolves to its own single message.
+// resolves to its own single message. Read covers the whole conversation;
+// unread selects its newest received message, preferring one outside spam or
+// trash, or its newest sent copy if none was received. Drafts are excluded.
 func (r *uniboxRepository) MarkSeenByThreads(ctx context.Context, orgID uuid.UUID, threadIDs []string, seen bool) ([]uuid.UUID, error) {
 	if len(threadIDs) == 0 {
 		return nil, nil
 	}
-	rows, err := r.db.Query(ctx,
-		`UPDATE unibox_emails SET seen = $1, updated_at = NOW()
+	query := `UPDATE unibox_emails SET seen = $1, updated_at = NOW()
 		 WHERE COALESCE(NULLIF(thread_id, ''), id::text) = ANY($3) AND seen <> $1
 		   AND email_id IN (SELECT id FROM email_accounts WHERE organization_id = $2)
-		 RETURNING id`,
-		seen, orgID, threadIDs,
-	)
+		 RETURNING id`
+	if !seen {
+		query = `UPDATE unibox_emails SET seen = $1, updated_at = NOW()
+		 WHERE seen <> $1 AND id IN (
+			SELECT DISTINCT ON (COALESCE(NULLIF(thread_id, ''), id::text)) id
+			FROM unibox_emails
+			WHERE COALESCE(NULLIF(thread_id, ''), id::text) = ANY($3)
+			  AND folder <> 'drafts'
+			  AND email_id IN (SELECT id FROM email_accounts WHERE organization_id = $2)
+			ORDER BY COALESCE(NULLIF(thread_id, ''), id::text),
+			         folder = 'sent', folder IN ('spam', 'trash'), internal_date DESC, id DESC
+		 )
+		 RETURNING id`
+	}
+	rows, err := r.db.Query(ctx, query, seen, orgID, threadIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -819,6 +956,7 @@ func (r *uniboxRepository) MarkSeenByFolder(ctx context.Context, orgID uuid.UUID
 	rows, err := r.db.Query(ctx,
 		`UPDATE unibox_emails SET seen = $1, updated_at = NOW()
 		 WHERE folder = $3 AND seen <> $1
+		   AND ($1 OR folder NOT IN `+foldersOutbound+`)
 		   AND email_id IN (SELECT id FROM email_accounts WHERE organization_id = $2)
 		 RETURNING id`,
 		seen, orgID, folder,
@@ -874,32 +1012,92 @@ func (r *uniboxRepository) SeenRelayTargets(ctx context.Context, orgID uuid.UUID
 	return out, rows.Err()
 }
 
-func (r *uniboxRepository) MoveToFolderBulk(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID, folder string) error {
+func (r *uniboxRepository) MoveToFolderBulk(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID, folder string) ([]models.FiledMessage, error) {
 	if len(ids) == 0 {
-		return nil
+		return nil, nil
 	}
-	_, err := r.db.Exec(ctx,
-		`UPDATE unibox_emails SET folder = $1, updated_at = NOW()
-		 WHERE id = ANY($3) AND email_id IN (SELECT id FROM email_accounts WHERE organization_id = $2)`,
+	return r.fileRows(ctx,
+		`UPDATE unibox_emails u SET folder = $1, updated_at = NOW()
+		 FROM unibox_emails prev
+		 WHERE prev.id = u.id AND u.id = ANY($3)
+		   AND u.email_id IN (SELECT id FROM email_accounts WHERE organization_id = $2)
+		 RETURNING u.id, prev.folder <> $1`,
 		folder, orgID, ids,
 	)
-	return err
 }
 
 // MoveThreadsToFolder files every message in the named conversations. Filing
 // by thread rather than by id is what makes a list row able to archive what it
 // shows: the row knows the conversation, not the messages inside it.
-func (r *uniboxRepository) MoveThreadsToFolder(ctx context.Context, orgID uuid.UUID, threadIDs []string, folder string) error {
+func (r *uniboxRepository) MoveThreadsToFolder(ctx context.Context, orgID uuid.UUID, threadIDs []string, folder string) ([]models.FiledMessage, error) {
 	if len(threadIDs) == 0 {
-		return nil
+		return nil, nil
 	}
-	_, err := r.db.Exec(ctx,
-		`UPDATE unibox_emails SET folder = $1, updated_at = NOW()
-		 WHERE COALESCE(NULLIF(thread_id, ''), id::text) = ANY($3)
-		   AND email_id IN (SELECT id FROM email_accounts WHERE organization_id = $2)`,
+	return r.fileRows(ctx,
+		`UPDATE unibox_emails u SET folder = $1, updated_at = NOW()
+		 FROM unibox_emails prev
+		 WHERE prev.id = u.id AND COALESCE(NULLIF(u.thread_id, ''), u.id::text) = ANY($3)
+		   AND u.email_id IN (SELECT id FROM email_accounts WHERE organization_id = $2)
+		 RETURNING u.id, prev.folder <> $1`,
 		folder, orgID, threadIDs,
 	)
-	return err
+}
+
+// fileRows runs a filing UPDATE. Rows already in the folder come back too,
+// unmoved: the provider may still disagree with them. prev is the row as the
+// statement found it, which is how the folder it left is read.
+func (r *uniboxRepository) fileRows(ctx context.Context, query string, args ...any) ([]models.FiledMessage, error) {
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var filed []models.FiledMessage
+	for rows.Next() {
+		var f models.FiledMessage
+		if err := rows.Scan(&f.ID, &f.Moved); err != nil {
+			return nil, err
+		}
+		filed = append(filed, f)
+	}
+	return filed, rows.Err()
+}
+
+// FolderRelayTargets reads back where each filed row sits now, and where its
+// provider last had it, so the relay moves only what the provider disagrees on.
+func (r *uniboxRepository) FolderRelayTargets(ctx context.Context, orgID uuid.UUID, ids []uuid.UUID) ([]models.FolderRelayTarget, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := r.db.Query(ctx,
+		`SELECT ue.email_id, ea.worker_id, ea.provider::text, ue.folder, ue.provider_folder,
+		        ue.id, ue.gmail_id, ue.uid, ue.folder_path, ue.message_id, ue.thread_id
+		 FROM unibox_emails ue
+		 JOIN email_accounts ea ON ea.id = ue.email_id
+		 WHERE ue.id = ANY($2) AND ea.organization_id = $1
+		   AND ea.worker_id IS NOT NULL AND ea.relay_folder_moves
+		   AND NOT EXISTS (
+		       SELECT 1 FROM warmup_received wr
+		       WHERE wr.email_account_id = ue.email_id AND wr.internal_id = ue.id)
+		 ORDER BY ue.email_id`,
+		orgID, ids,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []models.FolderRelayTarget
+	for rows.Next() {
+		var t models.FolderRelayTarget
+		if err := rows.Scan(&t.EmailID, &t.WorkerID, &t.Provider, &t.Folder, &t.Ref.ProviderFolder,
+			&t.Ref.ID, &t.Ref.ProviderID, &t.Ref.UID, &t.Ref.FolderPath, &t.Ref.RFCMessageID, &t.Ref.ThreadID); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
 }
 
 func (r *uniboxRepository) Delete(ctx context.Context, userID, id uuid.UUID) error {
@@ -916,6 +1114,51 @@ func (r *uniboxRepository) Delete(ctx context.Context, userID, id uuid.UUID) err
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// DeleteByFolderPaths removes the mirror rows for whole source folders. The
+// mail stays where it is at the provider; only the platform's copy goes.
+// The message map entries go with the rows: the sync reads a mapped
+// Message-ID as already stored, so an entry left behind would keep the
+// message from ever being imported again if it moved back into a synced
+// folder. An arrival still parked on warmup verification is dropped too, or
+// it would surface into a folder nobody follows.
+func (r *uniboxRepository) DeleteByFolderPaths(ctx context.Context, emailID uuid.UUID, folderPaths []string) (int64, error) {
+	if len(folderPaths) == 0 {
+		return 0, nil
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM email_message_map m
+		USING unibox_emails u
+		WHERE u.email_id = $1 AND u.folder_path = ANY($2)
+		  AND m.email_id = u.email_id AND m.message_id = u.message_id`, emailID, folderPaths); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM email_message_map m
+		USING unibox_pending_emails p
+		WHERE p.email_account_id = $1 AND p.payload->'message'->>'folder_path' = ANY($2)
+		  AND m.email_id = p.email_account_id AND m.message_id = p.payload->'message'->>'message_id'`, emailID, folderPaths); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM unibox_pending_emails
+		WHERE email_account_id = $1 AND payload->'message'->>'folder_path' = ANY($2)`, emailID, folderPaths); err != nil {
+		return 0, err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM unibox_emails WHERE email_id = $1 AND folder_path = ANY($2)`, emailID, folderPaths)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // queryPreviewList executes a query returning preview rows with limit+1 pagination.
@@ -943,9 +1186,11 @@ func (r *uniboxRepository) queryPreviewList(ctx context.Context, query string, a
 
 	var hasMore bool
 	var nextCursor *string
-	if len(emails) > limit {
+	if limit > 0 && len(emails) > limit {
 		hasMore = true
-		cursor := emails[limit].ID.String()
+		// The last row returned: the next page reads strictly past it, so
+		// pointing at the probe row instead would skip that row entirely.
+		cursor := emails[limit-1].ID.String()
 		nextCursor = &cursor
 		emails = emails[:limit]
 	}
@@ -993,9 +1238,11 @@ func (r *uniboxRepository) queryThreadList(ctx context.Context, query string, ar
 
 	var hasMore bool
 	var nextCursor *string
-	if len(emails) > limit {
+	if limit > 0 && len(emails) > limit {
 		hasMore = true
-		cursor := emails[limit].ID.String()
+		// The last row returned: the next page reads strictly past it, so
+		// pointing at the probe row instead would skip that row entirely.
+		cursor := emails[limit-1].ID.String()
 		nextCursor = &cursor
 		emails = emails[:limit]
 	}
@@ -1280,6 +1527,8 @@ func (r *uniboxRepository) Overview(ctx context.Context, orgID uuid.UUID) (*mode
 				e.from_addr,
 				e.internal_date,
 				e.seen,
+				e.automated,
+				e.folder IN ('sent', 'drafts') AS is_ours,
 				e.folder = 'archive' AS is_archived,
 				EXISTS (
 					SELECT 1 FROM unibox_snoozes s
@@ -1297,7 +1546,9 @@ func (r *uniboxRepository) Overview(ctx context.Context, orgID uuid.UUID) (*mode
 				bool_or(is_snoozed)                             AS is_snoozed,
 				bool_or(NOT is_archived)                        AS working,
 				bool_or(NOT seen) FILTER (WHERE NOT is_archived) AS has_unread,
-				max(internal_date) FILTER (WHERE NOT is_archived) AS last_date
+				max(internal_date) FILTER (WHERE NOT is_archived) AS last_date,
+				-- The same rule as automatedThreadSQL, over rows already in hand.
+				bool_or(automated) AND NOT COALESCE(bool_or(NOT automated AND NOT is_ours), false) AS is_automated
 			FROM ue
 			GROUP BY tkey
 		),
@@ -1309,10 +1560,12 @@ func (r *uniboxRepository) Overview(ctx context.Context, orgID uuid.UUID) (*mode
 		)
 		SELECT
 			COUNT(*) FILTER (WHERE NOT t.is_snoozed)                                          AS total,
-			COUNT(*) FILTER (WHERE NOT t.is_snoozed AND t.working AND t.has_unread)           AS unread,
-			COUNT(*) FILTER (WHERE NOT t.is_snoozed AND t.working AND t.last_date >= $2)      AS today,
-			COUNT(*) FILTER (WHERE NOT t.is_snoozed AND t.working AND t.last_date >= $3)      AS week,
-			COUNT(*) FILTER (WHERE t.is_snoozed AND t.working)                                AS snoozed,
+			COUNT(*) FILTER (WHERE NOT t.is_snoozed AND t.working AND NOT t.is_automated AND t.has_unread)      AS unread,
+			COUNT(*) FILTER (WHERE NOT t.is_snoozed AND t.working AND NOT t.is_automated AND t.last_date >= $2) AS today,
+			COUNT(*) FILTER (WHERE NOT t.is_snoozed AND t.working AND NOT t.is_automated AND t.last_date >= $3) AS week,
+			COUNT(*) FILTER (WHERE t.is_snoozed AND t.working)                                                  AS snoozed,
+			COUNT(*) FILTER (WHERE NOT t.is_snoozed AND t.working AND t.is_automated)                           AS automated,
+			COUNT(*) FILTER (WHERE NOT t.is_snoozed AND t.working AND t.is_automated AND t.has_unread)          AS automated_unread,
 			(SELECT COUNT(*) FROM latest_per_thread l WHERE `+ownAddressSQL("l.from_addr", "$1")+`) AS awaiting,
 			(SELECT COUNT(*) FROM ai_thread_drafts d
 				WHERE d.organization_id = $1 AND d.status = 'pending')                        AS awaiting_agent_draft
@@ -1323,6 +1576,8 @@ func (r *uniboxRepository) Overview(ctx context.Context, orgID uuid.UUID) (*mode
 		&overview.Today,
 		&overview.Week,
 		&overview.Snoozed,
+		&overview.Automated,
+		&overview.AutomatedUnread,
 		&overview.AwaitingReply,
 		&overview.AwaitingAgentDraft,
 	)
@@ -1348,6 +1603,7 @@ func (r *uniboxRepository) Overview(ctx context.Context, orgID uuid.UUID) (*mode
 			  AND s.thread_id = e.thread_id
 			  AND s.snoozed_until > NOW()
 		  )
+		  AND NOT (e.folder = 'inbox' AND `+automatedThreadSQL("e.thread_id", "e.automated", "$1")+`)
 		GROUP BY e.folder
 	`, orgID)
 	if err != nil {
@@ -1390,6 +1646,7 @@ func (r *uniboxRepository) Overview(ctx context.Context, orgID uuid.UUID) (*mode
 		FROM email_accounts ea
 		LEFT JOIN unibox_emails ue ON ue.email_id = ea.id AND ue.user_id = ea.user_id
 			AND ue.folder NOT IN `+foldersOutsideWorkingViews+`
+			AND NOT `+automatedThreadSQL("ue.thread_id", "ue.automated", "$1")+`
 		WHERE ea.organization_id = $1
 		GROUP BY ea.id, ea.email, ea.name
 		ORDER BY ea.email ASC
@@ -1433,6 +1690,7 @@ func (r *uniboxRepository) Overview(ctx context.Context, orgID uuid.UUID) (*mode
 		LEFT JOIN email_accounts ea ON ea.id = et.email_id AND ea.organization_id = t.organization_id
 		LEFT JOIN unibox_emails ue ON ue.email_id = ea.id
 			AND ue.folder NOT IN `+foldersOutsideWorkingViews+`
+			AND NOT `+automatedThreadSQL("ue.thread_id", "ue.automated", "$1")+`
 		WHERE t.organization_id = $1
 		GROUP BY t.id, t.title, t.color, t.position
 		ORDER BY t.position ASC, t.title ASC

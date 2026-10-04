@@ -157,10 +157,15 @@ func (s *service) execAction(ctx context.Context, target repository.DispatchTarg
 		url = rendered
 		// Automation tools (Zapier/Make/n8n) get the full structured + signed
 		// payload; the signing secret is the connection's (empty => unsigned).
-		secret := configString(target.Secrets.Conn.ConfigCapabilities, "signing_secret")
+		secret := configString(target.Secrets.Conn.ConfigCapabilities, models.ConfigCapabilitiesSigningSecret)
 		return automationDeliver(ctx, url, secret, sub.EventType, buildAutomationPayload(sub, data, msg))
 
 	case models.IntegrationActionHubSpotUpsert:
+		// While HubSpot is the workspace CRM, every send, reply and contact
+		// syncs on its own; this action would only add duplicate notes.
+		if s.crmMode != nil && s.crmMode(ctx, target.Secrets.Conn.OrganizationID) {
+			return nil
+		}
 		token, terr := s.accessTokenFor(ctx, &target.Secrets)
 		if terr != nil {
 			return errReauthRequired
@@ -177,6 +182,23 @@ func (s *service) execAction(ctx context.Context, target repository.DispatchTarg
 		return pipedriveUpsertPerson(ctx, token, contactEmail(data), props)
 
 	case models.IntegrationActionSalesforceUpsert:
+		if s.salesforce != nil {
+			ev := map[string]any{}
+			for k, v := range data {
+				ev[k] = v
+			}
+			// An automation's own field map overrides the connection's rules.
+			if len(autoCfg.FieldMap) > 0 {
+				ev["_salesforce_fields"] = projectFields(autoCfg.FieldMap, eventSource(data))
+			}
+			if err := s.salesforce.UpsertFromEvent(ctx, sub.OrganizationID, sub.ConnectionID, ev); err != nil {
+				if errors.Is(err, ErrPushReauth) {
+					return errReauthRequired
+				}
+				return err
+			}
+			return nil
+		}
 		token, terr := s.accessTokenFor(ctx, &target.Secrets)
 		if terr != nil {
 			return errReauthRequired

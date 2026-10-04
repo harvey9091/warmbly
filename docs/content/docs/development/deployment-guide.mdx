@@ -444,16 +444,17 @@ Every emailed link (password reset, invitation, the dashboard button in the welc
 
 This is the first thing you will actually want to do after installing, and the only part that needs credentials from outside Warmbly.
 
-There are three ways to attach a sending mailbox. Only the OAuth ones need setup.
+There are several ways to attach a sending mailbox. Only the OAuth and whole-domain ones need setup.
 
 | Mailbox type | Setup needed | Variables |
 |--------------|--------------|-----------|
 | Any SMTP + IMAP provider | None | none |
-| Gmail / Google Workspace | None with an app password (the default). A Google Cloud OAuth client to offer Google sign-in | `BOX_GOOGLE_OAUTH_CONNECT`, `BOX_GOOGLE_CLIENT_ID`, `BOX_GOOGLE_CLIENT_SECRET` |
+| Gmail / Google Workspace | None with an app password (the default). A Google Cloud OAuth client to offer per-mailbox Google sign-in, which is being retired | `BOX_GOOGLE_OAUTH_CONNECT`, `BOX_GOOGLE_CLIENT_ID`, `BOX_GOOGLE_CLIENT_SECRET` |
 | Outlook / Microsoft 365 | An Entra ID app registration | `BOX_OUTLOOK_CLIENT_ID`, `BOX_OUTLOOK_CLIENT_SECRET` |
+| A whole Google Workspace domain or Microsoft 365 organization | A Google Cloud service account for Google; the Outlook app above, with three application permissions, for Microsoft. See [whole-domain mailbox connects](/development/whole-domain-connect/) | `GOOGLE_WORKSPACE_DELEGATION_KEY_FILE` (or `GOOGLE_WORKSPACE_DELEGATION_KEY`), `BOX_OUTLOOK_CLIENT_ID`, `BOX_OUTLOOK_CLIENT_SECRET` |
 
 <Callout type="warn" title="These are not the sign-in variables">
-`BOX_GOOGLE_*` connects **mailboxes you send from**. `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (no `BOX_` prefix) are a different thing entirely: they enable "Sign in with Google" for logging into Warmbly. You can set either, both, or neither, and one never substitutes for the other.
+`BOX_GOOGLE_*` connects **mailboxes you send from**. `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (no `BOX_` prefix) are a different thing entirely: they enable "Sign in with Google" for logging into Warmbly. You can set either, both, or neither, and one never substitutes for the other. The one overlap: a Google Workspace administrator proving a domain for a [whole-domain connect](/development/whole-domain-connect/#proving-the-domain) signs in through the `GOOGLE_CLIENT_ID` client when it is set, and through the `BOX_GOOGLE_*` client otherwise.
 </Callout>
 
 ### SMTP and IMAP
@@ -462,7 +463,7 @@ Nothing to configure. Add the mailbox in the dashboard with its host, port, user
 
 ### Gmail and Google Workspace
 
-Nothing to configure by default: the connect dialog walks users through a Google app password over `smtp.gmail.com` and `imap.gmail.com`, see [the mailbox guide](/guides/mailboxes/#gmail-and-google-workspace). Set up a Google OAuth client only if you want to offer Google sign-in for new Gmail mailboxes, which also needs `BOX_GOOGLE_OAUTH_CONNECT=true`; without it the client still serves the mailboxes already connected that way, both refreshing their tokens and re-authorizing them when Google invalidates a grant.
+Nothing to configure by default: the connect dialog walks users through a Google app password over `smtp.gmail.com` and `imap.gmail.com`, see [the mailbox guide](/guides/mailboxes/#gmail-and-google-workspace). For Google Workspace, the recommended path is a [whole-domain connect](/development/whole-domain-connect/), which needs a service account rather than an OAuth client. Per-mailbox Google sign-in is [being retired](/guides/mailboxes/#moving-off-per-mailbox-google-sign-in). Set up a Google OAuth client only if you want to offer it for new Gmail mailboxes, which also needs `BOX_GOOGLE_OAUTH_CONNECT=true`; without it the client still serves the mailboxes already connected that way, both refreshing their tokens and re-authorizing them when Google invalidates a grant.
 
 <Steps>
 
@@ -532,7 +533,12 @@ BOX_OUTLOOK_CLIENT_SECRET=your-client-secret-value
 </Steps>
 
 <Callout title="Non-admin users and tenant-wide consent">
-None of the four permissions above requires admin consent by default, so an ordinary user can connect their own mailbox. A tenant that has turned user consent off needs an admin to grant consent once, under **Enterprise applications > your app > Permissions > Grant admin consent**. Warmbly's authorize request asks for `prompt=select_account`, never `prompt=consent`, so that grant is honoured for everyone afterwards. See [approval required when connecting an Outlook mailbox](/development/troubleshooting/#the-stack-is-up-but-something-is-wrong) if a non-admin is still refused.
+None of the four permissions above is admin-only, but whether an ordinary user may approve them is each Microsoft 365 organization's decision, not yours. Two things send a user to Microsoft's **Need admin approval** screen:
+
+- **An unverified app.** Microsoft's risk-based step-up consent treats a multitenant app registered after November 2020 with no verified publisher as risky when it asks for mail permissions, and sends every user to an administrator. [Verify the publisher](https://learn.microsoft.com/entra/identity-platform/publisher-verification-overview) of the app registration (a free Microsoft AI Cloud Partner Program account) and users of organizations with the default consent settings can approve it themselves.
+- **An organization that allows no user consent**, or only for permissions its administrator classified as low impact. Nothing on your side changes that.
+
+Either way, an administrator approves once for the whole organization and every mailbox in it then signs in on its own. The **Sign in one mailbox** panel shows a member the approval link to send them after a first try, and an administrator can also use **Enterprise applications > your app > Permissions > Grant admin consent**. Warmbly's authorize request asks for `prompt=select_account`, never `prompt=consent`, so that grant is honoured for everyone afterwards.
 </Callout>
 
 <Callout type="warn" title="Workers need these too">
@@ -674,7 +680,7 @@ AI_BASE_URL=             # required for custom (any OpenAI-compatible endpoint)
 
 | `AI_PROVIDER` | Endpoint | Notes |
 |---|---|---|
-| `openai` | api.openai.com | also the only provider for warmup content batch generation |
+| `openai` | api.openai.com | defaults to `gpt-6-luna`; also the only provider for warmup content batch generation |
 | `openrouter` | openrouter.ai | one key fronts every vendor; switch via `AI_MODEL` |
 | `groq` | api.groq.com | fast, free tier |
 | `ollama` | localhost:11434 | no key, free local model (`AI_FREE` is automatically true) |
@@ -831,6 +837,16 @@ make upgrade                 # git pull --ff-only, then make up; migrations appl
 ```
 
 Upgrading is safe with data in place: migrations are forward-only and apply on backend boot.
+
+### Updates without lost work
+
+A service being replaced finishes what it started, as long as the platform gives it the time to:
+
+- **Backend.** On a stop signal it takes no new import rows, hands back a row that had not started yet so the next instance starts it at once, and waits up to 45 seconds for the mailbox connects and import rows already under way. A connect someone started keeps going when they refresh or close the page. Anything cut off anyway resumes on the next instance: an import row after its 2-minute lease, a mailbox that was saved but not placed through the worker reconciler.
+- **Workers and consumers.** The command being handled when the stop arrives is finished before the process exits; only reading the next one stops. A credential check on a worker that went away is sent to another worker, and a restarted worker has its mailboxes shipped back on its first heartbeat.
+- **Vendor authorizations and sign-ins** in progress live in the database and Redis, not in a process, so a restart does not affect them.
+
+Give each service at least 60 seconds between the stop signal and a forced kill. The `docker-compose.yml` in the repository and the stack the installer writes set `stop_grace_period: 60s`; nodes that joined with `warmbly join` stop with a 45-second `docker stop` (nodes joined before this release keep a 10-second stop until they join again). On Railway, set `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=60` on the backend, consumer and any worker service; on Kubernetes, `terminationGracePeriodSeconds: 60`.
 
 ### Backing up
 

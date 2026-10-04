@@ -30,7 +30,7 @@ func (h *Handler) SetupClaim(c *gin.Context) {
 
 	var req setupClaimRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		errx.Handle(c, errx.ErrInvalid)
+		errx.Handle(c, errx.InvalidBody(err))
 		return
 	}
 

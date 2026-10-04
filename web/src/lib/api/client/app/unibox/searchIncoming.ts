@@ -14,7 +14,7 @@ export interface UniboxListRow {
   to_addr: string[];
   subject: string;
   snippet: string;
-  internal_date: string;
+  internal_date: Date;
   seen: boolean;
   /** Messages in the conversation behind this row (1 = singleton). */
   message_count: number;
@@ -41,6 +41,7 @@ function isoDay(d: Date): string {
 
 export default async function searchIncoming(
   p: UniboxSearchParams = {},
+  signal?: AbortSignal,
 ): Promise<UniboxListResponse> {
   const usp = new URLSearchParams();
   // The free-text param is still named `subject` for compatibility, but the
@@ -65,6 +66,7 @@ export default async function searchIncoming(
   if (p.categoryIds && p.categoryIds.length > 0) {
     usp.set("category_ids", p.categoryIds.join(","));
   }
+  if (p.automated !== undefined) usp.set("automated", String(p.automated));
   if (p.since) usp.set("since", isoDay(p.since));
   if (p.until) usp.set("until", isoDay(p.until));
   if (p.cursor) usp.set("cursor", p.cursor);
@@ -75,5 +77,6 @@ export default async function searchIncoming(
     method: "GET",
     url: `/unibox${qs ? `?${qs}` : ""}`,
     authorization: true,
+    signal,
   });
 }

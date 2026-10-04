@@ -143,6 +143,8 @@ type Service interface {
 	WireDispatcher(d EventDispatcher)
 	// WireNotifier attaches the in-app notification gate (reply/bounce/complaint).
 	WireNotifier(n Notifier)
+	// WireCRMOutbox attaches the connected-CRM outbox.
+	WireCRMOutbox(o CRMOutbox)
 	// WireRealtime attaches the org-scoped EMAIL_REPLIED realtime pulse.
 	WireRealtime(p ReplyRealtimePublisher)
 	// WireAutomationRunner attaches the automation runner so instant
@@ -186,6 +188,12 @@ type Service interface {
 
 	// DLQ auto-retry
 	ProcessRetryableDeadLetters(ctx context.Context) (int, *errx.Error)
+
+	// RecheckReplyOptOuts re-reads one page of reply opt-outs under the
+	// current rules, lifting the ones no message from the sender supports.
+	RecheckReplyOptOuts(ctx context.Context, afterID uuid.UUID, limit int) (uuid.UUID, bool, error)
+	// WireAudit attaches the audit trail a lifted reply opt-out is recorded in.
+	WireAudit(a AuditLogger)
 }
 
 type service struct {
@@ -197,6 +205,7 @@ type service struct {
 	segmentRepo          repository.SegmentRepository
 	campaignProgressRepo repository.CampaignProgressRepository
 	crmRepo              repository.CRMRepository
+	crmOutbox            CRMOutbox
 	categoryRepo         repository.GroupRepository
 	uniboxRepo           repository.UniboxRepository
 	tasksClient          tasksched.Scheduler
@@ -218,6 +227,8 @@ type service struct {
 	inboxTags repository.InboxTagRepository
 	// bounceJudge classifies ambiguous bounce reasons. Optional; nil-safe.
 	bounceJudge typesafe.Asker
+	// audit records what the reply opt-out recheck lifts. Optional; nil-safe.
+	audit AuditLogger
 }
 
 // WireBounceJudge attaches the bounce classifier after construction. Pass a
@@ -282,6 +293,13 @@ func (s *service) UpdateOrganizationSettings(ctx context.Context, organizationID
 	if err := settings.Validate(); err != nil {
 		return errx.NewWithIdentifier(errx.BadRequest, "invalid_setting", err.Error())
 	}
+	var saved []models.InboxTagQuestion
+	if current, err := s.repo.GetOutreachSettings(ctx, organizationID); err == nil && current != nil {
+		saved = current.InboxTagging.Questions
+	}
+	if err := inboxtag.ValidateQuestions(settings.InboxTagging.Questions, saved); err != nil {
+		return errx.NewWithIdentifier(errx.BadRequest, "invalid_setting", err.Error())
+	}
 	if err := s.repo.UpsertOutreachSettings(ctx, organizationID, updatedBy, settings); err != nil {
 		return toErrx(err)
 	}
@@ -307,6 +325,10 @@ func (s *service) UpdateCampaignSettings(ctx context.Context, campaignID uuid.UU
 	if settings == nil {
 		return errx.New(errx.BadRequest, "settings are required")
 	}
+	// Tagging questions and languages are the workspace's; a campaign cannot
+	// carry its own.
+	settings.InboxTagging.Questions = nil
+	settings.InboxTagging.Languages = nil
 	settings.Normalize()
 	if err := settings.Validate(); err != nil {
 		return errx.NewWithIdentifier(errx.BadRequest, "invalid_setting", err.Error())
@@ -454,6 +476,7 @@ func (s *service) CreateContactTask(ctx context.Context, orgID, createdBy uuid.U
 	if err != nil {
 		return nil, errx.InternalError()
 	}
+	s.pushCRM(ctx, orgID, models.CRMObjectTask, task.ID)
 	if task.ContactID != nil {
 		_ = s.crmRepo.RecordActivity(ctx, orgID, *task.ContactID, &createdBy, models.ActivityTaskCreated, map[string]interface{}{
 			"task_id":    task.ID.String(),
@@ -474,6 +497,7 @@ func (s *service) CreateContactDeal(ctx context.Context, orgID uuid.UUID, create
 	if err != nil {
 		return nil, toErrx(err)
 	}
+	s.pushCRM(ctx, orgID, models.CRMObjectDeal, deal.ID)
 	if deal.ContactID != nil {
 		_ = s.crmRepo.RecordActivity(ctx, orgID, *deal.ContactID, &createdBy, models.ActivityDealCreated, map[string]interface{}{
 			"deal_id":   deal.ID.String(),
@@ -517,6 +541,7 @@ func (s *service) MoveContactDealStage(ctx context.Context, orgID, contactID, pi
 	if uerr != nil {
 		return nil, toErrx(uerr)
 	}
+	s.pushCRM(ctx, orgID, models.CRMObjectDeal, updated.ID)
 	_ = s.crmRepo.RecordActivity(ctx, orgID, contactID, nil, models.ActivityDealStageChange, map[string]interface{}{
 		"deal_id": updated.ID.String(),
 		"from":    target.StageID.String(),
@@ -549,7 +574,7 @@ func (s *service) ListCategories(ctx context.Context, orgID uuid.UUID) ([]models
 // creator is nil: an automation has no human behind it.
 func (s *service) CreateCategory(ctx context.Context, orgID uuid.UUID, title, color string) (models.MiniCategory, error) {
 	if s.categoryRepo == nil {
-		return models.MiniCategory{}, errx.New(errx.BadRequest, "categories are not available")
+		return models.MiniCategory{}, errx.New(errx.BadRequest, "labels are not available")
 	}
 	if strings.TrimSpace(color) == "" {
 		color = "#64748b"
@@ -622,6 +647,72 @@ func (s *service) unsubscribe(ctx context.Context, expectOrg *uuid.UUID, campaig
 		"contact_email": contact.Email,
 		"source":        via,
 	})
+
+	// The link in a message is the same for everyone it copied and cannot say
+	// who used it, so it opts all of them out. A sequence action is about the
+	// lead alone.
+	if via != "action" {
+		return s.unsubscribeLeadCopies(ctx, *campaign.OrganizationID, campaignID, contactID, contact.Email, via, reason)
+	}
+	return nil
+}
+
+// isLeadCopy reports whether sender is one of the contacts copied on the
+// lead's emails rather than the lead answering from another address. A failed
+// read is an error, never "not a copy", which would charge the lead.
+func (s *service) isLeadCopy(ctx context.Context, campaignID, contactID uuid.UUID, leadEmail, sender string) (bool, error) {
+	if s.campaignProgressRepo == nil || sender == "" || strings.EqualFold(leadEmail, sender) {
+		return false, nil
+	}
+	copies, err := s.campaignProgressRepo.ListLeadCC(ctx, campaignID, contactID)
+	if err != nil {
+		return false, err
+	}
+	for _, cp := range copies {
+		if strings.EqualFold(strings.TrimSpace(cp.Email), sender) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// unsubscribeLeadCopies suppresses every contact copied on one lead's emails.
+// A failure fails the request, so the opt-out is retried rather than
+// acknowledged with a copy still sendable; the upserts are idempotent.
+func (s *service) unsubscribeLeadCopies(ctx context.Context, orgID, campaignID, contactID uuid.UUID, leadEmail, via, reason string) *errx.Error {
+	if s.campaignProgressRepo == nil {
+		return nil
+	}
+	copies, err := s.campaignProgressRepo.ListLeadCC(ctx, campaignID, contactID)
+	if err != nil {
+		return toErrx(err)
+	}
+	for _, cp := range copies {
+		addr := strings.ToLower(strings.TrimSpace(cp.Email))
+		if addr == "" {
+			continue
+		}
+		if err := s.repo.UpsertSuppressedRecipient(ctx, &models.SuppressedRecipient{
+			OrganizationID: orgID,
+			Email:          addr,
+			Kind:           models.SuppressionKindEmail,
+			Reason:         reason + " on an email copied to them",
+			Source:         models.DeliverabilityEventUnsubscribe,
+			CampaignID:     &campaignID,
+			Metadata:       map[string]interface{}{"via": via, "copied_on": leadEmail},
+		}); err != nil {
+			return toErrx(err)
+		}
+		if err := s.contactRepo.SetSubscribedByEmail(ctx, orgID, addr, false); err != nil {
+			log.Warn().Err(err).Str("contact_id", cp.ContactID.String()).Msg("unsubscribe: could not clear a copied contact's subscription flag")
+		}
+		s.emit(ctx, orgID, models.WebhookEventCampaignUnsubscribed, map[string]any{
+			"campaign_id":   campaignID.String(),
+			"contact_id":    cp.ContactID.String(),
+			"contact_email": cp.Email,
+			"source":        via,
+		})
+	}
 	return nil
 }
 
@@ -957,7 +1048,9 @@ func buildReplyHeaders(msg *models.EmailMessageStoreData) map[string][]string {
 	if msg == nil {
 		return nil
 	}
-	h := map[string][]string{}
+	// Custom headers the worker stored as "Header-Name:value" flags (auto-reply
+	// markers, Precedence, etc.).
+	h := replyclassify.FlagHeaders(msg.Flags)
 	if len(msg.FromAddr) > 0 {
 		h["From"] = msg.FromAddr
 	}
@@ -967,19 +1060,22 @@ func buildReplyHeaders(msg *models.EmailMessageStoreData) map[string][]string {
 	if msg.Subject != "" {
 		h["Subject"] = []string{msg.Subject}
 	}
-	// Custom headers the worker stored as "Header-Name:value" flags (auto-reply
-	// markers, Precedence, etc.). Split on the FIRST colon so header values that
-	// contain ':' survive intact.
-	for _, flag := range msg.Flags {
-		if i := strings.Index(flag, ":"); i > 0 {
-			name := strings.TrimSpace(flag[:i])
-			val := strings.TrimSpace(flag[i+1:])
-			if name != "" && !strings.HasPrefix(name, "\\") {
-				h[name] = append(h[name], val)
-			}
-		}
-	}
 	return h
+}
+
+// replyOptOutEligible decides whether an inbound message may be read as a
+// person asking us to stop. Only a person answering our outreach can: a bounce
+// or an auto-reply asks nothing, and a newsletter's footer "unsubscribe" is its
+// own sender's, so mail that is neither in one of our threads nor from a
+// contact, or that was sent to a list, is never an opt-out.
+func replyOptOutEligible(verdict replyclassify.Result, inOurThread, fromContact bool, headers map[string][]string) bool {
+	if replyclassify.IsAutomated(verdict.Class) {
+		return false
+	}
+	if inOurThread {
+		return true
+	}
+	return fromContact && !replyclassify.IsBulkMail(headers)
 }
 
 // replyTaskTitle words the follow-up the way it is read in a task list, rather
@@ -1145,10 +1241,19 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 	var sequenceID *uuid.UUID
 	var contactID *uuid.UUID
 	var taskID *uuid.UUID
+	// senderAccountID is the mailbox that sent the email this answers, which a
+	// shared reply inbox is not; viaReplyTo is a reply that landed here only
+	// because that send's Reply-To named this mailbox.
+	var senderAccountID *uuid.UUID
+	var viaReplyTo bool
 	var referencesCampaignThread bool
 	// contactEmail is the address we mailed, which is not always the one
 	// that answered; an opt-out has to reach both.
 	var contactEmail string
+	// senderIsCopy is a reply from a contact copied on the lead's emails. It
+	// counts as the lead's reply, but the copy's own away message or opt-out
+	// is about the copy, not the lead.
+	var senderIsCopy bool
 
 	// First, try exact message threading via In-Reply-To.
 	for _, mid := range msg.InReplyTo {
@@ -1171,14 +1276,18 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 				*campaign.OrganizationID != *account.OrganizationID {
 				continue
 			}
-			sentFromReceivingAccount, err := s.campaignProgressRepo.CampaignContactSentFromAccount(
-				ctx, *ct.CampaignID, *ct.ContactID, emailAccountID,
-			)
-			if err != nil {
-				return toErrx(err)
-			}
-			if !sentFromReceivingAccount {
-				continue
+			// The send pointing its Reply-To here is as good as having sent
+			// from here: a shared reply inbox never writes to anyone.
+			if !account.ReceivesAt(task.ReplyTo) {
+				sentFromReceivingAccount, err := s.campaignProgressRepo.CampaignContactSentFromAccount(
+					ctx, *ct.CampaignID, *ct.ContactID, emailAccountID,
+				)
+				if err != nil {
+					return toErrx(err)
+				}
+				if !sentFromReceivingAccount {
+					continue
+				}
 			}
 		}
 		// The thread is the evidence; the From address does not have to be
@@ -1196,9 +1305,16 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 		}
 		contactEmail = strings.TrimSpace(contact.Email)
 		taskID = &task.ID
+		senderAccountID = &task.EmailAccountID
+		viaReplyTo = task.EmailAccountID != emailAccountID && account.ReceivesAt(task.ReplyTo)
 		campaignID = ct.CampaignID
 		contactID = ct.ContactID
 		sequenceID = ct.SequenceID
+		isCopy, cerr := s.isLeadCopy(ctx, *ct.CampaignID, *ct.ContactID, contactEmail, sender)
+		if cerr != nil {
+			return toErrx(cerr)
+		}
+		senderIsCopy = isCopy
 		break
 	}
 
@@ -1218,6 +1334,30 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 		if err == nil && latest != nil {
 			campaignID = &latest.CampaignID
 			sequenceID = &latest.SequenceID
+		}
+	}
+
+	// A copied contact answering further down the thread (to the lead's own
+	// reply, say) names no message of ours; the mailbox that wrote to the
+	// lead, or the one its Reply-To named, is the evidence, and the reply is
+	// the lead's. A fresh message with
+	// no parent is not a reply to anything and credits nobody.
+	if campaignID == nil && contactID != nil && !referencesCampaignThread && len(msg.InReplyTo) > 0 {
+		ref, err := s.campaignProgressRepo.LeadForCopiedReply(ctx, *contactID, emailAccountID)
+		if err != nil {
+			return toErrx(err)
+		}
+		if ref != nil {
+			lead, lerr := s.contactRepo.GetByID(ctx, ref.ContactID)
+			if lerr != nil {
+				return lerr
+			}
+			if lead != nil {
+				campaignID, sequenceID = &ref.CampaignID, &ref.SequenceID
+				contactID = &ref.ContactID
+				contactEmail = strings.TrimSpace(lead.Email)
+				senderIsCopy = true
+			}
 		}
 	}
 
@@ -1316,9 +1456,15 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 			// unibox. Self-detaches, so it never blocks reply ingest.
 			if s.inboxAgent != nil && account.OrganizationID != nil {
 				ownerID, _ := uuid.Parse(account.UserID)
+				// An answer from a shared reply inbox leaves from the mailbox
+				// the contact wrote to, as the composer's does.
+				draftFrom := emailAccountID
+				if viaReplyTo && senderAccountID != nil {
+					draftFrom = *senderAccountID
+				}
 				s.inboxAgent.DraftForReply(ctx, models.InboxAgentReply{
 					OrganizationID:  *account.OrganizationID,
-					EmailAccountID:  emailAccountID,
+					EmailAccountID:  draftFrom,
 					OwnerUserID:     ownerID,
 					SourceMessageID: msg.ID,
 					ThreadID:        msg.ThreadID,
@@ -1392,8 +1538,8 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 	}
 
 	var held *time.Time
-	if campaignID != nil && contactID != nil && verdict.Class == replyclassify.ClassOutOfOffice && settings.ReplyIntent.HoldOnOutOfOffice {
-		held = s.holdForOutOfOffice(ctx, *contactID, settings.ReplyIntent, msg)
+	if campaignID != nil && contactID != nil && !senderIsCopy && verdict.Class == replyclassify.ClassOutOfOffice && settings.ReplyIntent.HoldOnOutOfOffice {
+		held = s.holdForOutOfOffice(ctx, *account.OrganizationID, *contactID, settings.ReplyIntent, msg)
 	}
 
 	actionTaken := ""
@@ -1406,6 +1552,7 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 	// line a real mechanism. The check ignores the quoted history (which
 	// carries our own opt-out wording) and matches whole phrases only.
 	if settings.ReplyIntent.AutoSuppressOnUnsubWord &&
+		replyOptOutEligible(verdict, referencesCampaignThread, contactID != nil, buildReplyHeaders(msg)) &&
 		replyclassify.IsOptOut(msg.Subject, firstNonEmpty(msg.BodyText, msg.Snippet)) {
 		_ = s.repo.UpsertSuppressedRecipient(ctx, &models.SuppressedRecipient{
 			OrganizationID: *account.OrganizationID,
@@ -1421,8 +1568,9 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 		if err := s.contactRepo.SetSubscribedByEmail(ctx, *account.OrganizationID, sender, false); err != nil {
 			log.Warn().Err(err).Msg("reply opt-out: could not clear the contact's subscription flag")
 		}
-		// Answered from another address: the one we mailed asked to stop too.
-		if contactEmail != "" && !strings.EqualFold(contactEmail, sender) {
+		// Answered from another address: the one we mailed asked to stop too,
+		// unless it was a copy asking for themselves.
+		if contactEmail != "" && !senderIsCopy && !strings.EqualFold(contactEmail, sender) {
 			_ = s.repo.UpsertSuppressedRecipient(ctx, &models.SuppressedRecipient{
 				OrganizationID: *account.OrganizationID,
 				Email:          strings.ToLower(contactEmail),
@@ -1460,13 +1608,15 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 		owner, parseErr := uuid.Parse(account.UserID)
 		if parseErr == nil {
 			title := replyTaskTitle(intent, sender)
-			_, _ = s.crmRepo.CreateCRMTask(ctx, *account.OrganizationID, owner, &models.CreateCRMTask{
+			if task, terr := s.crmRepo.CreateCRMTask(ctx, *account.OrganizationID, owner, &models.CreateCRMTask{
 				ContactID:  contactID,
 				Title:      title,
 				Priority:   "high",
 				DueDate:    ptrTime(time.Now().UTC().Add(24 * time.Hour)),
 				AssignedTo: &owner,
-			})
+			}); terr == nil {
+				s.pushCRM(ctx, *account.OrganizationID, models.CRMObjectTask, task.ID)
+			}
 			if actionTaken == "" {
 				actionTaken = "created_crm_task"
 			} else {
@@ -1509,8 +1659,15 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 		// user); the leading underscore keeps it out of outbound customer webhook
 		// bodies (publicEventData strips _-prefixed keys) while staying available
 		// to native actions, which read the raw event data.
-		"thread_id": msg.ThreadID,
-		"_user_id":  account.UserID,
+		"thread_id":        msg.ThreadID,
+		"email_account_id": emailAccountID.String(),
+		"_user_id":         account.UserID,
+		"_message_id":      msg.MessageID,
+		"_body_text":       msg.BodyText,
+		"_mailbox_email":   account.Email,
+	}
+	if senderAccountID != nil {
+		payload["sender_email_account_id"] = senderAccountID.String()
 	}
 	if campaignID != nil {
 		payload["campaign_id"] = campaignID.String()
@@ -1546,7 +1703,11 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 				body = "Held until " + held.Format("2 Jan") + " · " + msg.Subject
 			}
 		}
-		s.notify(uid, account.OrganizationID, cat, title, body, "/app/unibox", map[string]any{"intent": string(intent)})
+		s.notifyAboutMessage(uid, account.OrganizationID, msg.ID, cat, title, body, UniboxThreadLink(msg.ThreadID), map[string]any{
+			"intent":           string(intent),
+			"email_account_id": emailAccountID.String(),
+			"thread_id":        msg.ThreadID,
+		})
 	}
 
 	return nil
@@ -1554,14 +1715,16 @@ func (s *service) ProcessIncomingReply(ctx context.Context, emailAccountID uuid.
 
 // holdForOutOfOffice parks the contact's next step until they are back: the
 // return date the auto-reply names plus a business day, else the workspace's
-// fallback. Best-effort; a hold that cannot be written must never fail the
-// reply ingest behind it. Returns when the hold lifts, or nil if none was set.
+// fallback. With inbox tagging on, a date the model read as not the return
+// takes the fallback too. Best-effort; a hold that cannot be written must never
+// fail the reply ingest behind it. Returns when the hold lifts, or nil if none
+// was set.
 //
 // The hold covers every campaign the contact is still a lead of, not only the
 // one this reply was attributed to. An empty desk is an empty desk: holding
 // one sequence while a second kept mailing them was issue #470 again, narrowed
 // to the second campaign (issue #518).
-func (s *service) holdForOutOfOffice(ctx context.Context, contactID uuid.UUID, cfg models.ReplyIntentSettings, msg *models.EmailMessageStoreData) *time.Time {
+func (s *service) holdForOutOfOffice(ctx context.Context, orgID, contactID uuid.UUID, cfg models.ReplyIntentSettings, msg *models.EmailMessageStoreData) *time.Time {
 	if s.campaignProgressRepo == nil {
 		return nil
 	}
@@ -1576,7 +1739,11 @@ func (s *service) holdForOutOfOffice(ctx context.Context, contactID uuid.UUID, c
 	}
 	until, reason := fallback()
 	if back, ok := replyclassify.ParseReturnDate(msg.Subject, body, now); ok {
-		until, reason = replyclassify.NextBusinessDay(back), "back "+back.Format("2 Jan 2006")
+		if s.returnDateDoubted(ctx, orgID, msg.MessageID, back) {
+			until, reason = now.AddDate(0, 0, days), "auto-reply, return date unclear"
+		} else {
+			until, reason = replyclassify.NextBusinessDay(back), "back "+back.Format("2 Jan 2006")
+		}
 	}
 	// A return date already behind us (a stale auto-reply, a clock skew) would
 	// hold nothing; the fallback is the honest answer.
@@ -1838,6 +2005,9 @@ func (s *service) IngestDeliverabilityEvent(ctx context.Context, organizationID 
 	if req.ContactID != nil {
 		payload["contact_id"] = req.ContactID.String()
 	}
+	if req.TaskID != nil {
+		payload["_task_id"] = req.TaskID.String()
+	}
 	switch eventType {
 	case models.DeliverabilityEventBounce:
 		s.emit(ctx, organizationID, models.WebhookEventCampaignEmailBounced, payload)
@@ -2077,6 +2247,15 @@ func (s *service) ReplayDeadLetter(ctx context.Context, organizationID, deadLett
 	if task == nil {
 		return errx.ErrNotFound
 	}
+	if _, handled, rerr := s.replayCampaignPass(ctx, task); handled {
+		if rerr != nil {
+			return toErrx(rerr)
+		}
+		if err := s.repo.MarkTaskDeadLetterReplayed(ctx, deadLetterID); err != nil {
+			return toErrx(err)
+		}
+		return nil
+	}
 
 	scheduleAt := time.Now().UTC().Add(10 * time.Second)
 	cloudTaskName, err := s.tasksClient.CreateTask(ctx, &proto.ProcessTask{TaskId: task.ID.String()}, scheduleAt)
@@ -2093,6 +2272,49 @@ func (s *service) ReplayDeadLetter(ctx context.Context, organizationID, deadLett
 		return toErrx(err)
 	}
 	return nil
+}
+
+// replayCampaignPass replays a dead-lettered campaign pass as a fresh pass,
+// through the per-campaign lock every chain uses, so a campaign whose chain
+// already moved on keeps one. Putting the old pass back to pending would skip
+// that lock and could run a second chain beside the first. handled reports a
+// campaign pass; replayed, that a new pass was queued. An error means nothing
+// was queued and the dead letter stays for another try.
+func (s *service) replayCampaignPass(ctx context.Context, task *repository.Task) (replayed, handled bool, err error) {
+	if task == nil || task.TaskType != "campaign" {
+		return false, false, nil
+	}
+	ct, err := s.taskRepo.GetCampaignTask(ctx, task.ID)
+	if err != nil {
+		return false, true, err
+	}
+	if ct == nil || ct.CampaignID == nil {
+		// The campaign is gone; there is nothing to replay into.
+		return false, true, nil
+	}
+	at := time.Now().UTC().Add(10 * time.Second)
+	id := uuid.New()
+	created, err := s.taskRepo.CreateTaskWithLock(ctx,
+		&repository.Task{ID: id, TaskType: "campaign", EmailAccountID: task.EmailAccountID, Status: "pending", ScheduledAt: &at},
+		&repository.CampaignTask{TaskID: id, CampaignID: ct.CampaignID})
+	if err != nil {
+		return false, true, err
+	}
+	if !created {
+		// The chain already has its next pass.
+		return false, true, nil
+	}
+	name, err := s.tasksClient.CreateTask(ctx, &proto.ProcessTask{TaskId: id.String()}, at)
+	if err != nil {
+		// Nothing will fire the row, and while it is pending the chain can
+		// seed no other pass: take it back and keep the dead letter.
+		if derr := s.taskRepo.DeleteTask(ctx, id); derr != nil {
+			log.Warn().Err(derr).Str("task_id", id.String()).Msg("dead-letter replay: could not remove a pass that was never queued; overdue reconciliation will")
+		}
+		return false, true, err
+	}
+	_ = s.taskRepo.UpdateTaskScheduledAt(ctx, id, at, name)
+	return true, true, nil
 }
 
 // capitalize upper-cases the first rune of a validator message for display.
@@ -2420,6 +2642,20 @@ func (s *service) ProcessRetryableDeadLetters(ctx context.Context) (int, *errx.E
 		task, err := s.taskRepo.GetTask(ctx, dlq.TaskID)
 		if err != nil || task == nil {
 			// Mark as exhausted if the task no longer exists
+			_ = s.repo.MarkTaskDeadLetterReplayed(ctx, dlq.ID)
+			continue
+		}
+
+		if replayed, handled, rerr := s.replayCampaignPass(ctx, task); handled {
+			if rerr != nil {
+				backoff := time.Duration(30*(1<<uint(dlq.Attempts+1))) * time.Second
+				nextRetry := time.Now().UTC().Add(backoff)
+				_ = s.repo.IncrementDeadLetterAttempt(ctx, dlq.ID, &nextRetry)
+				continue
+			}
+			if replayed {
+				retried++
+			}
 			_ = s.repo.MarkTaskDeadLetterReplayed(ctx, dlq.ID)
 			continue
 		}

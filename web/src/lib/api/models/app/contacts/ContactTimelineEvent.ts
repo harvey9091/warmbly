@@ -27,7 +27,7 @@ export interface ContactPageHit {
     id: string;
     visitor_id: string;
     session_key: string;
-    occurred_at: string;
+    occurred_at: Date;
     url: string;
     path: string;
     title: string;
@@ -68,10 +68,13 @@ export interface ContactLinkClick {
 }
 
 // Where an open or click came from, when it was logged per event: the mail
-// client or image proxy when the user agent names one, otherwise browser,
-// OS and device; the location resolved from the source network.
+// client when the user agent names one, whether it was an app or webmail,
+// otherwise browser, OS and device; the location resolved from the source
+// network. device_hidden marks a fetch by a provider's image proxy.
 export interface EngagementOrigin {
     client?: string;
+    client_type?: "app" | "webmail";
+    device_hidden?: boolean;
     device_type?: string;
     os?: string;
     browser?: string;
@@ -83,7 +86,7 @@ export interface EngagementOrigin {
 
 export default interface ContactTimelineEvent {
     type: ContactTimelineEventType;
-    at: string;
+    at: Date;
 
     // Engagement classification (email_opened / email_clicked): true when an
     // automated fetcher (mail privacy proxy, security gateway) did it rather
@@ -117,7 +120,7 @@ export default interface ContactTimelineEvent {
     content?: string | null;
 
     // Meeting events (meeting_booked / rescheduled / canceled).
-    scheduled_for?: string | null;
+    scheduled_for?: Date | null;
     join_url?: string | null;
     meeting_state?: string | null;
 

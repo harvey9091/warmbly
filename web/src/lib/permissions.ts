@@ -47,7 +47,7 @@ export const PERMISSION_CATALOG: PermissionDef[] = [
     { key: "MANAGE_SEQUENCES",   bit: PERMISSION_BITS.MANAGE_SEQUENCES,   label: "Manage steps",  description: "Edit step content + spacing inside a campaign.",          category: "data" },
     { key: "VIEW_ANALYTICS",     bit: PERMISSION_BITS.VIEW_ANALYTICS,     label: "View analytics",    description: "See deliverability + engagement reports.",                category: "data" },
     { key: "USE_INTEGRATIONS",   bit: PERMISSION_BITS.USE_INTEGRATIONS,   label: "Use integrations",  description: "Push contacts and deals to connected CRMs and tools.",    category: "data" },
-    { key: "USE_AI",             bit: PERMISSION_BITS.USE_AI,             label: "Use AI",            description: "Use the AI assistant and AI drafting (spends workspace credits).", category: "data" },
+    { key: "USE_AI",             bit: PERMISSION_BITS.USE_AI,             label: "Use AI",            description: "Use Remie, the AI assistant, and AI drafting (spends workspace credits).", category: "data" },
     // People
     { key: "MANAGE_TEAM",        bit: PERMISSION_BITS.MANAGE_TEAM,        label: "Manage team",       description: "Invite, remove and re-role members.",                     category: "people" },
     { key: "TRANSFER_OWNERSHIP", bit: PERMISSION_BITS.TRANSFER_OWNERSHIP, label: "Transfer ownership", description: "Hand workspace ownership to another member.",            category: "people" },
@@ -57,7 +57,7 @@ export const PERMISSION_CATALOG: PermissionDef[] = [
     { key: "ACCESS_UNIBOX",      bit: PERMISSION_BITS.ACCESS_UNIBOX,      label: "Use unified inbox", description: "Read and reply from the shared inbox.",                   category: "send" },
     // Admin
     { key: "MANAGE_SETTINGS",    bit: PERMISSION_BITS.MANAGE_SETTINGS,    label: "Manage settings",   description: "Edit workspace-wide settings.",                           category: "admin" },
-    { key: "MANAGE_BILLING",     bit: PERMISSION_BITS.MANAGE_BILLING,     label: "Manage billing",    description: "View invoices and change the subscription plan.",         category: "admin" },
+    { key: "MANAGE_BILLING",     bit: PERMISSION_BITS.MANAGE_BILLING,     label: "Manage billing",    description: "Check out, change or cancel the plan and open the billing portal.", category: "admin" },
     { key: "MANAGE_API_KEYS",    bit: PERMISSION_BITS.MANAGE_API_KEYS,    label: "Manage API keys",   description: "Create and revoke workspace API keys.",                   category: "admin" },
 ];
 
