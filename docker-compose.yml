@@ -256,7 +256,7 @@ services:
       POSTGRES_DB: warmbly_dev
     ports: ["15432:5432"]
     volumes:
-      - ${WARMBLY_PG_DATA:-postgres_data}:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U warmbly"]
       interval: 5s
@@ -268,7 +268,7 @@ services:
     image: redis:7-alpine
     ports: ["16379:6379"]
     volumes:
-      - ${WARMBLY_REDIS_DATA:-redis_data}:/data
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -282,7 +282,7 @@ services:
     command: ["-js", "-sd", "/data", "-m", "8222"]
     ports: ["4222:4222", "8222:8222"]
     volumes:
-      - ${WARMBLY_NATS_DATA:-nats_data}:/data
+      - nats-data:/data
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
       interval: 5s
@@ -413,7 +413,7 @@ services:
       UPDATER_URL: ${UPDATER_URL:-http://updater:8095}
       UPDATER_TOKEN: ${UPDATER_TOKEN:-${INTERNAL_API_TOKEN:-local-dev-internal-token}}
     volumes:
-      - ${WARMBLY_BLOBS:-blobs}:/data/blobs
+      - blobs:/data/blobs
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -496,7 +496,7 @@ services:
       TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
       INBOX_TAGGING_ENABLED: ${INBOX_TAGGING_ENABLED:-false}
     volumes:
-      - ${WARMBLY_BLOBS:-blobs}:/data/blobs
+      - blobs:/data/blobs
     depends_on:
       backend: { condition: service_healthy }
       nats: { condition: service_healthy }
@@ -535,8 +535,8 @@ services:
       BOX_OUTLOOK_CLIENT_ID: ${BOX_OUTLOOK_CLIENT_ID:-}
       BOX_OUTLOOK_CLIENT_SECRET: ${BOX_OUTLOOK_CLIENT_SECRET:-}
     volumes:
-      - ${WARMBLY_BLOBS:-blobs}:/data/blobs
-      - ${WARMBLY_WORKER_STATE:-worker_state}:/data/state
+      - blobs:/data/blobs
+      - worker-state:/data/state
     depends_on:
       backend: { condition: service_healthy }
       nats: { condition: service_healthy }
@@ -693,40 +693,6 @@ services:
     depends_on:
       backend: { condition: service_healthy }
 
-  # One-click updates from the admin panel (the version pill in the top bar).
-  # Pulls this checkout, rebuilds the images and recreates the containers when
-  # the backend asks, then waits for the backend to answer again. It holds the
-  # docker socket, which is root on this host, so it only runs under the
-  # "updater" profile: `make up` enables it, and COMPOSE_PROFILES=updater in
-  # .env does the same for a plain `docker compose up`. Leave the profile off
-  # to update by hand with `git pull && make up`.
-  updater:
-    restart: unless-stopped
-    image: ${WARMBLY_IMAGE_PREFIX:-ghcr.io/warmbly/warmbly}/updater:${WARMBLY_TAG:-prod}
-    build:
-      context: .
-      dockerfile: deploy/docker/updater.Dockerfile
-      args:
-        VERSION: ${WARMBLY_BUILD_VERSION:-}
-        COMMIT: ${WARMBLY_BUILD_COMMIT:-}
-        BUILT_AT: ${WARMBLY_BUILD_TIME:-}
-    environment:
-      UPDATER_TOKEN: ${UPDATER_TOKEN:-${INTERNAL_API_TOKEN:-local-dev-internal-token}}
-      # The checkout is mounted at its host path so the compose file's relative
-      # paths resolve identically inside and outside the container.
-      UPDATER_REPO_DIR: ${WARMBLY_REPO_DIR:-${PWD}}
-      UPDATER_COMPOSE_PROJECT: warmbly
-      UPDATER_BACKEND_HEALTH_URL: http://backend:8080/health
-      UPDATER_FETCH_INTERVAL: ${UPDATER_FETCH_INTERVAL:-30m}
-      UPDATER_PRUNE: ${UPDATER_PRUNE:-true}
-      UPDATER_ALLOW_DIRTY: ${UPDATER_ALLOW_DIRTY:-false}
-    working_dir: ${WARMBLY_REPO_DIR:-${PWD}}
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ${WARMBLY_REPO_DIR:-${PWD}}:${WARMBLY_REPO_DIR:-${PWD}}
-      - ${WARMBLY_UPDATER_STATE:-updater_state}:/var/lib/warmbly-updater
-    profiles: ["updater"]
-
   # ─── one-shots ────────────────────────────────────────────────────────
 
   # Optional demo seed. Run explicitly: docker compose --profile seed run --rm seed
@@ -758,9 +724,8 @@ services:
 # WARMBLY_*_DATA variable simply stops using the named volume below; an unused
 # declaration costs nothing and keeps switching back a one-line .env edit.
 volumes:
-  postgres_data:
-  redis_data:
-  nats_data:
+  postgres-data:
+  redis-data:
+  nats-data:
   blobs:
-  worker_state:
-  updater_state:
+  worker-state:
