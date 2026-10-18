@@ -55,6 +55,9 @@ func (s *schedulerService) CalculateNextCampaignTime(ctx context.Context, campai
 	// the campaign keeps sending, instead of parking every lead behind the
 	// first one whose mailbox is full.
 	pass := s.newCampaignPass(ctx, campaign, accounts)
+	if err := s.prefillPool(ctx, pass, accounts); err != nil {
+		return time.Time{}, nil, uuid.Nil, err
+	}
 	paced := s.pacedSenders(ctx, pass, accounts)
 
 	// STEP 3: Get campaign progress - find next contact/sequence to send.
@@ -251,6 +254,9 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 	campaignID := campaign.ID
 	if pass == nil {
 		pass = s.newCampaignPass(ctx, campaign, accounts)
+		if err := s.prefillPool(ctx, pass, accounts); err != nil {
+			return time.Time{}, nil, uuid.Nil, err
+		}
 	}
 	logDecision := func(eventType, message string, metadata map[string]interface{}) {
 		if !preview {
@@ -331,7 +337,7 @@ func (s *schedulerService) placeCampaignSend(ctx context.Context, campaign *mode
 	// STEP 5: Apply campaign schedule constraints
 	// Fall back to UTC if campaign has no timezone set (account timezone checked later)
 	campaignTZName := campaign.ClockTimezone()
-	campaignTZ := loadLocation(campaignTZName)
+	campaignTZ := pass.location(campaignTZName)
 	// Authoritative per-day sending windows (or derived from the legacy
 	// days/start/end fields). Drives every day-of-week + time-window gate below.
 	windows := effectiveWindows(campaign)

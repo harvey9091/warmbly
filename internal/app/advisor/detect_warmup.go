@@ -43,12 +43,64 @@ func warmupDetectors() []Detector {
 			Run:      detectCloudStandingUnavailable,
 		},
 		{
+			Key:      "warmup_pool_throttled",
+			Category: models.AdvisorCategoryWarmup,
+			About:    "A mailbox whose warmup and cold sending are temporarily reduced by its health band. Throttling keeps the mailbox in the pool, including during re-entry probation. Placement throttles recover automatically through watch as placement improves. Throttling is not pool exclusion, a connection failure, or a reason on its own to hold campaigns or require manual re-entry. Follow the recommended action in the evidence.",
+			Run:      detectWarmupPoolThrottled,
+		},
+		{
 			Key:      "warmup_pool_blocked",
 			Category: models.AdvisorCategoryWarmup,
 			About:    "A mailbox quarantined or blocked from the shared warmup pool for its spam placement, complaint or bounce rate, or for tampering with warmup mail it received. Pool standing is the platform's own read on whether a mailbox is safe to keep in shared reputation surfaces.",
 			Run:      detectWarmupPoolBlocked,
 		},
+		{
+			Key:      "warmup_mail_not_arriving",
+			Category: models.AdvisorCategoryWarmup,
+			About:    "A mailbox the pool's warmup mail no longer reaches. When none of a week's warmup mail from several workspaces arrives where Warmbly can see it, the pool stops sending to the mailbox, so it receives no warmup until mail gets through again.",
+			Run:      detectWarmupMailNotArriving,
+		},
 	}
+}
+
+func detectWarmupMailNotArriving(s *repository.AdvisorSnapshot) []Finding {
+	out := []Finding{}
+	for _, m := range s.Mailboxes {
+		if !m.WarmupActive || !m.WarmupUnreachable() {
+			continue
+		}
+		out = append(out, Finding{
+			Key:         "warmup_mail_not_arriving",
+			GroupTitle:  "{count} mailboxes are not receiving warmup mail",
+			Category:    models.AdvisorCategoryWarmup,
+			Severity:    models.AdvisorHigh,
+			Surface:     models.AdvisorSurfaceMailboxes,
+			EntityType:  "email_account",
+			EntityID:    ref(m.ID),
+			EntityLabel: m.Email,
+			Impact:      clampImpact(60 + m.WarmupDelivered7d),
+			Title:       fmt.Sprintf("%s is not receiving warmup mail", m.Email),
+			Detail: fmt.Sprintf(
+				"None of the %d warmup emails other mailboxes sent to %s in the last week arrived where Warmbly could see them. The pool has stopped sending to it, so it gets no warmup until mail reaches it again.",
+				m.WarmupDelivered7d, m.Email),
+			Remedy: "Make sure mail for this address reaches the inbox Warmbly is connected to. It rejoins the pool on its own as soon as one warmup email arrives.",
+			Steps: []string{
+				"Check the domain's MX records. A domain with no MX record, or one pointing at another server, never receives mail at this mailbox.",
+				"Send it a test email from an outside account and confirm it lands in the inbox Warmbly syncs.",
+				"Look for a forwarding rule, a filter that moves mail into an unsynced folder, or a server that refuses mail from new domains.",
+				"Open the mailbox's settings in Warmbly and confirm the IMAP server is the one this address's mail is delivered to.",
+			},
+			Evidence: map[string]any{
+				"mailbox":           m.Email,
+				"warmup_delivered":  m.WarmupDelivered7d,
+				"warmup_arrived":    m.WarmupArrived7d,
+				"sender_workspaces": m.WarmupLostBy7d,
+				"window_days":       7,
+				"pool_type":         m.WarmupPoolType,
+			},
+		})
+	}
+	return out
 }
 
 func detectWarmupOffWhileSending(s *repository.AdvisorSnapshot) []Finding {
@@ -239,14 +291,60 @@ func detectCloudStandingUnavailable(s *repository.AdvisorSnapshot) []Finding {
 	return out
 }
 
+func detectWarmupPoolThrottled(s *repository.AdvisorSnapshot) []Finding {
+	out := []Finding{}
+	for _, m := range s.Mailboxes {
+		if m.PoolHealth != string(models.WarmupHealthThrottled) || m.PoolHealthReason == "cloud_evidence_unavailable" {
+			continue
+		}
+		remedy := "Keep warmup running and let Warmbly manage the reduced sending pace. Do not raise the daily cap to bypass the slowdown. Recovery follows the reason shown, without manual pool re-entry; separate ramp limits still apply."
+		out = append(out, Finding{
+			Key:         "warmup_pool_throttled",
+			GroupTitle:  "{count} mailboxes have temporarily reduced sending",
+			Category:    models.AdvisorCategoryWarmup,
+			Severity:    models.AdvisorHigh,
+			Surface:     models.AdvisorSurfaceMailboxes,
+			EntityType:  "email_account",
+			EntityID:    ref(m.ID),
+			EntityLabel: m.Email,
+			Impact:      clampImpact(40 + int(m.PoolHealthScore)/4),
+			Title:       fmt.Sprintf("%s has temporarily reduced sending", m.Email),
+			Detail: fmt.Sprintf(
+				"Warmbly has reduced warmup and cold sending for %s to half volume with wider spacing. This status describes a reduced sending pace, not pool exclusion or a connection failure. %s",
+				m.Email, m.PoolHealthReason),
+			Remedy: remedy,
+			Steps: []string{
+				"Keep warmup enabled so recent placement evidence can show recovery.",
+				"Leave the daily cap at or below its current setting while Warmbly manages the reduced pace.",
+				"Review recent campaign targeting and copy, and investigate any confirmed authentication, complaint or bounce issues separately.",
+				"For a placement throttle, the half-volume limit steps down to watch below 15% spam placement, and watch lifts below 7.5%. Other cooldowns follow the reason shown. Warmbly re-evaluates these limits automatically.",
+			},
+			Evidence: map[string]any{
+				"mailbox":                m.Email,
+				"pool_state":             m.PoolHealth,
+				"pool_health_reason":     m.PoolHealthReason,
+				"pool_type":              m.WarmupPoolType,
+				"currently_sending_cold": m.SendingCold(),
+				"recommended_action":     remedy,
+			},
+		})
+	}
+	return out
+}
+
 func detectWarmupPoolBlocked(s *repository.AdvisorSnapshot) []Finding {
 	out := []Finding{}
 	for _, m := range s.Mailboxes {
 		if m.PoolHealthReason == "cloud_evidence_unavailable" {
 			continue
 		}
+		// Recoverable bands also carry blocked_until; their timer is not pool exclusion.
+		switch models.WarmupHealthState(m.PoolHealth) {
+		case models.WarmupHealthHealthy, models.WarmupHealthWatch, models.WarmupHealthThrottled:
+			continue
+		}
 		bad := m.PoolBlocked ||
-			m.PoolHealth == "quarantined" || m.PoolHealth == "blocked" || m.PoolHealth == "throttled"
+			m.PoolHealth == "quarantined" || m.PoolHealth == "blocked"
 		if !bad {
 			continue
 		}

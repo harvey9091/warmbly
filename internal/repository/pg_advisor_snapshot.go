@@ -5,12 +5,41 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/warmbly/warmbly/internal/models"
 )
+
+// AdvisorSection names a snapshot section that loads on its own.
+type AdvisorSection string
+
+const (
+	AdvisorSectionCampaigns AdvisorSection = "campaigns"
+	AdvisorSectionSteps     AdvisorSection = "steps"
+	AdvisorSectionLists     AdvisorSection = "lists"
+	AdvisorSectionOrg       AdvisorSection = "org"
+)
+
+// SectionFailed reports whether sec did not load this run.
+func (s *AdvisorSnapshot) SectionFailed(sec AdvisorSection) bool {
+	_, failed := s.Failed[sec]
+	return failed
+}
+
+func (s *AdvisorSnapshot) fail(sec AdvisorSection, err error) {
+	if err == nil {
+		return
+	}
+	if s.Failed == nil {
+		s.Failed = map[AdvisorSection]error{}
+	}
+	s.Failed[sec] = err
+}
 
 // LoadSnapshot reads one org's advisor view. Every section is best-effort: a
 // single failing rollup must not cost the org its whole evaluation, because a
-// partial snapshot still produces correct findings for the parts that loaded
-// (detectors are written to no-op on absent data rather than guess).
+// partial snapshot still produces correct findings for the parts that loaded.
+// A section that fails is recorded in Failed, so the detectors that read it
+// are held for the run rather than run on empty data.
 func (r *advisorRepository) LoadSnapshot(ctx context.Context, orgID uuid.UUID, now time.Time) (*AdvisorSnapshot, error) {
 	snap := &AdvisorSnapshot{
 		OrganizationID: orgID,
@@ -18,7 +47,7 @@ func (r *advisorRepository) LoadSnapshot(ctx context.Context, orgID uuid.UUID, n
 		Lists:          map[uuid.UUID]AdvisorListStats{},
 	}
 
-	mailboxes, err := r.loadMailboxes(ctx, orgID)
+	mailboxes, err := r.loadMailboxes(ctx, orgID, now)
 	if err != nil {
 		// Mailboxes are the one section worth failing on: almost every detector
 		// is scoped to a mailbox, and an empty list would look like "org has no
@@ -27,15 +56,19 @@ func (r *advisorRepository) LoadSnapshot(ctx context.Context, orgID uuid.UUID, n
 	}
 	snap.Mailboxes = mailboxes
 
-	snap.Campaigns, _ = r.loadCampaigns(ctx, orgID)
-	snap.Steps, _ = r.loadSteps(ctx, orgID)
-	snap.Lists, _ = r.loadListStats(ctx, orgID)
-	snap.Org, _ = r.loadOrgStats(ctx, orgID)
+	snap.Campaigns, err = r.loadCampaigns(ctx, orgID)
+	snap.fail(AdvisorSectionCampaigns, err)
+	snap.Steps, err = r.loadSteps(ctx, orgID)
+	snap.fail(AdvisorSectionSteps, err)
+	snap.Lists, err = r.loadListStats(ctx, orgID)
+	snap.fail(AdvisorSectionLists, err)
+	snap.Org, err = r.loadOrgStats(ctx, orgID)
+	snap.fail(AdvisorSectionOrg, err)
 
 	return snap, nil
 }
 
-func (r *advisorRepository) loadMailboxes(ctx context.Context, orgID uuid.UUID) ([]AdvisorMailbox, error) {
+func (r *advisorRepository) loadMailboxes(ctx context.Context, orgID uuid.UUID, now time.Time) ([]AdvisorMailbox, error) {
 	// Bounce/complaint attribution runs through tasks: deliverability_events
 	// carries task_id, not email_account_id, so a mailbox's complaints are the
 	// events whose task was sent by it.
@@ -61,7 +94,8 @@ func (r *advisorRepository) loadMailboxes(ctx context.Context, orgID uuid.UUID) 
 			COALESCE(p.blocked_until > NOW(), false) AS pool_blocked,
 			COALESCE(err.n, 0),
 			COALESCE(camp.active, false),
-			ea.send_lifecycle
+			ea.send_lifecycle,
+			inb.delivered, inb.arrived, inb.lost_by
 		FROM email_accounts ea
 		LEFT JOIN LATERAL (
 			SELECT
@@ -74,15 +108,19 @@ func (r *advisorRepository) loadMailboxes(ctx context.Context, orgID uuid.UUID) 
 			  AND t.completed_at > NOW() - INTERVAL '30 days'
 			  AND ` + taskDispatchedEmail + `
 		) sent ON true
-		LEFT JOIN LATERAL (
+		-- One pass per org: no index bounds a single mailbox's events, so a lateral rescanned the window per mailbox.
+		LEFT JOIN (
 			SELECT
+				t2.email_account_id,
 				COUNT(*) FILTER (WHERE de.event_type = 'bounce')    AS bounces,
 				COUNT(*) FILTER (WHERE de.event_type = 'complaint') AS complaints
 			FROM deliverability_events de
 			JOIN tasks t2 ON t2.id = de.task_id
-			WHERE t2.email_account_id = ea.id
+			WHERE t2.email_account_id IN (SELECT id FROM email_accounts WHERE organization_id = $1)
+			  AND de.event_type IN ('bounce', 'complaint')
 			  AND de.created_at > NOW() - INTERVAL '30 days'
-		) dl ON true
+			GROUP BY t2.email_account_id
+		) dl ON dl.email_account_id = ea.id
 		LEFT JOIN LATERAL (
 			SELECT
 				COALESCE(SUM(emails_sent), 0)    AS sent7,
@@ -90,7 +128,7 @@ func (r *advisorRepository) loadMailboxes(ctx context.Context, orgID uuid.UUID) 
 			FROM warmup_statistics wst
 			WHERE wst.email_account_id = ea.id AND wst.date > CURRENT_DATE - 7
 		) w ON true
-		LEFT JOIN LATERAL (` + placementEvidenceSQL("ea.id", "NOW() - INTERVAL '7 days'") + `
+		LEFT JOIN LATERAL (` + placementEvidenceSQL("ea.id", "$2") + `
 		) ws ON true
 		LEFT JOIN LATERAL (` + warmupStandingSQL("ea.id") + `
 		) p ON true
@@ -101,6 +139,10 @@ func (r *advisorRepository) loadMailboxes(ctx context.Context, orgID uuid.UUID) 
 			  AND eae.resolved_at IS NULL
 			  AND eae.created_at > NOW() - INTERVAL '7 days'
 		) err ON true
+		LEFT JOIN LATERAL (
+			SELECT ` + warmupInboundColumns + ` ` + warmupInboundSQL + `
+			  AND wt.recipient_account_id = ea.id
+		) inb ON true
 		LEFT JOIN LATERAL (
 			-- A mailbox counts as "in an active campaign" when a running
 			-- campaign either lists it explicitly or matches one of its tags.
@@ -121,7 +163,7 @@ func (r *advisorRepository) loadMailboxes(ctx context.Context, orgID uuid.UUID) 
 		WHERE ea.organization_id = $1
 		ORDER BY ea.created_at ASC`
 
-	rows, err := r.db.Query(ctx, query, orgID)
+	rows, err := r.db.Query(ctx, query, orgID, models.WarmupPlacementWindowStart(now))
 	if err != nil {
 		return nil, err
 	}
@@ -146,6 +188,7 @@ func (r *advisorRepository) loadMailboxes(ctx context.Context, orgID uuid.UUID) 
 			&m.PoolHealth, &m.PoolHealthScore, &m.PoolHealthReason, &m.PoolBlocked,
 			&m.UnresolvedErrs, &m.InActiveCampaign,
 			&m.SendLifecycle,
+			&m.WarmupDelivered7d, &m.WarmupArrived7d, &m.WarmupLostBy7d,
 		); err != nil {
 			return nil, err
 		}

@@ -200,6 +200,27 @@ jobs:
         run: |
           go test -race -coverprofile=coverage.out -covermode=atomic ./...
 
+      - name: Linked-mailbox batching regressions (PostgreSQL)
+        env:
+          PRIMARY_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          set -o pipefail
+          go run ./cmd/migrate
+          go test -race -v -p 1 ./internal/repository ./internal/app/analytics -run '^TestLive(WarmupPartnerCountsMatchIndividualCandidates|WarmupSummariesMatchIndividualReads|LinkedMailboxStatusBatchPreservesDetails|WarmupPartnerWeekCacheMatchesExactReadAndKeepsTheCapLive|WarmupPartnerWeekCacheRefreshesDetachedAndServesStale|WarmupPartnerCandidatesCarryReciprocityAndHonourTheCap|AccountStatusPageMatchesSingleReadsInBoundedQueries)$' -count=1 | tee linked-mailbox-batch.log
+          for test in TestLiveWarmupPartnerCountsMatchIndividualCandidates TestLiveWarmupSummariesMatchIndividualReads TestLiveLinkedMailboxStatusBatchPreservesDetails TestLiveWarmupPartnerWeekCacheMatchesExactReadAndKeepsTheCapLive TestLiveWarmupPartnerWeekCacheRefreshesDetachedAndServesStale TestLiveWarmupPartnerCandidatesCarryReciprocityAndHonourTheCap TestLiveAccountStatusPageMatchesSingleReadsInBoundedQueries; do
+            grep -q -- "--- PASS: $test " linked-mailbox-batch.log
+          done
+          if grep -q -- '--- SKIP:' linked-mailbox-batch.log; then exit 1; fi
+
+      - name: Contact campaign empty-step regression (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -race -v ./internal/repository -run '^TestLiveContactCampaignStateEmptySteps$' -count=1 | tee contact-campaign-steps.log
+          grep -q -- '--- PASS: TestLiveContactCampaignStateEmptySteps ' contact-campaign-steps.log
+
       - name: Campaign send admission regressions (PostgreSQL)
         env:
           PRIMARY_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
@@ -219,6 +240,33 @@ jobs:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
         run: go test -race ./internal/repository -run '^TestLiveInvitedSignup$' -count=1
 
+      - name: Mailbox batch and folder identity regressions (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: go test -race -v -p 1 ./internal/repository -run '^TestLive(MessageMapBatch|FolderGenerationLookup|MailboxLookupIndexes)' -count=1
+
+      - name: CPU query pressure and accounting parity regressions (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -race -v -p 1 ./internal/repository -run '^TestLive(TaskLedgerRangesAndClocksMatchLegacy|TaskLedgerDayRangePreservesDST|TaskQueryPressureUsesBoundedHistory|WarmupHealthCountsShareScansWithoutChangingSignals|DashboardOverallBoundsHistoryAndPreservesScopedCounts|VerificationBacklogFollowsShelfLives|VerificationReopenOnProviderConnect|SegmentCampaignLinks|PoolLinkTouchIsThrottledButKeepsTheVersion)$' -count=1 | tee cpu-query-pressure.log
+          if grep -q -- '--- SKIP:' cpu-query-pressure.log; then exit 1; fi
+          for test in TestLiveTaskLedgerRangesAndClocksMatchLegacy TestLiveTaskLedgerDayRangePreservesDST TestLiveTaskQueryPressureUsesBoundedHistory TestLiveWarmupHealthCountsShareScansWithoutChangingSignals TestLiveDashboardOverallBoundsHistoryAndPreservesScopedCounts TestLiveVerificationBacklogFollowsShelfLives TestLiveVerificationReopenOnProviderConnect TestLiveSegmentCampaignLinks TestLivePoolLinkTouchIsThrottledButKeepsTheVersion; do
+            grep -q "^--- PASS: $test " cpu-query-pressure.log
+          done
+
+      - name: Campaign pool query batching regressions (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -race -v -p 1 ./internal/repository ./internal/scheduler -run '^TestLive(FindRoutedPairs|CampaignPool|LeadHold|PlanCampaignDay|WarmupHealthCountsShareScansWithoutChangingSignals|TaskLedgerRangesAndClocksMatchLegacy)' -count=1 | tee campaign-pool-batch.log
+          if grep -q -- '--- SKIP:' campaign-pool-batch.log; then exit 1; fi
+          for test in TestLiveFindRoutedPairsPriorityMatchesLegacyOrdering TestLiveCampaignPoolReadsStayBatched TestLiveCampaignPoolBatchFailuresKeepSafety TestLiveCampaignPoolStandalonePlacementIsBatched; do
+            grep -q -- "--- PASS: $test " campaign-pool-batch.log
+          done
+
       - name: Scheduled-job retirement regressions (PostgreSQL)
         env:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
@@ -233,6 +281,25 @@ jobs:
           go test -race ./internal/repository -run '^TestLive(Monitoring|LastWarmupSendFailure|PersistentMailboxLoadingFailure|DispatchRetry|LineageQueueRevisions|AdminPlatformOverview|WarmupRecoversOldPreparation|WarmupPreparationRecoveryRetains|WarmupFilingRequiresAcknowledgement|WarmupFilingAuthority|WarmupTimeWindow|WarmupInvalidWindow)' -count=1
           go test -race ./internal/tasks -run '^Test(LiveWarmup(SafetyHoldReschedules|Recovery|TaskDoesNotApplyResults|DispatchDefersInvalidHours)|WarmupSenderDistinguishes)' -count=1
           go test -race ./internal/app/consumer -run '^TestLiveStoredSendResult' -count=1
+
+      - name: Warmup database query-pressure regressions (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -race -v ./internal/repository -run '^TestLive(WarmupDispatchUsagePreservesBudgetAndLastSend|WarmupDispatchQueryPlansUseMailboxAndMessageIndexes|OwnConversationIgnoresEmptyIDsWithoutLosingTaskOrThreadOwnership|ReplyInboxOwns)' -count=1 | tee warmup-query-pressure.log
+          if grep -q -- '--- SKIP:' warmup-query-pressure.log; then
+            echo "Warmup database query-pressure regressions must execute without skips"
+            exit 1
+          fi
+          for test in TestLiveWarmupDispatchUsagePreservesBudgetAndLastSend \
+            TestLiveWarmupDispatchQueryPlansUseMailboxAndMessageIndexes \
+            TestLiveOwnConversationIgnoresEmptyIDsWithoutLosingTaskOrThreadOwnership; do
+            grep -q -- "--- PASS: $test " warmup-query-pressure.log || { echo "Missing regression: $test"; exit 1; }
+          done
+          go test -race -v ./internal/infrastructure/db -run '^TestLiveWarmupDispatchUsageIndexUpgradePreservesEvidenceAndHolds$' -count=1 | tee warmup-query-upgrade.log
+          if grep -q -- '--- SKIP:' warmup-query-upgrade.log; then exit 1; fi
+          grep -q -- '--- PASS: TestLiveWarmupDispatchUsageIndexUpgradePreservesEvidenceAndHolds ' warmup-query-upgrade.log
 
       - name: Monitoring database observation regressions (PostgreSQL)
         env:
@@ -274,6 +341,21 @@ jobs:
         run: |
           go test -race -v -p 1 ./internal/repository ./internal/app/consumer ./internal/tasks ./internal/app/orgtransfer -run '^TestLive(Warmup(ReservationPreservesOriginalChargeDay|RefundCASProtectsConcurrentAndRestampedTasks|RefundAndResultRollbackTogether|ReplyRefundUsesChargedShapeAfterParentDeletion|ChargeAndRefundUseUTCInNonUTCSession|ChargeProofRollsBackWhenCounterWriteFails|CancellationPathsRefundOnlyProvenCharge|GenericCompletionDoesNotProveChargedAccounting|SendFailureGivesTheDayBack|SendGiveBackIsIdempotent|SafetyHoldReschedulesInsteadOfBlockingTheDispatcher|Recovery(RetiresExistingUnstartedDispatchOnce|HandlesPartialReservations|PreservesExecutionAndReceiptEvidence|KeepsOtherUnknownAndRestrictiveHolds|AndBeginCannotBothWin))|AppliedWarmupFailureRepairsOnlyRefundedChargeDeadLetters|GiveBackDailySend(ReversesADispatchedWarmupSend|LeavesOtherDaysAlone)|AccountDailyUsage(CountsWarmupTasksNotTheStatisticsRow|ScopesWarmupToTypeAndDay)|ImportWarmupStatisticsCannotGrantChargeRefundAuthority|Legacy(FailedStatusCannotProveNonExecution|JSONAndAvroFailurePersistConservativeAdmission)|AuthoritativeDeadLetterResultsReconcileWithoutReplay|DeadLetterResultEffectsAndSettlementRollBackTogether|Campaign(DeadLetterWorkerResultReleasesReservationOnce|ForeignKeyCleanupDoesNotProveWakeupOnly)|UserEmailDeadLetterUsesUnderlyingSendTaskType|UnknownSendOperatorResolutionReconcilesAndAudits|RecordedWorkerOutcomeSurvivesLostEvent|UnreservedLegacyFailedTaskRetainsUnknownHold|UnknownResolutionRejectsMissingEvidenceAndLiveExecution|SendRecoveryResolutionRequiresEvidenceAndRetainsUnknown|UnstartedDispatchRetainsDeferredOutcomeConflict)$' -count=1
           go test -race -v -p 1 ./internal/infrastructure/db -run '^TestLiveWarmupChargeUpgradeKeepsLegacyUnverifiedAndPreservesEvidence$' -count=1
+
+      - name: Mailbox placement health recovery (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -race -v ./internal/app/warmup -run '^TestLiveHealthPlacementRecoveryUsesTheDisplayedUTCWindow$' -count=1 | tee placement-health-recovery.log
+          grep -q -- '^--- PASS: TestLiveHealthPlacementRecoveryUsesTheDisplayedUTCWindow ' placement-health-recovery.log
+
+      - name: Linked warmup scheduling regressions (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          go test -race -v -p 1 ./internal/repository -run '^TestLiveMailboxBehavior(CreationRespectsGatewayWarmup|FirstCustomerWriteIsNotInherited)$' -count=1
+          go test -race -v -p 1 ./internal/infrastructure/db -run '^TestLiveLinkedWarmupScheduleUpgradePreservesExplicitProfilesAndTasks$' -count=1
 
       - name: Warmup filing provider-floor regressions (PostgreSQL)
         env:
@@ -378,7 +460,7 @@ jobs:
         env:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
         run: |
-          go test -race -p 1 ./internal/repository ./internal/app/consumer ./internal/app/orgtransfer ./internal/infrastructure/db -run '^TestLive(SyncArrival|SyncTruth|EmailErrorDedupe)' -count=1
+          go test -race -p 1 ./internal/repository ./internal/app/consumer ./internal/app/orgtransfer ./internal/infrastructure/db -run '^TestLive(SyncArrival|SyncTruth|EmailErrorDedupe|EmailErrorResolveMethod)' -count=1
 
       - name: Payload-free arrival delivery diagnostics regressions (PostgreSQL)
         env:

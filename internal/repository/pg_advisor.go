@@ -76,6 +76,16 @@ type AdvisorMailbox struct {
 	InActiveCampaign bool
 	// SendLifecycle is active, resting or reserve (held by its owner).
 	SendLifecycle string
+	// The pool's warmup mail handed off to this mailbox over seven days, how
+	// much its sync verified, and how many sender workspaces lost mail to it.
+	WarmupDelivered7d int
+	WarmupArrived7d   int
+	WarmupLostBy7d    int
+}
+
+// WarmupUnreachable reports a mailbox the pool has stopped drawing as a recipient.
+func (m AdvisorMailbox) WarmupUnreachable() bool {
+	return models.WarmupRecipientUnreachable(m.WarmupDelivered7d, m.WarmupArrived7d, m.WarmupLostBy7d)
 }
 
 // SendingCold is true when campaigns can actually pick this mailbox right now.
@@ -214,6 +224,8 @@ type AdvisorSnapshot struct {
 	// a step with no entry is simply not judged, and no copy detector that
 	// reads a verdict fires on it.
 	CopyJudgments map[uuid.UUID]copyjudge.Verdict
+	// Failed holds each section that did not load this run, with its error.
+	Failed map[AdvisorSection]error
 }
 
 // AdvisorRepository persists findings and loads the evaluation snapshot.
@@ -227,8 +239,9 @@ type AdvisorRepository interface {
 	// dismissed one stays dismissed until it resolves first.
 	UpsertFinding(ctx context.Context, f *models.AdvisorFinding) (*models.AdvisorFinding, bool, error)
 	// ResolveMissing closes every open/snoozed/applied finding for the org whose
-	// fingerprint is not in keep, returning how many it closed.
-	ResolveMissing(ctx context.Context, orgID uuid.UUID, keep []string) (int, error)
+	// fingerprint is not in keep and whose detector is not in keepDetectors,
+	// returning how many it closed.
+	ResolveMissing(ctx context.Context, orgID uuid.UUID, keep, keepDetectors []string) (int, error)
 	// ExpireSnoozes flips snoozed findings whose window has passed back to open.
 	ExpireSnoozes(ctx context.Context) (int, error)
 
@@ -428,14 +441,19 @@ func evidenceHashOf(f *models.AdvisorFinding) string {
 	return f.EvidenceHash()
 }
 
-func (r *advisorRepository) ResolveMissing(ctx context.Context, orgID uuid.UUID, keep []string) (int, error) {
+func (r *advisorRepository) ResolveMissing(ctx context.Context, orgID uuid.UUID, keep, keepDetectors []string) (int, error) {
+	// A nil slice binds as NULL, and NOT (x = ANY(NULL)) would match no row.
+	if keepDetectors == nil {
+		keepDetectors = []string{}
+	}
 	query := `
 		UPDATE advisor_findings
 		SET status = 'resolved', resolved_at = NOW()
 		WHERE organization_id = $1
 		  AND status IN ('open', 'snoozed', 'applied', 'dismissed')
-		  AND NOT (fingerprint = ANY($2))`
-	tag, err := r.db.Exec(ctx, query, orgID, keep)
+		  AND NOT (fingerprint = ANY($2))
+		  AND NOT (detector_key = ANY($3))`
+	tag, err := r.db.Exec(ctx, query, orgID, keep, keepDetectors)
 	if err != nil {
 		return 0, err
 	}

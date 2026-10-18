@@ -191,6 +191,7 @@ type incomingReplyProgressRepo struct {
 	claims        int
 	completed     int
 	latest        *repository.CampaignSequencePair
+	latestBefore  time.Time
 	sourceInbound bool
 	sourceClaimed bool
 	replyAccepted bool
@@ -218,12 +219,17 @@ func (r *incomingReplyProgressRepo) CampaignContactSentFromAccount(context.Conte
 	return r.receivingSent, nil
 }
 
-func (r *incomingReplyProgressRepo) GetLatestCampaignSequenceForContact(context.Context, uuid.UUID) (*repository.CampaignSequencePair, error) {
+func (r *incomingReplyProgressRepo) GetLatestCampaignSequenceForContact(_ context.Context, _ uuid.UUID, receivedAt time.Time) (*repository.CampaignSequencePair, error) {
+	r.latestBefore = receivedAt
 	return r.latest, nil
 }
 
 func (r *incomingReplyProgressRepo) GetLatestReplyClass(context.Context, uuid.UUID, uuid.UUID) (string, error) {
 	return "", nil
+}
+
+func (r *incomingReplyProgressRepo) RecordReplyIntent(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string) error {
+	return nil
 }
 
 func (r *incomingReplyProgressRepo) RecordReplyClassification(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string, string, float64) error {

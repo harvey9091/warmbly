@@ -261,15 +261,17 @@ func (s *service) CanParticipate(ctx context.Context, accountID uuid.UUID, poolT
 	if err != nil {
 		return false, "", errx.InternalError()
 	}
-	if !eligible {
-		return false, "pool_authority_unavailable", nil
-	}
 	health, err := s.repo.GetParticipantHealth(ctx, accountID, poolType)
 	if err != nil {
 		return false, "", errx.InternalError()
 	}
+	// "not_in_pool" is what sends a reply-back to the other tier's gate, so it
+	// must not be masked by the eligibility refusal.
 	if health == nil {
 		return false, "not_in_pool", nil
+	}
+	if !eligible {
+		return false, "pool_authority_unavailable", nil
 	}
 
 	now := s.now().UTC()
@@ -684,14 +686,14 @@ func (s *service) evaluateAndPersist(ctx context.Context, participant *models.Wa
 func (s *service) loadMetrics(ctx context.Context, accountID uuid.UUID, participant *models.WarmupParticipantHealth) (*models.WarmupHealthMetrics, error) {
 	signalsFrom := participant.HealthSignalsFrom
 	now := s.now().UTC()
-	since := func(window time.Duration) time.Time {
-		start := now.Add(-window)
+	since := func(start time.Time) time.Time {
 		if signalsFrom.After(start) {
 			return signalsFrom
 		}
 		return start
 	}
-	counts, err := s.repo.HealthMetricCounts(ctx, accountID, since(7*24*time.Hour), since(30*24*time.Hour))
+	counts, err := s.repo.HealthMetricCounts(ctx, accountID,
+		since(models.WarmupPlacementWindowStart(now)), since(now.Add(-7*24*time.Hour)), since(now.Add(-30*24*time.Hour)))
 	if err != nil {
 		return nil, fmt.Errorf("HealthMetricCounts: %w", err)
 	}
@@ -928,8 +930,8 @@ func evaluatePlacement(m *models.WarmupHealthMetrics, prior models.WarmupHealthS
 		return evaluationDecision{
 			State:        models.WarmupHealthThrottled,
 			BlockedUntil: &until,
-			Reason: fmt.Sprintf("%s Warmup and cold sending run at half volume with wider spacing until it is below %s, then return to normal on their own.",
-				placementSummary(m), fmtPct(spamPlacementThrottlePct*spamPlacementExitFactor)),
+			Reason: fmt.Sprintf("%s Warmup and cold sending run at half volume with wider spacing until it is below %s, then step down to watch. Watch lifts below %s on its own. Separate ramp limits still apply.",
+				placementSummary(m), fmtPct(spamPlacementThrottlePct*spamPlacementExitFactor), fmtPct(spamPlacementWatchPct*spamPlacementExitFactor)),
 			Score: rate,
 		}
 	case rate >= spamPlacementWatchPct,

@@ -191,6 +191,7 @@ func Run(
 
 		// Worker mailbox-sync messageId -> internal email map.
 		node.GET("/email-message-map", h.InternalGetEmailMessageMap)
+		node.POST("/email-message-map/lookup", h.InternalLookupEmailMessageMaps)
 		node.PUT("/email-message-map", h.InternalPutEmailMessageMap)
 		node.POST("/email-message-map/arrival", h.InternalAdmitEmailArrival)
 		node.DELETE("/email-message-map", h.InternalDeleteEmailMessageMap)
@@ -495,6 +496,15 @@ func Run(
 		// Re-prove the account holder behind a live session. What the routes
 		// marked RequireFreshAuth below are waiting for.
 		protectedAuth.POST("/reauth", h.Reauth)
+		// The other ways to confirm, each answering only for the account's
+		// own passkeys and linked identities, and stamping only this session.
+		protectedAuth.GET("/reauth/methods", h.ReauthMethods)
+		protectedAuth.POST("/reauth/passkey/begin", h.ReauthPasskeyBegin)
+		protectedAuth.POST("/reauth/passkey/finish", h.ReauthPasskeyFinish)
+		protectedAuth.POST("/reauth/sso/begin", h.ReauthSSOBegin)
+		protectedAuth.POST("/reauth/sso/finish", h.ReauthSSOFinish)
+		protectedAuth.POST("/reauth/native/begin", h.ReauthNativeBegin)
+		protectedAuth.POST("/reauth/native", h.ReauthNative)
 
 		// Passkey enrollment + management require an authenticated session.
 		//

@@ -37,6 +37,7 @@ var (
 	ErrInstanceRevoked   = errx.NewWithIdentifier(errx.Unauthorized, "pool_link_revoked", "This instance's link has been revoked. Reconnect from the instance settings.")
 	ErrMailboxLimit      = errx.NewWithIdentifier(errx.PaymentRequired, "pool_link_mailbox_limit", "This workspace has reached the free allowance of linked mailboxes. Upgrade to the pool plan for unlimited mailboxes.")
 	ErrMailboxNotFound   = errx.NewWithIdentifier(errx.NotFound, "pool_link_mailbox_not_found", "That mailbox is not enrolled.")
+	ErrMailboxConflict   = errx.NewWithIdentifier(errx.Conflict, "pool_link_mailbox_conflict", "This address already exists in the linked Cloud workspace, but is not enrolled for this local mailbox. Contact Warmbly support to check the association. Do not delete or re-enroll the mailbox.")
 	ErrWarmupNotEntitled = errx.NewWithIdentifier(errx.Forbidden, "pool_link_warmup_unavailable", "Warmup is not available on this workspace.")
 	ErrBadCredential     = errx.NewWithIdentifier(errx.BadRequest, "pool_link_credential", "A credential matching the provider is required.")
 	ErrBadRequest        = errx.NewWithIdentifier(errx.BadRequest, "pool_link_request", "Instance name is required.")
@@ -420,7 +421,7 @@ func (s *service) RevokeInstance(ctx context.Context, orgID, instanceID uuid.UUI
 		return errx.InternalError()
 	}
 	for _, m := range mailboxes {
-		if xerr := s.Unenroll(ctx, inst, m.RemoteID); xerr != nil {
+		if xerr := s.unenroll(ctx, inst, m.RemoteID, false); xerr != nil {
 			log.Warn().Str("account_id", m.EmailAccountID.String()).Msg("pool link: mailbox removal failed during revoke; continuing")
 		}
 	}
@@ -478,13 +479,14 @@ func (s *service) Enroll(ctx context.Context, inst *models.PoolLinkInstance, req
 			return nil, ErrBadCredential
 		}
 		acc, xerr = s.emails.NewOauthAccount(ctx, userID, models.NewOauthAccount{
-			OrganizationID: &orgID,
-			Provider:       req.Provider,
-			Name:           name,
-			Email:          strings.TrimSpace(req.Email),
-			AccessToken:    req.OAuth.AccessToken,
-			RefreshToken:   req.OAuth.RefreshToken,
-			ExpiresAt:      req.OAuth.ExpiresAt,
+			OrganizationID:         &orgID,
+			DisableSendingBehavior: true,
+			Provider:               req.Provider,
+			Name:                   name,
+			Email:                  strings.TrimSpace(req.Email),
+			AccessToken:            req.OAuth.AccessToken,
+			RefreshToken:           req.OAuth.RefreshToken,
+			ExpiresAt:              req.OAuth.ExpiresAt,
 		})
 	case models.InboxProviderSMTPIMAP:
 		if req.SMTPIMAP == nil || req.SMTPIMAP.SMTP == nil || req.SMTPIMAP.IMAP == nil {
@@ -494,16 +496,20 @@ func (s *service) Enroll(ctx context.Context, inst *models.PoolLinkInstance, req
 			return nil, xerr
 		}
 		acc, xerr = s.emails.NewSMTPIMAPAccount(ctx, userID, models.NewSMTPIMAPAccount{
-			OrganizationID: &orgID,
-			Name:           name,
-			Email:          strings.TrimSpace(req.Email),
-			SMTP:           req.SMTPIMAP.SMTP,
-			IMAP:           req.SMTPIMAP.IMAP,
+			OrganizationID:         &orgID,
+			DisableSendingBehavior: true,
+			Name:                   name,
+			Email:                  strings.TrimSpace(req.Email),
+			SMTP:                   req.SMTPIMAP.SMTP,
+			IMAP:                   req.SMTPIMAP.IMAP,
 		})
 	default:
 		return nil, ErrBadCredential
 	}
 	if xerr != nil {
+		if errors.Is(xerr, errx.ErrEmailOnboardAlreadyExists) {
+			return nil, ErrMailboxConflict
+		}
 		return nil, xerr
 	}
 
@@ -567,12 +573,55 @@ func (s *service) ListMailboxes(ctx context.Context, inst *models.PoolLinkInstan
 		return nil, errx.InternalError()
 	}
 	out := make([]models.PoolLinkMailboxState, 0, len(rows))
-	for _, m := range rows {
-		state, xerr := s.state(ctx, inst, &m)
-		if xerr != nil {
-			continue
+	for start := 0; start < len(rows); start += config.AccountStatusLimitMax {
+		batch := rows[start:min(start+config.AccountStatusLimitMax, len(rows))]
+		ids := make([]uuid.UUID, len(batch))
+		for i, m := range batch {
+			ids[i] = m.EmailAccountID
 		}
-		out = append(out, *state)
+		accounts, xerr := s.emails.Search(ctx, inst.OrganizationID.String(), "", nil, nil, config.AccountStatusLimitMax, ids)
+		if xerr != nil {
+			return nil, xerr
+		}
+		byID := make(map[uuid.UUID]models.Email, len(accounts.Data))
+		for _, acc := range accounts.Data {
+			byID[acc.ID] = acc
+		}
+		statuses := make(map[uuid.UUID]models.EmailAccountStatus)
+		if s.analytics != nil {
+			page, xerr := s.analytics.GetAccountStatusDetailsPage(ctx, inst.OrganizationID, ids, "", config.AccountStatusLimitMax)
+			if xerr != nil {
+				return nil, xerr
+			}
+			for _, status := range page.Data {
+				statuses[status.ID] = status
+			}
+		}
+		summaries := make(map[uuid.UUID]repository.WarmupSummary)
+		if s.warmup != nil {
+			now := time.Now()
+			summaries, err = s.warmup.GetWarmupSummaries(ctx, ids, now.Add(-7*24*time.Hour), now)
+			if err != nil {
+				return nil, errx.InternalError()
+			}
+		}
+		for _, m := range batch {
+			acc, ok := byID[m.EmailAccountID]
+			if !ok {
+				return nil, errx.InternalError()
+			}
+			st := mailboxState(&acc, &m)
+			if s.analytics != nil {
+				status, ok := statuses[acc.ID]
+				if !ok {
+					return nil, errx.InternalError()
+				}
+				applyMailboxStatus(st, &status)
+			}
+			summary := summaries[acc.ID]
+			st.Sent7d, st.Replied7d, st.SpamPlaced7d = summary.Sent, summary.Replied, summary.SpamPlaced
+			out = append(out, *st)
+		}
 	}
 	return out, nil
 }
@@ -601,33 +650,14 @@ func (s *service) state(ctx context.Context, inst *models.PoolLinkInstance, m *m
 	if xerr != nil {
 		return nil, xerr
 	}
-	st := &models.PoolLinkMailboxState{
-		Participation:  &models.DiagnosticParticipation{Mode: models.TestParticipationLegacy, Send: acc.TestSendingAllowed(), Receive: acc.TestReceivingAllowed(), SharedDailyLimit: acc.SharedDailyLimit, RollingRecipientLimit: acc.RollingRecipientLimit},
-		RemoteID:       m.RemoteID,
-		EmailAccountID: acc.ID,
-		Email:          acc.Email,
-		Name:           acc.Name,
-		Provider:       acc.Provider,
-		Status:         acc.Status,
-		EnrolledAt:     m.EnrolledAt,
-		Managed:        m.Managed,
-		AuthState:      acc.AuthState,
-		Settings: models.PoolLinkWarmupSettings{
-			Base: acc.WarmupBase, Max: acc.WarmupMax, Increase: acc.WarmupIncrease, ReplyRate: acc.WarmupReplyRate,
-			StartTime: acc.WarmupStartTime, EndTime: acc.WarmupEndTime, Days: acc.WarmupDays, Timezone: acc.ClockTimezone(),
-		},
+	if acc.OrganizationID == nil || *acc.OrganizationID != inst.OrganizationID {
+		return nil, ErrMailboxNotFound
 	}
-	if acc.TestMode != nil {
-		st.Participation.Mode = *acc.TestMode
-	}
+	st := mailboxState(acc, m)
 	if s.analytics != nil {
-		// Detail carries the partner cap, so a target no partner can meet is never shown as one.
 		status, xerr := s.analytics.GetAccountStatusDetail(ctx, inst.OrganizationID, acc.ID)
 		if xerr == nil && status != nil {
-			st.Warmup = status.WarmupStatus
-			st.Health = status.WarmupHealth
-			st.Errors = status.Errors
-			st.SentToday = status.DailyUsage.WarmupSent
+			applyMailboxStatus(st, status)
 		} else if xerr != nil {
 			log.Warn().Str("account_id", acc.ID.String()).Str("error", xerr.Message).Msg("pool link: account status unavailable")
 		}
@@ -647,6 +677,36 @@ func (s *service) state(ctx context.Context, inst *models.PoolLinkInstance, m *m
 		}
 	}
 	return st, nil
+}
+
+func mailboxState(acc *models.Email, m *models.PoolLinkMailbox) *models.PoolLinkMailboxState {
+	st := &models.PoolLinkMailboxState{
+		Participation:  &models.DiagnosticParticipation{Mode: models.TestParticipationLegacy, Send: acc.TestSendingAllowed(), Receive: acc.TestReceivingAllowed(), SharedDailyLimit: acc.SharedDailyLimit, RollingRecipientLimit: acc.RollingRecipientLimit},
+		RemoteID:       m.RemoteID,
+		EmailAccountID: acc.ID,
+		Email:          acc.Email,
+		Name:           acc.Name,
+		Provider:       acc.Provider,
+		Status:         acc.Status,
+		EnrolledAt:     m.EnrolledAt,
+		Managed:        m.Managed,
+		AuthState:      acc.AuthState,
+		Settings: models.PoolLinkWarmupSettings{
+			Base: acc.WarmupBase, Max: acc.WarmupMax, Increase: acc.WarmupIncrease, ReplyRate: acc.WarmupReplyRate,
+			StartTime: acc.WarmupStartTime, EndTime: acc.WarmupEndTime, Days: acc.WarmupDays, Timezone: acc.ClockTimezone(),
+		},
+	}
+	if acc.TestMode != nil {
+		st.Participation.Mode = *acc.TestMode
+	}
+	return st
+}
+
+func applyMailboxStatus(st *models.PoolLinkMailboxState, status *models.EmailAccountStatus) {
+	st.Warmup = status.WarmupStatus
+	st.Health = status.WarmupHealth
+	st.Errors = status.Errors
+	st.SentToday = status.DailyUsage.WarmupSent
 }
 
 func (s *service) PatchMailbox(ctx context.Context, inst *models.PoolLinkInstance, remoteID uuid.UUID, patch models.PoolLinkMailboxPatch) (*models.PoolLinkMailboxState, *errx.Error) {
@@ -733,8 +793,12 @@ func (s *service) PatchMailbox(ctx context.Context, inst *models.PoolLinkInstanc
 }
 
 func (s *service) Unenroll(ctx context.Context, inst *models.PoolLinkInstance, remoteID uuid.UUID) *errx.Error {
+	return s.unenroll(ctx, inst, remoteID, true)
+}
+
+func (s *service) unenroll(ctx context.Context, inst *models.PoolLinkInstance, remoteID uuid.UUID, stopManaged bool) *errx.Error {
 	if _, ok := s.repo.(repository.PoolLinkManagedRepository); ok && !managedOperationLocked(ctx) {
-		return s.withManagedOperationLock(ctx, inst.ID, func(ctx context.Context) *errx.Error { return s.Unenroll(ctx, inst, remoteID) })
+		return s.withManagedOperationLock(ctx, inst.ID, func(ctx context.Context) *errx.Error { return s.unenroll(ctx, inst, remoteID, stopManaged) })
 	}
 	if r, ok := s.repo.(repository.PoolLinkManagedRepository); ok {
 		if err := r.RevokeManagedOperations(ctx, inst.ID, &remoteID); err != nil {
@@ -748,8 +812,12 @@ func (s *service) Unenroll(ctx context.Context, inst *models.PoolLinkInstance, r
 	if m == nil {
 		return ErrMailboxNotFound
 	}
-	// A managed mailbox belongs to the workspace; only the link goes.
-	if !m.Managed {
+	// Individual removal stops Cloud participation; an instance disconnect only releases its mirrors.
+	if m.Managed && stopManaged {
+		if _, xerr := s.emailSvc.SetWarmupLifecycle(ctx, inst.OrganizationID.String(), m.EmailAccountID.String(), "stop"); xerr != nil && xerr != errx.ErrNotFound {
+			return xerr
+		}
+	} else if !m.Managed {
 		if xerr := s.emailSvc.Delete(ctx, inst.OrganizationID.String(), m.EmailAccountID.String()); xerr != nil && xerr != errx.ErrNotFound {
 			return xerr
 		}

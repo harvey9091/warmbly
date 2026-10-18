@@ -2,6 +2,7 @@ package advisor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -262,6 +263,149 @@ func TestSpamPlacementRespectsItsSampleFloorAndBands(t *testing.T) {
 	}
 	if strings.Contains(string(f.Action.Args), "status") {
 		t.Errorf("spam placement fix must not switch the mailbox off: %s", f.Action.Args)
+	}
+}
+
+func TestPlacementSlowdownDoesNotOfferACampaignHold(t *testing.T) {
+	for _, tc := range []struct {
+		spam     int
+		severity models.AdvisorSeverity
+	}{
+		{10, models.AdvisorMedium},
+		{19, models.AdvisorMedium},
+		{20, models.AdvisorHigh},
+		{49, models.AdvisorHigh},
+		{50, models.AdvisorCritical},
+	} {
+		t.Run(fmt.Sprintf("%d percent", tc.spam), func(t *testing.T) {
+			m := healthyMailbox()
+			m.WarmupPlacement = models.WarmupPlacementEvidence{MajorDelivered: 100, MajorSpam: tc.spam}
+			f := findingsByKey(Detect(snapshotOf(m), defaults()))["mailbox_spam_placement"]
+			if f.Severity != tc.severity {
+				t.Fatalf("severity = %s, want %s", f.Severity, tc.severity)
+			}
+			if tc.spam >= 50 {
+				if f.Action == nil || f.Action.Tool != "set_mailbox_send_hold" || !strings.Contains(f.Remedy, "Stop cold sending") {
+					t.Fatalf("severe placement lost its campaign hold: %+v", f)
+				}
+				return
+			}
+			if f.Action != nil || !strings.Contains(f.Remedy, "automatically") {
+				t.Fatalf("recoverable placement should advise automatic slowdown without a hold: %+v", f)
+			}
+			if f.Evidence["recommended_action"] != f.Remedy {
+				t.Fatal("narration evidence does not carry the current recovery guidance")
+			}
+		})
+	}
+}
+
+func TestThrottledMailboxAdviceKeepsItInThePool(t *testing.T) {
+	for _, reason := range []string{
+		"27.3% of 22 major-provider deliveries landed in spam",
+		"re-entry probation after block expiry",
+	} {
+		t.Run(reason, func(t *testing.T) {
+			m := healthyMailbox()
+			m.PoolHealth, m.PoolHealthReason = "throttled", reason
+			m.PoolBlocked = true // A throttle's future blocked_until is not pool exclusion.
+			m.WarmupPlacement = models.WarmupPlacementEvidence{MajorDelivered: 22, MajorSpam: 6}
+			byKey := findingsByKey(Detect(snapshotOf(m), defaults()))
+			if _, ok := byKey["warmup_pool_blocked"]; ok {
+				t.Fatal("a throttled mailbox is still described as excluded from the pool")
+			}
+			f, ok := byKey["warmup_pool_throttled"]
+			if !ok || f.Severity != models.AdvisorHigh || f.Action != nil {
+				t.Fatalf("expected a non-critical slowdown finding without a hold: %+v", f)
+			}
+			if !strings.Contains(f.Detail, reason) || !strings.Contains(f.Remedy, "Warmbly manage") {
+				t.Fatalf("throttle advice does not explain the reason and automatic recovery: %+v", f)
+			}
+			for _, key := range []string{"warmup_pool_throttled", "mailbox_spam_placement"} {
+				f := byKey[key]
+				copy := strings.ToLower(f.Remedy + " " + strings.Join(f.Steps, " "))
+				for _, old := range []string{"stop cold sending", "take the mailbox off", "out of cold rotation for a week", "until it requalifies", "bring it back at 5"} {
+					if strings.Contains(copy, old) {
+						t.Errorf("%s still recommends unnecessary exclusion: %s", key, copy)
+					}
+				}
+				if f.Action != nil || f.Evidence["recommended_action"] != f.Remedy {
+					t.Errorf("%s carries a hold or stale narration guidance", key)
+				}
+			}
+			settings := defaults()
+			settings.MutedDetectors = []string{"warmup_pool_throttled"}
+			if _, ok := findingsByKey(Detect(snapshotOf(m), settings))["warmup_pool_throttled"]; ok {
+				t.Fatal("the slowdown finding ignored its own mute setting")
+			}
+		})
+	}
+}
+
+func TestPoolExclusionIsSeparateFromRecoverableBands(t *testing.T) {
+	for _, state := range []string{"healthy", "watch", "quarantined", "blocked", ""} {
+		t.Run(state, func(t *testing.T) {
+			m := healthyMailbox()
+			m.PoolHealth, m.PoolBlocked = state, true
+			byKey := findingsByKey(Detect(snapshotOf(m), defaults()))
+			if _, ok := byKey["warmup_pool_throttled"]; ok {
+				t.Fatal("a non-throttled mailbox produced a throttle finding")
+			}
+			f, blocked := byKey["warmup_pool_blocked"]
+			if state == "healthy" || state == "watch" {
+				if blocked {
+					t.Fatalf("%s was treated as pool exclusion solely for its timer", state)
+				}
+				return
+			}
+			if !blocked || f.Severity != models.AdvisorCritical || f.Action == nil || f.Action.Tool != "set_mailbox_send_hold" {
+				t.Fatalf("real pool exclusion lost its severe guidance or hold: %+v", f)
+			}
+			if !strings.Contains(f.Remedy, "Stop cold sending") || f.Action.Undo == nil || strings.Contains(string(f.Action.Args), "status") {
+				t.Fatalf("pool exclusion must offer a reversible campaign hold without disabling warmup: %+v", f)
+			}
+		})
+	}
+}
+
+func TestThrottleDoesNotSuppressIndependentSafetyFindings(t *testing.T) {
+	m := healthyMailbox()
+	m.PoolHealth = "throttled"
+	m.AuthState, m.AuthSPF, m.AuthDMARC = "failing", false, false
+	m.Complaints30d, m.Bounces30d = 2, 80
+	m.WarmupPlacement = models.WarmupPlacementEvidence{MajorDelivered: 100, MajorSpam: 50}
+	byKey := findingsByKey(Detect(snapshotOf(m), defaults()))
+	for _, key := range []string{"mailbox_domain_auth", "mailbox_complaint_rate", "mailbox_bounce_rate", "mailbox_spam_placement"} {
+		if f, ok := byKey[key]; !ok || f.Severity != models.AdvisorCritical {
+			t.Errorf("throttling suppressed independent safety finding %s: %+v", key, f)
+		}
+	}
+	if f := byKey["mailbox_spam_placement"]; f.Action == nil || f.Action.Tool != "set_mailbox_send_hold" {
+		t.Fatal("severe placement lost its hold action on a throttled mailbox")
+	}
+}
+
+func TestUpdatedPlacementGuidanceInvalidatesOldNarration(t *testing.T) {
+	m := healthyMailbox()
+	m.WarmupPlacement = models.WarmupPlacementEvidence{MajorDelivered: 22, MajorSpam: 6}
+	f := findingsByKey(Detect(snapshotOf(m), defaults()))["mailbox_spam_placement"]
+	current := f.toModel(uuid.New())
+	legacy := *current
+	var err error
+	legacy.Evidence, err = json.Marshal(map[string]any{
+		"mailbox":                     m.Email,
+		"major_provider_spam_7d":      6,
+		"major_provider_delivered_7d": 22,
+		"spam_placement_percent":      band(100.0 * 6 / 22),
+		"quarantine_band_percent":     20.0,
+		"currently_sending_cold":      m.SendingCold(),
+		"current_daily_cap":           m.CampaignLimit,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.EvidenceHash() == legacy.EvidenceHash() || cacheKey(current) == cacheKey(&legacy) {
+		t.Fatal("unchanged placement numbers would retain the old stop-sending narration after an upgrade")
 	}
 }
 
@@ -1089,5 +1233,156 @@ func TestSpamPlacementAtSmallHostsAloneDoesNotAlarm(t *testing.T) {
 	m.WarmupPlacement = models.WarmupPlacementEvidence{MajorDelivered: 40, OtherDelivered: 40, OtherSpam: 40}
 	if f, fired := findingsByKey(Detect(snapshotOf(m), defaults()))["mailbox_spam_placement"]; fired {
 		t.Fatalf("small-host spam alone raised %q: %s", f.Severity, f.Title)
+	}
+}
+
+// A warming mailbox the pool has stopped reaching is told why, and the finding
+// goes away the moment one warmup email arrives or warmup is off.
+func TestDetectWarmupMailNotArriving(t *testing.T) {
+	fires := func(m repository.AdvisorMailbox) bool {
+		t.Helper()
+		for _, f := range Detect(snapshotOf(m), defaults()) {
+			if f.Key == "warmup_mail_not_arriving" {
+				return true
+			}
+		}
+		return false
+	}
+	m := healthyMailbox()
+	m.WarmupDelivered7d, m.WarmupLostBy7d = 12, 3
+	if !fires(m) {
+		t.Fatal("an unreachable warming mailbox produced no finding")
+	}
+	arrived := m
+	arrived.WarmupArrived7d = 1
+	if fires(arrived) {
+		t.Fatal("a mailbox that verified an arrival is still reported")
+	}
+	oneSender := m
+	oneSender.WarmupLostBy7d = 1
+	if fires(oneSender) {
+		t.Fatal("losses from one workspace are blamed on the recipient")
+	}
+	off := m
+	off.WarmupActive = false
+	if fires(off) {
+		t.Fatal("a mailbox with warmup off is reported")
+	}
+	if fires(healthyMailbox()) {
+		t.Fatal("a healthy mailbox is reported")
+	}
+}
+
+// busySnapshot fires as many section-reading detectors as one fixture can.
+func busySnapshot() *repository.AdvisorSnapshot {
+	campaignID, otherID := uuid.New(), uuid.New()
+	heavy := healthyMailbox()
+	heavy.ColdSent7d, heavy.ColdSent30d = 5000, 20000
+	snap := snapshotOf(heavy, healthyMailbox())
+	snap.Campaigns = []repository.AdvisorCampaign{
+		{
+			ID: campaignID, Name: "Outbound", Status: "active",
+			DailyLimit: 900, StartTime: "09:00", EndTime: "09:30",
+			SenderCount: 1, SenderCapacity: 50, PickedSenders: 1, SenderStrategy: "explicit",
+			StepCount: 2, EmailStepCount: 2, VariantCount: 1,
+			Sent: 3000, Opened: 300, Replied: 1, Bounced: 10,
+			LeadsTotal: 1000, LeadsRemaining: 5,
+		},
+		{ID: otherID, Name: "Solo", Status: "active", StepCount: 1, EmailStepCount: 1, DailyLimit: 10, Sent: 10},
+	}
+	snap.Steps = []repository.AdvisorStep{
+		{
+			ID: uuid.New(), CampaignID: campaignID, Kind: "email", Position: 0, Name: "Opener", WaitAfter: 1,
+			Subject:   "ACT NOW!! LIMITED TIME OFFER, THIS IS NOT SPAM AND IT IS 100% FREE FOR YOU AND YOUR WHOLE TEAM TODAY",
+			BodyPlain: "Hi {{.FirstName}},\n\n{{if .Company}}Act now, click here, buy now, limited time, no obligation, 100% free, risk free. " + strings.Repeat("More words here. ", 200),
+			Sent:      2000, Replied: 40,
+		},
+		{
+			ID: uuid.New(), CampaignID: campaignID, Kind: "email", Position: 1, Name: "Bump",
+			Subject: "re", BodyPlain: "Hi {{.FirstName}}, any thoughts?",
+			Sent: 1000, Replied: 0,
+		},
+	}
+	snap.Lists = map[uuid.UUID]repository.AdvisorListStats{
+		campaignID: {CampaignID: campaignID, Total: 1000, RoleAddresses: 400, FreeMail: 700, Suppressed: 200, Unsubscribed: 30, MissingFirstName: 500},
+	}
+	snap.Org = repository.AdvisorOrgStats{Mailboxes: 2, ActiveMailboxes: 2, RunningCampaigns: 2, DuplicateContacts: 150}
+	return snap
+}
+
+// A detector that reads a section it does not declare would resolve its
+// findings on a run where that section failed to load.
+func TestDetectorsDeclareEverySectionTheyRead(t *testing.T) {
+	blank := map[repository.AdvisorSection]func(*repository.AdvisorSnapshot){
+		repository.AdvisorSectionCampaigns: func(s *repository.AdvisorSnapshot) { s.Campaigns = nil },
+		repository.AdvisorSectionSteps:     func(s *repository.AdvisorSnapshot) { s.Steps = nil },
+		repository.AdvisorSectionLists:     func(s *repository.AdvisorSnapshot) { s.Lists = map[uuid.UUID]repository.AdvisorListStats{} },
+		repository.AdvisorSectionOrg:       func(s *repository.AdvisorSnapshot) { s.Org = repository.AdvisorOrgStats{} },
+	}
+	fingerprints := func(fs []Finding) string {
+		out := make([]string, 0, len(fs))
+		for _, f := range fs {
+			out = append(out, f.Fingerprint())
+		}
+		return strings.Join(out, ",")
+	}
+	base := busySnapshot()
+	fired := 0
+	for _, d := range AllDetectors() {
+		full := d.Run(base)
+		if len(d.Reads) > 0 && len(full) > 0 {
+			fired++
+		}
+		for sec, clear := range blank {
+			declared := false
+			for _, r := range d.Reads {
+				declared = declared || r == sec
+			}
+			if declared {
+				continue
+			}
+			s := *base
+			clear(&s)
+			if fingerprints(d.Run(&s)) != fingerprints(full) {
+				t.Errorf("detector %q reads the %s section but does not declare it", d.Key, sec)
+			}
+		}
+	}
+	if fired < 20 {
+		t.Errorf("the fixture fires only %d section-reading detectors; the check has no teeth", fired)
+	}
+}
+
+func TestFailedSectionHoldsItsDetectors(t *testing.T) {
+	snap := busySnapshot()
+	snap.Failed = map[repository.AdvisorSection]error{repository.AdvisorSectionLists: errors.New("statement timeout")}
+	settings := defaults()
+
+	for _, f := range Detect(snap, settings) {
+		if strings.HasPrefix(f.Key, "list_") {
+			t.Errorf("%s opened from a list section that did not load", f.Key)
+		}
+	}
+	held := map[string]bool{}
+	for _, k := range heldDetectors(snap, settings) {
+		held[k] = true
+	}
+	for _, d := range AllDetectors() {
+		if want := strings.HasPrefix(d.Key, "list_"); held[d.Key] != want {
+			t.Errorf("detector %q held = %v, want %v", d.Key, held[d.Key], want)
+		}
+	}
+
+	// A muted detector is not held, so its findings still close as before.
+	settings.MutedDetectors = []string{"list_role_addresses"}
+	for _, k := range heldDetectors(snap, settings) {
+		if k == "list_role_addresses" {
+			t.Error("a muted detector was held open")
+		}
+	}
+
+	snap.Failed = nil
+	if got := heldDetectors(snap, settings); len(got) != 0 {
+		t.Errorf("a complete snapshot held %v", got)
 	}
 }

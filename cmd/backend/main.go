@@ -1513,6 +1513,9 @@ func main() {
 		if aware, ok := emailSendService.(emailsend.TrackedLinksAware); ok {
 			aware.WireTrackedLinks(trackedLinkRepository)
 		}
+		if aware, ok := emailSendService.(emailsend.SuppressionAware); ok {
+			aware.WireSuppression(advancedRepository)
+		}
 		composeService = compose.NewService(emailRepostory, repository.NewComposeRepository(primaryDB))
 		// uniboxService is constructed here (rather than alongside the
 		// other service constructors above) because cancel-scheduled
@@ -1768,8 +1771,9 @@ func main() {
 		}
 		// Never hand a send to a worker that stopped heartbeating: nothing
 		// would execute it and nothing would report it, so the step would
-		// look sent forever. The worker reconciler re-places the mailbox and
-		// the dead-letter retry replays the task once it has.
+		// look sent forever. The worker reconciler re-places the mailbox; a
+		// campaign retries on its next pass, and a unibox send is refused and
+		// reported to the mailbox owner.
 		if liveness, ok := emailSender.(interface{ WireWorkerLiveness(tasks.WorkerLiveness) }); ok {
 			liveness.WireWorkerLiveness(tasks.NewWorkerLiveness(workerRepository, cache))
 		}
@@ -1997,7 +2001,8 @@ func main() {
 		// snapshot instead of running the planner (lead supply, per-mailbox
 		// history) on the request. A no-op without the snapshot store or planner.
 		if campaignService != nil {
-			go campaignService.StartSendPlanSnapshotter(ctx, time.Minute)
+			interval, maxAge := sendPlanSnapshotTiming()
+			go campaignService.StartSendPlanSnapshotter(ctx, interval, maxAge)
 		}
 
 		// Segment-linked campaigns: enrol contacts that drifted into a linked
@@ -2668,6 +2673,20 @@ func localTasksPollInterval() time.Duration {
 		return time.Second
 	}
 	return d
+}
+
+// sendPlanSnapshotTiming reads SEND_PLAN_SNAPSHOT_INTERVAL (default 1m) and
+// SEND_PLAN_SNAPSHOT_MAX_AGE (default three intervals), both Go durations.
+func sendPlanSnapshotTiming() (time.Duration, time.Duration) {
+	interval, err := time.ParseDuration(getenvDefault("SEND_PLAN_SNAPSHOT_INTERVAL", "1m"))
+	if err != nil || interval <= 0 {
+		interval = time.Minute
+	}
+	maxAge, err := time.ParseDuration(os.Getenv("SEND_PLAN_SNAPSHOT_MAX_AGE"))
+	if err != nil || maxAge <= 0 {
+		maxAge = 3 * interval
+	}
+	return interval, maxAge
 }
 
 // wsHealthURL derives the realtime service's HTTP /health URL from the
