@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -1365,35 +1364,21 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 	args := []any{orgID, emailAccountID}
 	argPos := 3
 	statusSQL := "status"
+	if xerr := validate.MailboxUpdate(udata); xerr != nil {
+		return nil, xerr
+	}
 
 	if udata.Name != nil {
-		if !validate.EmailName(udata.Name) {
-			return nil, errx.ErrEmailName
-		}
-		if xerr := validate.MailboxNameShown(*udata.Name); xerr != nil {
-			return nil, xerr
-		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "name", argPos))
 		args = append(args, *udata.Name)
 		argPos++
 	}
 	if udata.SignaturePlain != nil {
-		// Characters, not bytes: the documented limit is in characters, and
-		// len() turned a perfectly ordinary Cyrillic or CJK signature into one
-		// that is "too long" at a third of it.
-		l := utf8.RuneCountInString(*udata.SignaturePlain)
-		if l > config.SignaturePlainMax {
-			return nil, errx.ErrEmailSignaturePlain
-		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "signature_plain", argPos))
 		args = append(args, *udata.SignaturePlain)
 		argPos++
 	}
 	if udata.SignatureHTML != nil {
-		l := utf8.RuneCountInString(*udata.SignatureHTML)
-		if l > config.SignatureHTMLMax {
-			return nil, errx.ErrEmailSignatureHTML
-		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "signature_html", argPos))
 		args = append(args, *udata.SignatureHTML)
 		argPos++
@@ -1405,9 +1390,6 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 	}
 	if udata.Timezone != nil {
 		tz := strings.TrimSpace(*udata.Timezone)
-		if verr := validate.EmailTimezone(tz); verr != nil {
-			return nil, verr
-		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "timezone", argPos))
 		args = append(args, tz)
 		argPos++
@@ -1448,11 +1430,7 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 		argPos++
 	}
 	if udata.Status != nil {
-		// Validate status - must be one of: active, inactive, revoked
 		status := *udata.Status
-		if status != "active" && status != "inactive" && status != "revoked" {
-			return nil, errx.ErrInvalid
-		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "status", argPos))
 		statusSQL = fmt.Sprintf("$%d::email_status", argPos)
 		args = append(args, status)
@@ -1466,35 +1444,20 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 		}
 	}
 	if udata.CampaignLimit != nil {
-		if *udata.CampaignLimit < config.LimitMin || *udata.CampaignLimit > config.LimitMax {
-			return nil, errx.ErrEmailCampaignLimit
-		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "campaign_limit", argPos))
 		args = append(args, *udata.CampaignLimit)
 		argPos++
 	}
 	if udata.MinWaitTime != nil {
-		if *udata.MinWaitTime < 0 || *udata.MinWaitTime > 86400 {
-			return nil, errx.ErrEmailMinWaitTime
-		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "min_wait_time", argPos))
 		args = append(args, *udata.MinWaitTime)
 		argPos++
 	}
 	if udata.ReplyTo != nil {
 		*udata.ReplyTo = strings.TrimSpace(*udata.ReplyTo)
-		if *udata.ReplyTo != "" && !validate.Email(*udata.ReplyTo) {
-			return nil, errx.ErrEmail
-		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "reply_to", argPos))
 		args = append(args, *udata.ReplyTo)
 		argPos++
-	}
-	// Cross-field guard: starting volume must not exceed the ceiling. Only
-	// enforced when both arrive together (the warmup form always sends both);
-	// each is still independently clamped below.
-	if udata.WarmupBase != nil && udata.WarmupMax != nil && *udata.WarmupBase > *udata.WarmupMax {
-		return nil, errx.ErrEmailWarmupBase
 	}
 	if udata.Warmup != nil {
 		if udata.TestMode == nil {
@@ -1517,103 +1480,56 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 		}
 	}
 	if udata.WarmupBase != nil {
-		if *udata.WarmupBase < 0 || *udata.WarmupBase > 100 {
-			return nil, errx.ErrEmailWarmupBase
-		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "warmup_base", argPos))
 		args = append(args, *udata.WarmupBase)
 		argPos++
 	}
 	if udata.WarmupMax != nil {
-		if *udata.WarmupMax < 0 || *udata.WarmupMax > 100 {
-			return nil, errx.ErrEmailWarmupMax
-		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "warmup_max", argPos))
 		args = append(args, *udata.WarmupMax)
 		argPos++
 	}
 	if udata.WarmupIncrease != nil {
-		if *udata.WarmupIncrease < 0 || *udata.WarmupIncrease > 100 {
-			return nil, errx.ErrEmailWarmupIncrease
-		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "warmup_increase", argPos))
 		args = append(args, *udata.WarmupIncrease)
 		argPos++
 	}
 	if udata.WarmupReplyRate != nil {
-		if *udata.WarmupReplyRate < 0 || *udata.WarmupReplyRate > 100 {
-			return nil, errx.ErrEmailReplyRate
-		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "warmup_reply_rate", argPos))
 		args = append(args, *udata.WarmupReplyRate)
 		argPos++
 	}
 	if udata.WarmupTag != nil {
-		// warmup_tag is the content segment: a lowercase slug (e.g. "saas",
-		// "agency") that the segment-aware AI content bank is keyed on. Empty
-		// = generic content. Reject anything that isn't a simple slug so it
-		// can't smuggle arbitrary text into the content-selection path.
-		seg := strings.ToLower(strings.TrimSpace(*udata.WarmupTag))
-		if len(seg) > 32 {
-			return nil, errx.ErrInvalid
-		}
-		for _, r := range seg {
-			if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-') {
-				return nil, errx.ErrInvalid
-			}
-		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "warmup_tag", argPos))
-		args = append(args, seg)
+		args = append(args, strings.ToLower(strings.TrimSpace(*udata.WarmupTag)))
 		argPos++
 	}
 	if udata.WarmupStartTime != nil {
-		if err := validate.CampaignTime(*udata.WarmupStartTime); err != nil {
-			return nil, err
-		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "warmup_start_time", argPos))
 		args = append(args, *udata.WarmupStartTime)
 		argPos++
 	}
 	if udata.WarmupEndTime != nil {
-		if err := validate.CampaignTime(*udata.WarmupEndTime); err != nil {
-			return nil, err
-		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "warmup_end_time", argPos))
 		args = append(args, *udata.WarmupEndTime)
 		argPos++
 	}
 	if udata.WarmupDays != nil {
-		if *udata.WarmupDays < 0 || *udata.WarmupDays > 127 {
-			return nil, errx.ErrInvalid
-		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "warmup_days", argPos))
 		args = append(args, *udata.WarmupDays)
 		argPos++
 	}
 	if udata.WarmupPlacement != nil {
-		if !models.ValidWarmupPlacement(*udata.WarmupPlacement) {
-			return nil, errx.ErrEmailWarmupPlacement
-		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "warmup_placement", argPos))
 		args = append(args, *udata.WarmupPlacement)
 		argPos++
 	}
 	if udata.WarmupFolder != nil {
-		// The value becomes a mailbox name on the provider, so it stays a
-		// single-level, printable name: a separator would create a child of
-		// whatever it names, and a control character is refused by IMAP.
-		folder := strings.TrimSpace(*udata.WarmupFolder)
-		if err := validate.WarmupFolder(folder); err != nil {
-			return nil, err
-		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", "warmup_folder", argPos))
-		args = append(args, folder)
+		args = append(args, strings.TrimSpace(*udata.WarmupFolder))
 		argPos++
 	}
 	if udata.WarmupRetentionDays != nil {
-		if !models.ValidWarmupRetentionDays(*udata.WarmupRetentionDays) {
-			return nil, errx.ErrEmailWarmupRetention
-		}
 		// Zero is "follow the instance", stored as NULL so a later change to
 		// the instance setting reaches every mailbox that never chose.
 		setClauses = append(setClauses, fmt.Sprintf("%s = NULLIF($%d, 0)", "warmup_retention_days", argPos))
@@ -1628,9 +1544,6 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 		udata.TestMode = &mode
 	}
 	if udata.TestMode != nil {
-		if *udata.TestMode != "diagnostic" && *udata.TestMode != "off" {
-			return nil, errx.ErrNotEnough
-		}
 		setClauses = append(setClauses, fmt.Sprintf("test_mode = $%d", argPos))
 		modeSQL = fmt.Sprintf("$%d", argPos)
 		args = append(args, *udata.TestMode)
@@ -1663,9 +1576,6 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 		{"shared_daily_limit", udata.SharedDailyLimit}, {"rolling_recipient_limit", udata.RollingRecipientLimit},
 	} {
 		if setting.value != nil {
-			if *setting.value < 0 {
-				return nil, errx.ErrNotEnough
-			}
 			setClauses = append(setClauses, fmt.Sprintf("%s = NULLIF($%d, 0)", setting.column, argPos))
 			args = append(args, *setting.value)
 			argPos++
@@ -1753,9 +1663,8 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 		if udata.WarmupEndTime != nil {
 			end = *udata.WarmupEndTime
 		}
-		startMinute, endMinute := models.ClockMinutes(start, -1), models.ClockMinutes(end, -1)
-		if startMinute < 0 || endMinute < 0 || endMinute <= startMinute {
-			return nil, errx.New(errx.BadRequest, "warmup end time must be later than start time on the same day")
+		if xerr := validate.WarmupWindow(start, end); xerr != nil {
+			return nil, xerr
 		}
 	}
 	if udata.SendRecoveryResolution != nil {
@@ -1777,7 +1686,7 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 		 FROM email_accounts ea LEFT JOIN tasks t ON t.id=ea.send_recovery_task_id
 		 WHERE ea.organization_id=$1 AND ea.id=$2 AND ea.status='active' AND ea.send_recovery_hold AND ea.send_recovery_task_id=$6 AND ea.send_recovery_reason=$7 AND ea.send_recovery_reason IN('authentication','permanent','conflict')
 		 AND (ea.send_cooldown_provider IS NULL OR ea.send_cooldown_provider=ea.provider::text) FOR UPDATE OF ea),
-		 valid AS(SELECT * FROM held WHERE NOT EXISTS(SELECT 1 FROM tasks u WHERE u.email_account_id=held.id AND u.send_result_state='unknown' AND u.send_result_applied_at IS NULL)
+		 valid AS(SELECT * FROM held WHERE NOT EXISTS(SELECT 1 FROM tasks u WHERE u.email_account_id=held.id AND u.send_result_state='unknown' AND u.send_result_applied_at IS NULL AND u.warmup_send_retired_at IS NULL)
 		 AND (($3='authentication_repaired' AND held.send_recovery_reason='authentication' AND $4::uuid IS NOT NULL
 		 AND EXISTS(SELECT 1 FROM tasks e WHERE e.id=$4 AND e.email_account_id=held.id AND e.send_result_state='sent' AND e.send_result_applied_at>held.completed_at AND e.send_executor_started_at>held.completed_at))
 		 OR ($3='operator_provider_confirmation' AND held.send_recovery_reason IN('authentication','permanent','conflict') AND length($5)>0 AND $4::uuid IS NOT NULL
@@ -2972,4 +2881,23 @@ func (r *emailRepository) ListOrganizationIDs(ctx context.Context) ([]uuid.UUID,
 		out = append(out, id)
 	}
 	return out, rows.Err()
+}
+
+// WarmingOnWorkspaceClock lists the workspace's warming mailboxes that read their hours in the workspace timezone.
+func (r *emailRepository) WarmingOnWorkspaceClock(ctx context.Context, orgID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := resultDB(ctx, r.DB).Query(ctx, `SELECT id FROM email_accounts
+		WHERE organization_id = $1 AND COALESCE(timezone, '') = '' AND status = 'active' AND warmup IS NOT NULL AND warmup_paused_at IS NULL`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }

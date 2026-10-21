@@ -15,24 +15,36 @@ import (
 // best-effort, as it was per mailbox: a failed one leaves its map nil, which
 // each consumer treats as no signal.
 type statusReads struct {
-	now        time.Time
-	diversity  map[uuid.UUID]repository.WarmupPartnerDiversity
-	cloud      map[uuid.UUID]*models.WarmupHealthInfo
-	ramp       *rampReads
-	failures   map[uuid.UUID]*models.WarmupSendFailure
-	coldRamp   map[uuid.UUID]repository.ColdRampState
-	lifecycles map[uuid.UUID]models.SendLifecycleState
+	now                  time.Time
+	diversity            map[uuid.UUID]repository.WarmupPartnerDiversity
+	cloud                map[uuid.UUID]*models.WarmupHealthInfo
+	ramp                 *rampReads
+	failures             map[uuid.UUID]*models.WarmupSendFailure
+	nextWarmup           map[uuid.UUID]time.Time
+	coldRamp             map[uuid.UUID]repository.ColdRampState
+	lifecycles           map[uuid.UUID]models.SendLifecycleState
+	sendHolds            map[uuid.UUID]repository.SendRecoveryHold
+	sendHoldsUnavailable bool
 }
 
 // loadStatusReads reads the signals for emails, asking each query only for the
 // mailboxes that would have issued it on their own.
 func (s *analyticsService) loadStatusReads(ctx context.Context, emails []models.Email, participants map[uuid.UUID]*models.WarmupParticipantHealth) *statusReads {
 	reads := &statusReads{now: time.Now()}
-	if s.lifecycleRepo != nil {
-		ids := make([]uuid.UUID, len(emails))
-		for i := range emails {
-			ids[i] = emails[i].ID
+	ids := make([]uuid.UUID, len(emails))
+	for i := range emails {
+		ids[i] = emails[i].ID
+	}
+	if reader, ok := s.emailRepo.(interface {
+		GetSendRecoveryHolds(context.Context, []uuid.UUID) (map[uuid.UUID]repository.SendRecoveryHold, error)
+	}); ok {
+		if holds, err := reader.GetSendRecoveryHolds(ctx, ids); err == nil {
+			reads.sendHolds = holds
+		} else {
+			reads.sendHoldsUnavailable = true
 		}
+	}
+	if s.lifecycleRepo != nil {
 		if m, err := s.lifecycleRepo.GetSendLifecycles(ctx, ids); err == nil {
 			reads.lifecycles = m
 		}
@@ -74,6 +86,13 @@ func (s *analyticsService) loadStatusReads(ctx context.Context, emails []models.
 		}
 	}
 	reads.ramp = s.loadRampReads(ctx, warming, reads.now)
+	if reader, ok := s.warmupRepo.(interface {
+		NextWarmupSends(context.Context, []uuid.UUID) (map[uuid.UUID]time.Time, error)
+	}); ok && len(warming) > 0 {
+		if m, err := reader.NextWarmupSends(ctx, warming); err == nil {
+			reads.nextWarmup = m
+		}
+	}
 	if len(failing) > 0 {
 		if m, err := s.warmupRepo.LastWarmupSendFailures(ctx, failing, reads.now.Add(-24*time.Hour)); err == nil {
 			reads.failures = m

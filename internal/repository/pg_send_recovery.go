@@ -115,6 +115,42 @@ type SendAdmission struct {
 	HoldReason   string
 }
 
+type SendRecoveryHold struct {
+	Reason string
+	Warmup bool
+}
+
+func (r *emailRepository) GetSendRecoveryHolds(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]SendRecoveryHold, error) {
+	// Normal in-flight sends also hold admission; only surface settled or stuck ones.
+	query := `SELECT ea.id,COALESCE(ea.send_recovery_reason,''),COALESCE(t.task_type='warmup',false) FROM email_accounts ea
+		LEFT JOIN tasks t ON t.id=ea.send_recovery_task_id AND t.email_account_id=ea.id
+		WHERE ea.id=ANY($1) AND ea.send_recovery_hold
+		AND (ea.send_recovery_reason IS DISTINCT FROM 'unknown' OR t.id IS NULL
+		 OR t.send_result_applied_at IS NOT NULL OR t.send_result_evidence IS NOT NULL
+		 OR COALESCE(t.send_reserved_at,t.completed_at,t.updated_at)<NOW()-INTERVAL '10 minutes')`
+	var rows pgx.Rows
+	var err error
+	if r.transportSnapshot != nil {
+		rows, err = r.transportSnapshot.Query(ctx, query, ids)
+	} else {
+		rows, err = r.DB.Query(ctx, query, ids)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	holds := make(map[uuid.UUID]SendRecoveryHold)
+	for rows.Next() {
+		var id uuid.UUID
+		var hold SendRecoveryHold
+		if err := rows.Scan(&id, &hold.Reason, &hold.Warmup); err != nil {
+			return nil, err
+		}
+		holds[id] = hold
+	}
+	return holds, rows.Err()
+}
+
 // GetSendAdmission is tenant-scoped mailbox/provider evidence, not domain or tenant-wide inference.
 func (r *taskRepository) GetSendAdmission(ctx context.Context, orgID, mailboxID uuid.UUID, provider models.InboxProvider, now time.Time) (*SendAdmission, error) {
 	a := &SendAdmission{MailboxID: mailboxID, Provider: provider, Scope: "mailbox"}
@@ -302,7 +338,7 @@ func refreshSendHold(ctx context.Context, tx pgx.Tx, mailboxID uuid.UUID, taskID
 	_, err := tx.Exec(ctx, `WITH next_hold AS (
 			SELECT id,reason FROM (
 			 SELECT t.id,'unknown' AS reason,1 AS priority,t.created_at FROM tasks t
-			 WHERE t.email_account_id=$1 AND t.send_result_state='unknown'
+			 WHERE t.email_account_id=$1 AND t.send_result_state='unknown' AND t.warmup_send_retired_at IS NULL
 			 UNION ALL
 			 SELECT t.id,'conflict',2,t.created_at FROM send_recovery_resolutions r JOIN tasks t ON t.id=r.recovery_task_id
 			 WHERE t.email_account_id=$1 AND (r.previous_reason='unknown' OR r.evidence_type='authoritative_result_conflict')
@@ -373,4 +409,29 @@ func persistSendHold(ctx context.Context, tx pgx.Tx, mailboxID uuid.UUID, result
 		return err
 	}
 	return nil
+}
+
+// ReleaseAuthenticationHold lifts an authentication hold once the mailbox's credentials passed a fresh login check, recording why; any unknown or conflict hold still owed is re-applied.
+func (r *emailRepository) ReleaseAuthenticationHold(ctx context.Context, orgID, accountID uuid.UUID) (bool, error) {
+	tx, err := r.DB.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `WITH held AS (SELECT organization_id,id,send_recovery_task_id FROM email_accounts
+		WHERE organization_id=$1 AND id=$2 AND send_recovery_hold AND send_recovery_reason='authentication' FOR UPDATE),
+		history AS (INSERT INTO send_recovery_resolutions(organization_id,email_account_id,recovery_task_id,previous_reason,evidence_type,recorded_locally_at)
+		SELECT organization_id,id,send_recovery_task_id,'authentication','credentials_reverified',clock_timestamp() FROM held RETURNING email_account_id)
+		UPDATE email_accounts ea SET send_recovery_hold=false,send_recovery_reason=NULL,send_recovery_task_id=NULL
+		FROM history WHERE ea.id=history.email_account_id`, orgID, accountID)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() != 1 {
+		return false, nil
+	}
+	if err := refreshSendHold(ctx, tx, accountID, nil, nil); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
 }

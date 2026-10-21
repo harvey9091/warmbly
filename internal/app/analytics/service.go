@@ -367,6 +367,16 @@ func (s *analyticsService) assembleAccountStatus(ctx context.Context, email *mod
 		errs = make([]models.AccountError, 0)
 	}
 	describeAccountErrors(email, errs)
+	hold, held := reads.sendHolds[email.ID]
+	if held {
+		for i := range errs {
+			if errs[i].Operation == models.MailTransportSync || (errs[i].ErrorCode != string(errx.MailErrorCodeServerUnreachable) && errs[i].ErrorCode != string(errx.MailErrorCodeConnectionLost)) {
+				continue
+			}
+			action := sendRecoveryHoldMessage(hold)
+			errs[i].ActionRequired = &action
+		}
+	}
 
 	// Calculate health, then fold in warmup-pool reputation so the single
 	// score the user sees reflects spam placement / complaints / throttling.
@@ -377,6 +387,16 @@ func (s *analyticsService) assembleAccountStatus(ctx context.Context, email *mod
 		placement = &r
 	}
 	applyWarmupPlacement(&health, placement)
+	if held {
+		health.Status = "error"
+		health.Score = min(health.Score, 50)
+		health.Issues = append(health.Issues, sendRecoveryHoldMessage(hold))
+	} else if reads.sendHoldsUnavailable {
+		if health.Status == "healthy" {
+			health.Status = "warning"
+		}
+		health.Issues = append(health.Issues, "Sending status is unavailable; mailbox send safety holds could not be checked.")
+	}
 
 	// Build warmup status if warmup has ever been enabled (active or paused).
 	var warmupStatus *models.WarmupStatusInfo
@@ -404,32 +424,58 @@ func (s *analyticsService) assembleAccountStatus(ctx context.Context, email *mod
 		}
 		// A day of refusals is what an owner can still act on; older ones were fixed or are stale.
 		warmupStatus.SendFailure = reads.failures[email.ID]
+		if at, ok := reads.nextWarmup[email.ID]; ok {
+			warmupStatus.NextSendAt = &at
+		}
 	}
 
 	coldRamp := coldRampNotice(email, reads.coldRamp, reads.now)
+	holdReason := ""
+	if held {
+		holdReason = hold.Reason
+	}
 	lifecycle := sendLifecycleNotice(reads.lifecycles, email.ID)
 
 	return &models.EmailAccountStatus{
-		ID:            email.ID,
-		Email:         email.Email,
-		Provider:      email.Provider,
-		Status:        email.Status,
-		LastSyncedAt:  &email.LastSyncedAt,
-		Health:        health,
-		Errors:        errs,
-		DailyUsage:    *usage,
-		WarmupStatus:  warmupStatus,
-		WarmupHealth:  warmupHealth,
-		Placement:     placement,
-		InCampaign:    inCampaign,
-		ColdRamp:      coldRamp,
-		SendLifecycle: lifecycle,
+		ID:                 email.ID,
+		Email:              email.Email,
+		Provider:           email.Provider,
+		Status:             email.Status,
+		LastSyncedAt:       &email.LastSyncedAt,
+		Health:             health,
+		Errors:             errs,
+		DailyUsage:         *usage,
+		WarmupStatus:       warmupStatus,
+		WarmupHealth:       warmupHealth,
+		Placement:          placement,
+		InCampaign:         inCampaign,
+		ColdRamp:           coldRamp,
+		SendLifecycle:      lifecycle,
+		SendRecoveryReason: holdReason,
+	}
+}
+
+func sendRecoveryHoldMessage(hold repository.SendRecoveryHold) string {
+	switch hold.Reason {
+	case "unknown":
+		if hold.Warmup {
+			return "Sending is paused after an unconfirmed warmup send. Warmbly checks it automatically and, when safe, retires that message so new sends can resume. The uncertain message is never retried."
+		}
+		return "Sending is paused because the previous send outcome is unconfirmed. Warmbly will not retry it automatically, to avoid duplicate mail. Provider confirmation is required to resolve this hold; a successful inbox sync does not confirm the send."
+	case "authentication":
+		return "Sending is paused because the mail server refused this mailbox's login when it last sent. Reconnect the mailbox (re-authorize it, or enter its current password or app password); once the server accepts the login, sending resumes unless another send safety hold is still pending."
+	default:
+		return "Sending is paused by a send safety hold. Resolve the held send before this mailbox can send again."
 	}
 }
 
 // warmupHealthState reads the band off the API shape, defaulting to healthy
 // for a mailbox in no pool — the same default resolveHealthState uses.
+// Unknown cloud evidence is no band at all, so it does not dampen the ramp.
 func warmupHealthState(h *models.WarmupHealthInfo) models.WarmupHealthState {
+	if h.CloudEvidenceUnavailable() {
+		return ""
+	}
 	if h == nil || h.State == "" {
 		return models.WarmupHealthHealthy
 	}
@@ -476,6 +522,14 @@ func (s *analyticsService) warmupHealthFromParticipant(accountID uuid.UUID, part
 // applyWarmupHealth keeps reduced volume a warning and pool exclusion an error.
 func applyWarmupHealth(health *models.AccountHealth, wh *models.WarmupHealthInfo) {
 	if wh == nil {
+		return
+	}
+	// Sends wait for a fresh report, but a missing report says nothing about reputation.
+	if wh.CloudEvidenceUnavailable() {
+		if health.Status == "healthy" {
+			health.Status = "warning"
+		}
+		health.Issues = append(health.Issues, "Warmbly Cloud status unavailable")
 		return
 	}
 

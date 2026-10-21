@@ -267,6 +267,17 @@ jobs:
             grep -q -- "--- PASS: $test " campaign-pool-batch.log
           done
 
+      - name: Cloud standing and missing-evidence holds (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -race -v -p 1 ./internal/repository -run '^TestLiveCloud' -count=1 | tee cloud-standing.log
+          if grep -q -- '--- SKIP:' cloud-standing.log; then exit 1; fi
+          for test in TestLiveCloudStandingFreshnessIsBoundedWithoutInventingAProviderBlock TestLiveCloudUnknownEvidenceDoesNotHideARealHold TestLiveCloudStaleLiveHoldStaysKnown TestLiveCloudPendingEnrollmentAndDisconnectAreUnknown; do
+            grep -q -- "--- PASS: $test " cloud-standing.log
+          done
+
       - name: Scheduled-job retirement regressions (PostgreSQL)
         env:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
@@ -278,8 +289,15 @@ jobs:
         env:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
         run: |
+          set -o pipefail
           go test -race ./internal/repository -run '^TestLive(Monitoring|LastWarmupSendFailure|PersistentMailboxLoadingFailure|DispatchRetry|LineageQueueRevisions|AdminPlatformOverview|WarmupRecoversOldPreparation|WarmupPreparationRecoveryRetains|WarmupFilingRequiresAcknowledgement|WarmupFilingAuthority|WarmupTimeWindow|WarmupInvalidWindow)' -count=1
-          go test -race ./internal/tasks -run '^Test(LiveWarmup(SafetyHoldReschedules|Recovery|TaskDoesNotApplyResults|DispatchDefersInvalidHours)|WarmupSenderDistinguishes)' -count=1
+          go test -race -v ./internal/tasks -run '^Test(LiveWarmup(SafetyHoldReschedules|Recovery|UnknownRetirement|TaskDoesNotApplyResults|DispatchDefersInvalidHours)|WarmupSenderDistinguishes)' -count=1 | tee warmup-recovery.log
+          if grep -q -- '--- SKIP: TestLiveWarmupUnknownRetirement' warmup-recovery.log; then exit 1; fi
+          for test in TestLiveWarmupUnknownRetirementPreservesEvidenceAndFencesReplayOnce TestLiveWarmupUnknownRetirementAllowsDistinctNewSendAndKeepsCooldown TestLiveWarmupUnknownRetirementAndDefinitiveResultSerialize TestLiveWarmupUnknownRetirementSkipsProtectedRowsWithoutStarvingLaterMailboxes TestLiveWarmupUnknownRetirementReconcilerSeedsOnceAndClearsActiveWarnings; do
+            grep -q -- "--- PASS: $test " warmup-recovery.log || exit 1
+          done
+          go test -race -v ./internal/infrastructure/db -run '^TestLiveWarmupUnknownRetirementUpgrade' -count=1 | tee warmup-retirement-upgrade.log
+          grep -q -- '--- PASS: TestLiveWarmupUnknownRetirementUpgrade ' warmup-retirement-upgrade.log
           go test -race ./internal/app/consumer -run '^TestLiveStoredSendResult' -count=1
 
       - name: Warmup database query-pressure regressions (PostgreSQL)
@@ -462,6 +480,11 @@ jobs:
         run: |
           go test -race -p 1 ./internal/repository ./internal/app/consumer ./internal/app/orgtransfer ./internal/infrastructure/db -run '^TestLive(SyncArrival|SyncTruth|EmailErrorDedupe|EmailErrorResolveMethod)' -count=1
 
+      - name: Workspace archive spec against the live schema (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: go test -race -v -p 1 ./internal/app/orgtransfer -run '^TestLive(EveryOrgTableIsRegistered|TablesAreInDependencyOrder|ResetColumnsHaveSomethingToFallBackOn)$' -count=1
+
       - name: Payload-free arrival delivery diagnostics regressions (PostgreSQL)
         env:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
@@ -472,6 +495,11 @@ jobs:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
         run: |
           go test -race -p 1 ./internal/repository -run '^TestLive(OrganizationScopedCounts|UniboxVisibility|EmailCursorVisibility|NotificationAudience)' -count=1
+
+      - name: Unibox indexed search, paging and interrupted reads (PostgreSQL)
+        env:
+          WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
+        run: go test -race -v -p 1 ./internal/repository ./internal/infrastructure/db -run '^TestLiveUnibox(Search|ReadStream|SearchUpgrade)' -count=1
 
       - name: Notification digest authorization retries (Redis)
         env:

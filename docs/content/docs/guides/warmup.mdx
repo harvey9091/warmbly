@@ -87,7 +87,7 @@ A worker-loading warning appears only for an active, sending-enabled mailbox aft
 
 "The sending worker has not loaded this mailbox yet" means that attempt did not send. It is not proof of a deliverability hold, a refused sign-in or an IP allowlist problem. Active mailboxes are reloaded automatically; after a worker restarts, it keeps reporting its restart until the backend acknowledges the request to reload its mailboxes.
 
-Persistent loading failures and pending warmup tasks at least an hour past their intended schedule are checked every five minutes and reported to configured operator channels and error tracking. The latter is a dispatch problem, not evidence of rejected credentials. The local dispatcher persists a five-minute retry delay after internal failures so an old failing batch cannot indefinitely block newer tasks. Backoff does not alter the intended send time, clear a safety hold, or bypass provider limits.
+Persistent loading failures and pending warmup tasks at least an hour past their intended schedule are checked every five minutes and reported to configured operator channels and error tracking. The latter is a dispatch problem, not evidence of rejected credentials. The local dispatcher persists a five-minute retry delay after internal failures so an old failing batch cannot indefinitely block newer tasks. Backoff does not alter the intended send time, clear a safety hold, or bypass provider limits. A send whose preparation was interrupted before it was handed to a worker (for example by a restart) is retired after ten minutes, so it never holds up the mailbox's next warmup email.
 
 A missing mailbox also requests another reload through the worker heartbeat. Existing warmup sends stuck before execution recover automatically: after ten minutes, the scheduler retires a nonce-protected command only when neither worker execution nor a delivery receipt exists, refunds its reserved count, and resumes the mailbox's normal schedule. Delayed copies of the retired command cannot send. Customers do not need to disconnect or re-add their mailboxes. Actually started sends with missing outcomes, conflicting outcomes, provider cooldowns, authentication failures and other safety holds are not cleared by this repair.
 
@@ -210,11 +210,15 @@ Filter by provider to distinguish observations from gaps. Historical rescued cou
 
 Configured diagnostic targets start at 10/day and rise by one toward 40/day before other constraints. These are product pacing defaults, not universal safe volumes or readiness evidence.
 
+On a self-hosted instance, a mailbox warmed by Warmbly Cloud runs the ramp, hours and days Warmbly Cloud holds for it. The Warmup tab edits those through the cloud, and hides the content segment, placement, folder and retention, which only apply to warmup sent from your instance. See [warmup settings](/guides/warmbly-cloud/#warmup-settings).
+
 Four things shape the real daily number: sends are spread across your warmup hours with jitter, the target is capped by how many eligible partners exist, a mailbox whose health drops gets reduced volume and wider spacing until it recovers, and a recent spam placement holds the ramp where it is.
 
 The partner cap exists because a mailbox never writes to the same partner twice in a day. When it applies, the **Warmup** tab of the mailbox drawer says so: it shows the ramp's number next to how many partners are available to the mailbox today, and the target it reports is the lower of the two. The count can fall during the day as partners reach their daily limit, and it recovers the next day. The same tab names the pool the mailbox warms in.
 
 Warmup hours are read in the mailbox's timezone: its own when one is set on the **Settings** tab of its drawer, otherwise the workspace timezone under **Settings > Profile > Timezones**, and UTC when neither is set. Set the workspace timezone once and every mailbox that follows it reads its warmup hours in the team's day. A mailbox with its own timezone keeps it, and changing the workspace timezone does not change any mailbox's hours.
+
+While [Sending behavior](/guides/sending-behavior/) is on, which it is for a newly connected mailbox, warmup only sends when both the warmup hours and that workday allow it, and the Warmup tab says so above the hours. A mailbox connected after its workday ends therefore sends its first warmup email the next working morning. Switch the mailbox to **Fixed schedule** on its **Sending** tab to use the warmup hours alone. Changing the warmup hours, days or timezone (the mailbox's own, or the workspace's for a mailbox that follows it), or switching sending behavior on or off, moves the queued warmup send at once. The mailbox list shows when the next warmup send is queued under the day's count.
 
 Warmup hours must end later than they start on the same day. Equal or reversed hours are rejected, including a change to only one endpoint that would invalidate the stored window. Existing invalid windows are not widened or corrected automatically: pending sends stay unstarted and recheck after five minutes, while admin monitoring shows **Invalid warmup sending hours** until the configured window is corrected. Other send protections still apply after correction; this does not replay uncertain sends or confirm mailbox recovery.
 
@@ -248,7 +252,7 @@ Configured diagnostic turns continue disclosed scenarios, not organic relationsh
 
 Replies thread properly with a real `Re:` subject and `In-Reply-To` header, and candidates must be between 45 minutes and seven days old, so nothing is answered instantly or revived indefinitely.
 
-Receiving warmup mail can also prompt an answer directly. When a verified warmup email arrives, the recipient sometimes points its next scheduled send back at whoever wrote, 25 minutes to 5 hours later and inside its own warmup hours. That is a re-pointing, not extra work: each mailbox has one warmup send queued at a time, so a reply-back moves that send earlier and aims it, and can never push a send the mailbox had already planned sooner. The chance is the recipient's own reply rate, drawn once when the reply is scheduled rather than again when it sends, and it stops before a thread reaches its message cap so replies cannot answer replies indefinitely. A reply crosses the free and paid tiers like the mail it answers: a paid mailbox answers a free partner that wrote to it, and a free mailbox answers a paid one while it is healthy and its workspace is in good standing.
+Receiving warmup mail can also prompt an answer directly. When a verified warmup email arrives, the recipient sometimes points its next scheduled send back at whoever wrote, 45 minutes to 5 hours later and inside its own warmup hours. That is a re-pointing, not extra work: each mailbox has one warmup send queued at a time, so a reply-back moves that send earlier and aims it, and can never push a send the mailbox had already planned sooner. When that send is already answering someone, the new email is not answered, so replies never crowd out new threads. The chance is the recipient's own reply rate (raised for a sender in [recovery](#recovery-engagement)), drawn once when the reply is scheduled rather than again when it sends, and it stops before a thread reaches its message cap so replies cannot answer replies indefinitely. A reply crosses the free and paid tiers like the mail it answers: a paid mailbox answers a free partner that wrote to it, and a free mailbox answers a paid one while it is healthy and its workspace is in good standing.
 
 Scheduling respects windows, provider feedback, shared limits and spacing. Jitter distributes load, not human identities. Receiving participation allows probabilistic spam rescue, reads, importance and stars or flags on verified warmup messages. Filing and selected spam rescues are requested immediately; reads, importance and stars are durably scheduled after a randomized dwell. Current receiving permission and worker assignment are checked again at execution time. These actions are automation, not human feedback or a guaranteed reputation improvement.
 
@@ -330,8 +334,8 @@ Pools enforce permission and restrictive complaint/bounce/authentication evidenc
 | State | Meaning | Effect |
 |-------|---------|--------|
 | `healthy` | Normal | Full volume |
-| `watch` | Mild concern | Spacing stretched modestly |
-| `throttled` | Probation | Volume cut, spacing widened until recovery |
+| `watch` | Mild concern | Warmup at full volume with recovery engagement; cold volume eased |
+| `throttled` | Probation | Volume cut, spacing widened, recovery engagement until recovery |
 | `quarantined` | Clear problem | Out of the shared pool for a cooldown |
 | `blocked` | Serious or repeated abuse | Out for longer, review required |
 
@@ -343,9 +347,13 @@ Watch and throttled standing are warnings, not connection failures. They do not 
 
 Spam placement is a folder outcome, not misconduct or evidence of diagnostic reputation benefit. It slows sending but does not alone quarantine or block a recipient:
 
-- `10%` puts the mailbox on watch: warmup and cold sending are spaced out a little more.
+- `10%` puts the mailbox on watch: warmup keeps its volume and pace (its ramp holds while spam landings are recent), the pool engages harder with its mail (see [recovery engagement](#recovery-engagement)), and cold volume is eased to `70%`.
 - `20%` throttles it: warmup keeps running at half volume with double spacing, and cold volume is halved.
 - A throttle steps down to watch below `15%`, then returns to healthy below `7.5%`, on its own. They lift below the line that set them rather than at it, so a mailbox sitting near a line is not flipped in and out of a band (and announced to your integrations) with every delivery. The separate [early-signal ramp pause](#holding-the-ramp-on-an-early-signal) still applies to fresh spam landings.
+
+### Recovery engagement
+
+While a mailbox is on watch or throttled, the pool works harder for it instead of only slowing it down. Recipients that take part in engagement move nearly every copy of its warmup mail that lands in spam back out of spam (each mailbox at its own rate, so none does it every time) and mark more of it important, and each email has at least a `60%` chance of a reply when the recipient's next warmup send is free to answer it (unless the recipient's owner turned warmup replies off). Replies take the place of the recipient's next scheduled warmup send, so the extra engagement adds no volume. It stops on its own when the band lifts.
 
 Placement uses today and the preceding six UTC dates, matching the seven-day inbox rate on Deliverability and Emails. Older placement results stop affecting volume at the same boundary as the displayed rate. Complaints and mailbox tampering keep their separate rolling windows.
 

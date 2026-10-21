@@ -46,6 +46,8 @@ export interface WarmupStatusInfo {
     partner_limit?: WarmupPartnerLimit;
     /** Present while the newest warmup send was refused and none has gone out since. */
     send_failure?: WarmupSendFailure;
+    /** When the next warmup send is queued for; absent while nothing is queued. */
+    next_send_at?: Date;
 }
 
 // Why a warmup send failed: the mail server's answer when it gave one.
@@ -107,6 +109,8 @@ export default interface AccountStatus {
     warmup_status?: WarmupStatusInfo;
     /** Present only while graduation holds the cold cap below the configured one. */
     cold_ramp?: ColdRampInfo;
+    /** Names a send safety hold; absent while sending is not held. "authentication" clears on a successful reconnect. */
+    send_recovery_reason?: "authentication" | "permanent" | "conflict" | "unknown";
     /** Present only when the mailbox is NOT in cold rotation. */
     send_lifecycle?: SendLifecycleState;
     warmup_health?: WarmupHealthInfo;

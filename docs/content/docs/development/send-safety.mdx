@@ -55,7 +55,7 @@ If a modern warmup task becomes dead-lettered after its definitive failure and r
 
 ## Evidence-based repair holds
 
-Authentication, permanent and conflicting-result holds do not clear merely because time passed, a reconnect occurred or an unrelated send succeeded. An organization-authorized operator can use `send_recovery_resolution` in the existing mailbox PATCH after investigating the current held task and reason:
+Authentication, permanent and conflicting-result holds do not clear merely because time passed or an unrelated send succeeded. An authentication hold clears when the mailbox is reconnected: both reconnect flows (OAuth re-authorization and replacement SMTP/IMAP credentials) only complete after the provider accepted the credential, and SMTP/IMAP credentials pass a worker's SMTP AUTH and IMAP login check first. The release is recorded in `send_recovery_resolutions` with evidence type `credentials_reverified`, scoped to the mailbox's organization, and the hold is then recomputed, so an unresolved unknown send or outcome conflict still holds the mailbox. Permanent and conflicting-result holds are not released by a reconnect. An organization-authorized operator can also use `send_recovery_resolution` in the existing mailbox PATCH after investigating the current held task and reason:
 
 ```json
 {
@@ -71,6 +71,18 @@ Authentication, permanent and conflicting-result holds do not clear merely becau
 `authentication_repaired` requires `evidence_task_id` naming a newer definitive, applied successful outbound send on the same mailbox; fresh inbox sync alone is not repair proof. `operator_provider_confirmation` requires a same-mailbox definitive, applied evidence task and non-empty `confirmation_reference`. Include the exact held task and reason (`authentication`, `permanent`, `conflict`). Changed holds, inactive mailboxes, cross-organization requests and remaining unknown sends refuse these repair resolutions. Repair history is inserted atomically before clearing only the repair hold. Cooldowns, suppression and other restrictions remain. References must not contain credentials, message bodies or provider payloads.
 
 ### Resolving an unknown send
+
+#### Automatic warmup retirement
+
+Warmup-only unknown sends have an automatic alternative to confirming the old outcome: permanently retire the individual task without replaying it, then admit new, distinct tasks. After ten minutes, the warmup scheduler checks for an existing execution authorization and attempt, no definitive recorded result or receipt, and an exact `unknown` hold for that task. It rechecks under scheduling, task and mailbox send locks. Unstarted dispatches use their separate safe cancellation and refund path first.
+
+Retirement records `tasks.warmup_send_retired_at`, cancels execution permanently, preserves `send_result_state='unknown'`, and keeps all original reservation, charge, message ID, nonce, worker and result evidence. It neither refunds nor reconstructs charges, marks the message sent or failed, nor retries it. Late results cannot apply accounting, reauthorize the retired task or change a later task's hold. Other unresolved sends and conflict, authentication or permanent holds remain restrictive. The normal scheduler respects all existing warmup eligibility, cooldown and volume limits.
+
+This recovery includes eligible historical holds after upgrade. Legacy sends without execution fencing, messages with confirmed receipt/provider evidence, and tasks with a definitive result or operator confirmation awaiting reconciliation are not retired. Campaign and other non-warmup sends keep the provider-confirmation-only policy below. No additional customer action or configuration is required for eligible warmup sends.
+
+Apply migration 315 before running the updated backend, consumer and scheduler. Upgrade all control-plane replicas before relying on the new policy. An old replica may temporarily reassert a retired task's unknown hold; the updated scheduler repairs that hold without replaying the task or touching a newer restrictive hold. Whole-instance backups and organization send-history exports retain the retirement marker. The down migration refuses to remove recorded retirements; retain the schema and roll forward rather than discarding the replay fence.
+
+#### Provider-confirmed resolution
 
 Unknown means the provider outcome is unproven, not that sending failed. Neither an expired timeout nor the absence of a synced Sent copy is proof that nothing was sent. Obtain explicit provider evidence for the exact task before using the mailbox PATCH:
 
@@ -102,7 +114,7 @@ Campaign routing, placement, day plans and estimates share durable mailbox send 
 
 Provider execution gets 120 seconds, which covers the SMTP client's own 90-second budget for a slow server's verdict after the message, so a send is not cut off waiting for an answer the server was about to give. After provider execution, workers record and publish the result on an independent 45-second context with at most four attempts, each bounded to 10 seconds. Failed reports retain the exact outcome in memory for command redelivery without another provider send. Persisted results survive worker replacement and lost broker events: the consumer replays them through the same idempotent reconciliation. A worker crash before durable recording can still leave an unknown outcome requiring investigation.
 
-Already-failed tasks with no outbound reservation or execution authorization cannot create unknown provider holds. The recorded-result sweep also reconciles existing invalid holds for such tasks. Real reserved or started unknown sends remain held; upgrades never infer failure from elapsed time. Deploy the backend/consumer (including the additive migration) before updated workers. No new configuration is required; existing genuine unknown holds need definitive worker evidence or the explicit operator confirmation above.
+Already-failed tasks with no outbound reservation or execution authorization cannot create unknown provider holds. The recorded-result sweep also reconciles existing invalid holds for such tasks. Real reserved or started unknown sends remain held until a definitive result is reconciled or an eligible warmup task is permanently retired; upgrades never infer failure from elapsed time. Deploy the backend/consumer (including the additive migration) before updated workers. No new configuration is required. Non-warmup and ineligible unknown holds need definitive worker evidence or the explicit operator confirmation above.
 
 ## Actual-message authentication
 

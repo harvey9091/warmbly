@@ -228,6 +228,8 @@ type EmailAccountStatus struct {
 	// is below the mailbox's own cap. Without it the cap just reads lower than
 	// the number the owner configured.
 	ColdRamp *ColdRampInfo `json:"cold_ramp,omitempty"`
+	// SendRecoveryReason names a send safety hold ("authentication", "permanent", "conflict" or "unknown"); absent when sending is not held.
+	SendRecoveryReason string `json:"send_recovery_reason,omitempty"`
 }
 
 // EmailAccountStatusesResult is one page of account statuses. Data carries the
@@ -323,6 +325,8 @@ type WarmupStatusInfo struct {
 	PartnerLimit *WarmupPartnerLimit `json:"partner_limit,omitempty"`
 	// SendFailure is present while the newest warmup send failed and no later one was confirmed delivered.
 	SendFailure *WarmupSendFailure `json:"send_failure,omitempty"`
+	// NextSendAt is when the parked warmup wakeup fires; absent while nothing is queued.
+	NextSendAt *time.Time `json:"next_send_at,omitempty"`
 }
 
 // WarmupSendFailure is why a warmup send failed: the server's answer when it gave one.
