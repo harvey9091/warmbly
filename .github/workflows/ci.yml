@@ -28,6 +28,7 @@ jobs:
     outputs:
       go-services: ${{ steps.filter.outputs.go-services }}
       migrations: ${{ steps.filter.outputs.migrations }}
+      aws-deployment: ${{ steps.filter.outputs.aws-deployment }}
       tracking: ${{ steps.filter.outputs.tracking }}
       realtime: ${{ steps.filter.outputs.realtime }}
       web: ${{ steps.filter.outputs.web }}
@@ -65,6 +66,14 @@ jobs:
             migrations:
               - 'internal/infrastructure/db/migrations/**'
               - 'scripts/check-migrations.sh'
+            aws-deployment:
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/deploy-aws.yml'
+              - '.github/workflows/rotate-keys.yml'
+              - '.github/scripts/aws-deploy*.cjs'
+              - '.github/scripts/aws-rotate*.cjs'
+              - '.github/aws-deploy/**'
+              - 'deploy/terraform/aws/runtime/rotate/**'
             tracking:
               - 'tracking/**'
             realtime:
@@ -175,11 +184,20 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # A pinned release verified by digest; resolving "latest" lists every protobuf release and fails when that listing is cut short.
       - name: Set up protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          version: "33.x"
-          repo-token: ${{ github.token }}
+        env:
+          PROTOC_VERSION: "33.6"
+          PROTOC_SHA256: 9c49962391ff8b5754342509efc3885db91dfe11a358e1e98c9a71518f0ad199
+        run: |
+          set -eu
+          archive="$RUNNER_TEMP/protoc.zip"
+          curl -fsSL --retry 5 --retry-all-errors -o "$archive" \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          echo "${PROTOC_SHA256}  ${archive}" | sha256sum -c -
+          unzip -q -o "$archive" -d "$RUNNER_TEMP/protoc"
+          echo "$RUNNER_TEMP/protoc/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/protoc/bin/protoc" --version
 
       - name: Install required Go tools
         run: make setup-tools
@@ -207,8 +225,8 @@ jobs:
         run: |
           set -o pipefail
           go run ./cmd/migrate
-          go test -race -v -p 1 ./internal/repository ./internal/app/analytics -run '^TestLive(WarmupPartnerCountsMatchIndividualCandidates|WarmupSummariesMatchIndividualReads|LinkedMailboxStatusBatchPreservesDetails|WarmupPartnerWeekCacheMatchesExactReadAndKeepsTheCapLive|WarmupPartnerWeekCacheRefreshesDetachedAndServesStale|WarmupPartnerCandidatesCarryReciprocityAndHonourTheCap|AccountStatusPageMatchesSingleReadsInBoundedQueries)$' -count=1 | tee linked-mailbox-batch.log
-          for test in TestLiveWarmupPartnerCountsMatchIndividualCandidates TestLiveWarmupSummariesMatchIndividualReads TestLiveLinkedMailboxStatusBatchPreservesDetails TestLiveWarmupPartnerWeekCacheMatchesExactReadAndKeepsTheCapLive TestLiveWarmupPartnerWeekCacheRefreshesDetachedAndServesStale TestLiveWarmupPartnerCandidatesCarryReciprocityAndHonourTheCap TestLiveAccountStatusPageMatchesSingleReadsInBoundedQueries; do
+          go test -race -v -p 1 ./internal/repository ./internal/app/analytics -run '^TestLive(WarmupPartnerCountsMatchIndividualCandidates|WarmupSummariesMatchIndividualReads|LinkedMailboxStatusBatchPreservesDetails|WarmupPartnerWeekCacheMatchesExactReadAndKeepsTheCapLive|WarmupPartnerWeekCacheRefreshesDetachedAndServesStale|WarmupPartnerCandidatesCarryReciprocityAndHonourTheCap|AccountStatusPageMatchesSingleReadsInBoundedQueries|WarmupOffMailboxReceivesNothing|WarmupPauseRetiresIncomingWork)$' -count=1 | tee linked-mailbox-batch.log
+          for test in TestLiveWarmupPartnerCountsMatchIndividualCandidates TestLiveWarmupSummariesMatchIndividualReads TestLiveLinkedMailboxStatusBatchPreservesDetails TestLiveWarmupPartnerWeekCacheMatchesExactReadAndKeepsTheCapLive TestLiveWarmupPartnerWeekCacheRefreshesDetachedAndServesStale TestLiveWarmupPartnerCandidatesCarryReciprocityAndHonourTheCap TestLiveAccountStatusPageMatchesSingleReadsInBoundedQueries TestLiveWarmupOffMailboxReceivesNothing TestLiveWarmupPauseRetiresIncomingWork; do
             grep -q -- "--- PASS: $test " linked-mailbox-batch.log
           done
           if grep -q -- '--- SKIP:' linked-mailbox-batch.log; then exit 1; fi
@@ -272,9 +290,9 @@ jobs:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
         run: |
           set -o pipefail
-          go test -race -v -p 1 ./internal/repository -run '^TestLiveCloud' -count=1 | tee cloud-standing.log
+          go test -race -v -p 1 ./internal/repository ./internal/app/poollink -run '^TestLiveCloud' -count=1 | tee cloud-standing.log
           if grep -q -- '--- SKIP:' cloud-standing.log; then exit 1; fi
-          for test in TestLiveCloudStandingFreshnessIsBoundedWithoutInventingAProviderBlock TestLiveCloudUnknownEvidenceDoesNotHideARealHold TestLiveCloudStaleLiveHoldStaysKnown TestLiveCloudPendingEnrollmentAndDisconnectAreUnknown; do
+          for test in TestLiveCloudStandingFreshnessIsBoundedWithoutInventingAProviderBlock TestLiveCloudUnknownEvidenceDoesNotHideARealHold TestLiveCloudStaleLiveHoldStaysKnown TestLiveCloudPendingEnrollmentAndDisconnectAreUnknown TestLiveCloudDetachedLinkWarmupStopsOnce; do
             grep -q -- "--- PASS: $test " cloud-standing.log
           done
 
@@ -290,7 +308,7 @@ jobs:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
         run: |
           set -o pipefail
-          go test -race ./internal/repository -run '^TestLive(Monitoring|LastWarmupSendFailure|PersistentMailboxLoadingFailure|DispatchRetry|LineageQueueRevisions|AdminPlatformOverview|WarmupRecoversOldPreparation|WarmupPreparationRecoveryRetains|WarmupFilingRequiresAcknowledgement|WarmupFilingAuthority|WarmupTimeWindow|WarmupInvalidWindow)' -count=1
+          go test -race ./internal/repository -run '^TestLive(Monitoring|LastWarmupSendFailure|PersistentMailboxLoadingFailure|DispatchRetry|LineageQueueRevisions|AdminPlatformOverview|WarmupRecoversOldPreparation|WarmupPreparationRecoveryRetains|WarmupFilingRequiresAcknowledgement|WarmupFilingAuthority|WarmupTimeWindow|WarmupInvalidWindow|StoppedRecipientIsNeverAddressed)' -count=1
           go test -race -v ./internal/tasks -run '^Test(LiveWarmup(SafetyHoldReschedules|Recovery|UnknownRetirement|TaskDoesNotApplyResults|DispatchDefersInvalidHours)|WarmupSenderDistinguishes)' -count=1 | tee warmup-recovery.log
           if grep -q -- '--- SKIP: TestLiveWarmupUnknownRetirement' warmup-recovery.log; then exit 1; fi
           for test in TestLiveWarmupUnknownRetirementPreservesEvidenceAndFencesReplayOnce TestLiveWarmupUnknownRetirementAllowsDistinctNewSendAndKeepsCooldown TestLiveWarmupUnknownRetirementAndDefinitiveResultSerialize TestLiveWarmupUnknownRetirementSkipsProtectedRowsWithoutStarvingLaterMailboxes TestLiveWarmupUnknownRetirementReconcilerSeedsOnceAndClearsActiveWarnings; do
@@ -499,7 +517,7 @@ jobs:
       - name: Unibox indexed search, paging and interrupted reads (PostgreSQL)
         env:
           WARMBLY_TEST_DB: postgres://warmbly:warmbly@127.0.0.1:5432/warmbly_test?sslmode=disable
-        run: go test -race -v -p 1 ./internal/repository ./internal/infrastructure/db -run '^TestLiveUnibox(Search|ReadStream|SearchUpgrade)' -count=1
+        run: go test -race -v -p 1 ./internal/repository ./internal/infrastructure/db -run '^TestLiveUnibox(Search|ReadStream|SearchUpgrade|GetBySender)' -count=1
 
       - name: Notification digest authorization retries (Redis)
         env:
@@ -876,10 +894,27 @@ jobs:
   # The one job to mark required in branch protection. Skipped jobs pass
   # (their tree did not change); anything failed or cancelled fails it.
   # Dependency scanning lives in security.yml, off the PR path on purpose.
+  aws-deployment-ci:
+    name: AWS deployment gates
+    needs: changes
+    if: needs.changes.outputs.aws-deployment == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install deployment client
+        run: npm ci --prefix .github/aws-deploy --omit=dev --ignore-scripts --no-audit --no-fund
+      - name: Check deploy, rollback and rotation gates
+        env:
+          NODE_PATH: ${{ github.workspace }}/.github/aws-deploy/node_modules
+        run: node --test .github/scripts/aws-deploy.test.cjs .github/scripts/aws-rotate.test.cjs deploy/terraform/aws/runtime/rotate/rotate.test.cjs
+
   ci-status:
     name: CI Status
     runs-on: ubuntu-latest
-    needs: [changes, migrations-ci, go-ci, web-ci, qa-ci, admin-ci, site-ci, forms-ci, installer-ci, cli-installer-ci, make-ci, rust-ci, elixir-ci, ios-ci, frontend-images, pages-ci]
+    needs: [changes, migrations-ci, go-ci, web-ci, qa-ci, admin-ci, site-ci, forms-ci, installer-ci, cli-installer-ci, make-ci, rust-ci, elixir-ci, ios-ci, frontend-images, pages-ci, aws-deployment-ci]
     if: always()
     steps:
       - name: Check CI status

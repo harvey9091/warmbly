@@ -77,9 +77,11 @@ import (
 	"github.com/warmbly/warmbly/internal/app/instanceconfig"
 	"github.com/warmbly/warmbly/internal/app/instancesettings"
 	"github.com/warmbly/warmbly/internal/app/integration"
+	"github.com/warmbly/warmbly/internal/app/keystatus"
 	"github.com/warmbly/warmbly/internal/app/leadsync"
 	"github.com/warmbly/warmbly/internal/app/mailboxavatar"
 	"github.com/warmbly/warmbly/internal/app/mailboximport"
+	"github.com/warmbly/warmbly/internal/app/mailcred"
 	"github.com/warmbly/warmbly/internal/app/mcp"
 	"github.com/warmbly/warmbly/internal/app/monitoring"
 	"github.com/warmbly/warmbly/internal/app/nativeactions"
@@ -221,6 +223,7 @@ func main() {
 	var fleetNodeRepo repository.FleetNodeRepository
 	var fleetSettingsRepo repository.FleetSettingsRepository
 	var fleetNodeService *fleetnode.Service
+	var keyStatusDB keystatus.DB
 	var tasksService tasks.TasksService
 	var advancedService advanced.Service
 	var unsubSigner *unsublink.Signer
@@ -479,19 +482,35 @@ func main() {
 			log.Fatal(err)
 		}
 
-		primaryDB, err := db.New(ctx, primaryDBEndpoint)
+		directDBEndpoint, err := db.DirectEndpoint(primaryDBEndpoint, cfg.LoadPrimaryDBDirectEndpoint(ctx))
 		if err != nil {
 			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
 
-		// Run database migrations
-		log.Println("Running database migrations...")
-		if err := db.RunMigrations(primaryDBEndpoint); err != nil {
-			errs.CaptureFatal(err)
-			log.Fatal("Failed to run migrations: ", err)
+		migrationsOnStart := cfg.LoadMigrationsOnStart(ctx)
+		if migrationsOnStart {
+			log.Println("Running database migrations...")
+			if err := db.RunMigrations(directDBEndpoint); err != nil {
+				errs.CaptureFatal(err)
+				log.Fatal("Failed to run migrations: ", err)
+			}
+			log.Println("Database migrations completed")
 		}
-		log.Println("Database migrations completed")
+		primaryDB, err := db.NewWithDirect(ctx, primaryDBEndpoint, directDBEndpoint)
+		if err == nil {
+			keyStatusDB = primaryDB.Pool
+		}
+		if err != nil {
+			errs.CaptureFatal(err)
+			log.Fatal(err)
+		}
+		if !migrationsOnStart {
+			if err := db.WaitForSchema(ctx, primaryDB); err != nil {
+				errs.CaptureFatal(err)
+				log.Fatal(err)
+			}
+		}
 		// Once, not per warmup tick: the pools are fixed rows, and their absence
 		// (a data-only restore, a manual delete) otherwise fails every tick quietly.
 		if n, perr := instancecheck.CountSeededWarmupPools(ctx, primaryDB.Pool); perr == nil && n != 2 {
@@ -669,7 +688,6 @@ func main() {
 			errs.CaptureFatal(cerr)
 			log.Fatal("Invalid CREDENTIALS_ENCRYPTION_KEY: ", cerr)
 		}
-		emailRepostory := repository.NewEmailRepostory(primaryDB, credEncrypter)
 		campaignRepostory := repository.NewCampaignRepostory(primaryDB)
 		sequenceRepostory := repository.NewSequenceRepostory(primaryDB)
 		contactRepostory := repository.NewContactRepostory(primaryDB)
@@ -696,6 +714,13 @@ func main() {
 			errs.CaptureFatal(err)
 			log.Fatal(err)
 		}
+		cipherService = cipher.NewService(kms, cache, encryptedKeys)
+		mailboxCredentials, merr := mailcred.FromEnv(credEncrypter, cipherService)
+		if merr != nil {
+			errs.CaptureFatal(merr)
+			log.Fatal(merr)
+		}
+		emailRepostory := repository.NewEmailRepositoryWithSealer(primaryDB, mailboxCredentials)
 
 		folderRepostory := repository.NewGroupRepostory(primaryDB, models.Folders)
 		tagRepostory := repository.NewGroupRepostory(primaryDB, models.Tags)
@@ -958,7 +983,11 @@ func main() {
 		// TOTP 2FA: the secret is sealed with a server-wide key (the per-user DEK
 		// is unreachable at login time). Wire the challenger into auth so the login
 		// gate can issue a pending challenge.
-		twofaService = twofa.NewService(repository.NewTOTPRepository(primaryDB.Pool), userRepostory, tokenService, cache, twofa.DeriveKey(authCfg.TwoFASecret))
+		var twoFAReadKeys [][32]byte
+		for _, secret := range authCfg.TwoFAReadSecrets {
+			twoFAReadKeys = append(twoFAReadKeys, twofa.DeriveKey(secret))
+		}
+		twofaService = twofa.NewService(repository.NewTOTPRepository(primaryDB.Pool), userRepostory, tokenService, cache, twofa.DeriveKey(authCfg.TwoFASecret), twoFAReadKeys...)
 		authService.WireTwoFA(twofaService)
 		// The native app proves itself with App Attest where a browser solves Turnstile.
 		appAttestService = appattest.New(repository.NewAppAttestRepository(primaryDB.Pool), cache, appattest.Config{
@@ -1155,7 +1184,6 @@ func main() {
 			log.Printf("Warning: bootstrap failed: %v", berr)
 		}
 
-		cipherService = cipher.NewService(kms, cache, encryptedKeys)
 		emailMessageMapForHandler = repository.NewDurableEmailMessageMapRepository(primaryDB, cipherService)
 
 		// Third-party integrations: OAuth connect flows + encrypted token
@@ -1173,6 +1201,8 @@ func main() {
 		fleetNodeRepo = repository.NewFleetNodeRepository(primaryDB)
 		fleetSettingsRepo = repository.NewFleetSettingsRepository(primaryDB)
 		fleetNodeService = fleetnode.New(fleetNodeRepo, workerRepository, fleetSettingsRepo)
+		// Idle unless a staged rollout was started; every replica may run it.
+		go fleetNodeService.RunRolloutLoop(ctx, 30*time.Second)
 		settingsRegistrar := settings.NewRegistrar(storageBackendRepo)
 		if err := settingsRegistrar.RegisterAll(ctx, []settings.Backend{
 			{Kind: "kms", Provider: kms.Name(), Display: kms.Name(), ReadOnly: true},
@@ -1243,9 +1273,8 @@ func main() {
 		// the mailbox-connect redirect_uri from it sends the provider
 		// "0.0.0.0:8080/addresses/google/callback".
 		oauth2Cfg := config.LoadOauth2(oauthPublicBaseURL(apiCfg.Hostname))
-		// Recipient unsubscribe links live on the API origin, signed under the
-		// auth secret; the same base the OAuth callbacks are built on.
-		unsubSigner = unsublink.New(authCfg.AuthSecret, oauthPublicBaseURL(apiCfg.Hostname))
+		// Recipient links use a separate purpose key when one is configured.
+		unsubSigner = unsublink.NewWithReadKeys(authCfg.UnsubscribeSigningSecret, oauthPublicBaseURL(apiCfg.Hostname), authCfg.UnsubscribeReadSecrets, authCfg.UnsubscribeReadUntil)
 		emailService = email.NewServiceWithWorker(
 			emailRepostory,
 			cipherService,
@@ -1262,6 +1291,7 @@ func main() {
 		// Every connect path checks the workspace's mailbox allowance
 		// (fair use for paid plans, the free cap otherwise).
 		emailService.WireMailboxAllowance(organizationService)
+		emailService.WireMailboxCredentials(mailboxCredentials)
 		// Seed Graph delta cursors when the reconciler reloads mailboxes.
 		emailService.WireGraphDelta(repository.NewEmailGraphDeltaRepository(primaryDB))
 		// The Gmail equivalent: without it a reloaded mailbox re-bootstraps its
@@ -1303,7 +1333,7 @@ func main() {
 		// Self-hosted warmup pool link, both roles. The cloud side hands out
 		// codes and runs enrolled mailboxes as warmup-only accounts; the
 		// self-hosted side keeps the link and mirrors the cloud's state.
-		poolLinkRepository := repository.NewPoolLinkRepository(primaryDB.Pool)
+		poolLinkRepository := repository.NewPoolLinkRepository(primaryDB.Pool, primaryDB.ConnectSession)
 		poolLinkService = poollink.NewService(poolLinkRepository, emailRepostory, emailService, analyticsService, warmupRepository, featureGateService, organizationService, planRepository)
 		emailService.WirePoolLink(poolLinkRepository)
 		if g, ok := featureGateService.(interface{ WirePoolLink(feature.PoolLinkReader) }); ok {
@@ -1315,7 +1345,7 @@ func main() {
 		if w, ok := poolLinkService.(interface{ WireCampaigns(poollink.CampaignUsage) }); ok {
 			w.WireCampaigns(campaignRepostory)
 		}
-		cloudLinkRepository := repository.NewCloudLinkRepository(primaryDB.Pool, credEncrypter)
+		cloudLinkRepository := repository.NewCloudLinkRepository(primaryDB.Pool, credEncrypter, primaryDB.ConnectSession)
 		emailService.WireCloudLink(cloudLinkRepository)
 		cloudLinkService = cloudlink.NewService(cloudLinkRepository, emailRepostory, emailService)
 		cloudLinkService.OnStandingChange(func(ctx context.Context, change models.CloudLinkStandingChange) {
@@ -1841,7 +1871,7 @@ func main() {
 		// Mailbox imports: files and pasted lists connected in the background,
 		// with each domain's mail host detected from its DNS.
 		// One prover for every DNS ownership proof, keyed by the instance secret.
-		domainProver := domainproof.New(authCfg.AuthSecret)
+		domainProver := domainproof.New(authCfg.DomainProofSecret)
 
 		// Whole-domain connects: Google Workspace delegation to the instance's
 		// service account, Microsoft 365 consent to its Outlook app.
@@ -1873,6 +1903,11 @@ func main() {
 			GoogleSignin:      googleSignin,
 			Prover:            domainProver,
 		})
+		if w, ok := poolLinkService.(interface {
+			WireDelegation(poollink.DelegatedTokenBroker)
+		}); ok {
+			w.WireDelegation(delegationService)
+		}
 		go delegationService.StartHealth(ctx)
 
 		// Inbox vendor accounts: keys sealed per workspace, mailboxes imported by API.
@@ -1956,6 +1991,10 @@ func main() {
 			WireScheduler(poollink.WarmupScheduler)
 		}); ok {
 			w.WireScheduler(tasksService)
+		}
+		// Stops Cloud warmup on mailboxes of links revoked before revocation stopped it; a no-op once complete.
+		if j, ok := poolLinkService.(interface{ StopDetachedWarmup(context.Context) error }); ok {
+			go jobrun.Loop(ctx, "pool_link_detached_warmup_stop", 10*time.Minute, true, j.StopDetachedWarmup)
 		}
 
 		// Admin outreach composer — sends from the platform mailer
@@ -2069,7 +2108,7 @@ func main() {
 			repository.NewMailboxErasureRepository(primaryDB),
 			s3,
 			credEncrypter,
-		).Start(ctx, 1*time.Minute)
+		).WithOrganizationKeys(cipherService).Start(ctx, 1*time.Minute)
 
 		// Workspace archives: export a whole organization to a portable file
 		// and import one back, so a workspace can move between instances.
@@ -2540,6 +2579,7 @@ func main() {
 		FleetNodeRepo:          fleetNodeRepo,
 		FleetSettingsRepo:      fleetSettingsRepo,
 		FleetNodes:             fleetNodeService,
+		KeyStatusDB:            keyStatusDB,
 
 		// Danger zone
 		DangerZoneService:  dangerZoneService,

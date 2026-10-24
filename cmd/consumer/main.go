@@ -32,6 +32,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/inboxtag"
 	"github.com/warmbly/warmbly/internal/app/instancesettings"
 	"github.com/warmbly/warmbly/internal/app/integration"
+	"github.com/warmbly/warmbly/internal/app/mailcred"
 	"github.com/warmbly/warmbly/internal/app/nativeactions"
 	"github.com/warmbly/warmbly/internal/app/notification"
 	"github.com/warmbly/warmbly/internal/app/opsnotify"
@@ -97,7 +98,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	primaryDB, err := db.New(ctx, primaryDBEndpoint)
+	primaryDB, err := db.NewWithDirect(ctx, primaryDBEndpoint, cfg.LoadPrimaryDBDirectEndpoint(ctx))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -207,7 +208,12 @@ func main() {
 		errs.CaptureFatal(err)
 		log.Fatal("Invalid CREDENTIALS_ENCRYPTION_KEY: ", err)
 	}
-	emailRepo := repository.NewEmailRepostory(primaryDB, credEncrypter)
+	mailboxCredentials, err := mailcred.FromEnv(credEncrypter, cipherService)
+	if err != nil {
+		errs.CaptureFatal(err)
+		log.Fatal(err)
+	}
+	emailRepo := repository.NewEmailRepositoryWithSealer(primaryDB, mailboxCredentials)
 	uniboxRepo := repository.NewUniboxRepository(primaryDB)
 	mailboxRepo := repository.NewMailboxRepository(primaryDB)
 	emailHistoryIDRepo := repository.NewEmailHistoryIDRepository(primaryDB)
@@ -529,8 +535,8 @@ func main() {
 		ArrivalOutbox:               repository.NewDurableEmailMessageMapRepository(primaryDB, cipherService),
 		EmailAccountErrorRepository: emailAccountErrorRepo,
 		WarmupRepo:                  warmupRepo,
-		PoolLinkRepo:                repository.NewPoolLinkRepository(primaryDB.Pool),
-		CloudLink:                   cloudlink.NewService(repository.NewCloudLinkRepository(primaryDB.Pool, credEncrypter), emailRepo, nil),
+		PoolLinkRepo:                repository.NewPoolLinkRepository(primaryDB.Pool, primaryDB.ConnectSession),
+		CloudLink:                   cloudlink.NewService(repository.NewCloudLinkRepository(primaryDB.Pool, credEncrypter, primaryDB.ConnectSession), emailRepo, nil),
 		WarmupContentRepo:           repository.NewWarmupContentRepository(primaryDB.Pool),
 		WarmupEngagementRepo:        repository.NewWarmupEngagementRepository(primaryDB.Pool),
 		WarmupRecoveryRepo:          repository.NewWarmupRecoveryRepository(primaryDB.Pool),
@@ -620,6 +626,11 @@ func main() {
 	// Resolve campaign sends that were reserved and dispatched but whose worker
 	// result never came back, so a lead is never held in flight forever.
 	go jobsService.StartStuckSendReclaimer(ctx, 5*time.Minute)
+
+	if mailboxCredentials.SealsForOrganizations() {
+		// Moves credentials stored under the instance key onto workspace keys.
+		go jobsService.StartMailboxCredentialReseal(ctx)
+	}
 
 	// Mirror Redis heartbeats into workers.last_seen_at every 60s
 	// so the admin dashboard can render liveness without touching Redis.

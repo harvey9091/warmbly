@@ -14,6 +14,7 @@ import (
 
 	"github.com/warmbly/warmbly/internal/app/cipher"
 	"github.com/warmbly/warmbly/internal/app/credits"
+	"github.com/warmbly/warmbly/internal/app/mailcred"
 	"github.com/warmbly/warmbly/internal/app/organization"
 	"github.com/warmbly/warmbly/internal/app/orgtransfer"
 	"github.com/warmbly/warmbly/internal/app/token"
@@ -46,7 +47,11 @@ func connect(ctx context.Context) (*conn, error) {
 		return nil, err
 	}
 
-	handle, err := db.New(ctx, dsn)
+	directDSN, err := directDBEndpoint(ctx)
+	if err != nil {
+		return nil, err
+	}
+	handle, err := db.NewWithDirect(ctx, dsn, directDSN)
 	if err != nil {
 		return nil, fmt.Errorf("PRIMARY_DB is not a usable connection string (%s): %w", redact(dsn), err)
 	}
@@ -175,6 +180,9 @@ func (c *conn) orgTransferService(ctx context.Context) (orgtransfer.Service, err
 	if credEncrypter == nil {
 		warn("CREDENTIALS_ENCRYPTION_KEY is not set, so mailbox credentials cannot be read or written by this command.")
 	}
+	if _, err := mailcred.ModeFromEnv(); err != nil {
+		return nil, err
+	}
 
 	return orgtransfer.NewService(
 		repository.NewOrgTransferRepository(c.db),
@@ -231,6 +239,20 @@ func dbEndpoint(ctx context.Context) (string, error) {
 		}
 	}
 	return "", errors.New("PRIMARY_DB is not set, so there is no database to talk to.\nRun this inside the backend container, where the environment is already correct:\n  docker compose -p warmbly exec backend warmblyctl status\nOr export PRIMARY_DB first.")
+}
+
+func directDBEndpoint(ctx context.Context) (string, error) {
+	primary, err := dbEndpoint(ctx)
+	if err != nil {
+		return "", err
+	}
+	direct := os.Getenv("PRIMARY_DB_DIRECT")
+	if direct == "" {
+		if cfg, err := config.NewConfig(ctx); err == nil {
+			direct = cfg.LoadPrimaryDBDirectEndpoint(ctx)
+		}
+	}
+	return db.DirectEndpoint(primary, direct)
 }
 
 func redisEndpoint(ctx context.Context) (string, error) {

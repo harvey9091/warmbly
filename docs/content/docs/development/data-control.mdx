@@ -36,8 +36,8 @@ Two keys, and they are not interchangeable.
 
 | Key | Opens | Read by |
 |---|---|---|
-| `CREDENTIALS_ENCRYPTION_KEY` | Mailbox SMTP and IMAP credentials, and OAuth tokens | Backend and workers, without an organization context |
-| `KMS_LOCAL_MASTER_KEY` | The per-organization data keys, which in turn open everything else | Backend and consumer |
+| `CREDENTIALS_ENCRYPTION_KEY` | Mailbox SMTP and IMAP credentials and OAuth tokens stored under the instance key: everything by default, and only older values and personal mailboxes with `MAILBOX_CREDENTIALS_SEALING=organization` | Backend, consumer and workers |
+| `KMS_LOCAL_MASTER_KEY` | The per-organization data keys, which in turn open everything else, including mailbox credentials sealed under workspace keys | Backend and consumer, and workers when `KMS_PROVIDER=local` |
 
 Both are unrecoverable. A database backup without them restores an instance whose mailboxes authenticate against nothing, and there is no way back from that. They are in `.env`, and `install.sh` also writes them to `keys-backup.txt` next to the install, which is on the same disk as the database and therefore not a backup either. Copy them somewhere else.
 
@@ -177,7 +177,7 @@ Disconnecting a mailbox, or deleting the workspace holding it, removes its rows 
 | The OAuth grant | A Gmail mailbox's refresh token is sent to Google's revocation endpoint, which invalidates it and removes the instance from the customer's third-party access list. Microsoft publishes no per-application revocation endpoint, so an Outlook mailbox's tokens are destroyed locally and the customer removes the app themselves |
 | The message bodies | Everything the mailbox wrote under `users/<user>/emails/<mailbox>/` in the blob store is deleted, whether that is a filesystem path or an S3 bucket |
 
-While an erasure is outstanding its row holds a copy of the mailbox's OAuth refresh token, still sealed under `CREDENTIALS_ENCRYPTION_KEY`, because the row it was read from goes with the mailbox and the token is what the revocation sends. It is destroyed with the rest of the row when the erasure finishes.
+While an erasure is outstanding its row holds a copy of the mailbox's OAuth refresh token, still sealed under the key that sealed the mailbox's credentials, because the row it was read from goes with the mailbox and the token is what the revocation sends. It is destroyed with the rest of the row when the erasure finishes.
 
 The queue is the `mailbox_erasures` table, and it holds only work still owed: a finished erasure is removed rather than kept, because the row names the address the customer asked to have forgotten. A failure is retried with a widening backoff, capped at six hours, and never abandoned, so an unreachable provider or store delays the erasure instead of losing it. Anything still outstanding after a day is reported by the `mailbox_erasure` job, visible under scheduled jobs in the admin panel.
 
@@ -209,7 +209,7 @@ docker compose -p warmbly cp backend:/data/blobs/warmbly.tar.gz ./warmbly.tar.gz
 
 `/data/blobs` is a hand-off, not a destination: it is the one path the container and the host both see. The `&&` matters twice over. `backup` leaves its own output out of the archive, but a bundle left there is swept into the next run, so it has to be deleted; and a `cp` that failed must not be followed by deleting the only copy that exists.
 
-The bundle is written 0600 and holds every mailbox credential on the instance plus the keys that open them. Treat the file as you would the instance itself.
+The bundle is written 0600 and holds every mailbox credential on the instance plus the keys that open them. It includes configured credential and MFA read keys, purpose-specific signing keys and bounded internal-token overlap settings. Preserve those values when restoring a bundle that contains mixed generations of ciphertext. Treat the file as you would the instance itself.
 
 An install from `install.sh --wizard` can schedule this for you: `backup.sh` next to the install, a systemd timer, a retention count, and an optional `aws s3 cp` to somewhere off the host. A backup that only exists on the machine it backs up is not one.
 
@@ -250,7 +250,7 @@ curl -fsSL https://warmbly.com/install.sh | sh -s -- --host <new-hostname>
 
 ### Put the old keys in the new `.env`
 
-Copy `CREDENTIALS_ENCRYPTION_KEY` and `KMS_LOCAL_MASTER_KEY` from the old install, then recreate the containers so they take:
+Copy the saved keys from the old install, including `CREDENTIALS_ENCRYPTION_KEY`, `KMS_LOCAL_MASTER_KEY` and any configured read keys or separate MFA and signing keys. See [key rotation](/development/configuration/#rotate-instance-keys). Then recreate the containers so they take:
 
 ```bash
 docker compose -p warmbly up -d
@@ -314,6 +314,10 @@ See [upgrade order and downgrade limits](/development/install/#mailbox-sync-upgr
 Warmup placement aggregates travel in a [workspace archive](/guides/workspace-export-import/). Raw `warmup_received` first-observation, authentication-header and provider-thread provenance is explicitly instance-local and is not exported. Imported task lineage, parent receipt/message handles, queue revisions and worker dispatch nonces/results reset, so historical metadata does not authorize a continuation or replay on another instance.
 
 Managed OAuth consent tables contain operation/reference hashes and restrictive history, not authorization codes, PKCE verifiers, raw session handles or credentials. History remains until organization deletion. Browser/PKCE state in Redis expires after ten minutes; encrypted provider credentials retain their normal Cloud mailbox lifetime. Import keeps restrictive history while clearing source-instance/session/remote/planned-account/activation handles. Disconnect does not erase that history, and downgrade refuses to discard it. Revoking instance access does not delete the independently Cloud-owned provider grant or mailbox; pause or delete that mailbox on Cloud separately. See [managed consent recovery](/guides/warmbly-cloud/).
+
+Adopting a delegated Google Workspace mailbox leaves its domain grant and service-account key on Cloud. The self-hosted instance requests short-lived access tokens for that mailbox through its existing workspace connection. Converting an existing local app-password mailbox removes its local credential after Cloud confirms the association, while retaining its mailbox ID, campaigns and imported messages. Cloud warmup history remains on Cloud. Workspace archives carry the local data in the selected groups, but neither the Cloud connection nor its domain grant or cached tokens travel.
+
+Explicitly associating two existing app-password copies keeps both credentials where they already live. Only mailbox identifiers and the address cross the link for this action. The local enrollment stores the selected Cloud mailbox ID for restart-safe retries and keeps local password updates from being relayed to Cloud. Migration `000322` adds that nullable identifier with no backfill; image rollback retains it, and schema downgrade refuses to discard a live association. Both mailbox records and their histories remain on disconnect. The association is part of the instance-local `cloud_link_mailboxes` table, which is excluded from workspace archives; ordinary local SMTP/IMAP credentials still travel when the archive includes credentials.
 
 A self-hosted Warmbly makes no outbound call of its own except the one below, which is off with a single setting. The mail host lookup and company logos are listed too: both are off on a self-host unless you turn them on.
 

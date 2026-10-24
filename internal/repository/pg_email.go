@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/warmbly/warmbly/internal/app/mailcred"
 	"github.com/warmbly/warmbly/internal/config"
 	"github.com/warmbly/warmbly/internal/errx"
 	"github.com/warmbly/warmbly/internal/infrastructure/db"
@@ -163,6 +164,8 @@ type EmailRepository interface {
 	NewManagedAccount(ctx context.Context, userID string, data models.NewOauthAccount) (*models.Email, *errx.Error)
 	NewSMTPIMAPAccount(ctx context.Context, userID string, data models.NewSMTPIMAPAccount) (*models.Email, *errx.Error)
 	RefreshBoxToken(ctx context.Context, id uuid.UUID, accessToken, refreshToken string, expiresAt time.Time) error
+	// RefreshBoxTokenSealed stores a refreshed token a worker sealed under the mailbox's organization key.
+	RefreshBoxTokenSealed(ctx context.Context, id uuid.UUID, sealed string, expiresAt time.Time) error
 	// ReplaceSMTPIMAPCredentials overwrites a mailbox's SMTP/IMAP credential
 	// row, sealed on the same terms as at connect time.
 	ReplaceSMTPIMAPCredentials(ctx context.Context, id uuid.UUID, creds *models.SmtpImap) error
@@ -224,7 +227,7 @@ type EmailRepository interface {
 
 type emailRepository struct {
 	DB                *db.DB
-	Encrypt           *encrypt.Encrypter
+	Creds             *mailcred.Sealer
 	transportSnapshot pgx.Tx
 }
 
@@ -238,7 +241,7 @@ func (r *emailRepository) WithTransportSnapshot(ctx context.Context, read func(E
 		return err
 	}
 	defer tx.Rollback(ctx)
-	snapshot := &emailRepository{DB: r.DB, Encrypt: r.Encrypt, transportSnapshot: tx}
+	snapshot := &emailRepository{DB: r.DB, Creds: r.Creds, transportSnapshot: tx}
 	if err := read(snapshot); err != nil {
 		return err
 	}
@@ -252,45 +255,56 @@ func (r *emailRepository) transportQueryRow(ctx context.Context, query string, a
 	return r.DB.QueryRow(ctx, query, args...)
 }
 
-// NewEmailRepostory builds the email repository. enc seals SMTP/IMAP and
-// OAuth credentials at rest (CREDENTIALS_ENCRYPTION_KEY); nil is tolerated so
-// deployments without the key keep booting, but credential reads/writes then
-// fail with a captured error instead of a nil-pointer panic.
+// NewEmailRepostory builds the email repository with credentials sealed under
+// the instance key only; nil is tolerated so deployments without the key keep
+// booting, but credential reads/writes then fail with a captured error.
 func NewEmailRepostory(db *db.DB, enc *encrypt.Encrypter) EmailRepository {
+	return NewEmailRepositoryWithSealer(db, &mailcred.Sealer{Instance: enc, Mode: mailcred.ModeInstance})
+}
+
+// NewEmailRepositoryWithSealer builds the email repository over a mailbox credential sealer.
+func NewEmailRepositoryWithSealer(db *db.DB, creds *mailcred.Sealer) EmailRepository {
 	return &emailRepository{
-		DB:      db,
-		Encrypt: enc,
+		DB:    db,
+		Creds: creds,
 	}
 }
 
-// errNoCredentialEncrypter is returned when credential sealing is attempted
-// without CREDENTIALS_ENCRYPTION_KEY configured.
-var errNoCredentialEncrypter = errors.New("credential encrypter not configured (set CREDENTIALS_ENCRYPTION_KEY)")
-
-// sealCredential encrypts a credential for storage. It fails closed: without an
-// encrypter the caller must abort rather than fall back to a plaintext write.
-func (r *emailRepository) sealCredential(plain string) (string, error) {
-	if r.Encrypt == nil {
-		return "", errNoCredentialEncrypter
+// sealCredentials seals mailbox credentials for storage. It fails closed: without a key the caller aborts rather than writing plaintext.
+func (r *emailRepository) sealCredentials(ctx context.Context, orgID *uuid.UUID, plains ...string) ([]string, error) {
+	if r.Creds == nil {
+		return nil, mailcred.ErrNoKey
 	}
-	return r.Encrypt.Encrypt(plain)
+	return r.Creds.SealAll(ctx, orgID, plains...)
 }
 
 // openCredential returns the plaintext behind a stored credential, reporting
 // whether the row was still in the pre-sealing plaintext format.
 //
 // Rows written before OAuth tokens were sealed hold the provider token verbatim
-// ("ya29...", "1//0g...", a Graph JWT), none of which is valid hex, so a
-// ParseHex/AEAD failure identifies a legacy row rather than corruption. Callers
-// re-seal on the spot so the plaintext window closes on first read.
-func (r *emailRepository) openCredential(stored string) (string, bool, error) {
-	if r.Encrypt == nil {
-		return "", false, errNoCredentialEncrypter
+// ("ya29...", "1//0g...", a Graph JWT), none of which is valid hex, so only a
+// value outside the sealed format is legacy. Callers re-seal on the spot so the
+// plaintext window closes on first read.
+func (r *emailRepository) openCredential(ctx context.Context, orgID *uuid.UUID, stored string) (string, bool, error) {
+	if r.Creds == nil {
+		return "", false, mailcred.ErrNoKey
 	}
-	if plain, err := r.Encrypt.Decrypt(stored); err == nil {
-		return plain, false, nil
+	return r.Creds.OpenOrLegacy(ctx, orgID, stored)
+}
+
+// openCredentials opens sealed credentials that have no legacy plaintext form.
+func (r *emailRepository) openCredentials(ctx context.Context, orgID *uuid.UUID, stored ...*string) error {
+	if r.Creds == nil {
+		return mailcred.ErrNoKey
 	}
-	return stored, true, nil
+	for _, v := range stored {
+		plain, err := r.Creds.Open(ctx, orgID, *v)
+		if err != nil {
+			return err
+		}
+		*v = plain
+	}
+	return nil
 }
 
 func (r *emailRepository) FindInOrganization(ctx context.Context, orgID uuid.UUID, email string) (*models.EmailRef, *errx.Error) {
@@ -413,14 +427,10 @@ func (r *emailRepository) ConvertGoogleToAppPassword(ctx context.Context, orgID,
 	if creds == nil || creds.SMTP == nil || creds.IMAP == nil {
 		return false, errx.ErrInvalid
 	}
-	sealed := make([]string, 0, 6)
-	for _, plain := range []string{creds.SMTP.Host, creds.SMTP.Username, creds.SMTP.Password, creds.IMAP.Host, creds.IMAP.Username, creds.IMAP.Password} {
-		v, err := r.sealCredential(plain)
-		if err != nil {
-			db.CaptureError(err, "", nil, "encrypt-smtp-imap")
-			return false, errx.InternalError()
-		}
-		sealed = append(sealed, v)
+	sealed, err := r.sealCredentials(ctx, &orgID, creds.SMTP.Host, creds.SMTP.Username, creds.SMTP.Password, creds.IMAP.Host, creds.IMAP.Username, creds.IMAP.Password)
+	if err != nil {
+		db.CaptureError(err, "", nil, "encrypt-smtp-imap")
+		return false, errx.InternalError()
 	}
 	query := `UPDATE email_accounts ea SET provider = 'smtp_imap', auth_method = 'app_password',
 		       mail_host = CASE WHEN $3 = '' THEN mail_host ELSE $3 END, last_id = NULL, updated_at = now()
@@ -856,16 +866,12 @@ func (r *emailRepository) NewOauthAccount(ctx context.Context, userID string, da
 
 	// Seal before opening the transaction so a misconfigured encrypter aborts
 	// the connect instead of writing provider tokens in the clear.
-	encAccessToken, encErr := r.sealCredential(data.AccessToken)
+	sealedTokens, encErr := r.sealCredentials(ctx, data.OrganizationID, data.AccessToken, data.RefreshToken)
 	if encErr != nil {
-		db.CaptureError(encErr, "", nil, "encrypt-access-token")
+		db.CaptureError(encErr, "", nil, "encrypt-oauth-tokens")
 		return nil, errx.InternalError()
 	}
-	encRefreshToken, encErr := r.sealCredential(data.RefreshToken)
-	if encErr != nil {
-		db.CaptureError(encErr, "", nil, "encrypt-refresh-token")
-		return nil, errx.InternalError()
-	}
+	encAccessToken, encRefreshToken := sealedTokens[0], sealedTokens[1]
 
 	tx, err := r.DB.Begin(ctx)
 	if err != nil {
@@ -1000,22 +1006,36 @@ func (r *emailRepository) NewManagedAccount(ctx context.Context, userID string, 
 	if data.ID != uuid.Nil {
 		id = data.ID
 	}
+	tx, err := r.DB.Begin(ctx)
+	if err != nil {
+		return nil, errx.InternalError()
+	}
+	defer tx.Rollback(ctx)
+	if xerr := ensureMailboxAbsentTx(ctx, tx, data.OrganizationID, data.Email); xerr != nil {
+		return nil, xerr
+	}
 	query := withNewMailboxBehavior(`
 		INSERT INTO email_accounts (id, user_id, organization_id, email, name, provider, signature_plain, signature_html, tracking_domain, last_synced_at, created_at, updated_at, warmup_tag, mail_host, auth_method)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $10, $11, $12, $13)
 	`, true)
-	if _, err := r.DB.Exec(ctx, query, id, userID, data.OrganizationID, data.Email, data.Name, data.Provider, sigplain, sightml, "", t, "", data.MailHost, models.MailAuthOAuth); err != nil {
+	if _, err := tx.Exec(ctx, query, id, userID, data.OrganizationID, data.Email, data.Name, data.Provider, sigplain, sightml, "", t, "", data.MailHost, models.MailAuthOAuth); err != nil {
 		db.CaptureError(err, query, nil, "exec")
+		return nil, errx.InternalError()
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, errx.InternalError()
 	}
 	return r.GetByID(ctx, id)
 }
 
 func (r *emailRepository) NewSMTPIMAPAccount(ctx context.Context, userID string, data models.NewSMTPIMAPAccount) (*models.Email, *errx.Error) {
-	if r.Encrypt == nil {
-		errs.CaptureException(errNoCredentialEncrypter)
+	// Seal before the transaction so a key lookup never holds the organization's mailbox lock.
+	sealed, sealErr := r.sealCredentials(ctx, data.OrganizationID, data.SMTP.Host, data.SMTP.Username, data.SMTP.Password, data.IMAP.Host, data.IMAP.Username, data.IMAP.Password)
+	if sealErr != nil {
+		errs.CaptureException(sealErr)
 		return nil, errx.InternalError()
 	}
+	smtphost, smtpuser, smtppass, imaphost, imapuser, imappass := sealed[0], sealed[1], sealed[2], sealed[3], sealed[4], sealed[5]
 	tx, err := r.DB.Begin(ctx)
 	if err != nil {
 		db.CaptureError(err, "", nil, "begin")
@@ -1063,38 +1083,6 @@ func (r *emailRepository) NewSMTPIMAPAccount(ctx context.Context, userID string,
 	)
 	if err != nil {
 		db.CaptureError(err, query, nil, "exec")
-		return nil, errx.InternalError()
-	}
-
-	smtphost, err := r.Encrypt.Encrypt(data.SMTP.Host)
-	if err != nil {
-		errs.CaptureException(err)
-		return nil, errx.InternalError()
-	}
-	smtpuser, err := r.Encrypt.Encrypt(data.SMTP.Username)
-	if err != nil {
-		errs.CaptureException(err)
-		return nil, errx.InternalError()
-	}
-	smtppass, err := r.Encrypt.Encrypt(data.SMTP.Password)
-	if err != nil {
-		errs.CaptureException(err)
-		return nil, errx.InternalError()
-	}
-
-	imaphost, err := r.Encrypt.Encrypt(data.IMAP.Host)
-	if err != nil {
-		errs.CaptureException(err)
-		return nil, errx.InternalError()
-	}
-	imapuser, err := r.Encrypt.Encrypt(data.IMAP.Username)
-	if err != nil {
-		errs.CaptureException(err)
-		return nil, errx.InternalError()
-	}
-	imappass, err := r.Encrypt.Encrypt(data.IMAP.Password)
-	if err != nil {
-		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
 
@@ -1308,7 +1296,7 @@ func (r *emailRepository) Search(ctx context.Context, orgID, search string, curs
 func (r *emailRepository) Get(ctx context.Context, orgID, emailAccountID string) (*models.Email, *errx.Error) {
 	query := `
 		SELECT
-		ea.id, ea.email, ea.name, ea.signature_plain, ea.signature_html, ea.signature_sync, ea.signature_code, ea.send_as_email,
+		ea.id, ea.organization_id, ea.email, ea.name, ea.signature_plain, ea.signature_html, ea.signature_sync, ea.signature_code, ea.send_as_email,
 		 ea.provider, ea.mail_host, ea.auth_method, ea.domain_grant_id, ea.vendor_connection_id, COALESCE((SELECT vc.vendor FROM mailbox_vendor_connections vc WHERE vc.id = ea.vendor_connection_id), ''), ea.avatar_url, ea.status, COALESCE(ea.last_synced_at, ea.created_at) AS last_synced_at, ea.last_id, ea.campaign_limit,
 		 ea.min_wait_time, ea.reply_to, ea.tracking_domain, ea.tracking_domain_verified, ea.tracking_domain_verified_at, ea.track_direct_mail,
 		 ea.auth_state, ea.auth_spf, ea.auth_dkim, ea.auth_dmarc, ea.auth_dmarc_policy, ea.auth_reason, ea.auth_checked_at, ea.auth_failing_since,
@@ -1333,7 +1321,7 @@ func (r *emailRepository) Get(ctx context.Context, orgID, emailAccountID string)
 		query,
 		params...,
 	).Scan(
-		&i.ID, &i.Email, &i.Name, &i.SignaturePlain, &i.SignatureHTML, &i.SignatureSync, &i.SignatureCode, &i.SendAsEmail, &i.Provider, &i.MailHost, &i.AuthMethod, &i.DomainGrantID, &i.VendorConnectionID, &i.Vendor, &i.AvatarURL, &i.Status,
+		&i.ID, &i.OrganizationID, &i.Email, &i.Name, &i.SignaturePlain, &i.SignatureHTML, &i.SignatureSync, &i.SignatureCode, &i.SendAsEmail, &i.Provider, &i.MailHost, &i.AuthMethod, &i.DomainGrantID, &i.VendorConnectionID, &i.Vendor, &i.AvatarURL, &i.Status,
 		&i.LastSyncedAt, &i.LastID, &i.CampaignLimit, &i.MinWaitTime, &i.ReplyTo, &i.TrackingDomain, &i.TrackingDomainVerified, &i.TrackingDomainVerifiedAt, &i.TrackDirectMail,
 		&i.AuthState, &i.AuthSPF, &i.AuthDKIM, &i.AuthDMARC, &i.AuthDMARCPolicy, &i.AuthReason, &i.AuthCheckedAt, &i.AuthFailingSince,
 		&i.Warmup, &i.WarmupPausedAt, &i.WarmupBase, &i.WarmupMax, &i.WarmupIncrease, &i.WarmupReplyRate, &i.WarmupTag, &i.WarmupPoolType,
@@ -1617,8 +1605,10 @@ func (r *emailRepository) Update(ctx context.Context, orgID, emailAccountID stri
 		}
 		direction := ""
 		diagnostic := currentMode != nil && *currentMode == "diagnostic"
-		sendingOff := currentPaused || diagnostic && !currentSend || udata.TestSendEnabled != nil && !*udata.TestSendEnabled
-		receivingOff := diagnostic && !currentReceive || udata.TestReceiveEnabled != nil && !*udata.TestReceiveEnabled
+		// Pausing warmup stops both directions whatever participation flags the same request sends.
+		pausing := currentPaused || udata.Warmup != nil && !*udata.Warmup
+		sendingOff := pausing || diagnostic && !currentSend || udata.TestSendEnabled != nil && !*udata.TestSendEnabled
+		receivingOff := pausing || diagnostic && !currentReceive || udata.TestReceiveEnabled != nil && !*udata.TestReceiveEnabled
 		if currentStatus != "active" || udata.Status != nil && *udata.Status != "active" || currentMode != nil && *currentMode == "off" || udata.TestMode != nil && *udata.TestMode == "off" || sendingOff && receivingOff {
 			direction = "both"
 		} else if sendingOff {
@@ -2238,7 +2228,8 @@ func (r *emailRepository) SetWarmupLifecycle(ctx context.Context, orgID, emailAc
 	}
 	diagnostic := currentMode != nil && *currentMode == "diagnostic"
 	sendingOff := currentPaused || action == "pause" || diagnostic && !currentSend
-	receivingOff := diagnostic && !currentReceive
+	// Warmup off stops receiving as well as sending.
+	receivingOff := currentPaused || action == "pause" || diagnostic && !currentReceive
 	direction := ""
 	if action == "stop" || action == "disable" || currentStatus != "active" || currentMode != nil && *currentMode == "off" || sendingOff && receivingOff {
 		direction = "both"
@@ -2597,23 +2588,23 @@ func (r *emailRepository) GetByCampaignSenders(ctx context.Context, scope Accoun
 
 // GetSMTPCredentials retrieves SMTP/IMAP credentials for an email account
 func (r *emailRepository) GetSMTPCredentials(ctx context.Context, emailAccountID uuid.UUID) (*SMTPCredentials, *errx.Error) {
-	if r.Encrypt == nil {
-		errs.CaptureException(errNoCredentialEncrypter)
+	if r.Creds == nil {
+		errs.CaptureException(mailcred.ErrNoKey)
 		return nil, errx.InternalError()
 	}
 	query := `
-		SELECT smtp_host, smtp_port, smtp_user, smtp_password, smtp_security,
-		       imap_host, imap_port, imap_user, imap_password, imap_security
-		FROM email_accounts_smtp_imap
-		WHERE email_account_id = $1
+		SELECT ea.organization_id, s.smtp_host, s.smtp_port, s.smtp_user, s.smtp_password, s.smtp_security,
+		       s.imap_host, s.imap_port, s.imap_user, s.imap_password, s.imap_security
+		FROM email_accounts_smtp_imap s
+		JOIN email_accounts ea ON ea.id = s.email_account_id
+		WHERE s.email_account_id = $1
 	`
 
 	var creds SMTPCredentials
-	var smtpHost, smtpUser, smtpPassword, imapHost, imapUser, imapPassword string
-
+	var orgID *uuid.UUID
 	err := r.transportQueryRow(ctx, query, emailAccountID).Scan(
-		&smtpHost, &creds.SMTPPort, &smtpUser, &smtpPassword, &creds.SMTPSecurity,
-		&imapHost, &creds.IMAPPort, &imapUser, &imapPassword, &creds.IMAPSecurity,
+		&orgID, &creds.SMTPHost, &creds.SMTPPort, &creds.SMTPUser, &creds.SMTPPassword, &creds.SMTPSecurity,
+		&creds.IMAPHost, &creds.IMAPPort, &creds.IMAPUser, &creds.IMAPPassword, &creds.IMAPSecurity,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -2623,59 +2614,33 @@ func (r *emailRepository) GetSMTPCredentials(ctx context.Context, emailAccountID
 		return nil, errx.InternalError()
 	}
 
-	// Decrypt credentials
-	var xerr error
-	creds.SMTPHost, xerr = r.Encrypt.Decrypt(smtpHost)
-	if xerr != nil {
-		errs.CaptureException(xerr)
+	if err := r.openCredentials(ctx, orgID, &creds.SMTPHost, &creds.SMTPUser, &creds.SMTPPassword,
+		&creds.IMAPHost, &creds.IMAPUser, &creds.IMAPPassword); err != nil {
+		errs.CaptureException(err)
 		return nil, errx.InternalError()
 	}
-	creds.SMTPUser, xerr = r.Encrypt.Decrypt(smtpUser)
-	if xerr != nil {
-		errs.CaptureException(xerr)
-		return nil, errx.InternalError()
-	}
-	creds.SMTPPassword, xerr = r.Encrypt.Decrypt(smtpPassword)
-	if xerr != nil {
-		errs.CaptureException(xerr)
-		return nil, errx.InternalError()
-	}
-	creds.IMAPHost, xerr = r.Encrypt.Decrypt(imapHost)
-	if xerr != nil {
-		errs.CaptureException(xerr)
-		return nil, errx.InternalError()
-	}
-	creds.IMAPUser, xerr = r.Encrypt.Decrypt(imapUser)
-	if xerr != nil {
-		errs.CaptureException(xerr)
-		return nil, errx.InternalError()
-	}
-	creds.IMAPPassword, xerr = r.Encrypt.Decrypt(imapPassword)
-	if xerr != nil {
-		errs.CaptureException(xerr)
-		return nil, errx.InternalError()
-	}
-
 	return &creds, nil
 }
 
 // GetOAuthCredentials retrieves OAuth credentials for an email account
 func (r *emailRepository) GetOAuthCredentials(ctx context.Context, emailAccountID uuid.UUID) (*OAuthCredentials, *errx.Error) {
-	if r.Encrypt == nil {
-		errs.CaptureException(errNoCredentialEncrypter)
+	if r.Creds == nil {
+		errs.CaptureException(mailcred.ErrNoKey)
 		return nil, errx.InternalError()
 	}
 	query := `
-		SELECT access_token, refresh_token, expires_at
-		FROM email_accounts_oauth
-		WHERE email_account_id = $1
+		SELECT ea.organization_id, o.access_token, o.refresh_token, o.expires_at
+		FROM email_accounts_oauth o
+		JOIN email_accounts ea ON ea.id = o.email_account_id
+		WHERE o.email_account_id = $1
 	`
 
+	var orgID *uuid.UUID
 	var accessToken, refreshToken string
 	var expiresAt time.Time
 
 	err := r.transportQueryRow(ctx, query, emailAccountID).Scan(
-		&accessToken, &refreshToken, &expiresAt,
+		&orgID, &accessToken, &refreshToken, &expiresAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -2686,18 +2651,18 @@ func (r *emailRepository) GetOAuthCredentials(ctx context.Context, emailAccountI
 	}
 
 	// Decrypt tokens, tolerating rows written before OAuth tokens were sealed.
-	decryptedAccessToken, accessLegacy, xerr := r.openCredential(accessToken)
+	decryptedAccessToken, accessLegacy, xerr := r.openCredential(ctx, orgID, accessToken)
 	if xerr != nil {
 		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
-	decryptedRefreshToken, refreshLegacy, xerr := r.openCredential(refreshToken)
+	decryptedRefreshToken, refreshLegacy, xerr := r.openCredential(ctx, orgID, refreshToken)
 	if xerr != nil {
 		errs.CaptureException(xerr)
 		return nil, errx.InternalError()
 	}
 	if (accessLegacy || refreshLegacy) && r.transportSnapshot == nil {
-		r.resealOAuthCredentials(ctx, emailAccountID, decryptedAccessToken, decryptedRefreshToken)
+		r.resealOAuthCredentials(ctx, orgID, emailAccountID, accessToken, refreshToken, decryptedAccessToken, decryptedRefreshToken)
 	}
 
 	return &OAuthCredentials{
@@ -2711,14 +2676,10 @@ func (r *emailRepository) GetOAuthCredentials(ctx context.Context, emailAccountI
 // is the migration path for tokens stored before sealing existed: there is no
 // SQL-only migration for them because the key lives in the application, so the
 // upgrade happens on first read instead. Best-effort by design, a failure here
-// must not break the read that triggered it; the next read retries.
-func (r *emailRepository) resealOAuthCredentials(ctx context.Context, emailAccountID uuid.UUID, accessToken, refreshToken string) {
-	encAccessToken, err := r.sealCredential(accessToken)
-	if err != nil {
-		errs.CaptureException(err)
-		return
-	}
-	encRefreshToken, err := r.sealCredential(refreshToken)
+// must not break the read that triggered it; the next read retries. The write
+// only lands while the row still holds what was read, so a concurrent refresh wins.
+func (r *emailRepository) resealOAuthCredentials(ctx context.Context, orgID *uuid.UUID, emailAccountID uuid.UUID, storedAccess, storedRefresh, accessToken, refreshToken string) {
+	sealed, err := r.sealCredentials(ctx, orgID, accessToken, refreshToken)
 	if err != nil {
 		errs.CaptureException(err)
 		return
@@ -2727,9 +2688,9 @@ func (r *emailRepository) resealOAuthCredentials(ctx context.Context, emailAccou
 	query := `
 		UPDATE email_accounts_oauth
 		SET access_token = $1, refresh_token = $2
-		WHERE email_account_id = $3
+		WHERE email_account_id = $3 AND access_token = $4 AND refresh_token = $5
 	`
-	if _, err := r.DB.Exec(ctx, query, encAccessToken, encRefreshToken, emailAccountID); err != nil {
+	if _, err := r.DB.Exec(ctx, query, sealed[0], sealed[1], emailAccountID, storedAccess, storedRefresh); err != nil {
 		db.CaptureError(err, query, nil, "reseal-oauth-credentials")
 	}
 }
