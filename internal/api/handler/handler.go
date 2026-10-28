@@ -27,6 +27,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/credits"
 	"github.com/warmbly/warmbly/internal/app/crm"
 	"github.com/warmbly/warmbly/internal/app/crmmode"
+	"github.com/warmbly/warmbly/internal/app/customhost"
 	"github.com/warmbly/warmbly/internal/app/dangerzone"
 	"github.com/warmbly/warmbly/internal/app/delegation"
 	"github.com/warmbly/warmbly/internal/app/discount"
@@ -57,6 +58,7 @@ import (
 	"github.com/warmbly/warmbly/internal/app/passkey"
 	"github.com/warmbly/warmbly/internal/app/pipedrive"
 	"github.com/warmbly/warmbly/internal/app/placement"
+	"github.com/warmbly/warmbly/internal/app/planoffer"
 	"github.com/warmbly/warmbly/internal/app/poollink"
 	"github.com/warmbly/warmbly/internal/app/ratelimit"
 	"github.com/warmbly/warmbly/internal/app/referral"
@@ -166,6 +168,8 @@ type Handler struct {
 	StripeService       stripe.StripeService
 	DiscountService     discount.DiscountService
 	ReferralService     referral.Service
+	// PlanOfferService holds private plan offers and credential-free Cloud warmup grants. Nil-safe.
+	PlanOfferService planoffer.Service
 
 	// Trial & feature gates
 	TrialService            trial.TrialService
@@ -375,6 +379,8 @@ type Handler struct {
 	// gate at /tls/authorize so a reverse proxy can obtain a certificate for a
 	// hostname that was not known when the instance was installed.
 	CustomDomains repository.CustomDomainRepository
+	// CustomHosts confines a workspace's custom host to that workspace's forms and tracked links.
+	CustomHosts *customhost.Checker
 
 	// Direct repositories used by handlers that don't yet have a
 	// service layer (avatars, etc.). Keep narrow and add a service

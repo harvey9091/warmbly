@@ -136,8 +136,20 @@ func DevEnv() bool {
 	return false
 }
 
+// ExplicitDevelopment reports whether APP_ENV names development; unlike DevEnv, unset is not.
+func ExplicitDevelopment() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV"))) {
+	case "dev", "development", "local":
+		return true
+	}
+	return false
+}
+
 // HostedProduction reports a hosted (not self-host) instance outside development.
 func HostedProduction() bool { return !SelfHosted() && !DevEnv() }
+
+// SMTPCRAMMD5Allowed preserves legacy mail-server compatibility outside hosted production.
+func SMTPCRAMMD5Allowed() bool { return !HostedProduction() }
 
 // UnsafeWebhookURLsAllowed reports whether outbound HTTP to customer URLs may use
 // http:// and private addresses. Only a self-hosted or development instance may opt in.
@@ -159,6 +171,11 @@ func PrivateMailHostsAllowed() bool {
 // on hosted production, where a mailbox opts out per server with a pinned key.
 func MailTLSInsecureAllowed() bool {
 	return isTrue(os.Getenv("MAIL_TLS_INSECURE")) && !HostedProduction()
+}
+
+// SMTPTLSInsecureAllowed reports whether SMTP_TLS_INSECURE_SKIP_VERIFY=true applies: never on hosted production.
+func SMTPTLSInsecureAllowed() bool {
+	return isTrue(os.Getenv("SMTP_TLS_INSECURE_SKIP_VERIFY")) && !HostedProduction()
 }
 
 // MailvendorSandboxURL points every inbox vendor client at the sandbox's mock

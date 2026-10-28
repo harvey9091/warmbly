@@ -793,7 +793,7 @@ type MailboxAssignment struct {
 }
 
 func (r *emailRepository) ListActiveWorkerAccounts(ctx context.Context) ([]MailboxAssignment, error) {
-	const query = `SELECT id, worker_id FROM email_accounts WHERE status = 'active'`
+	query := `SELECT id, worker_id FROM email_accounts WHERE status = 'active' AND NOT ` + instanceExecutedSQL("email_accounts.id")
 	rows, err := r.DB.Query(ctx, query)
 	if err != nil {
 		return nil, err
@@ -1928,7 +1928,7 @@ func (r *emailRepository) UpdateTrackingDomain(ctx context.Context, orgID, email
 // anybody pressing anything.
 func (r *emailRepository) ListTrackingDomainCheckDue(ctx context.Context, staleBefore time.Time, limit int) ([]models.TrackingDomainTarget, *errx.Error) {
 	query := `
-		SELECT id, tracking_domain, tracking_domain_verified
+		SELECT id, COALESCE(organization_id, '00000000-0000-0000-0000-000000000000'::uuid), tracking_domain, tracking_domain_verified
 		FROM email_accounts
 		WHERE status = 'active'
 		  AND COALESCE(tracking_domain, '') <> ''
@@ -1948,7 +1948,7 @@ func (r *emailRepository) ListTrackingDomainCheckDue(ctx context.Context, staleB
 	out := []models.TrackingDomainTarget{}
 	for rows.Next() {
 		var t models.TrackingDomainTarget
-		if err := rows.Scan(&t.ID, &t.Domain, &t.Verified); err != nil {
+		if err := rows.Scan(&t.ID, &t.OrganizationID, &t.Domain, &t.Verified); err != nil {
 			db.CaptureError(err, query, params, "scan")
 			return nil, errx.InternalError()
 		}
@@ -2805,7 +2805,7 @@ func (r *emailRepository) SetStatus(ctx context.Context, emailAccountID uuid.UUI
 
 // SetWorkerID assigns a worker to an email account
 func (r *emailRepository) SetWorkerID(ctx context.Context, emailAccountID, workerID uuid.UUID) *errx.Error {
-	query := `UPDATE email_accounts SET worker_id = $1, updated_at = NOW() WHERE id = $2`
+	query := `UPDATE email_accounts SET worker_id = $1, updated_at = NOW() WHERE id = $2 AND NOT ` + instanceExecutedSQL("email_accounts.id")
 
 	cmd, err := r.DB.Exec(ctx, query, workerID, emailAccountID)
 	if err != nil {

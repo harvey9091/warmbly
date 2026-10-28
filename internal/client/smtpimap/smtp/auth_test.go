@@ -2,11 +2,14 @@ package smtp
 
 import (
 	"errors"
+	"net"
 	"net/smtp"
+	"strings"
 	"testing"
 )
 
 func TestChooseAuthPicksByLinkAndAdvertisement(t *testing.T) {
+	t.Setenv("DEPLOYMENT_MODE", "self_hosted")
 	for _, tc := range []struct {
 		name       string
 		advertised string
@@ -52,9 +55,56 @@ func TestChooseAuthPicksByLinkAndAdvertisement(t *testing.T) {
 	}
 }
 
+func TestHostedSMTPAuthUsesLoginOrPlain(t *testing.T) {
+	t.Setenv("DEPLOYMENT_MODE", "cloud")
+	t.Setenv("APP_ENV", "prod")
+	for _, advertised := range []string{"CRAM-MD5", "cram-md5"} {
+		if auth, err := chooseAuth(advertised, true, "user", "password", "mail.example.com"); auth != nil || !errors.Is(err, ErrSMTPNoSupportedAuth) {
+			t.Fatalf("%q: auth=%v err=%v", advertised, auth, err)
+		}
+	}
+	for _, advertised := range []string{"CRAM-MD5 LOGIN", "CRAM-MD5 PLAIN"} {
+		auth, err := chooseAuth(advertised, true, "user", "password", "mail.example.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mechanism, _, err := auth.Start(&smtp.ServerInfo{Name: "mail.example.com", TLS: true})
+		if err != nil || (mechanism != "LOGIN" && mechanism != "PLAIN") {
+			t.Fatalf("%q: mechanism=%q err=%v", advertised, mechanism, err)
+		}
+	}
+}
+
 func TestLoginAuthRefusesCleartextToARemoteHost(t *testing.T) {
 	auth := NewLoginAuth("user", "pw", "mail.example.com")
 	if _, _, err := auth.Start(&smtp.ServerInfo{Name: "mail.example.com"}); !errors.Is(err, ErrSMTPCleartextAuth) {
 		t.Fatalf("err = %v, want ErrSMTPCleartextAuth", err)
+	}
+}
+
+// The XOAUTH2 bearer token travels only over TLS or to this machine.
+func TestOAuth2AuthRefusesCleartextToARemoteHost(t *testing.T) {
+	auth := newOAuth2Auth("sender", "ya29.token")
+	for _, tc := range []struct {
+		server *smtp.ServerInfo
+		ok     bool
+	}{
+		{&smtp.ServerInfo{Name: "smtp.gmail.com"}, false},
+		{nil, false},
+		{&smtp.ServerInfo{Name: "smtp.gmail.com", TLS: true}, true},
+		{&smtp.ServerInfo{Name: net.IPv4(127, 0, 0, 1).String()}, true},
+		{&smtp.ServerInfo{Name: "::1"}, true},
+		{&smtp.ServerInfo{Name: "localhost"}, true},
+	} {
+		mech, payload, err := auth.Start(tc.server)
+		if !tc.ok {
+			if !errors.Is(err, ErrSMTPCleartextAuth) || payload != nil {
+				t.Fatalf("%+v: err = %v, payload sent = %v; want ErrSMTPCleartextAuth and no payload", tc.server, err, payload != nil)
+			}
+			continue
+		}
+		if err != nil || mech != "XOAUTH2" || !strings.Contains(string(payload), "auth=Bearer ya29.token") {
+			t.Fatalf("%+v: mech=%q err=%v", tc.server, mech, err)
+		}
 	}
 }
