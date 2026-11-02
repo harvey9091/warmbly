@@ -68,6 +68,19 @@ earlier revisions remain active for rollback. Retain their referenced images and
 secret versions throughout the rollback window; retire them separately after it
 closes.
 
+## TLS behind the load balancer
+
+`target_tls` moves the load balancer's target groups and the forms and tracking
+services' internal calls to the backend onto TLS, in six stages (`off`,
+`serve`, `both`, `route`, `drain`, `on`) advanced one apply at a time. Route keeps
+the healthy HTTP path while HTTPS bakes; drain removes references and waits for
+registrations to empty before a separately approved cleanup. The backend serves the
+certificate in `backend_internal_certificate` with `SERVE_TLS_KEY` from its
+secret, and its callers trust only that certificate. Prerequisites, the stages
+and what each one changes are in `aws-fargate.mdx` under "Encrypt traffic inside
+the VPC". `terraform test` in this directory exercises every stage against a
+mocked provider.
+
 ## Rotate keys
 
 `rotation.tf` registers a rotator task that generates replacement values with
@@ -88,6 +101,15 @@ cannot change the two CI roles themselves, so a change to their policies or
 trust is applied by an administrator by hand. Var files stay in
 the state bucket under `warmbly/production/vars/`; only resource addresses and
 actions are ever printed.
+
+`tls_recovery_evidence_writer` is a separate hosted-only opt-in, defaulting to
+`false`. It creates the dedicated `warmbly-production-tls-recovery-evidence` role
+and one conditional private S3 upload policy, with no read, delete or deployment
+access. It requires the production account, bucket and name, the Warmbly
+repository and `terraform_ci`. Every managed change to this role or its policy
+requires `aws-infrastructure-approval`, including creation. Its optional output
+is `tls_recovery_evidence_role_arn`. Provisioning does not enable recovery; the
+runbook in `aws-fargate.mdx` describes the separate configuration and review.
 
 The runtime sets `DB_MIGRATIONS_ON_START=false` for the backend. New application
 images must support that setting and schema readiness before activation. Keep
