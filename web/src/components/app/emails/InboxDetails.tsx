@@ -61,6 +61,7 @@ import type AccountStatusModel from "@/lib/api/models/app/analytics/AccountStatu
 import type { AccountError } from "@/lib/api/models/app/analytics/AccountStatus";
 import useAccountStatus from "@/lib/api/hooks/app/analytics/useAccountStatus";
 import useWarmupAnalytics from "@/lib/api/hooks/app/analytics/useWarmupAnalytics";
+import type WarmupAnalytics from "@/lib/api/models/app/analytics/WarmupAnalytics";
 import useUpdateEmail from "@/lib/api/hooks/app/emails/useUpdateEmail";
 import useRemoveEmail from "@/lib/api/hooks/app/emails/useRemoveEmail";
 import useWarmupLifecycle from "@/lib/api/hooks/app/emails/useWarmupLifecycle";
@@ -87,7 +88,7 @@ import { mailboxConnectionLabel, mailHostLogo } from "@/lib/mailHost";
 import { useGrants } from "@/lib/api/hooks/app/emails/useMailboxGrants";
 import { domainOf, grantFor, grantName, vendorLabel, type GrantProvider } from "@/lib/api/models/app/emails/MailboxSources";
 import MailboxGrantDialog from "./import/grants/MailboxGrantDialog";
-import SigninRetiringNotice from "./migration/SigninRetiringNotice";
+import MailboxSigninSection, { SigninPrompt } from "./migration/MailboxSigninSection";
 import ProviderLogo from "./ProviderLogo";
 import MailboxSourceChip from "./MailboxSourceChip";
 import { mailboxSource } from "@/lib/mailboxSource";
@@ -99,26 +100,27 @@ import SendingBehaviorTab from "./SendingBehaviorTab";
 import { useUserProfile } from "@/hooks/context/user";
 import useCurrentOrganization from "@/lib/api/hooks/app/organizations/useCurrentOrganization";
 import { timezoneOptions } from "@/lib/timezone";
-import { utcDay } from "@/lib/campaignPeriod";
+import { utcDay, utcToday } from "@/lib/campaignPeriod";
 import SyncStatusCard from "./SyncStatusCard";
+import SendPauseNotice from "./SendPauseNotice";
 import ServerCertificatesCard from "./ServerCertificatesCard";
 import CloudWarmupCard from "./CloudWarmupCard";
 import WarmupPartnerDiversity from "./WarmupPartnerDiversity";
 import useCloudPool from "@/hooks/useCloudPool";
+import { resolveMailboxWarmup, warmupActivityLabel, warmupUnknown, type MailboxWarmup } from "@/lib/mailboxWarmup";
 import { cloudOwnedWarmupFields } from "@/lib/cloudWarmup";
 import useAuthConfig from "@/lib/api/hooks/auth/useAuthConfig";
 import { Toggle } from "@/components/app/campaigns/preferences/components/CampaignPreferenceBoolBox";
 import setDirectTracking from "@/lib/api/client/app/emails/setDirectTracking";
 import useSendingBehavior from "@/lib/api/hooks/app/emails/useSendingBehavior";
-import useUpdateSendingBehavior from "@/lib/api/hooks/app/emails/useUpdateSendingBehavior";
 import useSendingPlan from "@/lib/api/hooks/app/emails/useSendingPlan";
-import { minutesToClock, secondsToLabel } from "@/lib/api/models/app/emails/SendingBehavior";
+import { clockToMinutes, minutesToClock, secondsToLabel } from "@/lib/api/models/app/emails/SendingBehavior";
 import TagSelector from "../popup/select/TagSelector";
 import { useAppStore } from "@/stores";
 import { repliesGoTo } from "@/lib/unibox/replyInbox";
 import TimeSelect from "@/components/ui/TimeSelect";
 import { DitherBarChart } from "@/components/ui/dither";
-import WeekdayBitmask from "../campaigns/schedule/WeekdayBitmask";
+import WarmupDaysPicker from "./WarmupDaysPicker";
 import { Loading } from "@/components/loader";
 import { NumberInput, TextInput } from "@/components/ui/field";
 import { clampWarmupRetentionDays } from "@/lib/warmupRetention";
@@ -414,6 +416,8 @@ const EDITABLE: (keyof Inbox)[] = [
     "warmup_placement", "warmup_folder", "warmup_retention_days",
     "test_mode", "test_send_enabled", "test_receive_enabled", "shared_daily_limit", "rolling_recipient_limit",
 ];
+// Local participation is saved only for a mailbox confirmed local; Cloud owns it for an enrolled one.
+const LOCAL_PARTICIPATION: (keyof Inbox)[] = ["test_mode", "test_send_enabled", "test_receive_enabled", "shared_daily_limit", "rolling_recipient_limit"];
 
 function Detail({ mailbox, onClose, initialTab, tabIntentKey, onTabIntentConsumed, canWarmup = true }: { mailbox: Inbox; onClose: () => void; initialTab?: MailboxTab; tabIntentKey?: number; onTabIntentConsumed?: () => void; canWarmup?: boolean }) {
     const [tab, setTab] = useBrowseState<MailboxTab>(`emails.mailbox.${mailbox.id}.tab`, "overview", mailboxTab,
@@ -425,12 +429,14 @@ function Detail({ mailbox, onClose, initialTab, tabIntentKey, onTabIntentConsume
         }
     }, [initialTab, tabIntentKey, onTabIntentConsumed, setTab]);
     const [form, setForm] = useState<Inbox>(mailbox);
+    const [daysToApply, setDaysToApply] = useState<number | null>(null);
     // Fields the user has edited since the last save; a refresh never overwrites them.
     const touched = React.useRef(new Set<keyof Inbox>());
     const update = (patch: Partial<Inbox>) => {
-        // A field put back to the stored value is untouched again, so a refresh can still reach it.
+        // Choosing warmup days reapplies the schedule even when the saved selection is unchanged.
+        if (patch.warmup_days !== undefined) setDaysToApply(patch.warmup_days);
         for (const k of Object.keys(patch) as (keyof Inbox)[]) {
-            if (JSON.stringify(patch[k]) === JSON.stringify(mailbox[k])) touched.current.delete(k);
+            if (k !== "warmup_days" && JSON.stringify(patch[k]) === JSON.stringify(mailbox[k])) touched.current.delete(k);
             else touched.current.add(k);
         }
         setForm((f) => ({ ...f, ...patch }));
@@ -449,37 +455,41 @@ function Detail({ mailbox, onClose, initialTab, tabIntentKey, onTabIntentConsume
     }, [mailbox]);
     const discard = () => {
         touched.current.clear();
+        setDaysToApply(null);
         setForm(mailbox);
     };
 
     usePresenceResource(mailbox.id ? `mailbox:${mailbox.id}` : null, "editing");
 
     const status = useAccountStatus(mailbox.id);
-    const { from, to } = useMemo(() => {
-        const end = new Date();
-        const start = new Date();
-        start.setDate(start.getDate() - 29);
-        const fmt = (d: Date) => d.toISOString().slice(0, 10);
-        return { from: fmt(start), to: fmt(end) };
-    }, []);
+    // Recomputed each render so a drawer left open past UTC midnight moves on to the new day.
+    const to = utcToday();
+    const from = utcDay(new Date(Date.now() - 29 * 86_400_000));
     const warmup = useWarmupAnalytics(mailbox.id, from, to);
     const pool = useCloudPool();
     const mutation = useUpdateEmail(mailbox.id, pool.connected && pool.isEnrolled(mailbox.id) ? cloudOwnedWarmupFields : undefined);
+    const effectiveWarmup = resolveMailboxWarmup(mailbox, status.data, pool);
+    const savable = useMemo(
+        () => effectiveWarmup.source === "local" ? EDITABLE : EDITABLE.filter((k) => !LOCAL_PARTICIPATION.includes(k)),
+        [effectiveWarmup.source],
+    );
 
     const dirty = useMemo(
-        () => EDITABLE.some((k) => JSON.stringify(form[k]) !== JSON.stringify(mailbox[k])),
-        [form, mailbox],
+        () => daysToApply !== null || savable.some((k) => JSON.stringify(form[k]) !== JSON.stringify(mailbox[k])),
+        [daysToApply, form, mailbox, savable],
     );
 
     const save = async () => {
         const patch: Partial<Inbox> = {};
-        for (const k of EDITABLE) {
+        for (const k of savable) {
             if (JSON.stringify(form[k]) !== JSON.stringify(mailbox[k])) {
                 (patch as Record<string, unknown>)[k] = form[k];
             }
         }
+        if (daysToApply !== null) patch.warmup_days = daysToApply;
         try {
             const saved = await mutation.mutateAsync(patch);
+            setDaysToApply((current) => current === patch.warmup_days ? null : current);
             // The answer is what was stored (for a Cloud mailbox, what Warmbly Cloud applied).
             setForm((f) => {
                 const next = { ...f } as Record<string, unknown>;
@@ -570,10 +580,10 @@ function Detail({ mailbox, onClose, initialTab, tabIntentKey, onTabIntentConsume
 
             {/* Body */}
             <div className="flex-1 min-h-0 overflow-y-auto">
-                {tab === "overview" && <OverviewTab status={status.data} loading={status.isPending} mailbox={mailbox} />}
+                {tab === "overview" && <OverviewTab status={status.data} loading={status.isPending} mailbox={mailbox} warmup={warmup.data} warmupState={effectiveWarmup} onOpenSignin={() => setTab("settings")} />}
                 {tab === "deliverability" && <MailboxPlacementTab mailboxId={mailbox.id} poolHealth={status.data?.warmup_health} />}
-                {tab === "analytics" && <AnalyticsTab warmup={warmup.data} loading={warmup.isPending} failed={warmup.isError} retry={() => void warmup.refetch()} />}
-                {tab === "warmup" && <WarmupTab form={form} update={update} status={status.data} mailbox={mailbox} canWarmup={canWarmup} />}
+                {tab === "analytics" && <AnalyticsTab warmup={warmup.data} replyTarget={mailbox.warmup_reply_rate} loading={warmup.isPending} failed={warmup.isError} retry={() => void warmup.refetch()} />}
+                {tab === "warmup" && <WarmupTab form={form} update={update} status={status.data} mailbox={mailbox} canWarmup={canWarmup} warmup={effectiveWarmup} />}
                 {tab === "sending" && <SendingBehaviorTab mailboxId={mailbox.id} />}
                 {tab === "settings" && <SettingsTab form={form} update={update} mailbox={mailbox} onDisconnected={onClose} />}
             </div>
@@ -731,10 +741,11 @@ function DelegatedGrantNotice({ mailbox, inError = false }: { mailbox: Inbox; in
     );
 }
 
-function OverviewTab({ status, loading, mailbox }: { status?: import("@/lib/api/models/app/analytics/AccountStatus").default; loading: boolean; mailbox: Inbox }) {
+function OverviewTab({ status, loading, mailbox, warmup, warmupState, onOpenSignin }: { status?: AccountStatusModel; loading: boolean; mailbox: Inbox; warmup?: WarmupAnalytics; warmupState: MailboxWarmup; onOpenSignin: () => void }) {
     const health = status?.health;
     const usage = status?.daily_usage;
-    const ws = status?.warmup_status;
+    const ws = warmupState.info;
+    const replyShare = weekReplyShare(warmup);
 
     // When a sending-behaviour profile is on, TODAY'S rolled plan is the real
     // ceiling and spacing — not the mailbox's fixed cap and gap. Showing the
@@ -759,7 +770,7 @@ function OverviewTab({ status, loading, mailbox }: { status?: import("@/lib/api/
     return (
         <div className="divide-y divide-slate-200/60">
             {mailbox.status === "inactive" && <SwitchedOffNotice mailbox={mailbox} />}
-            {mailbox.provider === "gmail" && mailbox.auth_method !== "delegated" && <SigninRetiringNotice mailbox={mailbox} />}
+            <SigninPrompt mailbox={mailbox} onOpen={onOpenSignin} />
             {/* Whatever the Advisor has on this mailbox, above the numbers that
                 produced it. This is where a row flag and a deep link both land. */}
             <AdvisorStrip
@@ -798,9 +809,18 @@ function OverviewTab({ status, loading, mailbox }: { status?: import("@/lib/api/
                     </ul>
                 )}
                 {/* A login refused at send time can hold sending while sync still works, so no credential error carries the button. */}
-                {status?.send_recovery_reason === "authentication" && !firstCredentialErrorId &&
+                {status?.send_recovery_reason === "authentication" && !firstCredentialErrorId && !status.send_pause &&
                     (mailbox.auth_method === "delegated" ? <DelegatedGrantNotice mailbox={mailbox} inError /> : <ReconnectAction mailbox={mailbox} />)}
             </div>
+
+            {status?.send_pause && (
+                <SendPauseNotice
+                    mailboxId={mailbox.id}
+                    address={mailbox.email}
+                    pause={status.send_pause}
+                    reconnect={!firstCredentialErrorId && (mailbox.auth_method === "delegated" ? <DelegatedGrantNotice mailbox={mailbox} inError /> : <ReconnectAction mailbox={mailbox} />)}
+                />
+            )}
 
             {/* Sync: import progress and fair-use status */}
             <SyncStatusCard mailboxId={mailbox.id} provider={mailbox.provider} />
@@ -814,14 +834,14 @@ function OverviewTab({ status, loading, mailbox }: { status?: import("@/lib/api/
                         today
                             ? today.is_working_day
                                 ? `of ${today.daily_limit} rolled for today`
-                                : "not a sending day"
+                                : "not a campaign sending day"
                             : usage
                                 ? `of ${usage.campaign_limit}/day cap`
                                 : undefined
                     }
                 />
-                <StatCard label="Warmup today" value={ws ? ws.current_volume : (usage?.warmup_sent ?? "—")} sub={ws ? `target ${ws.target_volume}` : undefined} accent />
-                <StatCard label="Reply target" value={ws ? `${ws.reply_rate}%` : "—"} sub="configured warmup share" />
+                <StatCard label="Warmup today" value={warmupState.sentToday ?? "—"} sub={warmupUnknown(warmupState) ? warmupActivityLabel[warmupState.activity] : `${warmupState.source === "cloud" ? "Warmbly Cloud · " : ""}${ws ? `target ${ws.target_volume}` : warmupActivityLabel[warmupState.activity]}`} accent />
+                <StatCard label="Reply target" value={ws ? `${ws.reply_rate}%` : "—"} sub={replyShare === null ? "configured warmup share" : `${replyShare}% over the last 7 days`} />
                 <StatCard label="Days warming" value={ws ? ws.days_active : "—"} sub={ws ? `max ${ws.max_volume}/day` : undefined} />
             </div>
 
@@ -911,9 +931,21 @@ function OverviewTab({ status, loading, mailbox }: { status?: import("@/lib/api/
     );
 }
 
+// The reply target is held over the last seven UTC days, so that window is the one to compare it with.
+function weekReplyShare(warmup?: WarmupAnalytics): number | null {
+    const since = utcDay(new Date(Date.now() - 6 * 86_400_000));
+    let sent = 0, replied = 0;
+    for (const d of warmup?.daily_stats ?? []) {
+        if (d.date < since) continue;
+        sent += d.emails_sent;
+        replied += d.emails_replied;
+    }
+    return sent > 0 ? Math.round((replied / sent) * 100) : null;
+}
+
 /* ── Analytics ─────────────────────── */
 
-function AnalyticsTab({ warmup, loading, failed, retry }: { warmup?: import("@/lib/api/models/app/analytics/WarmupAnalytics").default; loading: boolean; failed: boolean; retry: () => void }) {
+function AnalyticsTab({ warmup, replyTarget, loading, failed, retry }: { warmup?: WarmupAnalytics; replyTarget: number; loading: boolean; failed: boolean; retry: () => void }) {
     // Tap affordance for touch devices, where the native title tooltip never fires.
     const [selectedDay, setSelectedDay] = useState<string | null>(null);
     if (loading) {
@@ -940,6 +972,11 @@ function AnalyticsTab({ warmup, loading, failed, retry }: { warmup?: import("@/l
         );
     }
     const s = warmup.summary;
+    // The range runs 30 days but the target is held over 7, so the share is read against the target on that window.
+    const weekShare = weekReplyShare(warmup);
+    const replySub = weekShare === null
+        ? `${s.reply_rate.toFixed(1)}% reply rate`
+        : replyTarget > 0 ? `${weekShare}% last 7d · target ${replyTarget}%` : `${weekShare}% last 7 days`;
     const chartData = warmup.daily_stats.map((d) => ({
         key: d.date,
         value: d.emails_sent,
@@ -955,7 +992,7 @@ function AnalyticsTab({ warmup, loading, failed, retry }: { warmup?: import("@/l
             <div className="grid grid-cols-2 divide-x divide-y divide-slate-200/60">
                 <StatCard label="Total sent" value={s.total_sent} sub={`${s.average_daily.toFixed(1)}/active day`} />
                 <StatCard label="Received" value={received} sub={exchange} accent />
-                <StatCard label="Replies" value={s.total_replied} sub={`${s.reply_rate.toFixed(1)}% reply rate`} />
+                <StatCard label="Replies" value={s.total_replied} sub={replySub} />
                 <StatCard label="Target met" value={`${Math.round(s.target_progress)}%`} sub="of planned volume" />
                 <div className="col-span-2">
                     <StatCard label="Days active" value={s.days_active} sub={`${utcDay(warmup.date_range.from)} → ${utcDay(warmup.date_range.to)}`} />
@@ -998,7 +1035,6 @@ function AnalyticsTab({ warmup, loading, failed, retry }: { warmup?: import("@/l
 
 /* ── Warmup (editable) ─────────────────────── */
 
-const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 // A critical report stops the mailbox; a warning is retried on its own, so it reads as amber, not red.
 const errorTone = {
@@ -1304,64 +1340,12 @@ function AuthCheckPanel({ mailbox }: { mailbox: Inbox }) {
     );
 }
 
-const ALL_DAYS = 127;
-
-const listDays = (mask: number) => {
-    const names = WEEKDAYS.filter((_, i) => (mask & (1 << i)) !== 0);
-    return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names.join("");
-};
-
-// Warmup sends only on days both calendars allow, so a day ticked here that the persona does not work is silently skipped.
-function WarmupDaysNotice({ mailboxId, warmupDays, personaDays }: { mailboxId: string; warmupDays: number; personaDays: number }) {
-    const wanted = warmupDays || ALL_DAYS;
-    const skipped = wanted & ~personaDays;
-    const canManage = usePermission("MANAGE_EMAILS");
-    const queryClient = useQueryClient();
-    const mutation = useUpdateSendingBehavior(mailboxId);
-    if (skipped === 0) return null;
-
-    const workDays = async () => {
-        try {
-            await mutation.mutateAsync({ weekdays: personaDays | skipped });
-            await queryClient.invalidateQueries({ queryKey: ["analytics", "accounts"] });
-            toast.success(`Warmup now sends on ${listDays(skipped)} too`);
-        } catch (e) {
-            toast.error(buildError(e as unknown as AppError));
-        }
-    };
-
-    return (
-        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 flex items-start gap-2">
-            <AlertTriangleIcon className="w-3.5 h-3.5 mt-px shrink-0 text-amber-600" />
-            <div className="min-w-0">
-                <p className="text-[12.5px] font-medium text-amber-900">
-                    {(wanted & personaDays) === 0 ? "Warmup has no day to send on" : `Warmup skips ${listDays(skipped)}`}
-                </p>
-                <p className="text-[11.5px] text-amber-800/90 leading-relaxed mt-0.5">
-                    Sending behaviour only works {personaDays ? listDays(personaDays) : "no days"}, and warmup follows its workdays as well as the
-                    days picked here.
-                </p>
-                {canManage && (
-                    <button
-                        type="button"
-                        onClick={workDays}
-                        disabled={mutation.isPending}
-                        className="mt-2 h-7 px-2.5 rounded-md border border-amber-300 bg-white hover:bg-amber-100/60 text-amber-900 text-[12px] font-medium inline-flex items-center gap-1.5 transition-colors disabled:opacity-60"
-                    >
-                        {mutation.isPending && <Loading className="!w-3 h-3" />}
-                        Work {listDays(skipped)} too
-                    </button>
-                )}
-            </div>
-        </div>
-    );
-}
-
-function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: Inbox; update: (p: Partial<Inbox>) => void; status?: AccountStatusModel; mailbox: Inbox; canWarmup?: boolean }) {
-    const ws = status?.warmup_status;
+function WarmupTab({ form, update, status, mailbox, canWarmup = true, warmup }: { form: Inbox; update: (p: Partial<Inbox>) => void; status?: AccountStatusModel; mailbox: Inbox; canWarmup?: boolean; warmup: MailboxWarmup }) {
+    const ws = warmup.info;
     const wh = status?.warmup_health;
     const whUnavailable = cloudStandingUnavailable(wh);
     const persona = useSendingBehavior(mailbox.id).data;
+    const workspaceZone = useCurrentOrganization().data?.timezone;
     const behaviorOn = !!persona?.enabled;
     const inCampaign = status?.in_campaign;
 
@@ -1374,13 +1358,21 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
     const paused = !off && !!mailbox.warmup && (!!mailbox.warmup_paused_at || !diagnosticSendingAllowed(mailbox));
     // Warmup on with sending off is receive-only, which still receives; only a real pause stops both.
     const receiveOnly = paused && !mailbox.warmup_paused_at;
-    const active = diagnosticWarmupActive(mailbox);
+    const active = warmup.activity === "active";
+    // The local controls act on the local setting, not on the resolved display state.
+    const localActive = diagnosticWarmupActive(mailbox);
+    // Warmup set to run on a switched-off mailbox is stopped; the controls still change the setting.
+    const stoppedHere = mailbox.status !== "active" && !off;
     // When Warmbly Cloud warms this mailbox the local controls step aside.
     const pool = useCloudPool();
     const inCloud = pool.connected && pool.isEnrolled(mailbox.id);
     const cloudRow = inCloud ? pool.rowFor(mailbox.id) : undefined;
     // Warmbly Cloud skips a 0 sent from an instance, so the form does not offer one.
     const cloudMin = inCloud ? 1 : 0;
+    const startMinute = clockToMinutes(form.warmup_start_time || "08:00");
+    const endMinute = clockToMinutes(form.warmup_end_time || "20:00");
+    const noOverlap = !inCloud && persona?.enabled && startMinute !== null && endMinute !== null &&
+        (startMinute >= persona.work_end_max || endMinute <= persona.work_start_min);
 
     const run = (action: "start" | "pause" | "resume" | "stop", verb: string) => {
         const execute = () => life.mutate(action, {
@@ -1413,18 +1405,18 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
             {/* Ban banner + appeal — only when the mailbox is blocked from the pool */}
             <WarmupBanBanner emailId={mailbox.id} />
 
-            <CloudWarmupCard mailboxId={mailbox.id} email={mailbox.email} provider={mailbox.provider} />
+            <CloudWarmupCard mailboxId={mailbox.id} email={mailbox.email} provider={mailbox.provider} status={mailbox.status} />
 
-            {/* Lifecycle control */}
-            {!inCloud && (
+            {/* Lifecycle control: only once Cloud ownership is known, so a missing report never offers a local action. */}
+            {!inCloud && warmup.source === "local" && (
             <div className="px-5 py-4 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2.5 min-w-0">
-                    <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center shrink-0", active ? "bg-orange-50 text-orange-600" : paused ? "bg-amber-50 text-amber-600" : "bg-slate-100 text-slate-400")}>
+                    <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center shrink-0", stoppedHere ? "bg-slate-100 text-slate-400" : localActive ? "bg-orange-50 text-orange-600" : paused ? "bg-amber-50 text-amber-600" : "bg-slate-100 text-slate-400")}>
                         <FlameIcon className="w-4 h-4" />
                     </div>
                     <div className="min-w-0">
-                        <div className="text-[12.5px] font-medium text-slate-900">{active ? "Warming up" : receiveOnly ? "Receiving only" : paused ? "Paused" : "Warmup off"}</div>
-                        <div className="text-[11px] text-slate-400 truncate">{active ? "Automated diagnostic traffic, not organic engagement" : receiveOnly ? "Receives warmup mail; sending is off" : paused && !off ? "Paused: no warmup mail is sent or received" : "Sending and receiving diagnostic tests disabled"}</div>
+                        <div className="text-[12.5px] font-medium text-slate-900">{stoppedHere ? "Stopped: mailbox off" : localActive ? "Warming up" : receiveOnly ? "Receiving only" : paused ? "Paused" : "Warmup off"}</div>
+                        <div className="text-[11px] text-slate-400 truncate">{stoppedHere ? `Set to ${localActive ? "warm" : receiveOnly ? "receive only" : "stay paused"} once the mailbox is switched back on` : localActive ? "Automated diagnostic traffic, not organic engagement" : receiveOnly ? "Receives warmup mail; sending is off" : paused && !off ? "Paused: no warmup mail is sent or received" : "Sending and receiving diagnostic tests disabled"}</div>
                     </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
@@ -1438,7 +1430,7 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
                             {off ? "Start" : "Resume"}
                         </button>
                     )}
-                    {active && (
+                    {localActive && (
                         <>
                             <button
                                 onClick={() => run("pause", "paused")}
@@ -1482,7 +1474,7 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
             )}
 
             {/* Live volume */}
-            {!inCloud && (
+            {!inCloud && warmup.source === "local" && (
                 <div className="px-5 py-4 space-y-3 border-t border-slate-100">
                     <Eyebrow>Diagnostic participation</Eyebrow>
                     <SelectMenu
@@ -1525,7 +1517,7 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
                     <Eyebrow>Today</Eyebrow>
                     <div className="mt-2 flex items-center gap-2 text-[12.5px] text-slate-700">
                         <span>Sending <b className="text-slate-900 tabular-nums">{ws.current_volume}</b> of <b className="text-slate-900 tabular-nums">{ws.target_volume}</b> · day {ws.days_active}</span>
-                        {ws.next_send_at && <span className="text-slate-400">· next {nextSlotLabel(ws.next_send_at)}</span>}
+                        {ws.next_send_at && <span className="text-slate-400">· next {nextSlotLabel(ws.next_send_at, undefined, mailbox.timezone || workspaceZone || "UTC")}</span>}
                     </div>
                     <div className="mt-2.5 h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
                         <div className="h-full rounded-full bg-orange-400 transition-all" style={{ width: `${Math.min(100, (ws.current_volume / Math.max(1, ws.target_volume)) * 100)}%` }} />
@@ -1639,10 +1631,12 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
             {/* Schedule */}
             <div className="px-5 py-5 space-y-5">
                 <Eyebrow>Sending window</Eyebrow>
-                {behaviorOn && (
+                {behaviorOn && !inCloud && (
                     <p className="text-[11.5px] text-slate-500 leading-relaxed">
-                        Sending behaviour is on for this mailbox, so warmup only sends when both this window and the workday on the Sending tab
-                        allow it. Switch it to Fixed schedule there to use these hours alone.
+                        Sending behaviour is on. Warmup uses the overlap between these hours and the varied workday on the Sending tab,
+                        including its break. The workday starts between {minutesToClock(persona.work_start_min)} and {minutesToClock(persona.work_start_max)} and
+                        ends between {minutesToClock(persona.work_end_min)} and {minutesToClock(persona.work_end_max)}.
+                        Switch to Fixed schedule on the Sending tab to use these hours alone.
                     </p>
                 )}
                 <div className="grid grid-cols-2 gap-3">
@@ -1653,18 +1647,20 @@ function WarmupTab({ form, update, status, mailbox, canWarmup = true }: { form: 
                         <TimeSelect value={form.warmup_end_time || "20:00"} onChange={(v) => update({ warmup_end_time: v })} />
                     </FieldShell>
                 </div>
-                <FieldShell label="Sending days" hint="Days warmup mail goes out. Leave all unselected to send every day.">
-                    <div className="mt-1">
-                        <WeekdayBitmask
-                            weekdays={WEEKDAYS}
-                            value={form.warmup_days ?? 0}
-                            setValue={(v) => update({ warmup_days: v })}
-                        />
-                    </div>
-                </FieldShell>
-                {behaviorOn && persona && (
-                    <WarmupDaysNotice mailboxId={mailbox.id} warmupDays={form.warmup_days ?? 0} personaDays={persona.weekdays} />
+                {noOverlap && (
+                    <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-[11.5px] text-amber-900 leading-relaxed">
+                        These hours do not overlap the sending plan, so warmup has no time to send. Extend this window or switch
+                        to Fixed schedule on the Sending tab.
+                    </p>
                 )}
+                <FieldShell label="Sending days" hint="These days control warmup only. Choose Every day to include Saturday and Sunday.">
+                    <WarmupDaysPicker
+                        value={inCloud ? (form.warmup_days || 127) : (form.warmup_days ?? 0)}
+                        onChange={(warmup_days) => update({ warmup_days })}
+                        inheritedDays={persona ? (persona.enabled ? persona.weekdays : 127) : undefined}
+                        allowFollow={!inCloud}
+                    />
+                </FieldShell>
             </div>
         </div>
     );
@@ -2247,7 +2243,7 @@ function SendIdentityCard({
  * takes before asking, and the copy differs by provider because what happens to
  * the connection does: Google accepts a revocation and Microsoft does not.
  */
-// Off stops everything, so the way back sits where the drawer opens.
+// The switch controls execution on this instance.
 function SwitchedOffNotice({ mailbox }: { mailbox: Inbox }) {
     const power = useMailboxSwitch(mailbox.id, mailbox.email);
     return (
@@ -2257,7 +2253,7 @@ function SwitchedOffNotice({ mailbox }: { mailbox: Inbox }) {
                 <div className="min-w-0 flex-1">
                     <p className="text-[12.5px] font-medium text-slate-900">This mailbox is switched off</p>
                     <p className="text-[11.5px] text-slate-600 leading-relaxed mt-0.5">
-                        It is not sending campaigns, warming up or syncing mail, whatever its warmup setting says. Its
+                        It is not sending campaigns, running local warmup or syncing mail on this instance. Warmbly Cloud warmup is managed separately in the Warmup tab. Its
                         settings, history and worker are kept, so switching it back on picks up where it stopped.
                         To keep it out of campaigns while it warms, turn on Hold from campaigns below first, then switch it back on.
                     </p>
@@ -2288,7 +2284,7 @@ function MailboxPowerCard({ mailbox }: { mailbox: Inbox }) {
                 <div className="min-w-0">
                     <div className="text-[12.5px] font-medium text-slate-900">Mailbox on</div>
                     <div className="text-[11px] text-slate-400">
-                        Switched off, it neither sends, warms nor syncs, and keeps its settings and history. To stop
+                        Switched off, it stops campaign sending, local warmup and syncing on this instance, and keeps its settings and history. Warmbly Cloud warmup is managed separately in the Warmup tab. To stop
                         only campaign sending and keep warming, use Hold from campaigns on the Overview tab. On a
                         mailbox that is off, turn the hold on before switching it back on.
                     </div>
@@ -2414,6 +2410,7 @@ function SettingsTab({ form, update, mailbox, onDisconnected }: { form: Inbox; u
     );
     return (
         <div className="divide-y divide-slate-200/60">
+            <MailboxSigninSection mailbox={mailbox} />
             <div className="px-5 py-5 space-y-4">
                 <Eyebrow>Sender profile</Eyebrow>
                 <FieldShell label="Display name">
