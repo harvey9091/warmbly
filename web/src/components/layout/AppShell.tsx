@@ -35,7 +35,7 @@ import { useScrollMemory, type ScrollStore } from "@/hooks/useScrollMemory";
 import { RouteFallback } from "./RouteStates";
 import { rememberView } from "@/lib/agencyView";
 import { useAppStore } from "@/stores";
-import type { UISlice } from "@/stores";
+
 
 // Overlays closed on first paint, so the frame does not wait on their code.
 const ShortcutsModal = lazy(() => import("@/components/shared/ShortcutsModal").then((m) => ({ default: m.ShortcutsModal })));
@@ -61,6 +61,22 @@ export function AppShell() {
     useEffect(() => setNavOpen(false), [pathname]);
     useEffect(() => rememberView("workspace"), []);
 
+    // Apply glassmorphism background classes to document root
+    const glassBackground = useAppStore((state) => state.glassBackground);
+    useEffect(() => {
+        const root = document.documentElement;
+        
+        // Remove existing glass background classes
+        root.classList.remove('glass-bg-1', 'glass-bg-2');
+        
+        // Add the appropriate background class
+        if (glassBackground === 'bg1') {
+            root.classList.add('glass-bg-1');
+        } else if (glassBackground === 'bg2') {
+            root.classList.add('glass-bg-2');
+        }
+    }, [glassBackground]);
+
     // The page content's scroll container, anchor for the global cursor layer.
     const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -71,11 +87,8 @@ export function AppShell() {
     if (scrollFor.routeKey !== routeKey) setScrollFor({ routeKey, key: `${routeKey}@${entryKey}` });
     useScrollMemory(scrollRef, scrollFor.key, entryOffsets);
 
-    // Get glass background from UI store
-    const glassBackground = useAppStore((state: UISlice) => state.glassBackground);
-
     return (
-        <div className={`fixed inset-0 flex flex-col ${glassBackground === 'bg1' ? 'glass-bg-1' : 'glass-bg-2'}`}>
+        <div className="fixed inset-0 flex flex-col">
             <SkyChrome />
 
             <div className="relative z-10 flex flex-col h-full">

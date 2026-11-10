@@ -15,6 +15,7 @@ import { useRegisterUnsaved } from "@/hooks/context/unsaved";
 import { PERSON_NAME_MAX, nameError, normalizeName } from "@/lib/displayName";
 import TimezonesSection from "./TimezonesSection";
 import { ThemeCards } from "@/components/app/theme/ThemePicker";
+import { useAppStore } from "@/stores";
 
 // Header indicator priority when two autosaves share one SaveStatus.
 function combineStatus(a: AutosaveStatus, b: AutosaveStatus): AutosaveStatus {
@@ -28,6 +29,15 @@ export default function ProfileSettingsPage() {
     const { user } = useUserProfile();
     const [firstName, setFirstName] = React.useState(user.first_name ?? "");
     const [lastName, setLastName] = React.useState(user.last_name ?? "");
+    
+    // Glassmorphism theme state
+    const theme = useAppStore((state) => state.theme);
+    const glassBackground = useAppStore((state) => state.glassBackground);
+    const setGlassBackground = useAppStore((state) => state.setGlassBackground);
+    const glassBlurLevel = useAppStore((state) => state.glassBlurLevel);
+    const setGlassBlurLevel = useAppStore((state) => state.setGlassBlurLevel);
+    const glassTransparency = useAppStore((state) => state.glassTransparency);
+    const setGlassTransparency = useAppStore((state) => state.setGlassTransparency);
 
     const uploadAvatar = useUploadUserAvatar();
     const removeAvatar = useDeleteUserAvatar();
@@ -137,6 +147,81 @@ export default function ProfileSettingsPage() {
                 description="System follows your device and switches with it. Saved in this browser."
             >
                 <ThemeCards />
+                
+                {/* Glassmorphism customization controls - only shown when Glassmorphism theme is selected */}
+                {theme === 'glassmorphism' && (
+                    <div className="mt-6 space-y-4">
+                        <h3 className="text-sm font-medium text-slate-700">Glassmorphism Settings</h3>
+                        
+                        <div>
+                            <label className="block text-xs font-medium text-slate-700 mb-1">Background Image</label>
+                            <div className="grid grid-cols-2 gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setGlassBackground('bg1')}
+                                    className={`relative rounded-lg overflow-hidden border transition-colors ${glassBackground === 'bg1' ? 'border-sky-500 ring-2 ring-sky-100' : 'border-slate-200 hover:border-slate-300'}`}
+                                >
+                                    <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent"></div>
+                                    <div className="absolute bottom-0 left-0 right-0 p-2 text-white z-10">
+                                        <h4 className="text-xs font-medium">Background 1</h4>
+                                    </div>
+                                    <img 
+                                        src="/backdrops/bg1.png" 
+                                        alt="Background 1" 
+                                        className="w-full h-16 object-cover opacity-80"
+                                    />
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setGlassBackground('bg2')}
+                                    className={`relative rounded-lg overflow-hidden border transition-colors ${glassBackground === 'bg2' ? 'border-sky-500 ring-2 ring-sky-100' : 'border-slate-200 hover:border-slate-300'}`}
+                                >
+                                    <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent"></div>
+                                    <div className="absolute bottom-0 left-0 right-0 p-2 text-white z-10">
+                                        <h4 className="text-xs font-medium">Background 2</h4>
+                                    </div>
+                                    <img 
+                                        src="/backdrops/bg2.png" 
+                                        alt="Background 2" 
+                                        className="w-full h-16 object-cover opacity-80"
+                                    />
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <label className="block text-xs font-medium text-slate-700 mb-1">Backdrop Blur Level</label>
+                            <input
+                                type="range"
+                                min="8"
+                                max="24"
+                                value={glassBlurLevel}
+                                onChange={(e) => setGlassBlurLevel(parseInt(e.target.value))}
+                                className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-sky-600"
+                            />
+                            <div className="flex justify-between text-xs text-slate-500 mt-1">
+                                <span>Subtle</span>
+                                <span>Strong</span>
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <label className="block text-xs font-medium text-slate-700 mb-1">Transparency Level</label>
+                            <input
+                                type="range"
+                                min="40"
+                                max="90"
+                                value={glassTransparency}
+                                onChange={(e) => setGlassTransparency(parseInt(e.target.value))}
+                                className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-sky-600"
+                            />
+                            <div className="flex justify-between text-xs text-slate-500 mt-1">
+                                <span>Opaque</span>
+                                <span>Transparent</span>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </Section>
 
             <TimezonesSection />
