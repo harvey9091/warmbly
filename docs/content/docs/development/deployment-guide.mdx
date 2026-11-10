@@ -474,7 +474,7 @@ In the [Google Cloud console](https://console.cloud.google.com/), create (or pic
 </Step>
 
 <Step>
-Configure the OAuth consent screen. For your own Workspace domain only, choose **Internal** to skip Google's verification review; an Internal client is exempt from the 100-user cap ([Google's help](https://support.google.com/cloud/answer/13464323)). To connect mailboxes on other Workspace domains you need **External**: until Google verifies the app it is limited to 100 new users, except on domains whose administrator marks the client ID Trusted under **Security > Access and data control > API controls > Manage Third-Party App Access**. Personal Gmail never signs in this way; it connects with an app password.
+Configure the OAuth consent screen. For your own Workspace domain only, choose **Internal** to skip Google's verification review; an Internal client is exempt from the 100-user cap ([Google's help](https://support.google.com/cloud/answer/13464323)). To connect mailboxes on other Workspace domains you need **External**: until Google verifies the app it is limited to 100 new users, except on domains whose administrator marks the client ID Trusted under **Security > API Controls > App Access Control**. Personal Gmail never signs in this way; it connects with an app password.
 
 Under **Data access**, add the two scopes Warmbly requests: `https://mail.google.com/` and `https://www.googleapis.com/auth/gmail.settings.basic`. Full mail access is what lets a mailbox run its warmup engagement over IMAP; a mailbox connected earlier under `gmail.modify` keeps working on the Gmail API until it is re-authorized. Workers reach `imap.gmail.com` on port `993` for that, so allow it outbound wherever workers have an egress allowlist.
 </Step>
@@ -693,7 +693,7 @@ AI_BASE_URL=             # required for custom (any OpenAI-compatible endpoint)
 | `anthropic` | api.anthropic.com | Anthropic connector |
 | `custom` | your `AI_BASE_URL` | vLLM, LocalAI, LM Studio |
 
-`AI_MODEL_TRIAL` and `AI_MODEL_PAID` optionally split models by plan. Web search for the assistant is `SEARCH_PROVIDER=serper` (plus `SEARCH_API_KEY`) or `=searxng` (plus `SEARCH_API_URL`).
+`AI_MODEL_TRIAL` and `AI_MODEL_PAID` optionally split models by plan. Web search for the assistant and the lead finder is `SEARCH_PROVIDER=serper`, `brave`, `tavily` or `jina` (plus `SEARCH_API_KEY`), or `=searxng` or `=ddgs` (plus `SEARCH_API_URL`); list several, comma-separated, to fall back in order. `WEB_READER` adds reader services for sites that turn the lead finder away. See [configuration](/development/configuration/#ai-and-search).
 
 ## Workers
 

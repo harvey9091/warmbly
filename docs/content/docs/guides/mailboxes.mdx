@@ -77,7 +77,7 @@ Open **Accounts** and choose **Add account**. Google and Microsoft each have one
 | Provider | Method | Notes |
 |----------|--------|-------|
 | Google | **Sign in with Google**: OAuth for one Workspace mailbox (`gmail`, sign-in method `oauth`) | Recommended for Google Workspace where the deployment offers it. A Workspace administrator marks Warmbly as a trusted app once, then each mailbox signs in. See [Google Workspace with Google sign-in](#google-workspace-with-google-sign-in). Not for personal Gmail |
-| Google | **Whole Workspace domain**: domain-wide delegation (`gmail`, sign-in method `delegated`) | Legacy, for grants a workspace already holds: connect more of their mailboxes, check or remove a grant. New domains are no longer connected this way, and a workspace with no Google grant does not see the option. See [connect a whole Google Workspace domain](/guides/mailbox-import/#connect-a-whole-google-workspace-domain) |
+| Google | Domain-wide delegation (`gmail`, sign-in method `delegated`) | Legacy, and no longer offered under **Add account**. A grant a workspace already holds keeps working: open a mailbox it connected and choose **View the grant** (**Check the grant** when the grant is invalid) in the mailbox's drawer to connect more of its mailboxes, check it or remove it. See [connect a whole Google Workspace domain](/guides/mailbox-import/#connect-a-whole-google-workspace-domain) |
 | Google | **App password** over IMAP + SMTP (`smtp_imap`, sign-in method `app_password`) | The way to connect personal Gmail, and it works for one Workspace mailbox too. The dialog walks you through it in three steps, see [personal Gmail](#personal-gmail) below |
 | Microsoft | **Whole organization**: an administrator's grant (`outlook`, sign-in method `delegated`) | Recommended for Microsoft 365. A Global Administrator approves Warmbly once, and every licensed mailbox connects with no sign-in each. Runs on Microsoft Graph. See [connect a whole Microsoft 365 organization](/guides/mailbox-import/#connect-a-whole-microsoft-365-organization) |
 | Microsoft | **Sign in one mailbox**: OAuth (`outlook`, sign-in method `oauth`) | No password stored. Runs on Microsoft Graph. The way to connect Outlook.com and a single Microsoft 365 mailbox |
@@ -184,17 +184,17 @@ Where your deployment offers **Sign in with Google**, it is the recommended way 
 The administrator does this in the Google Admin console:
 
 1. Sign in to [admin.google.com](https://admin.google.com) as an administrator.
-2. Go to **Security > Access and data control > API controls > Manage Third-Party App Access**, and choose **Configure new app** (some consoles label it **Add app > OAuth App Name or Client ID**).
-3. Search by the client ID that **Add account > Google > Sign in with Google** shows (it has a copy button), and select Warmbly.
-4. Choose **All users**, or the organizational unit that holds the mailboxes you send from, then **Trusted**, and finish.
+2. Go to **Security > API Controls > App Access Control**, and choose **Configure new app**.
+3. Search by the client ID that **Add account > Google > Sign in with Google** shows (it has a copy button), and select the app it finds.
+4. Under **Scope**, choose **All in** your organization **(all users)**, or the org units that hold the mailboxes you send from. Under **Access to Google Data**, choose **Trusted**, then **Finish**.
 
 Then connect each mailbox: choose **Add account > Google > Sign in with Google**, enter the mailbox's address, choose **Continue with Google** and approve the consent screen. When the Google window closes without connecting, the dialog shows the client ID again with what to ask the administrator. The same client ID is reported as `google_mailbox_client_id` by `GET /emails/grants/config`. On a self-hosted instance linked to Warmbly Cloud, the consent runs on Warmbly Cloud's own app, so the dialog shows no client ID.
 
 This option appears when the instance has a Google mailbox client configured and `BOX_GOOGLE_OAUTH_CONNECT` is unset or true; an explicit `false` or an invalid value turns new connects off (see [configuration](/development/configuration/)). An instance linked to Warmbly Cloud offers it either way, through Warmbly Cloud's app. If it is hidden, use an app password instead. Existing Google sign-in mailboxes keep working and can re-authorize even when new Google sign-in connects are disabled.
 
-#### Whole Workspace domain with delegation
+#### Existing Workspace domain grants
 
-Domain-wide delegation is legacy. New Google Workspace domains are no longer connected this way, and the dashboard offers **Whole Workspace domain** only to a workspace that already holds a Google grant. Those grants keep working: you can check them, connect more of their mailboxes and remove them. See [connect a whole Google Workspace domain](/guides/mailbox-import/#connect-a-whole-google-workspace-domain).
+Domain-wide delegation is legacy, and **Add account** no longer offers it. Grants a workspace already holds keep working: open a mailbox it connected and choose **View the grant** (**Check the grant** when the grant is invalid) in the mailbox's drawer to check the grant, connect more of its mailboxes or remove it. A grant with no mailbox left appears under **Add account > Google > Workspace domain grant**, as long as the instance has its delegation service account configured ([whole-domain connect](/development/whole-domain-connect/)). See [connect a whole Google Workspace domain](/guides/mailbox-import/#connect-a-whole-google-workspace-domain).
 
 #### Personal Gmail
 
@@ -238,11 +238,12 @@ A vendor reconnect shows where it stands as it moves, without refreshing: about 
 
 #### Automatic reconnect for vendor mailboxes
 
-A Google mailbox imported from InboxKit or Zapmail reconnects on its own, with no click, when it is on the older Google sign-in without full mail access or on a legacy domain grant. Warmbly asks the vendor, the vendor marks Warmbly trusted on the domain and signs in as the mailbox, and the mailbox moves onto its own Google sign-in with full mail access in place. The Sign-in section says when this is coming and how it ended.
+A Google Workspace mailbox imported from InboxKit or Zapmail reconnects on its own, with no click, when it connects with an app password, is on the older Google sign-in without full mail access, or is on a legacy domain grant. Warmbly asks the vendor, the vendor marks Warmbly trusted on the domain and signs in as the mailbox, and the mailbox moves onto its own Google sign-in with full mail access in place. The Sign-in section says when this is coming and how it ended.
 
 - A mailbox has at most one request open at a time, and after a request ends Warmbly waits a week before asking again on its own. Zapmail takes at most 3 sign-in requests per mailbox every 7 days, so this stays well inside it.
-- A mailbox that reconnected is not asked again. One that failed keeps working on its current sign-in and is tried again after the week; **Reconnect** in the Sign-in section asks sooner.
-- Only mailboxes that are switched on are reconnected, and app-password mailboxes are left as they are: they already work over IMAP.
+- The mailbox keeps working on its current sign-in the whole time. It moves only once Google has granted full mail access and the new sign-in has read the mailbox as that exact address; the switch then keeps the same mailbox, its history, campaigns and warmup, and nothing is imported again.
+- A mailbox that reconnected is not asked again. One that failed, for example because the domain does not trust Warmbly yet, stays on its app password or current sign-in and is tried again after the week; **Reconnect** in the Sign-in section asks sooner.
+- Only mailboxes that are switched on are reconnected. Personal Gmail addresses are never switched: they connect only with an app password.
 - It runs every 15 minutes and takes a bounded number of mailboxes each time, so a large vendor account switches over a few hours.
 
 The instance operator turns it off in the admin panel under **Instance > Configuration > Settings > Mailbox sign-in**, the [`mailbox_signin.auto_vendor_reconnect`](/development/configuration/#settings-stored-in-the-database) setting. Off, a member reconnects from the Sign-in section, the banner, or the vendor account's menu.
@@ -325,9 +326,19 @@ There is no daily cap on how many mailboxes you connect: a Business workspace ca
 
 Choose **Import mailboxes** in the connect dialog to connect up to 5,000 mailboxes from a CSV, TSV or XLSX file, a vendor export, or a pasted list of `address:password` pairs. Only an address and a password are needed: the columns are recognised and each domain's servers are found from DNS. Microsoft 365 and Outlook.com rows wait for a Microsoft sign-in each. Google rows use an app password, Google sign-in where enabled, or an admin grant the workspace already holds for the domain. The import runs on the server, verifies every credential before saving it, and groups whatever fails by cause with the fix.
 
-The same dialog imports straight from an [inbox vendor](/guides/mailbox-import/#import-from-an-inbox-vendor) with an API key, and connects a whole [Microsoft 365 organization](/guides/mailbox-import/#connect-a-whole-microsoft-365-organization) (**Microsoft > Whole organization**) through one administrator's grant. A workspace that already holds a [Google Workspace domain grant](/guides/mailbox-import/#connect-a-whole-google-workspace-domain) connects more of its mailboxes from **Google > Whole Workspace domain**.
+The same dialog imports straight from an [inbox vendor](/guides/mailbox-import/#import-from-an-inbox-vendor) with an API key, and connects a whole [Microsoft 365 organization](/guides/mailbox-import/#connect-a-whole-microsoft-365-organization) (**Microsoft > Whole organization**) through one administrator's grant. A workspace that already holds a [Google Workspace domain grant](/guides/mailbox-import/#connect-a-whole-google-workspace-domain) connects more of its mailboxes from **View the grant** in the drawer of a mailbox it connected.
 
 See [Import mailboxes](/guides/mailbox-import/) for the columns, what each provider needs, and what is kept, and [sending domains](/guides/sending-domains/) for setting a tracking host and a root redirect per domain.
+
+</Fold>
+
+<Fold>
+
+## Letting a client connect their own mailboxes
+
+When the mailboxes belong to someone else, such as a client, choose **Invite client to connect** on the Mailboxes page instead of asking for their passwords. You get a link to send them; they open it, sign in with Google or Microsoft or enter their server details, and each mailbox lands in this workspace with the tags and warmup setting you chose. Nobody shares a password with you, and you are notified each time one connects.
+
+See [client connect links](/guides/agencies/#client-connect-links) for what the link allows, how long it lasts and how to revoke it.
 
 </Fold>
 
@@ -593,7 +604,7 @@ A mailbox marked as a [placement seed inbox](/guides/placement-tests/#your-own-s
 
 A mailbox can be switched off when you want it to stop without losing its settings, its history, or its place in the fleet. Use **Switch off** on its row's **More** menu, the **Mailbox on** switch on its **Settings** tab, or the selection bar for several at once. Over the API it is `PATCH /emails/{id}` with `status` set to `inactive`, and `active` turns it back on.
 
-Off stops the mailbox on this instance: campaign sending, local warmup and syncing stop, while settings and history remain. Warmup executed by Warmbly Cloud can continue while the local mailbox is Off. If Cloud plans warmup but this server executes it, turning the local mailbox off stops those commands too. Manage Cloud warmup in the mailbox's **Warmup** tab or **Settings > Warmbly Cloud**. The list's Status column describes the local mailbox; its Warmup column uses the source that owns warmup. To stop cold sending while keeping local warmup running, use [Hold from campaigns](#holding-a-mailbox-yourself) instead.
+Off stops the mailbox on this instance: campaign sending, local warmup and syncing stop, while settings and history remain. Warmup executed by Warmbly Cloud can continue while the local mailbox is Off. Manage Cloud warmup in the mailbox's **Warmup** tab or **Settings > Warmbly Cloud**. The list's Status column describes the local mailbox; its Warmup column uses the source that owns warmup. To stop cold sending while keeping local warmup running, use [Hold from campaigns](#holding-a-mailbox-yourself) instead.
 
 A switched-off mailbox is turned back on the same ways: **Switch back on** on the row's **More** menu or its warmup menu, the **Switch back on** button at the top of its Overview tab, the **Mailbox on** switch, or **Switch on** in the selection bar. Local warmup that was set to run starts again unless Cloud owns warmup. To bring a mailbox back for warmup only, turn on **Hold from campaigns** on its Overview tab before switching it on, so campaigns cannot pick it in between. A mailbox whose provider access was revoked shows **Reconnect** rather than **Off**, and is turned back on by reconnecting it.
 
@@ -703,7 +714,7 @@ If Warmbly cannot read a mailbox's error reports, its current status is unavaila
 
 Each Cloud mailbox uses its own current health report. A missing report shows **Unavailable** for that mailbox while other mailboxes keep their reported readings. Summary counts remain unavailable until every listed mailbox has a current status.
 
-The Accounts list groups mailboxes as **Healthy** (sending normally), **Warming** (ramping through warmup), or **Needs attention** (paused, failing, or not sending). Each row shows the mailbox with how it connects and its tags, a **Status** that says what it is doing (**Sending**, **Warming**, **Active** when it does both, **Resting**, or **Idle**, and **Error**, **Off** or **Reconnect** when something stops it, **Paused** in amber while a provider has paused its sending, or **Retrying** in amber while a warning such as a dropped connection is being retried on its own), campaign emails sent today against its cap, warmup sent today against the ramp target, the inbox rate, and the health score. Hover a status for the reason, and click any column header to sort. A drop in health between refreshes notifies you rather than waiting to be noticed.
+Above the list, four cards show what the workspace did today against its last 14 days: campaign emails sent against today's sending capacity, warmup emails sent against the ramp targets, the 7-day inbox rate at Google, Microsoft and Yahoo, and replies. Hover a line to read any single day. The sent, inbox and reply cards need the View analytics permission. The list header counts mailboxes as **Healthy** (sending normally), **Warming** (ramping through warmup), or **Needs attention** (paused, failing, or not sending). Each row shows the mailbox with how it connects and its tags, a **Status** that says what it is doing (**Sending**, **Warming**, **Active** when it does both, **Resting**, or **Idle**, and **Error**, **Off** or **Reconnect** when something stops it, **Paused** in amber while a provider has paused its sending, or **Retrying** in amber while a warning such as a dropped connection is being retried on its own), campaign emails sent today against its cap, warmup sent today against the ramp target, the inbox rate, and the health score. Hover a status for the reason, and click any column header to sort. A drop in health between refreshes notifies you rather than waiting to be noticed.
 
 Repeated reports of the same error code count once toward the health score, at their highest unresolved severity, rather than making one problem look like several. The drawer groups identical reports while keeping different error details and sending versus sync failures separate. Connection titles name Gmail, Microsoft Outlook or the mail server. **Reported** shows the stored report time: connection and temporary provider-limit observations refresh it, while other error categories may retain their original report time. It is not proof of an ongoing outage.
 

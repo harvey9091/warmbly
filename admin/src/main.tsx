@@ -15,7 +15,8 @@ import "@fontsource/inter/400.css";
 import "@fontsource/inter/500.css";
 import "@fontsource/inter/600.css";
 
-import { initErrorReporting } from "@/lib/observability";
+import { ReauthCancelledError, SessionExpiredError } from "@/lib/api/client";
+import { captureException, initErrorReporting, reportsErrors } from "@/lib/observability";
 import { reportFailure } from "@/lib/api/reportFailure";
 
 import { Toaster } from "@/components/ui/sonner";
@@ -48,6 +49,8 @@ import PlacementPage from "@/app/dashboard/PlacementPage";
 import CampaignsPage from "@/app/dashboard/CampaignsPage";
 import SendsPage from "@/app/dashboard/SendsPage";
 import LimitRequestsPage from "@/app/dashboard/LimitRequestsPage";
+import AgenciesPage from "@/app/dashboard/agencies/AgenciesPage";
+import AgencyDetailPage from "@/app/dashboard/agencies/AgencyDetailPage";
 import DiscountsPage from "@/app/dashboard/DiscountsPage";
 import OutreachPage from "@/app/dashboard/OutreachPage";
 import MailboxesPage from "@/app/dashboard/MailboxesPage";
@@ -168,6 +171,8 @@ const router = createBrowserRouter([
                             { path: "organizations", element: gated(AdminPerm.ViewOrganizations, <OrganizationsPage />) },
                             { path: "organizations/:id", element: gated(AdminPerm.ViewOrganizations, <OrganizationDetailPage />) },
                             { path: "limit-requests", element: gated(AdminPerm.ViewOrganizations, <LimitRequestsPage />) },
+                            { path: "agencies", element: gated(AdminPerm.ViewOrganizations, <AgenciesPage />) },
+                            { path: "agencies/:id", element: gated(AdminPerm.ViewOrganizations, <AgencyDetailPage />) },
                             { path: "developer-apps", element: gated(AdminPerm.ViewOrganizations, <DeveloperAppsPage />) },
                             { path: "app-listings", element: <Navigate to="/developer-apps?tab=directory" replace /> },
                             { path: "discounts", element: gated(AdminPerm.ViewOrganizations, <DiscountsPage />) },
@@ -220,10 +225,23 @@ export { Outlet };
 // Before the first render, so a boot failure is reported too.
 initErrorReporting();
 
-createRoot(document.getElementById("root")!).render(
+// A caught error is reported by reportRouteError below; React's console copy would report it twice.
+const logCaught = (error: unknown, info: { componentStack?: string }) => {
+    if (import.meta.env.DEV || !reportsErrors()) console.error(error, info.componentStack);
+};
+
+// The one report for every route's render, loader and action errors, including routes with no errorElement.
+const reportRouteError = (error: unknown) => {
+    if (import.meta.env.DEV || !reportsErrors()) console.error(error);
+    // A lapsed session is the sign-in screen's job, and a closed confirm prompt is a choice.
+    if (error instanceof SessionExpiredError || error instanceof ReauthCancelledError) return;
+    captureException(error);
+};
+
+createRoot(document.getElementById("root")!, { onCaughtError: logCaught }).render(
     <StrictMode>
         <QueryClientProvider client={queryClient}>
-            <RouterProvider router={router} />
+            <RouterProvider router={router} onError={reportRouteError} />
             <Toaster position="top-center" />
             {import.meta.env.DEV && <ReactQueryDevtools initialIsOpen={false} />}
         </QueryClientProvider>

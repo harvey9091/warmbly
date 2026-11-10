@@ -71,6 +71,9 @@ or `@file`.
 - On `rate_limit_exceeded` wait the `Retry-After` the error names, then retry.
 - Retried writes: pass `--idempotency-key <same-key>` so a retry can never
   double-apply. Any unique string works; reuse it only for the identical retry.
+  A `409 idempotency_outcome_unknown` means the first attempt ended in a server
+  error and may have applied: retry with a new key only once you have
+  established that it did not.
 - `contact list` is a search: `--data` carries the filter body, e.g.
   `--data '{"query":"acme.com"}'`. Omit it to list everything.
 
@@ -86,6 +89,12 @@ These commands put real mail on the wire: `campaign start`,
 - When a campaign sends less than expected, `campaign plan --id <id>` is the
   answer: today's projected sends and every limit that lowered them. Read it
   before touching a cap.
+- To send each lead inside their own working day, set the campaign's
+  `timezone_mode` to `recipient`, then check `campaign timezones --id <id>`:
+  its leads by timezone and how many have no location (those are sent on the
+  campaign's own timezone). Location comes from the contacts' country, state,
+  city, location or timezone fields, then phone and email domain; segment
+  conditions `world_region`, `country` and `timezone` split an audience by it.
 - Never raise a mailbox's daily cap casually. The platform default is 50
   campaign emails per mailbox per day with 600 seconds between sends; a fresh
   mailbox should start around 10-20. Do not set a cap above 50 unless the

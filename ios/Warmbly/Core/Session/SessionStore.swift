@@ -18,6 +18,22 @@ enum LoginOutcome {
     /// deployment sends one: self-hosted installs default to signing in without
     /// it, so a login can resolve on the first call.
     case needsCode(session: String)
+    /// The password was an issued initial one; `chooseInitialPassword` replaces it and continues.
+    case needsNewPassword(pendingToken: String)
+}
+
+/// A federated sign-in on an address that already has a password: nothing is
+/// linked until that password reaches `confirmSSOLink`.
+struct SSOLinkChallenge: Equatable, Sendable {
+    var pendingToken: String
+    var email: String
+    var provider: String
+}
+
+enum SocialOutcome {
+    case loggedIn
+    case needsTwoFA(pendingToken: String)
+    case needsLink(SSOLinkChallenge)
 }
 
 /// Owns the auth lifecycle and the active-organization context.
@@ -202,8 +218,15 @@ final class SessionStore {
 
     func startLogin(email: String, password: String) async throws -> LoginOutcome {
         let result: AuthSession = try await verified(.login) { check in
-            try await self.api.post("auth/login", body: PasswordAuthBody(email: email, password: password, check: check), authorized: false)
+            try await self.api.post("auth/login", body: PasswordAuthBody(email: email, password: password, check: check, supportsPasswordChange: true), authorized: false)
         }
+        return try await resolve(result)
+    }
+
+    /// Replaces an issued initial password with the holder's own, then continues the sign-in.
+    func chooseInitialPassword(pendingToken: String, password: String) async throws -> LoginOutcome {
+        let body = ["pending_token": pendingToken, "password": password]
+        let result: AuthSession = try await api.post("auth/login/initial-password", body: body, authorized: false)
         return try await resolve(result)
     }
 
@@ -238,17 +261,21 @@ final class SessionStore {
         var password: String
         var turnstile: String?
         var appAttest: AppAttestClient.Proof?
+        /// Login only: this build can take a `password_change_required` answer.
+        var supportsPasswordChange: Bool?
 
-        init(email: String, password: String, check: HumanCheck) {
+        init(email: String, password: String, check: HumanCheck, supportsPasswordChange: Bool? = nil) {
             self.email = email
             self.password = password
             turnstile = check.turnstile
             appAttest = check.appAttest
+            self.supportsPasswordChange = supportsPasswordChange
         }
 
         enum CodingKeys: String, CodingKey {
             case email, password, turnstile
             case appAttest = "app_attest"
+            case supportsPasswordChange = "supports_password_change"
         }
     }
 
@@ -286,6 +313,13 @@ final class SessionStore {
     /// Maps a start-of-login response onto an outcome, completing the sign-in
     /// when the backend already resolved it.
     private func resolve(_ result: AuthSession) async throws -> LoginOutcome {
+        // Carries code_required false and no token, so it is read first.
+        if result.passwordChangeRequired == true {
+            guard let pending = result.pendingToken else {
+                throw APIError.decoding(URLError(.cannotParseResponse))
+            }
+            return .needsNewPassword(pendingToken: pending)
+        }
         if result.needsCode {
             guard let session = result.session else {
                 throw APIError.decoding(URLError(.cannotParseResponse))
@@ -337,7 +371,7 @@ final class SessionStore {
 
     /// Apple shares the user's name only with the app, never inside the
     /// identity token, so it rides along for first-sign-in profile prefill.
-    func signInWithApple(identityToken: String, firstName: String?, lastName: String?) async throws -> LoginOutcome {
+    func signInWithApple(identityToken: String, firstName: String?, lastName: String?) async throws -> SocialOutcome {
         var body = ["identity_token": identityToken]
         if let firstName, !firstName.isEmpty { body["first_name"] = firstName }
         if let lastName, !lastName.isEmpty { body["last_name"] = lastName }
@@ -345,16 +379,72 @@ final class SessionStore {
         return try await resolve(social: result)
     }
 
-    func signInWithGoogle(idToken: String) async throws -> LoginOutcome {
+    func signInWithGoogle(idToken: String) async throws -> SocialOutcome {
         let result: LoginResult = try await api.post("auth/google", body: ["id_token": idToken], authorized: false)
         return try await resolve(social: result)
     }
 
-    /// Social sign-in runs the same 2FA gate as password login, so it can
-    /// return a challenge instead of a token.
-    private func resolve(social result: LoginResult) async throws -> LoginOutcome {
+    private struct BrowserSignInConfig: Decodable {
+        var providers: [String]?
+        var appURL: String?
+
+        enum CodingKeys: String, CodingKey {
+            case providers
+            case appURL = "app_url"
+        }
+    }
+
+    /// The native providers plus, when this backend's dashboard is on a host
+    /// the app is associated with, the website's own Google sign-in.
+    func fetchSignInProviders() async -> AuthProvidersInfo? {
+        async let native = fetchAuthProviders()
+        async let config: BrowserSignInConfig? = try? api.get("auth/config", authorized: false)
+        var browserHost: String?
+        if let config = await config,
+           config.providers?.contains("google") == true,
+           let url = config.appURL.flatMap({ URL(string: $0) }),
+           url.scheme?.lowercased() == "https",
+           let host = url.host()?.lowercased(),
+           AppConfig.associatedWebHosts.contains(host)
+        {
+            browserHost = host
+        }
+        // Unknown native providers keep Apple optimistic, as a nil answer does.
+        var info = await native ?? (browserHost == nil ? nil : AuthProvidersInfo(apple: .init(enabled: true)))
+        info?.googleBrowserHost = browserHost
+        return info
+    }
+
+    struct BrowserSignIn: Decodable, Sendable {
+        var url: URL
+        /// Stays on the device and is presented again at the exchange.
+        var binding: String
+    }
+
+    /// The website's sign-in for `provider`; the backend's callback ends on `<app_url>/auth/sso?code=`.
+    func beginBrowserSignIn(_ provider: String) async throws -> BrowserSignIn {
+        try await api.post("auth/\(provider)/begin", authorized: false)
+    }
+
+    func finishBrowserSignIn(code: String, binding: String) async throws -> SocialOutcome {
+        let result: LoginResult = try await api.post("auth/sso/exchange", body: ["code": code, "binding": binding], authorized: false)
+        return try await resolve(social: result)
+    }
+
+    func confirmSSOLink(pendingToken: String, password: String) async throws -> SocialOutcome {
+        let body = ["pending_token": pendingToken, "password": password]
+        let result: LoginResult = try await api.post("auth/sso/link", body: body, authorized: false)
+        return try await resolve(social: result)
+    }
+
+    /// Social sign-in runs the same 2FA gate as password login, and an address
+    /// that already has a password asks for it before the identity is linked.
+    private func resolve(social result: LoginResult) async throws -> SocialOutcome {
         if result.twoFARequired == true, let pending = result.pendingToken {
             return .needsTwoFA(pendingToken: pending)
+        }
+        if result.linkRequired == true, let pending = result.pendingToken {
+            return .needsLink(SSOLinkChallenge(pendingToken: pending, email: result.linkEmail ?? "", provider: result.linkProvider ?? ""))
         }
         guard let token = result.token else {
             throw APIError.decoding(URLError(.cannotParseResponse))

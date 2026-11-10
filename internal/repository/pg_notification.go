@@ -24,6 +24,8 @@ type NotificationRepository interface {
 	CountUnread(ctx context.Context, userID uuid.UUID) (int, error)
 	MarkRead(ctx context.Context, userID, notifID uuid.UUID) error
 	MarkAllRead(ctx context.Context, userID uuid.UUID) error
+	// MarkReadIn marks the user's unread notifications in orgIDs read: notifID alone when set, else all of them.
+	MarkReadIn(ctx context.Context, userID uuid.UUID, notifID *uuid.UUID, orgIDs []uuid.UUID) error
 
 	// ClaimDueEmails atomically claims every pending email row belonging to a
 	// user with at least one due row (so all their pending mail bundles into
@@ -46,6 +48,8 @@ type NotificationRepository interface {
 	// with a retry delay; rows that already burned their attempts are
 	// dropped to skipped instead of retrying forever.
 	RequeueEmails(ctx context.Context, ids []uuid.UUID, delay time.Duration, maxAttempts int) error
+	// DeferEmails returns claimed rows to pending after delay without spending an attempt.
+	DeferEmails(ctx context.Context, ids []uuid.UUID, delay time.Duration) error
 }
 
 type notificationRepository struct {
@@ -244,6 +248,19 @@ func (r *notificationRepository) MarkAllRead(ctx context.Context, userID uuid.UU
 	return err
 }
 
+func (r *notificationRepository) MarkReadIn(ctx context.Context, userID uuid.UUID, notifID *uuid.UUID, orgIDs []uuid.UUID) error {
+	if len(orgIDs) == 0 {
+		return nil
+	}
+	_, err := r.db.Exec(ctx, `
+		UPDATE notifications
+		SET read_at = now(),
+			email_state = CASE WHEN email_state = 'pending' THEN 'skipped' ELSE email_state END
+		WHERE user_id = $1 AND read_at IS NULL AND organization_id = ANY($2::uuid[])
+		  AND ($3::uuid IS NULL OR id = $3)`, userID, orgIDs, notifID)
+	return err
+}
+
 // ClaimDueEmails flips claimable rows to 'sending' and returns them. While a
 // row is 'sending', email_due_at doubles as the claim timestamp so crashed
 // claims can be recovered back to pending.
@@ -327,5 +344,15 @@ func (r *notificationRepository) RequeueEmails(ctx context.Context, ids []uuid.U
 			email_state = CASE WHEN email_attempts + 1 >= $3 THEN 'skipped' ELSE 'pending' END,
 			email_due_at = CASE WHEN email_attempts + 1 >= $3 THEN NULL ELSE now() + make_interval(secs => $2) END
 		WHERE id = ANY($1) AND email_state = 'sending'`, ids, delay.Seconds(), maxAttempts)
+	return err
+}
+
+func (r *notificationRepository) DeferEmails(ctx context.Context, ids []uuid.UUID, delay time.Duration) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := r.db.Exec(ctx, `
+		UPDATE notifications SET email_state = 'pending', email_due_at = now() + make_interval(secs => $2)
+		WHERE id = ANY($1) AND email_state = 'sending'`, ids, delay.Seconds())
 	return err
 }

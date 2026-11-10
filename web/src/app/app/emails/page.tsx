@@ -32,7 +32,8 @@ import useCloudPool from "@/hooks/useCloudPool";
 import useAuthConfig from "@/lib/api/hooks/auth/useAuthConfig";
 import { cloudMailboxPickerOpened } from "@/lib/cloudMailboxConnect";
 import { providerSupported } from "@/app/app/settings/warmbly-cloud/providers";
-import { CloudIcon, MailCheckIcon } from "lucide-react";
+import { CloudIcon, Link2Icon, MailCheckIcon } from "lucide-react";
+import ConnectLinksDialog from "@/components/app/emails/connect-links/ConnectLinksDialog";
 import { PlacementRateBadge } from "@/components/app/placement/PlacementCharts";
 import type { CloudLinkMailboxRow } from "@/lib/api/models/app/cloudlink/CloudLink";
 import { cloudLinkScope, invalidateWarmupReports } from "@/lib/api/hooks/app/cloudlink/warmupReports";
@@ -100,15 +101,31 @@ import {
     PageBody,
     PageTopbar,
     SectionBar,
-    Stat,
-    StatStrip,
     TopbarAction,
 } from "@/components/layout/Page";
+import AccountsTrendStrip, { type WarmupToday } from "@/components/app/emails/AccountsTrendStrip";
 
 const DefaultFolder = {
     title: "All accounts",
     color: "#c4c8cf",
 } as Tag;
+const NO_TAGS: Tag[] = [];
+
+// One mailbox status count in the list header; a zero fades, an alert count turns amber.
+function StatusCount({ label, dot, count, pending, alert = false, detail }: { label: string; dot: string; count: number; pending?: string; alert?: boolean; detail?: string }) {
+    const zero = pending === undefined && count === 0;
+    const alerting = pending === undefined && alert && count > 0;
+    return (
+        <span className={cn("inline-flex items-center gap-1.5 text-[11.5px] whitespace-nowrap", alerting ? "text-amber-700" : "text-slate-500")}>
+            <span className={cn("size-1.5 rounded-full", zero ? "bg-slate-300" : dot)} />
+            <span>{label}</span>
+            <span className={cn("tabular-nums font-medium", pending !== undefined ? "text-slate-400 font-normal" : alerting ? "text-amber-700" : zero ? "text-slate-400" : "text-slate-900")}>
+                {pending ?? <AnimatedNumber value={count} />}
+            </span>
+            {detail && pending === undefined && <span className="text-slate-400">{detail}</span>}
+        </span>
+    );
+}
 
 /* ── health helpers ───────────────────────────────── */
 
@@ -134,7 +151,7 @@ import AdvisorSummaryBar from "@/components/app/advisor/AdvisorSummaryBar";
 import { useAdvisorEntityIndex } from "@/lib/api/hooks/app/advisor/useAdvisor";
 import type { AdvisorFinding } from "@/lib/api/models/app/advisor/Advisor";
 import { Checkbox } from "@/components/ui/checkbox";
-import { labelInk } from "@/lib/utils";
+import { cn, labelInk } from "@/lib/utils";
 import { nextSlotLabel } from "@/lib/helper/nextSlot";
 
 export default function AddressesPage() {
@@ -154,6 +171,7 @@ export default function AddressesPage() {
     const [removing, setRemoving] = React.useState(false);
     const [bulkStart, setBulkStart] = React.useState<string[] | null>(null);
     const [bulkSignature, setBulkSignature] = React.useState(false);
+    const [inviteOpen, setInviteOpen] = React.useState(false);
     const [searchParams, setSearchParams] = useSearchParams();
     const queryClient = useQueryClient();
 
@@ -166,10 +184,10 @@ export default function AddressesPage() {
     }, [migration.data]);
     const [migrationOpen, setMigrationOpen] = React.useState(false);
     const [migrationFocus, setMigrationFocus] = React.useState<string | null>(null);
-    const openMigration = (domain: string | null = null) => {
+    const openMigration = useCallback((domain: string | null = null) => {
         setMigrationFocus(domain);
         setMigrationOpen(true);
-    };
+    }, []);
 
     // Warmup is a paid/trial feature; gate the start controls when the org
     // isn't entitled. Treat unknown (still loading) as allowed — the backend
@@ -219,16 +237,16 @@ export default function AddressesPage() {
     );
     // One resolution per mailbox per input change; sorting and the virtualized rows read it on every scroll.
     const warmupSource = useMemo<WarmupSource>(
-        () => ({ connected: cloud.connected, loading: cloud.loading, unavailable: cloud.unavailable, reportsUnavailable: cloud.reportsUnavailable, ownershipHidden: cloud.ownershipHidden, selfExecutionGranted: cloud.selfExecutionGranted, rowFor: cloud.rowFor }),
-        [cloud.connected, cloud.loading, cloud.unavailable, cloud.reportsUnavailable, cloud.ownershipHidden, cloud.selfExecutionGranted, cloud.rowFor],
+        () => ({ connected: cloud.connected, loading: cloud.loading, unavailable: cloud.unavailable, reportsUnavailable: cloud.reportsUnavailable, ownershipHidden: cloud.ownershipHidden, rowFor: cloud.rowFor }),
+        [cloud.connected, cloud.loading, cloud.unavailable, cloud.reportsUnavailable, cloud.ownershipHidden, cloud.rowFor],
     );
     const warmupById = useMemo(() => {
         const m = new Map<string, MailboxWarmup>();
-        for (const box of emailsData.emails ?? []) m.set(box.id, resolveMailboxWarmup(box, statusById.get(box.id), warmupSource));
+        for (const box of emailsData.emails ?? []) m.set(box.id, cachedWarmup(box, statusById.get(box.id), warmupSource));
         return m;
     }, [emailsData.emails, statusById, warmupSource]);
     const warmupFor = useCallback(
-        (box: Inbox) => warmupById.get(box.id) ?? resolveMailboxWarmup(box, statusById.get(box.id), warmupSource),
+        (box: Inbox) => warmupById.get(box.id) ?? cachedWarmup(box, statusById.get(box.id), warmupSource),
         [warmupById, statusById, warmupSource],
     );
     const warmupCoverageUnknown = (emailsData.emails ?? []).some((box) => warmupUnknown(warmupFor(box)));
@@ -374,7 +392,8 @@ export default function AddressesPage() {
                 const failed = (await bulkSwitchEmails(ids, on ? "active" : "inactive")).failed;
                 await queryClient.invalidateQueries({ queryKey: ["emails", "list"] });
                 await queryClient.invalidateQueries({ queryKey: ["analytics", "accounts"] });
-                setSelected((prev) => prev.filter((id) => !ids.includes(id)));
+                const done = new Set(ids);
+                setSelected((prev) => prev.filter((id) => !done.has(id)));
                 if (failed > 0) toast.error(`${failed} mailbox${failed > 1 ? "es" : ""} couldn't be switched ${on ? "on" : "off"}`);
                 else toast.success(`${n} mailbox${n > 1 ? "es" : ""} switched ${on ? "back on" : "off"}`);
             } catch (e) {
@@ -400,12 +419,12 @@ export default function AddressesPage() {
         return (emailsData.emails ?? []).filter((e) => ids.has(e.id));
     }, [selected, emailsData.emails]);
 
-    const openDetail = (id: string, tab?: string) => {
+    const openDetail = useCallback((id: string, tab?: string) => {
         const parsed = mailboxTab.safeParse(tab);
         setViewTab(tab === undefined ? undefined : parsed.success ? parsed.data : "overview");
         setTabIntentKey((key) => key + 1);
         setView(id);
-    };
+    }, []);
 
     // ?mailbox=<id> opens that mailbox's detail on arrival, so advisor advice
     // about one mailbox can link straight to it instead of dropping the reader
@@ -457,6 +476,20 @@ export default function AddressesPage() {
         return s;
     }, [emailsData.emails, statusById, warmupFor]);
 
+    const statusPending = statusChecking ? "Checking…" : statusUnavailable ? "Unavailable" : undefined;
+    const warmupToday = useMemo<WarmupToday>(() => {
+        const out: WarmupToday = { state: statusChecking ? "checking" : statusUnavailable ? "unavailable" : "ready", sent: 0, target: 0, mailboxes: 0, inCampaign: 0 };
+        for (const e of emailsData.emails ?? []) {
+            if (statusById.get(e.id)?.in_campaign) out.inCampaign++;
+            const w = warmupFor(e);
+            if (w.activity !== "active") continue;
+            out.mailboxes++;
+            out.sent += w.sentToday ?? 0;
+            out.target += w.info?.target_volume ?? e.warmup_base;
+        }
+        return out;
+    }, [emailsData.emails, statusById, warmupFor, statusChecking, statusUnavailable]);
+
     // Mailboxes actively warming (enabled and not paused). Warmup pairs mailboxes
     // with each other, so too few starves it; the notice below warns on that.
     const warmupActive = useMemo(
@@ -492,42 +525,54 @@ export default function AddressesPage() {
 
     const rowActions = useMailboxRowActions();
     const selectedSet = useMemo(() => new Set(selected), [selected]);
+    const toggleSelected = useCallback(
+        (id: string) => setSelected((bef) => (bef.includes(id) ? bef.filter((i) => i !== id) : [...bef, id])),
+        [],
+    );
 
-    // Only the rows near the viewport are mounted; the list scrolls inside PageBody.
+    // The list scrolls inside PageBody; the virtualized body below reads it.
     const [scrollEl, setScrollEl] = React.useState<HTMLElement | null>(null);
     const tableWrapRef = React.useCallback((node: HTMLDivElement | null) => setScrollEl(node?.parentElement ?? null), []);
-    const tbodyRef = React.useRef<HTMLTableSectionElement>(null);
-    const [scrollMargin, setScrollMargin] = React.useState(0);
-    React.useLayoutEffect(() => {
-        if (!scrollEl) return;
-        // Where the rows start inside the scroll box, which moves as the banners above them change.
-        const measure = () => {
-            const body = tbodyRef.current;
-            if (!body) return;
-            const m = Math.round(body.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top + scrollEl.scrollTop);
-            setScrollMargin((prev) => (prev === m ? prev : m));
-        };
-        measure();
-        if (typeof ResizeObserver === "undefined") return;
-        const ro = new ResizeObserver(measure);
-        for (const child of Array.from(scrollEl.children)) ro.observe(child);
-        return () => ro.disconnect();
-    }, [scrollEl]);
-    const rowVirtualizer = useVirtualizer({
-        count: sortedEmails.length,
-        getScrollElement: () => scrollEl,
-        estimateSize: () => 44,
-        getItemKey: (i) => sortedEmails[i]?.id ?? i,
-        overscan: 12,
-        scrollMargin,
-        initialRect: { width: 0, height: 800 },
-    });
-    const virtualRows = rowVirtualizer.getVirtualItems();
-    const padTop = virtualRows.length ? virtualRows[0].start - scrollMargin : 0;
-    const padBottom = virtualRows.length
-        ? Math.max(0, rowVirtualizer.getTotalSize() - (virtualRows[virtualRows.length - 1].end - scrollMargin))
-        : 0;
-    const columnCount = MAILBOX_COLUMNS.length + 2;
+    const tags = p?.user.tags ?? NO_TAGS;
+    const statusErrored = statuses.isError;
+    const renderRow = useCallback(
+        (box: Inbox, index: number, measure: (node: HTMLTableRowElement | null) => void) => {
+            const cloudRow = cloudConnected ? cloudRowFor(box.id) : undefined;
+            const rowCloudUnavailable = cloudUnavailable || !!(cloudRow?.enrolled && !cloudRow.cloud?.health);
+            const reported = statusById.get(box.id);
+            const status = rowCloudUnavailable && reported?.health?.status === "healthy" && !reported.errors?.length ? undefined : reported;
+            const cloudStatusPending = cloudChecking || rowCloudUnavailable;
+            // Only a row with no status, or one still waiting on Cloud, shows pending; the rest skip the refetch's render.
+            const statusPending = statusChecking && !inventoryUnavailable && !rowCloudUnavailable && !statusErrored && (!status || cloudStatusPending);
+            return (
+                <MailboxRow
+                    warmup={warmupFor(box)}
+                    key={box.id}
+                    index={index}
+                    measure={measure}
+                    actions={rowActions}
+                    box={box}
+                    tags={tags}
+                    status={status}
+                    statusCurrent={!cloudChecking && !rowCloudUnavailable && currentStatusIds.has(box.id)}
+                    lastReportedIssue={lastReportedIssues.get(box.id)}
+                    statusPending={statusPending}
+                    cloudStatusPending={cloudStatusPending}
+                    cloudRemovalPending={cloudRemovalPending}
+                    findings={advisor.get(box.id)}
+                    canWarmup={canWarmup}
+                    cloud={cloudRow}
+                    cloudConnected={cloudConnected}
+                    retiringDomain={retiringDomain.get(box.id)}
+                    onRetiring={openMigration}
+                    checked={selectedSet.has(box.id)}
+                    onToggleSelect={toggleSelected}
+                    onOpen={openDetail}
+                />
+            );
+        },
+        [cloudConnected, cloudRowFor, cloudUnavailable, statusById, cloudChecking, statusChecking, inventoryUnavailable, statusErrored, warmupFor, rowActions, tags, currentStatusIds, lastReportedIssues, cloudRemovalPending, advisor, canWarmup, retiringDomain, openMigration, selectedSet, toggleSelected, openDetail],
+    );
 
     if (!canView) {
         return <NoAccess feature="email accounts" permissionLabel="Manage mailboxes" />;
@@ -549,6 +594,9 @@ export default function AddressesPage() {
                 <TopbarAction variant="ghost" href="/app/emails/domains" icon={<GlobeIcon className="w-3 h-3" />}>
                     <span className="sr-only sm:not-sr-only">Sending domains</span>
                 </TopbarAction>
+                <TopbarAction variant="ghost" onClick={() => setInviteOpen(true)} icon={<Link2Icon className="w-3 h-3" />}>
+                    <span className="sr-only sm:not-sr-only">Invite client to connect</span>
+                </TopbarAction>
                 <TopbarAction
                     onClick={() => p?.setAddEmail(true)}
                     icon={<PlusIcon className="w-3 h-3" />}
@@ -557,14 +605,19 @@ export default function AddressesPage() {
                 </TopbarAction>
             </PageTopbar>
 
-            <StatStrip cols={4}>
-                <Stat label="Total" value={emailsData.isLoading ? "Checking…" : inventoryUnavailable ? "Unavailable" : <AnimatedNumber value={stats.total} />} sub="connected" />
-                <Stat label="Healthy" value={statusChecking ? "Checking…" : statusUnavailable ? "Unavailable" : <AnimatedNumber value={stats.healthy} />} sub="no reported health issues" accent={!statusChecking && !statusUnavailable && stats.healthy > 0} />
-                <Stat label="Warming" value={statusChecking ? "Checking…" : statusUnavailable ? "Unavailable" : <AnimatedNumber value={stats.warming} />} sub={stats.slowed > 0 ? `ramping up, ${stats.slowed} slowed` : "ramping up"} />
-                <Stat label="Needs attention" value={statusChecking ? "Checking…" : statusUnavailable ? "Unavailable" : <AnimatedNumber value={stats.issues} />} sub="paused or failing" last />
-            </StatStrip>
+            <AccountsTrendStrip warmup={warmupToday} filtered={!!query || !!tag} />
 
-            <SectionBar label="Mailboxes" count={emailsData.emails?.length ?? 0}>
+            <SectionBar
+                label="Mailboxes"
+                count={emailsData.emails?.length ?? 0}
+                meta={
+                    <>
+                        <StatusCount label="Healthy" dot="bg-emerald-500" count={stats.healthy} pending={statusPending} />
+                        <StatusCount label="Warming" dot="bg-sky-500" count={stats.warming} pending={statusPending} detail={stats.slowed > 0 ? `${stats.slowed} slowed` : undefined} />
+                        <StatusCount label="Needs attention" dot="bg-amber-500" count={stats.issues} pending={statusPending} alert />
+                    </>
+                }
+            >
                 <SearchInput
                     value={query}
                     onChange={setQuery}
@@ -675,16 +728,13 @@ export default function AddressesPage() {
                                             checked={isSelectedAll()}
                                             onChange={() => {
                                                 if (isSelectedAll()) {
-                                                    setSelected((bef) =>
-                                                        bef.filter((e) => !emailsData.emails.map((em) => em.id).includes(e)),
-                                                    );
+                                                    const listed = new Set(emailsData.emails.map((em) => em.id));
+                                                    setSelected((bef) => bef.filter((e) => !listed.has(e)));
                                                 } else {
-                                                    setSelected((bef) => [
-                                                        ...bef,
-                                                        ...emailsData.emails
-                                                            .filter((em) => !selected.includes(em.id))
-                                                            .map((em) => em.id),
-                                                    ]);
+                                                    setSelected((bef) => {
+                                                        const had = new Set(bef);
+                                                        return [...bef, ...emailsData.emails.filter((em) => !had.has(em.id)).map((em) => em.id)];
+                                                    });
                                                 }
                                             }}
                                         />
@@ -695,54 +745,7 @@ export default function AddressesPage() {
                                     <th className="px-3 py-2 w-[84px] @2xl:w-[76px]"></th>
                                 </tr>
                             </thead>
-                            <tbody ref={tbodyRef}>
-                                {padTop > 0 && (
-                                    <tr aria-hidden style={{ height: padTop }}>
-                                        <td colSpan={columnCount} className="p-0" />
-                                    </tr>
-                                )}
-                                {virtualRows.map((v) => {
-                                    const box = sortedEmails[v.index];
-                                    if (!box) return null;
-                                    const cloudRow = cloud.connected ? cloud.rowFor(box.id) : undefined;
-                                    const rowCloudUnavailable = cloud.unavailable || !!(cloudRow?.enrolled && !cloudRow.cloud?.health);
-                                    return (
-                                        <MailboxRow
-                                            warmup={warmupFor(box)}
-                                            key={box.id}
-                                            index={v.index}
-                                            measure={rowVirtualizer.measureElement}
-                                            actions={rowActions}
-                                            box={box}
-                                            tags={p?.user.tags ?? []}
-                                            status={rowCloudUnavailable && statusById.get(box.id)?.health?.status === "healthy" && !statusById.get(box.id)?.errors?.length ? undefined : statusById.get(box.id)}
-                                            statusCurrent={!cloudChecking && !rowCloudUnavailable && currentStatusIds.has(box.id)}
-                                            lastReportedIssue={lastReportedIssues.get(box.id)}
-                                            statusPending={statusChecking && !inventoryUnavailable && !rowCloudUnavailable && !statuses.isError}
-                                            cloudStatusPending={cloudChecking || rowCloudUnavailable}
-                                            cloudRemovalPending={cloudRemovalPending}
-                                            findings={advisor.get(box.id)}
-                                            canWarmup={canWarmup}
-                                            cloud={cloudRow}
-                                            cloudConnected={cloud.connected}
-                                            retiring={retiringDomain.has(box.id)}
-                                            onRetiring={() => openMigration(retiringDomain.get(box.id) ?? null)}
-                                            checked={selectedSet.has(box.id)}
-                                            onToggleSelect={() =>
-                                                selectedSet.has(box.id)
-                                                    ? setSelected((bef) => bef.filter((i) => i !== box.id))
-                                                    : setSelected((bef) => [...bef, box.id])
-                                            }
-                                            onOpen={openDetail}
-                                        />
-                                    );
-                                })}
-                                {padBottom > 0 && (
-                                    <tr aria-hidden style={{ height: padBottom }}>
-                                        <td colSpan={columnCount} className="p-0" />
-                                    </tr>
-                                )}
-                            </tbody>
+                            <MailboxTableBody rows={sortedEmails} scrollEl={scrollEl} renderRow={renderRow} />
                         </table>
                     </div>
                 )}
@@ -847,6 +850,8 @@ export default function AddressesPage() {
 
             <InboxDetails emails={emailsData.emails} view={view} setView={setView} initialTab={viewTab} tabIntentKey={tabIntentKey} onTabIntentConsumed={consumeTabIntent} canWarmup={canWarmup} />
 
+            <ConnectLinksDialog open={inviteOpen} onClose={() => setInviteOpen(false)} />
+
             <SigninMigrationDialog
                 open={migrationOpen}
                 focusDomain={migrationFocus}
@@ -859,7 +864,10 @@ export default function AddressesPage() {
                 ownershipPending={cloudRemovalPending}
                 allowFollow={!(bulkStart ?? []).some((id) => cloud.isEnrolled(id))}
                 onClose={() => setBulkStart(null)}
-                onComplete={(ids) => setSelected((current) => current.filter((id) => !ids.includes(id)))}
+                onComplete={(ids) => {
+                    const done = new Set(ids);
+                    setSelected((current) => current.filter((id) => !done.has(id)));
+                }}
             />
 
             <BulkSignatureDialog
@@ -907,7 +915,7 @@ function removeErrorMessage(err: unknown): string | undefined {
     return e?.response?.data?.message;
 }
 
-function MailboxRow({
+const MailboxRow = React.memo(function MailboxRow({
     warmup,
     index,
     measure,
@@ -924,7 +932,7 @@ function MailboxRow({
     canWarmup,
     cloud,
     cloudConnected,
-    retiring,
+    retiringDomain,
     onRetiring,
     checked,
     onToggleSelect,
@@ -947,11 +955,11 @@ function MailboxRow({
     canWarmup: boolean;
     cloud?: CloudLinkMailboxRow;
     cloudConnected: boolean;
-    /** On the retiring per-mailbox Google sign-in. */
-    retiring: boolean;
-    onRetiring: () => void;
+    /** The domain moving off the retiring per-mailbox Google sign-in, when this mailbox is on it. */
+    retiringDomain?: string;
+    onRetiring: (domain: string) => void;
     checked: boolean;
-    onToggleSelect: () => void;
+    onToggleSelect: (id: string) => void;
     onOpen: (id: string, tab?: string) => void;
 }) {
     const { confirm, workspaceZone } = actions;
@@ -1011,7 +1019,7 @@ function MailboxRow({
     // Local actions wait until Cloud ownership is known; a missing report is not a local mailbox.
     const localOwned = !inCloud && warmup.source === "local";
     const cloudActivity = warmup.cloudActivity ?? warmup.activity;
-    const cloudPaused = cloudActivity === "paused" || cloudActivity === "receive_only";
+    const cloudPaused = cloudActivity === "paused" || cloudActivity === "receive_only" || cloudActivity === "needs_credential";
     const cloudResume = cloudPaused || cloudActivity === "off";
     const cloudUnknown = cloudReportMissing(warmup);
     const cloudLabel = `Warmbly Cloud: ${warmupActivityLabel[warmup.activity]}`;
@@ -1026,7 +1034,9 @@ function MailboxRow({
     };
 
     // A refused send outranks the count: it is why the count is not moving.
-    const sendFailure = inCloud ? cloudSendFailure(cloud?.cloud) : warming ? ws?.send_failure : undefined;
+    const reportedFailure = inCloud ? cloudSendFailure(cloud?.cloud) : warming ? ws?.send_failure : undefined;
+    // Provider pacing is absorbed by the scheduler; the drawer explains it.
+    const sendFailure = reportedFailure?.kind === "provider_throttle" ? undefined : reportedFailure;
     const nextWarmup = warming && ws?.next_send_at ? nextSlotLabel(ws.next_send_at, undefined, box.timezone || workspaceZone || "UTC") : undefined;
 
     // Warmup column: what's flowing today and why.
@@ -1174,7 +1184,7 @@ function MailboxRow({
             className={`border-b border-slate-200/60 transition-colors group h-11 cursor-pointer ${checked ? "bg-sky-50/60" : "hover:bg-slate-50/80"}`}
         >
             <td className="pl-5 pr-2" onClick={(e) => e.stopPropagation()}>
-                <Checkbox checked={checked} onChange={onToggleSelect} />
+                <Checkbox checked={checked} onChange={() => onToggleSelect(box.id)} />
             </td>
             <td className="px-3 py-2 @2xl:py-0 overflow-hidden">
                 {/* The flag is a sibling of the open-row button, not a child:
@@ -1265,7 +1275,7 @@ function MailboxRow({
                         </div>
                     </div>
                 </button>
-                {retiring && <SigninRetiringChip onClick={onRetiring} />}
+                {retiringDomain !== undefined && <SigninRetiringChip onClick={() => onRetiring(retiringDomain)} />}
                 <AdvisorRowFlag findings={findings} subject={box.email} />
                 </div>
             </td>
@@ -1343,7 +1353,7 @@ function MailboxRow({
                                         onSelect={() => void cloudRun(() => actions.cloudLifecycle(box.id, cloudResume ? "resume" : "pause"), cloudResume ? "Warmup resumed" : "Warmup paused")}
                                         icon={cloudResume ? <PlayIcon className="w-3 h-3" /> : <PauseIcon className="w-3 h-3" />}
                                     >
-                                        {cloudUnknown ? "Cloud warmup status unavailable" : cloudResume ? "Resume in Warmbly Cloud" : "Pause in Warmbly Cloud"}
+                                        {cloudActivity === "needs_credential" ? "Paused until Cloud holds its credential" : cloudUnknown ? "Cloud warmup status unavailable" : cloudResume ? "Resume in Warmbly Cloud" : "Pause in Warmbly Cloud"}
                                     </PopoverMenuItem>
                                     <PopoverMenuItem
                                         danger
@@ -1449,6 +1459,78 @@ function MailboxRow({
             </td>
         </tr>
     );
+});
+
+// Owns the virtualizer, so a scroll re-renders the rows near the viewport and not the page around them.
+const MailboxTableBody = React.memo(function MailboxTableBody({
+    rows,
+    scrollEl,
+    renderRow,
+}: {
+    rows: Inbox[];
+    scrollEl: HTMLElement | null;
+    renderRow: (box: Inbox, index: number, measure: (node: HTMLTableRowElement | null) => void) => React.ReactNode;
+}) {
+    const tbodyRef = React.useRef<HTMLTableSectionElement>(null);
+    const [scrollMargin, setScrollMargin] = React.useState(0);
+    React.useLayoutEffect(() => {
+        if (!scrollEl) return;
+        // Where the rows start inside the scroll box, which moves as the banners above them change.
+        const measure = () => {
+            const body = tbodyRef.current;
+            if (!body) return;
+            const m = Math.round(body.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top + scrollEl.scrollTop);
+            setScrollMargin((prev) => (prev === m ? prev : m));
+        };
+        measure();
+        if (typeof ResizeObserver === "undefined") return;
+        const ro = new ResizeObserver(measure);
+        for (const child of Array.from(scrollEl.children)) ro.observe(child);
+        return () => ro.disconnect();
+    }, [scrollEl]);
+    const rowVirtualizer = useVirtualizer({
+        count: rows.length,
+        getScrollElement: () => scrollEl,
+        estimateSize: () => 44,
+        getItemKey: (i) => rows[i]?.id ?? i,
+        overscan: 12,
+        scrollMargin,
+        initialRect: { width: 0, height: 800 },
+    });
+    const virtualRows = rowVirtualizer.getVirtualItems();
+    const padTop = virtualRows.length ? virtualRows[0].start - scrollMargin : 0;
+    const padBottom = virtualRows.length
+        ? Math.max(0, rowVirtualizer.getTotalSize() - (virtualRows[virtualRows.length - 1].end - scrollMargin))
+        : 0;
+    const columnCount = MAILBOX_COLUMNS.length + 2;
+    return (
+        <tbody ref={tbodyRef}>
+            {padTop > 0 && (
+                <tr aria-hidden style={{ height: padTop }}>
+                    <td colSpan={columnCount} className="p-0" />
+                </tr>
+            )}
+            {virtualRows.map((v) => {
+                const box = rows[v.index];
+                return box ? renderRow(box, v.index, rowVirtualizer.measureElement) : null;
+            })}
+            {padBottom > 0 && (
+                <tr aria-hidden style={{ height: padBottom }}>
+                    <td colSpan={columnCount} className="p-0" />
+                </tr>
+            )}
+        </tbody>
+    );
+});
+
+// Keyed by the mailbox object, so a row whose inputs did not change keeps its warmup and skips its render.
+const warmupCache = new WeakMap<Inbox, { status?: AccountStatus; source: WarmupSource; warmup: MailboxWarmup }>();
+function cachedWarmup(box: Inbox, status: AccountStatus | undefined, source: WarmupSource): MailboxWarmup {
+    const hit = warmupCache.get(box);
+    if (hit && hit.status === status && hit.source === source) return hit.warmup;
+    const warmup = resolveMailboxWarmup(box, status, source);
+    warmupCache.set(box, { status, source, warmup });
+    return warmup;
 }
 
 // A refusal the server explains with a code (a seed inbox, a blocked pool)
@@ -1617,7 +1699,7 @@ function MailboxStatusPill({ box, status, stale, historicalIssue, warmup, compac
     if (!status) return <span className="text-[10.5px] text-slate-500">{pending ? "Checking…" : "Unavailable"}</span>;
 
     // One word; the icons beside it say which activities are on. An unknown warmup state is not reported as idle.
-    const idle = !warmupUnknown(warmup) ? "Idle" : warmup.activity === "checking" ? "Checking…" : warmup.activity === "unavailable" || warmup.activity === "unconfirmed" ? "Unavailable" : "Pending";
+    const idle = !warmupUnknown(warmup) ? "Idle" : warmup.activity === "checking" ? "Checking…" : warmup.activity === "unavailable" ? "Unavailable" : "Pending";
     const label = sending && warming ? "Active" : sending ? "Sending" : resting ? (lifecycle?.state === "reserve" ? "Reserve" : "Resting") : warming ? "Warming" : idle;
     const title = [
         sending ? "Sending campaign emails" : resting ? `Held out of campaign sending${lifecycle?.reason ? `: ${lifecycle.reason}` : ""}` : "Not in a live campaign",

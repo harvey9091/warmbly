@@ -270,6 +270,15 @@ const (
 	// it must stay well clear of a slow provider handshake.
 	CampaignSendReclaimAfterMinutes = 30
 
+	// ManualSendInterruptedAfterMinutes is how long a manual send may sit claimed
+	// without a reservation before recovery treats its execution as lost. It is
+	// well past the handler's two-minute deadline and the execution key's lease.
+	ManualSendInterruptedAfterMinutes = 10
+
+	// ManualSendRetryWithinMinutes bounds how old an interrupted manual send may
+	// be and still go out: older ones fail and the owner is told instead.
+	ManualSendRetryWithinMinutes = 60
+
 	// UnknownSendHoldVisibleAfterMinutes keeps an unconfirmed send out of mailbox health until it outlasts automatic recovery.
 	UnknownSendHoldVisibleAfterMinutes = 2 * CampaignSendReclaimAfterMinutes
 
@@ -484,6 +493,12 @@ const (
 	// sweeps and backend replicas.
 	ContactMailHostCacheHours = 24
 
+	// ContactLocationBatchSize is how many contacts one location sweep pass reads.
+	ContactLocationBatchSize = 2000
+	// ContactLocationIntervalSeconds is how often the location sweep passes; a
+	// full batch runs again immediately, so an import drains without waiting.
+	ContactLocationIntervalSeconds = 30
+
 	// VerificationRecheckDays is how long a verification verdict is trusted
 	// before the address is checked again. Mailboxes get created and closed;
 	// a verdict from last quarter is a guess.
@@ -610,30 +625,13 @@ const (
 
 	// Pool link: mailboxes a self-hosted instance may enroll in the hosted
 	// warmup pool without a paid pool plan, and the handshake lifetimes.
-	PoolLinkCodeTTLMinutes      = 15
-	PoolLinkPollIntervalSeconds = 3
-	PoolLinkPlanID              = "00000000-0000-0000-0000-000000000002"
-	PoolLinkPlanPriceUSD        = 15
-	PoolLinkRedirectLimit       = 200 // root redirects Warmbly Cloud serves for one linked instance
-	// Instance-executed mailboxes: a link that leased within the liveness window
-	// is ready; a lease lasts LeaseSeconds; a send must start within its TTL
-	// (under the 10-minute unstarted-dispatch recovery) and an action within its.
-	PoolLinkExecutorLivenessMinutes = 5
-	PoolLinkCommandLeaseSeconds     = 300
-	PoolLinkSendCommandTTLMinutes   = 8
-	PoolLinkActionCommandTTLHours   = 6
-	PoolLinkLeaseLimitMax           = 100
-	PoolLinkArrivalClockSkewMinutes = 5
-	// Reporter trust: a self-executed mailbox's first-landing spam rate is
-	// compared, over the window, with what Cloud-executed recipients of the same
-	// provider family saw from the same senders.
-	PoolLinkTrustWindowDays          = 14
-	PoolLinkTrustMinReported         = 30
-	PoolLinkTrustMinObserved         = 50
-	PoolLinkTrustProbationDivergence = 0.15
-	PoolLinkTrustUntrustedDivergence = 0.30
-	WarmupPoolFallbackMinAgeDays     = 3  // a free mailbox must have been a pool member this long before premium may borrow it, or write back to one
-	WarmupPoolReturnVisitDays        = 14 // a proven free mailbox may write back to a paying mailbox that wrote to it this recently
+	PoolLinkCodeTTLMinutes       = 15
+	PoolLinkPollIntervalSeconds  = 3
+	PoolLinkPlanID               = "00000000-0000-0000-0000-000000000002"
+	PoolLinkPlanPriceUSD         = 15
+	PoolLinkRedirectLimit        = 200 // root redirects Warmbly Cloud serves for one linked instance
+	WarmupPoolFallbackMinAgeDays = 3   // a free mailbox must have been a pool member this long before premium may borrow it, or write back to one
+	WarmupPoolReturnVisitDays    = 14  // a proven free mailbox may write back to a paying mailbox that wrote to it this recently
 	// New threads one inbox may receive from the pool in a day (replies are not counted): WarmupInboundDailyMultiple
 	// times its own daily sends, never below the floor (a recipient-only mailbox
 	// sends nothing) and never above the ceiling. A recipient at its cap is left
@@ -701,6 +699,10 @@ const (
 	NotificationEmailWindowMinMinutes     = 30
 	NotificationEmailWindowDefaultMinutes = 30
 	NotificationEmailWindowMaxMinutes     = 1440
+
+	// AgencyIsolatedEgressMaxClients is how many of one agency's client
+	// workspaces hold a reserved worker at once, oldest attached first.
+	AgencyIsolatedEgressMaxClients = 20
 )
 
 // InboundClassificationHeaders are the internet headers the API-based inbound

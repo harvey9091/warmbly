@@ -191,16 +191,6 @@ func ConsumerMailboxHost(mailHost, provider, address string) bool {
 	return h == mailhost.Gmail || h == mailhost.Outlook
 }
 
-// BusinessMailbox reports a Google Workspace or Microsoft 365 mailbox on the
-// organization's own domain, the kind of inbox cold mail is written for.
-func (e *Email) BusinessMailbox() bool {
-	if e == nil {
-		return false
-	}
-	h := mailhost.ForMailbox(e.MailHost, e.Provider, e.Email)
-	return h == mailhost.GoogleWorkspace || h == mailhost.Microsoft365
-}
-
 // NewMailboxVolume is a new mailbox's starting cold cap, minimum gap and warmup
 // ceiling. A free Gmail or Outlook.com account starts lower.
 func NewMailboxVolume(mailHost, provider, address string) (campaignLimit, minWait, warmupMax int) {
@@ -674,6 +664,8 @@ type NewOauthAccount struct {
 	MailHost string
 	// GrantedScopes is what the provider says it granted; nil when it did not say.
 	GrantedScopes []string
+	// OAuthAppID is the workspace client that issued the grant; nil is this deployment's own.
+	OAuthAppID *uuid.UUID
 }
 
 // GoogleFullMailScope is the Google consent that lets a token sign in over IMAP.
@@ -768,6 +760,8 @@ type EmailOnboardingState struct {
 	// code intercepted anywhere between the provider and this backend is not
 	// redeemable. A state without one is refused.
 	CodeVerifier string `json:"code_verifier,omitempty"`
+	// OAuthAppID is the workspace client the round trip started with; nil is this deployment's own.
+	OAuthAppID *uuid.UUID `json:"oauth_app_id,omitempty"`
 }
 
 // VendorConsentRequest names the import row, or the existing mailbox, an inbox vendor is asked to sign in for.
