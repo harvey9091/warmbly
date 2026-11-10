@@ -1,11 +1,12 @@
 import type React from "react";
-import { MonitorIcon, MoonIcon, SunIcon } from "lucide-react";
+import { Glasses, MonitorIcon, MoonIcon, SunIcon } from "lucide-react";
 import type { Theme, ThemeOrigin } from "@/lib/theme";
 
 export const THEME_OPTIONS: { value: Theme; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
     { value: "light", label: "Light", icon: SunIcon },
     { value: "dark", label: "Dark", icon: MoonIcon },
     { value: "system", label: "System", icon: MonitorIcon },
+    { value: "glassmorphism", label: "Glassmorphism", icon: Glasses },
 ];
 
 // A keyboard activation has no pointer position, so the reveal starts at the control.

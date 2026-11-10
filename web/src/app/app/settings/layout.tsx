@@ -75,6 +75,12 @@ const GROUPS: SectionGroup[] = [
         ],
     },
     {
+        label: "Appearance",
+        items: [
+            { path: "appearance", label: "Appearance", icon: PaletteIcon, description: "Customize how Warmbly looks and feels." },
+        ],
+    },
+    {
         label: "Workspace",
         items: [
             { path: "members", label: "Members", icon: UsersIcon, description: "Team and invitations." },

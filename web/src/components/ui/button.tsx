@@ -9,15 +9,15 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-zinc-900 text-white shadow-none hover:bg-zinc-800",
+        default: "glass-button shadow-none hover:bg-white/25",
         destructive:
           "bg-destructive text-white shadow-none hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
         outline:
-          "border border-border bg-white shadow-none hover:bg-muted/50 hover:text-foreground",
+          "border border-border glass-button shadow-none hover:bg-white/25",
         secondary:
-          "bg-muted text-foreground shadow-none hover:bg-muted/80",
+          "glass-button shadow-none hover:bg-white/25",
         ghost:
-          "hover:bg-muted/50 hover:text-foreground",
+          "glass-button hover:bg-white/25",
         link: "text-foreground underline-offset-4 hover:underline",
       },
       size: {
@@ -61,4 +61,4 @@ function Button({
   )
 }
 
-export { Button, buttonVariants }
+export { Button }

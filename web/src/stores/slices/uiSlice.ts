@@ -68,6 +68,10 @@ export interface UISlice {
   // Theme
   theme: Theme
   resolvedTheme: ResolvedTheme
+  // Glassmorphism settings
+  glassBackground: "bg1" | "bg2"
+  glassBlurLevel: number
+  glassTransparency: number
 
   // Modals
   tagsModalOpen: boolean
@@ -109,6 +113,10 @@ export interface UISlice {
   // origin is where the switch was asked for; the new theme spreads from it.
   setTheme: (theme: Theme, origin?: ThemeOrigin) => void
   setResolvedTheme: (theme: ResolvedTheme, origin?: ThemeOrigin) => void
+  // Actions - Glassmorphism
+  setGlassBackground: (background: "bg1" | "bg2") => void
+  setGlassBlurLevel: (level: number) => void
+  setGlassTransparency: (transparency: number) => void
 
   // Actions - Modals
   setTagsModalOpen: (open: boolean) => void
@@ -207,6 +215,10 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set, get) 
   // Theme
   theme: readStoredTheme(),
   resolvedTheme: resolveTheme(readStoredTheme()),
+  // Glassmorphism settings
+  glassBackground: "bg1",
+  glassBlurLevel: 12,
+  glassTransparency: 75,
 
   // Modals
   tagsModalOpen: false,
@@ -275,12 +287,19 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set, get) 
     if (get().theme === theme) return
     const resolvedTheme = resolveTheme(theme)
     applyTheme(resolvedTheme, origin)
-    set({ theme, resolvedTheme })
+    set((state) => ({ ...state, theme, resolvedTheme }))
   },
   setResolvedTheme: (resolvedTheme, origin) => {
     applyTheme(resolvedTheme, origin)
     set((state) => (state.resolvedTheme === resolvedTheme ? state : { resolvedTheme }))
   },
+  // Actions - Glassmorphism
+  setGlassBackground: (glassBackground) =>
+    set((state) => (state.glassBackground === glassBackground ? state : { glassBackground })),
+  setGlassBlurLevel: (glassBlurLevel) =>
+    set((state) => (state.glassBlurLevel === glassBlurLevel ? state : { glassBlurLevel })),
+  setGlassTransparency: (glassTransparency) =>
+    set((state) => (state.glassTransparency === glassTransparency ? state : { glassTransparency })),
 
   // Actions - Modals
   setTagsModalOpen: (tagsModalOpen) =>

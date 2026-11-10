@@ -19,11 +19,11 @@ import React from "react";
 
 export function SkyChrome() {
     return (
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute inset-0 overflow-hidden pointer-events-none glass-sidebar">
             {/* Base tint — clean neutral, a half-step darker than white.
                 Avoid blue-leaning here; the only colour cue is the soft
                 clouds above. */}
-            <div className="absolute inset-0 bg-[#f5f6f8] dark:bg-[var(--wb-chrome)]" />
+            <div className="absolute inset-0" />
             <div className="wb-chrome-light absolute inset-0 hidden dark:block" />
 
             {/* Faint cloud blobs, light theme only: white haze on the dark
