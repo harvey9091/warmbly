@@ -52,7 +52,7 @@ export function AppHeader({ onMenu }: { onMenu?: () => void }) {
     const navCollapsed = useAppStore((s) => s.navCollapsed) && !isMobile;
 
     return (
-        <div className="h-14 flex items-center shrink-0">
+        <div className="h-14 flex items-center shrink-0 glass-header">
             {/* Logo zone — sidebar-width on >=md, compact with a menu button
                 on mobile (the sidebar collapses into a drawer below md). */}
             <button
