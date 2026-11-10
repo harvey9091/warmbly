@@ -34,6 +34,8 @@ import { useRouteKey } from "@/hooks/useRouteKey";
 import { useScrollMemory, type ScrollStore } from "@/hooks/useScrollMemory";
 import { RouteFallback } from "./RouteStates";
 import { rememberView } from "@/lib/agencyView";
+import { useAppStore } from "@/stores";
+import type { UISlice } from "@/stores";
 
 // Overlays closed on first paint, so the frame does not wait on their code.
 const ShortcutsModal = lazy(() => import("@/components/shared/ShortcutsModal").then((m) => ({ default: m.ShortcutsModal })));
@@ -69,8 +71,11 @@ export function AppShell() {
     if (scrollFor.routeKey !== routeKey) setScrollFor({ routeKey, key: `${routeKey}@${entryKey}` });
     useScrollMemory(scrollRef, scrollFor.key, entryOffsets);
 
+    // Get glass background from UI store
+    const glassBackground = useAppStore((state: UISlice) => state.glassBackground);
+
     return (
-        <div className="fixed inset-0 flex flex-col">
+        <div className={`fixed inset-0 flex flex-col ${glassBackground === 'bg1' ? 'glass-bg-1' : 'glass-bg-2'}`}>
             <SkyChrome />
 
             <div className="relative z-10 flex flex-col h-full">

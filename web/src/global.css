@@ -925,10 +925,6 @@ svg.loading circle {
 }
 
 @layer base {
-  * {
-    border: 1px solid var(--border);
-    outline: 2px solid rgba(0, 0, 0, 0.1);
-  }
   body {
     background-color: var(--background);
     color: var(--foreground);
