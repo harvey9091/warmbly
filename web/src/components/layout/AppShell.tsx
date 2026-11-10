@@ -18,7 +18,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Outlet, useLocation } from "@tanstack/react-router";
 import SubscriptionGate from "./SubscriptionGate";
-import { SkyChrome } from "./SkyChrome";
+import { GlassBackground } from "./GlassBackground";
 import { AppHeader } from "./AppHeader";
 import { AppNav } from "./AppNav";
 import PendingDeletionBar from "./PendingDeletionBar";
@@ -111,7 +111,7 @@ export function AppShell() {
 
     return (
         <div className="fixed inset-0 flex flex-col">
-            <SkyChrome />
+            <GlassBackground />
 
             <div className="relative z-10 flex flex-col h-full">
                 {/* Sits above the header so it can't be missed. Only
@@ -131,7 +131,7 @@ export function AppShell() {
                         corner is softened (rounded-tl-2xl) only on >=md, where
                         the sidebar sits beside it; on mobile the panel is
                         full-bleed with just a top hairline. */}
-                    <main className="wb-panel flex-1 min-w-0 glass-card overflow-hidden border-t border-slate-200/70 md:rounded-tl-2xl md:border-l">
+                    <main className="wb-panel flex-1 min-w-0 glass-card border-t border-slate-200/70 md:rounded-tl-2xl md:border-l">
                         {/* Dark theme only: a soft light from the top edge, laid over every page whatever it paints. */}
                         <div aria-hidden className="pointer-events-none relative z-20 hidden h-0 dark:block">
                             <div className="wb-panel-light absolute inset-x-0 top-0 h-[420px]" />
