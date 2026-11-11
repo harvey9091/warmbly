@@ -93,7 +93,10 @@ export function systemTheme(): ResolvedTheme {
 
 export const resolveTheme = (theme: Theme): ResolvedTheme => {
   if (theme === "system") return systemTheme();
-  if (theme === "glassmorphism") return "light";
+  if (theme === "glassmorphism") {
+    // For glassmorphism, use the system preference or default to light
+    return systemTheme();
+  }
   return theme;
 };
 

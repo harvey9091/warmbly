@@ -1,25 +1,24 @@
+import { useEffect } from 'react';
 import { useAppStore } from '@/stores';
 
 export function GlassBackground() {
     const glassBackground = useAppStore((state) => state.glassBackground);
 
+    useEffect(() => {
+        const root = document.documentElement;
+        
+        // Toggle background classes on document root
+        root.classList.remove('glass-bg-1', 'glass-bg-2');
+        if (glassBackground === 'bg1') {
+            root.classList.add('glass-bg-1');
+        } else if (glassBackground === 'bg2') {
+            root.classList.add('glass-bg-2');
+        }
+    }, [glassBackground]);
+
     if (!glassBackground) return null;
 
-    const bgUrl =
-        glassBackground === "bg1"
-            ? "/backdrops/bg1.png"
-            : "/backdrops/bg2.png";
-
     return (
-        <div
-            className="fixed inset-0 z-[0] pointer-events-none"
-            style={{
-                backgroundImage: `url(${bgUrl})`,
-                backgroundSize: "cover",
-                backgroundPosition: "center",
-                backgroundRepeat: "no-repeat",
-                backgroundAttachment: "fixed",
-            }}
-        />
+        <div className="fixed inset-0 z-0 pointer-events-none" />
     );
 }

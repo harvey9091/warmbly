@@ -156,7 +156,7 @@ export function AppShell() {
             </div>
 
             {/* Overlay components - should be above everything else */}
-            <div className="z-20">
+            <div className="z-30">
                 <Suspense fallback={null}>
                     <ShortcutsModal />
                     <CommandPalette />

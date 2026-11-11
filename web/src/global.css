@@ -91,6 +91,17 @@
   --glass-backdrop-filter-dark: blur(16px);
 }
 
+/* Glassmorphism theme - dark mode */
+.glassmorphism.dark {
+  --glass-background: rgba(255, 255, 255, 0.15);
+  --glass-card: rgba(255, 255, 255, 0.2);
+  --glass-popover: rgba(255, 255, 255, 0.25);
+  --glass-border: rgba(255, 255, 255, 0.15);
+  --glass-input: rgba(255, 255, 255, 0.25);
+  --glass-ring: rgba(255, 255, 255, 0.35);
+  --glass-shadow: rgba(0, 0, 0, 0.25);
+}
+
 /* Glassmorphism theme - light mode */
 .glassmorphism:not(.dark) {
   --background: var(--glass-background);
@@ -105,13 +116,13 @@
 
 /* Glassmorphism theme - dark mode */
 .glassmorphism.dark {
-  --background: rgba(255, 255, 255, 0.1);
-  --card: rgba(255, 255, 255, 0.15);
-  --popover: rgba(255, 255, 255, 0.2);
-  --border: rgba(255, 255, 255, 0.1);
-  --input: rgba(255, 255, 255, 0.2);
-  --ring: rgba(255, 255, 255, 0.3);
-  --shadow: rgba(0, 0, 0, 0.2);
+  --background: var(--glass-background);
+  --card: var(--glass-card);
+  --popover: var(--glass-popover);
+  --border: var(--glass-border);
+  --input: var(--glass-input);
+  --ring: var(--glass-ring);
+  --shadow: var(--glass-shadow);
   --backdrop-filter: var(--glass-backdrop-filter-dark);
 }
 
@@ -122,8 +133,6 @@
   -webkit-backdrop-filter: var(--backdrop-filter);
   border: 1px solid var(--border);
   box-shadow: 0 4px 30px var(--shadow);
-  /* Ensure glass surfaces have sufficient transparency for backdrop to be visible */
-  background-color: rgba(255, 255, 255, 0.85);
 }
 
 .glass-popover {
@@ -132,8 +141,6 @@
   -webkit-backdrop-filter: var(--backdrop-filter);
   border: 1px solid var(--border);
   box-shadow: 0 4px 30px var(--shadow);
-  /* Ensure glass surfaces have sufficient transparency for backdrop to be visible */
-  background-color: rgba(255, 255, 255, 0.9);
 }
 
 .glass-dialog {
@@ -142,8 +149,6 @@
   -webkit-backdrop-filter: var(--backdrop-filter);
   border: 1px solid var(--border);
   box-shadow: 0 4px 30px var(--shadow);
-  /* Ensure glass surfaces have sufficient transparency for backdrop to be visible */
-  background-color: rgba(255, 255, 255, 0.92);
 }
 
 .glass-sidebar {
@@ -151,8 +156,6 @@
   backdrop-filter: var(--backdrop-filter);
   -webkit-backdrop-filter: var(--backdrop-filter);
   border-right: 1px solid var(--border);
-  /* Ensure glass surfaces have sufficient transparency for backdrop to be visible */
-  background-color: rgba(255, 255, 255, 0.87);
 }
 
 .glass-header {
@@ -160,8 +163,6 @@
   backdrop-filter: var(--backdrop-filter);
   -webkit-backdrop-filter: var(--backdrop-filter);
   border-bottom: 1px solid var(--border);
-  /* Ensure glass surfaces have sufficient transparency for backdrop to be visible */
-  background-color: rgba(255, 255, 255, 0.9);
 }
 
 .glass-navigation {
@@ -169,8 +170,6 @@
   backdrop-filter: var(--backdrop-filter);
   -webkit-backdrop-filter: var(--backdrop-filter);
   border-bottom: 1px solid var(--border);
-  /* Ensure glass surfaces have sufficient transparency for backdrop to be visible */
-  background-color: rgba(255, 255, 255, 0.85);
 }
 
 .glass-dropdown {
@@ -179,8 +178,6 @@
   -webkit-backdrop-filter: var(--backdrop-filter);
   border: 1px solid var(--border);
   box-shadow: 0 4px 30px var(--shadow);
-  /* Ensure glass surfaces have sufficient transparency for backdrop to be visible */
-  background-color: rgba(255, 255, 255, 0.92);
 }
 
 .glass-dialog-overlay {
