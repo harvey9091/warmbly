@@ -9,6 +9,8 @@ import { cn } from "@/lib/utils";
 export default function AppearanceSettings() {
   const theme = useAppStore((state) => state.theme);
   const setTheme = useAppStore((state) => state.setTheme);
+  const glassmorphismEnabled = useAppStore((state) => state.glassmorphismEnabled);
+  const setGlassmorphismEnabled = useAppStore((state) => state.setGlassmorphismEnabled);
   
   // Glassmorphism background selection
   const glassBackground = useAppStore((state) => state.glassBackground);
@@ -20,7 +22,7 @@ export default function AppearanceSettings() {
   const glassTransparency = useAppStore((state) => state.glassTransparency);
   const setGlassTransparency = useAppStore((state) => state.setGlassTransparency);
   
-  const handleThemeChange = (newTheme: "light" | "dark" | "system" | "glassmorphism") => {
+  const handleThemeChange = (newTheme: "light" | "dark" | "system") => {
     setTheme(newTheme);
   };
   
@@ -114,29 +116,29 @@ export default function AppearanceSettings() {
                 </span>
                 <span className="font-medium">System</span>
               </button>
-              <button
-                type="button"
-                role="radio"
-                aria-checked={theme === "glassmorphism"}
-                tabIndex={theme === "glassmorphism" ? 0 : -1}
-                onClick={() => handleThemeChange("glassmorphism")}
-                className={cn(
-                  "flex items-center space-x-2 p-3 rounded-lg border outline-none transition-colors",
-                  theme === "glassmorphism"
-                    ? "border-sky-500 bg-sky-50 text-sky-700"
-                    : "border-slate-200 hover:border-slate-300 text-slate-700"
-                )}
-              >
-                <span className="h-4 w-4 rounded-full border border-slate-300 flex items-center justify-center">
-                  {theme === "glassmorphism" && <span className="h-2 w-2 rounded-full bg-sky-500" />}
-                </span>
-                <span className="font-medium">Glassmorphism</span>
-              </button>
+              <div className="flex items-center justify-between py-2 px-3 rounded-lg border border-slate-200 hover:border-slate-300 text-slate-700">
+                <div className="flex items-center space-x-2">
+                  <span className="h-4 w-4 rounded-full border border-slate-300 flex items-center justify-center">
+                    {glassmorphismEnabled && <span className="h-2 w-2 rounded-full bg-sky-500" />}
+                  </span>
+                  <span className="font-medium">Glassmorphism</span>
+                </div>
+                <button 
+                  type="button"
+                  onClick={() => setGlassmorphismEnabled(!glassmorphismEnabled)}
+                  className="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2"
+                  aria-label="Toggle Glassmorphism"
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${glassmorphismEnabled ? 'translate-x-6' : 'translate-x-1'}`}
+                  />
+                </button>
+              </div>
             </div>
         </CardContent>
       </Card>
       
-      {theme === 'glassmorphism' && (
+      {glassmorphismEnabled && (
         <Card>
           <CardHeader>
             <CardTitle>Glassmorphism Settings</CardTitle>

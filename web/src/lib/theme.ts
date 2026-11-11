@@ -2,7 +2,7 @@
 // index.html applies the stored choice before the first paint with the same
 // rules; keep STORAGE_KEY and the resolution there in step with this file.
 
-export type Theme = "light" | "dark" | "system" | "glassmorphism";
+export type Theme = "light" | "dark" | "system";
 export type ResolvedTheme = "light" | "dark";
 
 export const THEME_STORAGE_KEY = "theme";
@@ -93,10 +93,6 @@ export function systemTheme(): ResolvedTheme {
 
 export const resolveTheme = (theme: Theme): ResolvedTheme => {
   if (theme === "system") return systemTheme();
-  if (theme === "glassmorphism") {
-    // For glassmorphism, use the system preference or default to light
-    return systemTheme();
-  }
   return theme;
 };
 
@@ -108,10 +104,9 @@ export function onSystemThemeChange(cb: (t: ResolvedTheme) => void): () => void 
     return () => mq.removeEventListener("change", handler);
 }
 
-function paint(resolved: ResolvedTheme, isGlassmorphism: boolean = false) {
+function paint(resolved: ResolvedTheme) {
     const root = document.documentElement;
     root.classList.toggle("dark", resolved === "dark");
-    root.classList.toggle("glassmorphism", isGlassmorphism);
     root.style.colorScheme = resolved;
     let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
     if (!meta) {
@@ -141,7 +136,7 @@ type ViewTransitionDocument = Document & {
 // alone would let a second call in the same tick repaint under the snapshot.
 let target: ResolvedTheme | null = null;
 
-export function applyTheme(resolved: ResolvedTheme, origin?: ThemeOrigin, isGlassmorphism: boolean = false) {
+export function applyTheme(resolved: ResolvedTheme, origin?: ThemeOrigin) {
     if (typeof document === "undefined") return;
     const root = document.documentElement;
     const current = target ?? (root.classList.contains("dark") ? "dark" : "light");
@@ -151,7 +146,7 @@ export function applyTheme(resolved: ResolvedTheme, origin?: ThemeOrigin, isGlas
     const doc = document as ViewTransitionDocument;
     if (origin && doc.startViewTransition && !prefersReducedMotion()) {
         root.classList.add("theme-switching");
-        const t = doc.startViewTransition(() => paint(resolved, isGlassmorphism));
+        const t = doc.startViewTransition(() => paint(resolved));
         t.ready
             .then(() => {
                 const r = Math.hypot(
@@ -169,7 +164,7 @@ export function applyTheme(resolved: ResolvedTheme, origin?: ThemeOrigin, isGlas
     }
 
     root.classList.add("theme-instant");
-    paint(resolved, isGlassmorphism);
+    paint(resolved);
     // Two frames: one for the new colours to compute, one to paint them.
     requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove("theme-instant")));
 }

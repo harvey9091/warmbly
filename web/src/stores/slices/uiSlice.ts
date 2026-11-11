@@ -69,6 +69,7 @@ export interface UISlice {
   theme: Theme
   resolvedTheme: ResolvedTheme
   // Glassmorphism settings
+  glassmorphismEnabled: boolean
   glassBackground: "bg1" | "bg2"
   glassBlurLevel: number
   glassTransparency: number
@@ -114,6 +115,7 @@ export interface UISlice {
   setTheme: (theme: Theme, origin?: ThemeOrigin) => void
   setResolvedTheme: (theme: ResolvedTheme, origin?: ThemeOrigin) => void
   // Actions - Glassmorphism
+  setGlassmorphismEnabled: (enabled: boolean) => void
   setGlassBackground: (background: "bg1" | "bg2") => void
   setGlassBlurLevel: (level: number) => void
   setGlassTransparency: (transparency: number) => void
@@ -216,6 +218,7 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set, get) 
   theme: readStoredTheme(),
   resolvedTheme: resolveTheme(readStoredTheme()),
   // Glassmorphism settings
+  glassmorphismEnabled: false,
   glassBackground: "bg1",
   glassBlurLevel: 12,
   glassTransparency: 75,
@@ -294,6 +297,8 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set, get) 
     set((state) => (state.resolvedTheme === resolvedTheme ? state : { resolvedTheme }))
   },
   // Actions - Glassmorphism
+  setGlassmorphismEnabled: (glassmorphismEnabled) =>
+    set((state) => (state.glassmorphismEnabled === glassmorphismEnabled ? state : { glassmorphismEnabled })),
   setGlassBackground: (glassBackground) =>
     set((state) => (state.glassBackground === glassBackground ? state : { glassBackground })),
   setGlassBlurLevel: (glassBlurLevel) =>

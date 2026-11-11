@@ -63,41 +63,46 @@ export function AppShell() {
 
     // Apply glassmorphism theme globally
     const glassBackground = useAppStore((state) => state.glassBackground);
+    const glassmorphismEnabled = useAppStore((state) => state.glassmorphismEnabled);
     const glassBlurLevel = useAppStore((state) => state.glassBlurLevel);
     const glassTransparency = useAppStore((state) => state.glassTransparency);
     useEffect(() => {
         const root = document.documentElement;
 
-        // Toggle glassmorphism class
-        if (glassBackground) {
-            root.classList.add('glassmorphism');
+        // Toggle glassmorphism class and set CSS variables
+        const html = document.querySelector('html');
+        if (!html) return;
+        
+        if (glassmorphismEnabled && glassBackground) {
+            html.classList.add('glassmorphism');
         } else {
-            root.classList.remove('glassmorphism');
+            html.classList.remove('glassmorphism');
         }
 
         // Set backdrop filter
-        root.style.setProperty('--glass-backdrop-filter', `blur(${glassBlurLevel}px)`);
-        root.style.setProperty('--glass-backdrop-filter-light', `blur(${glassBlurLevel}px)`);
-        root.style.setProperty('--glass-backdrop-filter-dark', `blur(${glassBlurLevel + 4}px)`);
+        html.style.setProperty('--glass-backdrop-filter', `blur(${glassBlurLevel}px)`);
+        html.style.setProperty('--glass-backdrop-filter-light', `blur(${glassBlurLevel}px)`);
+        html.style.setProperty('--glass-backdrop-filter-dark', `blur(${glassBlurLevel + 4}px)`);
 
         // Set transparency (0–100 → 0.0–1.0)
         const alpha = glassTransparency / 100;
-        root.style.setProperty('--glass-background', `rgba(255, 255, 255, ${alpha})`);
-        root.style.setProperty('--glass-card', `rgba(255, 255, 255, ${alpha * 0.9})`);
-        root.style.setProperty('--glass-popover', `rgba(255, 255, 255, ${alpha * 0.85})`);
-        root.style.setProperty('--glass-border', `rgba(255, 255, 255, ${alpha * 0.2})`);
-        root.style.setProperty('--glass-input', `rgba(255, 255, 255, ${alpha * 0.7})`);
-        root.style.setProperty('--glass-ring', `rgba(255, 255, 255, ${alpha * 0.4})`);
-        root.style.setProperty('--glass-shadow', `rgba(0, 0, 0, ${0.1 * alpha})`);
+        
+        html.style.setProperty('--glass-background', `rgba(255, 255, 255, ${alpha})`);
+        html.style.setProperty('--glass-card', `rgba(255, 255, 255, ${alpha * 0.9})`);
+        html.style.setProperty('--glass-popover', `rgba(255, 255, 255, ${alpha * 0.85})`);
+        html.style.setProperty('--glass-border', `rgba(255, 255, 255, ${alpha * 0.2})`);
+        html.style.setProperty('--glass-input', `rgba(255, 255, 255, ${alpha * 0.7})`);
+        html.style.setProperty('--glass-ring', `rgba(255, 255, 255, ${alpha * 0.4})`);
+        html.style.setProperty('--glass-shadow', `rgba(0, 0, 0, ${0.1 * alpha})`);
 
         // Set background classes
-        root.classList.remove('glass-bg-1', 'glass-bg-2');
-        if (glassBackground === 'bg1') {
-            root.classList.add('glass-bg-1');
-        } else if (glassBackground === 'bg2') {
-            root.classList.add('glass-bg-2');
+        html.classList.remove('glass-bg-1', 'glass-bg-2');
+        if (glassmorphismEnabled && glassBackground === 'bg1') {
+            html.classList.add('glass-bg-1');
+        } else if (glassmorphismEnabled && glassBackground === 'bg2') {
+            html.classList.add('glass-bg-2');
         }
-    }, [glassBackground, glassBlurLevel, glassTransparency]);
+    }, [glassBackground, glassmorphismEnabled, glassBlurLevel, glassTransparency]);
 
     // The page content's scroll container, anchor for the global cursor layer.
     const scrollRef = useRef<HTMLDivElement>(null);

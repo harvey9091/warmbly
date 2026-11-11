@@ -11,9 +11,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const resolved = resolveTheme(theme)
     setResolvedTheme(resolved)
-    if (theme === 'glassmorphism') {
-      applyTheme(resolved, undefined, true)
-    } else if (theme === 'system') {
+    if (theme === 'system') {
       return onSystemThemeChange((t) => setResolvedTheme(t))
     }
   }, [theme, setResolvedTheme])

@@ -22,17 +22,14 @@
     <script>
       (function () {
         var dark = false;
-        var isGlassmorphism = false;
         try {
           var t = localStorage.getItem("theme");
           // No choice of the viewer's own: a brand's default, when one was applied here before.
-          if (t !== "light" && t !== "dark" && t !== "system" && t !== "glassmorphism") t = localStorage.getItem("theme-default");
+          if (t !== "light" && t !== "dark" && t !== "system") t = localStorage.getItem("theme-default");
           dark = t === "dark" || (t === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
-          isGlassmorphism = t === "glassmorphism";
         } catch (e) {}
         var root = document.documentElement;
         root.classList.toggle("dark", dark);
-        root.classList.toggle("glassmorphism", isGlassmorphism);
         root.style.colorScheme = dark ? "dark" : "light";
         var meta = document.createElement("meta");
         meta.name = "theme-color";
@@ -44,8 +41,6 @@
       /* Paint the dashboard chrome's colour at once and keep #root hidden
          until the stylesheet and the interface font are in effect (main.tsx
          adds .app-ready), so the first visible frame is the finished one. */
-      html { background-color: #f5f6f8; }
-      html.dark { background-color: #070708; }
       #root { opacity: 0; }
       #root.app-ready { opacity: 1; transition: opacity 120ms ease-out; }
     </style>

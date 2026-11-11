@@ -89,6 +89,11 @@ export const useAppStore = create<AppStore>()(
           uniboxRailSectionOrder: state.uniboxRailSectionOrder,
           uniboxRailFavorites: state.uniboxRailFavorites,
           uniboxRailOwner: state.uniboxRailOwner,
+          // Glassmorphism settings
+          glassmorphismEnabled: state.glassmorphismEnabled,
+          glassBackground: state.glassBackground,
+          glassBlurLevel: state.glassBlurLevel,
+          glassTransparency: state.glassTransparency,
           // Persist current organization selection
           currentOrganization: state.currentOrganization,
         }),
