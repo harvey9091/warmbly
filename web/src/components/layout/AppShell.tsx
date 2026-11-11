@@ -111,8 +111,10 @@ export function AppShell() {
 
     return (
         <div className="fixed inset-0 flex flex-col">
+            {/* Global background layer - covers entire viewport */}
             <GlassBackground />
 
+            {/* Main application content layer */}
             <div className="relative z-10 flex flex-col h-full">
                 {/* Sits above the header so it can't be missed. Only
                     renders when the current workspace or the user's
@@ -141,7 +143,7 @@ export function AppShell() {
                                 <RouteBoundary>
                                     {/* Catches a suspend above the route's own
                                         boundary (SubscriptionGate). */}
-                                    <Suspense fallback={<RouteFallback />}>
+                                    <Suspense fallback={<RouteFallback />}> 
                                         <SubscriptionGate>
                                             <Outlet />
                                         </SubscriptionGate>
@@ -153,13 +155,16 @@ export function AppShell() {
                 </div>
             </div>
 
-            <Suspense fallback={null}>
-                <ShortcutsModal />
-                <CommandPalette />
-                {/* Right-side AI assistant, persistent across routes. */}
-                <AgentPanel />
-                <ProductTourHost />
-            </Suspense>
+            {/* Overlay components - should be above everything else */}
+            <div className="z-20">
+                <Suspense fallback={null}>
+                    <ShortcutsModal />
+                    <CommandPalette />
+                    {/* Right-side AI assistant, persistent across routes. */}
+                    <AgentPanel />
+                    <ProductTourHost />
+                </Suspense>
+            </div>
         </div>
     );
 }

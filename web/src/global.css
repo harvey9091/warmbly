@@ -122,6 +122,8 @@
   -webkit-backdrop-filter: var(--backdrop-filter);
   border: 1px solid var(--border);
   box-shadow: 0 4px 30px var(--shadow);
+  /* Ensure glass surfaces have sufficient transparency for backdrop to be visible */
+  background-color: rgba(255, 255, 255, 0.85);
 }
 
 .glass-popover {
@@ -130,6 +132,8 @@
   -webkit-backdrop-filter: var(--backdrop-filter);
   border: 1px solid var(--border);
   box-shadow: 0 4px 30px var(--shadow);
+  /* Ensure glass surfaces have sufficient transparency for backdrop to be visible */
+  background-color: rgba(255, 255, 255, 0.9);
 }
 
 .glass-dialog {
@@ -138,6 +142,8 @@
   -webkit-backdrop-filter: var(--backdrop-filter);
   border: 1px solid var(--border);
   box-shadow: 0 4px 30px var(--shadow);
+  /* Ensure glass surfaces have sufficient transparency for backdrop to be visible */
+  background-color: rgba(255, 255, 255, 0.92);
 }
 
 .glass-sidebar {
@@ -145,6 +151,8 @@
   backdrop-filter: var(--backdrop-filter);
   -webkit-backdrop-filter: var(--backdrop-filter);
   border-right: 1px solid var(--border);
+  /* Ensure glass surfaces have sufficient transparency for backdrop to be visible */
+  background-color: rgba(255, 255, 255, 0.87);
 }
 
 .glass-header {
@@ -152,6 +160,8 @@
   backdrop-filter: var(--backdrop-filter);
   -webkit-backdrop-filter: var(--backdrop-filter);
   border-bottom: 1px solid var(--border);
+  /* Ensure glass surfaces have sufficient transparency for backdrop to be visible */
+  background-color: rgba(255, 255, 255, 0.9);
 }
 
 .glass-navigation {
@@ -159,6 +169,8 @@
   backdrop-filter: var(--backdrop-filter);
   -webkit-backdrop-filter: var(--backdrop-filter);
   border-bottom: 1px solid var(--border);
+  /* Ensure glass surfaces have sufficient transparency for backdrop to be visible */
+  background-color: rgba(255, 255, 255, 0.85);
 }
 
 .glass-dropdown {
@@ -167,6 +179,8 @@
   -webkit-backdrop-filter: var(--backdrop-filter);
   border: 1px solid var(--border);
   box-shadow: 0 4px 30px var(--shadow);
+  /* Ensure glass surfaces have sufficient transparency for backdrop to be visible */
+  background-color: rgba(255, 255, 255, 0.92);
 }
 
 .glass-dialog-overlay {
@@ -179,6 +193,7 @@
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
+  background-attachment: fixed;
 }
 
 .glass-bg-2 {
@@ -186,6 +201,7 @@
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
+  background-attachment: fixed;
 }
 
 /* Glassmorphism text contrast for readability */
